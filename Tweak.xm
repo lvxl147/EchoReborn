@@ -12266,7 +12266,9 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     [self collectLandscapeStatusBarViews:statusBar indicator:indicator inRoot:overlay.view window:window];
     // 1.0.7-24：类名一个都没命中时的几何兜底 —— 先在 CC 自己的窗口里找，
     // 再退到系统状态栏窗口里找（那条带可能根本不在 overlay 子树里）。
+    BOOL usedFallback = NO;
     if (active && statusBar.count == 0) {
+        usedFallback = YES;
         [self collectLandscapeFallbackStatusBarViews:statusBar inRoot:overlay.view window:window];
         if (statusBar.count == 0) {
             for (UIWindow *w in ERAllApplicationWindows()) {
@@ -12283,9 +12285,10 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     CFTimeInterval chromeNow = CACurrentMediaTime();
     if (chromeNow - chromeEnterLoggedAt > 1.0) {
         chromeEnterLoggedAt = chromeNow;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-25 enter landscape=%d active=%d presented=%d state=%lu hits=%lu",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-26 enter landscape=%d active=%d presented=%d state=%lu hits=%lu fallback=%d",
                    (int)landscape, (int)active, (int)gERControlCenterPresented,
-                   (unsigned long)gERControlCenterPresentationState, (unsigned long)statusBar.count);
+                   (unsigned long)gERControlCenterPresentationState, (unsigned long)statusBar.count,
+                   (int)usedFallback);
     }
 
     // 诊断先于改写：这时读到的还是「原生/基准」位置。
@@ -12532,10 +12535,12 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 // 下一次日志能直接判定是「类名不对」「窗口不对」还是「rise 不对」。
 // 横屏期间只打一次，回到竖屏复位。
 - (void)dumpLandscapeChromeDiagnosticsForOverlay:(UIViewController *)overlay landscape:(BOOL)landscape matched:(NSArray<UIView *> *)matched {
-    static BOOL dumped = NO;
-    if (!landscape) { dumped = NO; return; }   // 竖屏复位，下次横屏再打
-    if (dumped) return;
-    dumped = YES;
+    static CFTimeInterval dumpedAt = 0.0;
+    if (!landscape) { dumpedAt = 0.0; return; }   // 竖屏复位，下次横屏再打
+    // 1.0.7-26：原来一次会话只打一次，日志导出往往错过窗口 —— 改成 3 秒节流重复打。
+    CFTimeInterval dumpNow = CACurrentMediaTime();
+    if (dumpNow - dumpedAt < 3.0) return;
+    dumpedAt = dumpNow;
     UIWindow *window = overlay.view.window;
     CGRect winRect = window ? window.bounds : CGRectZero;
     CGSize screenSize = UIScreen.mainScreen.bounds.size;
@@ -12609,15 +12614,27 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     CGAffineTransform target = CGAffineTransformTranslate(baseValue.CGAffineTransformValue, 0.0, -rise);
     if (CGAffineTransformEqualToTransform(view.transform, target)) return;
     view.transform = target;
-    static NSMutableSet<NSString *> *landscapeChromeLogged = nil;
-    if (!landscapeChromeLogged) landscapeChromeLogged = [NSMutableSet set];
+    static NSMutableDictionary<NSString *, NSNumber *> *landscapeChromeLogged = nil;
+    if (!landscapeChromeLogged) landscapeChromeLogged = [NSMutableDictionary dictionary];
     NSString *key = [NSString stringWithFormat:@"%@/%.1f", NSStringFromClass(view.class), rise];
-    if (![landscapeChromeLogged containsObject:key]) {
-        [landscapeChromeLogged addObject:key];
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
+    // 1.0.7-26：改成 2 秒节流重复打，并在 0.15s 后复核一次 —— 用来区分
+    // 「压根没写进去」和「写进去又被系统改回去」。
+    CFTimeInterval chromeNow = CACurrentMediaTime();
+    NSNumber *lastLogged = landscapeChromeLogged[key];
+    if (!lastLogged || chromeNow - lastLogged.doubleValue > 2.0) {
+        landscapeChromeLogged[key] = @(chromeNow);
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-26 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
                    NSStringFromClass(view.class), rise, CGRectGetMinY(view.frame), CGRectGetHeight(view.frame),
                    view.transform.ty,
                    view.window ? CGRectGetMinY([view convertRect:view.bounds toView:view.window]) : -1.0);
+        __weak UIView *weakChrome = view;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIView *alive = weakChrome;
+            if (!alive) return;
+            ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-26 verify class=%@ ty=%.1f winY=%.1f",
+                       NSStringFromClass(alive.class), alive.transform.ty,
+                       alive.window ? CGRectGetMinY([alive convertRect:alive.bounds toView:alive.window]) : -1.0);
+        });
     }
 }
 
@@ -22309,19 +22326,77 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                                                        style:UIAlertActionStyleDefault
                                                      handler:^(__unused UIAlertAction *action) {
                 @try {
-                    SEL move = NSSelectorFromString(@"addIcons:intoFolderIcon:openFolderOnFinish:completion:");
-                    SEL moveAlt = NSSelectorFromString(@"addIcons:intoFolderIcon:openFolderOnFinish:complete:");
-                    id target = [model respondsToSelector:move] ? model : ([controller respondsToSelector:move] ? controller : nil);
-                    SEL use = [model respondsToSelector:move] ? move : moveAlt;
-                    if (!target) target = [controller respondsToSelector:moveAlt] ? controller : model;
-                    if (![target respondsToSelector:use]) {
-                        ERLogInfo(@"QUICKADD ver=1.0.7-21 move: no addIcons selector on model/controller");
-                        return;
+                    // 1.0.7-26：iOS 17.2.1 实机日志证明 SBIconController 与 iconModel
+                    // 都不再响应 addIcons:intoFolderIcon:…（“点了没反应”的真正收尾点）。
+                    // 这里不再猜选择器，改成运行时发现：先把候选目标里所有含
+                    // "Folder" / "addIcon" 的方法名打进日志，再逐个尝试调用第一个命中的。
+                    NSMutableArray<id> *targets = [NSMutableArray array];
+                    void (^addTarget)(id) = ^(id obj) { if (obj && ![targets containsObject:obj]) [targets addObject:obj]; };
+                    addTarget(controller);
+                    addTarget(model);
+                    for (NSString *key in @[@"iconManager", @"_iconManager"]) {
+                        @try { addTarget([controller valueForKey:key]); } @catch (__unused NSException *e) {}
                     }
-                    ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(target, use, @[icon], folderIcon, NO, ^{});
-                    ERLogInfo(@"QUICKADD ver=1.0.7-21 moved into %@", rowTitle);
+                    Class managerClass = NSClassFromString(@"SBIconManager");
+                    if (managerClass && [managerClass respondsToSelector:@selector(sharedInstance)]) {
+                        @try { addTarget(((id (*)(id, SEL))objc_msgSend)(managerClass, @selector(sharedInstance))); }
+                        @catch (__unused NSException *e) {}
+                    }
+                    static BOOL apiDumped = NO;
+                    if (!apiDumped) {
+                        apiDumped = YES;
+                        for (id candidate in targets) {
+                            unsigned int methodCount = 0;
+                            Method *methods = class_copyMethodList([candidate class], &methodCount);
+                            NSMutableArray<NSString *> *hits = [NSMutableArray array];
+                            for (unsigned int i = 0; i < methodCount; i++) {
+                                NSString *name = NSStringFromSelector(method_getName(methods[i]));
+                                if ([name containsString:@"Folder"] || [name containsString:@"addIcon"]) [hits addObject:name];
+                            }
+                            free(methods);
+                            ERLogInfo(@"QUICKADD ver=1.0.7-26 api-dump cls=%@ count=%u hits=%@",
+                                       NSStringFromClass([candidate class]), methodCount, hits);
+                        }
+                    }
+                    NSArray<NSString *> *selectorNames = @[
+                        @"addIcons:intoFolderIcon:openFolderOnFinish:completion:",
+                        @"addIcons:intoFolderIcon:openFolderOnFinish:complete:",
+                        @"addIcons:intoFolderIcon:openFolderOnFinish:",
+                        @"addIcons:intoFolderIcon:",
+                        @"addIcon:intoFolderIcon:openFolderOnFinish:completion:",
+                        @"addIcon:intoFolderIcon:" ];
+                    BOOL invoked = NO;
+                    for (id candidate in targets) {
+                        for (NSString *name in selectorNames) {
+                            SEL sel = NSSelectorFromString(name);
+                            if (![candidate respondsToSelector:sel]) continue;
+                            @try {
+                                NSMethodSignature *sig = [candidate methodSignatureForSelector:sel];
+                                if (!sig) continue;
+                                NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                                inv.selector = sel;
+                                NSArray *icons = @[icon];
+                                id folder = folderIcon;
+                                [inv setArgument:&icons atIndex:2];
+                                [inv setArgument:&folder atIndex:3];
+                                if (sig.numberOfArguments > 4) { BOOL open = NO; [inv setArgument:&open atIndex:4]; }
+                                if (sig.numberOfArguments > 5) { id completion = nil; [inv setArgument:&completion atIndex:5]; }
+                                [inv invokeWithTarget:candidate];
+                                ERLogInfo(@"QUICKADD ver=1.0.7-26 moved via %@ %@ into %@",
+                                           NSStringFromClass([candidate class]), name, rowTitle);
+                                invoked = YES;
+                                break;
+                            } @catch (NSException *e) {
+                                ERLogInfo(@"QUICKADD ver=1.0.7-26 move EXC %@ via %@ %@",
+                                           e.reason, NSStringFromClass([candidate class]), name);
+                            }
+                        }
+                        if (invoked) break;
+                    }
+                    if (!invoked) ERLogInfo(@"QUICKADD ver=1.0.7-26 move: no target/selector on %lu candidate(s)",
+                                            (unsigned long)targets.count);
                 } @catch (NSException *exception) {
-                    ERLogInfo(@"QUICKADD ver=1.0.7-21 move EXC %@ -- %@", exception.name, exception.reason);
+                    ERLogInfo(@"QUICKADD ver=1.0.7-26 move EXC %@ -- %@", exception.name, exception.reason);
                 }
             }]];
         }
