@@ -12315,7 +12315,8 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     // 1.0.7-28：位移改落在**外层容器**上。
     // 023615 日志里可见那条带（CCUIStatusBar）的 transform 会被系统在两次写入之间
     // 重置；叶子视图追不上，但它的外层容器（HeaderPocket / 匿名容器）不由系统逐帧驱动。
-    NSMutableDictionary<UIView *, NSNumber *> *chromeApplied = [NSMutableDictionary dictionary];
+    NSMutableArray<UIView *> *appliedViews = [NSMutableArray array];
+    NSMutableArray<NSNumber *> *appliedRises = [NSMutableArray array];
     for (UIView *view in statusBar) {
         UIView *target = ERLandscapeStatusChromeTarget(view);
         if (!target) continue;
@@ -12334,15 +12335,17 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         } else {
             [self applyLandscapeRise:statusRise toView:target];
         }
-        if (statusRise > 0.0) chromeApplied[target] = @(statusRise);
+        if (statusRise > 0.0) { [appliedViews addObject:target]; [appliedRises addObject:@(statusRise)]; }
     }
     for (UIView *view in indicator) {
         CGFloat rise = [self landscapeChromeRiseForContainer:view landscape:active];
         [self applyLandscapeRise:rise toView:view];
-        if (rise > 0.0) chromeApplied[view] = @(rise);
+        if (rise > 0.0) { [appliedViews addObject:view]; [appliedRises addObject:@(rise)]; }
     }
-    if (active && chromeApplied.count) {
-        for (UIView *view in chromeApplied) ERChromeReassertRegisterView(view, chromeApplied[view].doubleValue);
+    if (active && appliedViews.count) {
+        for (NSUInteger index = 0; index < appliedViews.count; index++) {
+            ERChromeReassertRegisterView(appliedViews[index], appliedRises[index].doubleValue);
+        }
         ERStartLandscapeChromeReassertIfNeeded();
     } else if (!active) {
         ERStopLandscapeChromeReassert();
@@ -22491,10 +22494,10 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         }
         ERQuickAddSheetController *sheet = [[ERQuickAddSheetController alloc] init];
         sheet.titles = rowTitles;
-        NSArray<id> *folders = [folderIcons copy];
+        NSArray<id> *folderList = [folderIcons copy];
         sheet.onPick = ^(NSInteger index) {
-            if (index < 0 || index >= (NSInteger)folders.count) return;
-            id folderIcon = folders[(NSUInteger)index];
+            if (index < 0 || index >= (NSInteger)folderList.count) return;
+            id folderIcon = folderList[(NSUInteger)index];
             NSString *rowTitle = rowTitles[(NSUInteger)index];
             @try {
                     // 1.0.7-26：iOS 17.2.1 实机日志证明 SBIconController 与 iconModel
@@ -22582,7 +22585,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
         ERLogInfo(@"QUICKADD ver=1.0.7-28 picker presenter=%@ folders=%lu",
                   presenter ? NSStringFromClass(presenter.class) : @"(nil)",
-                  (unsigned long)folders.count);
+                  (unsigned long)folderList.count);
         sheet.modalPresentationStyle = UIModalPresentationOverFullScreen;
         sheet.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
         [presenter presentViewController:sheet animated:NO completion:nil];
