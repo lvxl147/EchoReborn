@@ -70,6 +70,30 @@ static void toggleDualCam(void);
 
 static void shootPhoto(void);
 
+// ---------------------------------------------------------------------------
+// 1.0.7-20 · 前向声明。
+//
+// 这几样东西（小窗位置枚举 + 读取/换算helper）的**定义**在文件后半段 —— 它们依赖
+// 那里的 DualCamLog / 偏好域常量。但 DualCamPreviewController 的类方法（
+// viewDidLayoutSubviews / composeShot / compositeVideoFrame）在文件前半段就要用它们，
+// 而 C 不允许「先用后定义」。所以在这里先声明，定义仍在原处（只有一份）。
+// ---------------------------------------------------------------------------
+typedef NS_ENUM(NSInteger, ERDualCamCorner) {
+    ERDualCamCornerTopLeft = 0,
+    ERDualCamCornerTopRight = 1,
+    ERDualCamCornerBottomLeft = 2,
+    ERDualCamCornerBottomRight = 3,
+};
+
+static NSInteger DualCamCornerValue(void);
+static NSInteger DualCamCornerValueCached(void);
+static NSString *DualCamCornerName(NSInteger corner);
+static CGRect DualCamCornerRect(NSInteger corner, CGSize hostSize, CGSize windowSize,
+                                CGFloat marginX, CGFloat marginY);
+// DualCamLog 的定义同样在文件后半段，而类方法里（viewDidLayoutSubviews / composeShot）
+// 要打诊断日志，所以这里也要先声明。
+static void DualCamLog(NSString *format, ...);
+
 @interface DualCamShutterTarget : NSObject
 @end
 @implementation DualCamShutterTarget
@@ -205,7 +229,7 @@ static void shootPhoto(void) {
     CGFloat w = 130, h = 180;
     CGFloat topMargin = MAX(topInset + 14.0, 80.0);
     CGFloat bottomMargin = 150.0;
-    NSInteger corner = DualCamCornerValue();
+    NSInteger corner = DualCamCornerValueCached();
     BOOL pipLeft = (corner == ERDualCamCornerTopLeft || corner == ERDualCamCornerBottomLeft);
     BOOL pipTop = (corner == ERDualCamCornerTopLeft || corner == ERDualCamCornerTopRight);
     CGFloat pipX = pipLeft ? 16.0 : sw - w - 16.0;
@@ -731,7 +755,7 @@ static void releaseFrameCopy(void *info, const void *data, size_t size) {
         CGFloat fAspect = swap ? ((CGFloat)fw / fh) : ((CGFloat)fh / fw);
         CGFloat ph = pw * fAspect;
         // 1.0.7-20（用户第 3 条）：录像里的小窗落点与照片、与双摄画面同源。
-        CGRect pip = DualCamCornerRect(DualCamCornerValue(),
+        CGRect pip = DualCamCornerRect(DualCamCornerValueCached(),
                                        CGSizeMake(self.recordW, self.recordH),
                                        CGSizeMake(pw, ph),
                                        self.recordW * 0.03, self.recordH * 0.03);
@@ -806,7 +830,7 @@ static void releaseFrameCopy(void *info, const void *data, size_t size) {
 - (UIImage *)composeShot {
     CGSize bs = g_backShot.size;
     if (bs.width < 1 || bs.height < 1) return nil;
-    NSInteger corner = DualCamCornerValue();
+    NSInteger corner = DualCamCornerValueCached();
     UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:bs];
     UIImage *composed = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
         [g_backShot drawInRect:CGRectMake(0, 0, bs.width, bs.height)];
@@ -941,12 +965,8 @@ static BOOL DualCamFeatureEnabled(void) {
 // 相机是沙盒进程，读不到偏好时走与开关同一条标记文件回退链。
 static NSString *const kERDualCamCornerKey = @"DualCam.Corner";
 
-typedef NS_ENUM(NSInteger, ERDualCamCorner) {
-    ERDualCamCornerTopLeft = 0,
-    ERDualCamCornerTopRight = 1,
-    ERDualCamCornerBottomLeft = 2,
-    ERDualCamCornerBottomRight = 3,
-};
+// ERDualCamCorner 枚举与四个 helper 的前向声明在文件开头（类方法要先用到它们），
+// 这里只放定义 —— 同一份，不重复声明枚举。
 
 static NSInteger DualCamCornerValue(void) {
     // 本函数每次布局都会被调用 —— 日志只在**首次**落一行，避免刷屏
@@ -990,6 +1010,20 @@ static NSString *DualCamCornerName(NSInteger corner) {
         case ERDualCamCornerBottomRight: return @"右下";
         default:                         return @"右上";
     }
+}
+
+// 带 1 秒缓存的值读取。**必须有**：录像合成是每帧调用（30fps），而回退链里
+// NSFileManager 那次是**真读磁盘** —— 不留缓存就是每秒 30 次文件读取。
+// 1 秒的窗口对「改设置 → 立刻生效」的体感无影响。
+static NSInteger DualCamCornerValueCached(void) {
+    static NSInteger sCorner = -1;
+    static CFAbsoluteTime sCornerAt = 0.0;
+    CFAbsoluteTime now = CFAbsoluteTimeGetCurrent();
+    if (sCorner < 0 || now - sCornerAt > 1.0) {
+        sCorner = DualCamCornerValue();
+        sCornerAt = now;
+    }
+    return sCorner;
 }
 
 // 小窗在 hostSize 里的落点。边距分开传：画面按点数、照片按比例（3%）。
