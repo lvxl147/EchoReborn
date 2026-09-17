@@ -260,6 +260,32 @@
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>保存横屏布局</string>
+			<key>footerText</key>
+			<string>开启后，横屏下的布局可单独摆放并保存，与竖屏互不干扰；关闭时横屏按竖屏布局一分为二展示（左 1–4 行 / 右 5–8 行）。摆放方式：控制中心编辑态里直接拖动，落点吸附到页内 32 个圆位（8 列 × 4 行），松手即保存（横屏专用）。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>保存布局</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>LandscapeLayout.Enabled</string>
+			<key>default</key>
+			<false/>
+			<key>erIcon</key>
+			<string>rectangle.on.rectangle</string>
+			<key>erIconColor</key>
+			<string>blue</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
 	</array>
 </dict>
 </plist>

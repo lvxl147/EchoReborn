@@ -1155,6 +1155,67 @@ static NSMutableDictionary<NSString *, NSNumber *> *gERConnectivityOptimisticSta
 static UIImage *gERSheetScreenImage;
 static NSDictionary<NSString *, NSValue *> *gERSheetModuleFrames;
 
+// ---------------------------------------------------------------------------
+// 1.0.7-22 · 保存横屏布局
+//
+// 开关关（默认 = 1.0.7-21 的行为）：横屏位置一律由竖屏账本折行推导
+// （行 ≥ 4 → 列 + 4、行 − 4），横屏不能单独摆放。
+// 开关开：横屏拥有一套**独立账本** gERLandscapeOrigins。横屏呈现时先查它，
+// 命中就用账本里的格位；没摆放过的模块回退折行位。竖屏完全不受影响。
+//
+// 坐标口径（关键）：横屏账本存的**不是**横屏像素坐标，而是与竖屏同一套
+// 「配置空间」格位（4 列 × 8 行 / 页，绝对行 = 页 × 8 + 行）。折叠
+// （行 ≥ 4 → 列 + 4、行 − 4）是 32 格 ↔ 32 格的**双射**，所以横屏的任意
+// 一格都能反算成唯一的竖屏格位 —— 折叠、翻页、合法性校验、占用判定因此
+// 全部复用现有代码，不必为横屏再写一套几何。拖动落点（8 列 × 4 行的横屏
+// 格位）在写入前用 ERPortraitCellFromLandscapeCell 反算即可。
+static BOOL gERLandscapeLayoutEnabled = NO;
+static NSMutableDictionary<NSString *, NSArray<NSNumber *> *> *gERLandscapeOrigins;
+
+// 开关开 **且** 当前确实是横屏呈现 —— 两者都成立才走横屏账本。
+static BOOL ERLandscapeLayoutActive(void) {
+    return gERLandscapeLayoutEnabled && ERLandscapePresentationActive();
+}
+
+// 读取一个模块的**生效格位**：横屏账本优先，否则竖屏账本。
+static NSArray<NSNumber *> *ERStoredOriginForIdentifier(NSString *identifier) {
+    if (!identifier.length) return nil;
+    if (ERLandscapeLayoutActive()) {
+        NSArray<NSNumber *> *landscape = gERLandscapeOrigins[identifier];
+        if (landscape.count >= 2) return landscape;
+    }
+    return gERCustomOrigins[identifier];
+}
+
+// 写入一个模块的格位（只动内存；落盘统一由 ERPersistStoredOrigins 做）。
+static void ERStoreOriginForIdentifier(NSString *identifier, NSUInteger column, NSUInteger absoluteRow) {
+    if (!identifier.length) return;
+    NSArray<NSNumber *> *value = @[@(column), @(absoluteRow)];
+    BOOL landscape = ERLandscapeLayoutActive();
+    if (landscape) gERLandscapeOrigins[identifier] = value;
+    else gERCustomOrigins[identifier] = value;
+    ERLogInfo(@"LANDSCAPE ver=1.0.7-22 store id=%@ cell={%lu,%lu} ledger=%@",
+              identifier, (unsigned long)column, (unsigned long)absoluteRow,
+              landscape ? @"landscape" : @"portrait");
+}
+
+static void ERPersistStoredOrigins(void) {
+    if (ERLandscapeLayoutActive()) {
+        CFPreferencesSetAppValue(CFSTR("COSMICLandscapeOrigins"), (__bridge CFPropertyListRef)[gERLandscapeOrigins copy], kERPrefsDomain);
+    } else {
+        CFPreferencesSetAppValue(CFSTR("ModuleGridOrigins"), (__bridge CFPropertyListRef)[gERCustomOrigins copy], kERPrefsDomain);
+    }
+    CFPreferencesAppSynchronize(kERPrefsDomain);
+}
+
+// 横屏格位（8 列 × 4 行）→ 等价的竖屏格位（4 列 × 8 行）。折叠的逆运算。
+static CCUILayoutPoint ERPortraitCellFromLandscapeCell(CCUILayoutPoint cell) {
+    if (cell.x >= kERLandscapeBlockColumns) {
+        return (CCUILayoutPoint){cell.x - kERLandscapeBlockColumns, cell.y + kERLandscapeBlockRows};
+    }
+    return cell;
+}
+
 static CGRect ERRemoveButtonFrameForModuleFrame(CGRect moduleFrame) {
     CGFloat originOffset = kERRemoveVisualCenterOffset - kERRemoveHitSize * 0.5;
     return CGRectMake(CGRectGetMinX(moduleFrame) + originOffset,
@@ -2226,6 +2287,7 @@ static void ERLoadPrefs(void) {
     gVolumeControlEnabled = ERPreferenceBool(@"VolumeControlEnabled", YES);
     gBrightnessControlEnabled = ERPreferenceBool(@"BrightnessControlEnabled", YES);
     gERLoggingEnabled = ERPreferenceBool(@"LoggingEnabled", NO);
+    gERLandscapeLayoutEnabled = ERPreferenceBool(@"LandscapeLayout.Enabled", NO);
     ERLogPrefs();
 }
 
@@ -7676,7 +7738,7 @@ static NSUInteger ERPageForModuleIdentifier(NSString *identifier) {
     CCUILayoutRect rect = {};
     NSValue *value = gERNativeLayoutRects[identifier];
     if (value) [value getValue:&rect];
-    NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+    NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
     if (origin.count >= 2) {
         rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
     } else if (!value) {
@@ -7732,12 +7794,12 @@ static void ERLogShortcutGridOnce(UIViewController *module, NSString *identifier
                  fabs(candidateFrame.size.height - selfFrame.size.height) > 1.0)) continue;
             refFrame = candidateFrame;
             refIdentifier = candidateIdentifier;
-            refOrigin = gERCustomOrigins[candidateIdentifier];
+            refOrigin = ERStoredOriginForIdentifier(candidateIdentifier);
             break;
         }
     }
 
-    NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+    NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
     NSMutableString *state = [NSMutableString string];
     if (origin.count >= 2) {
         [state appendFormat:@"cell={%lu,%lu} ",
@@ -8439,7 +8501,7 @@ static NSString *ERThemedPageIndicatorSymbolForPage(NSUInteger page) {
         if (!value) continue;
         CCUILayoutRect rect = {};
         [value getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) rect.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -8491,7 +8553,7 @@ static NSMutableDictionary<NSString *, NSValue *> *ERLayoutForPage(UIViewControl
         if (!nativeValue) continue;
         CCUILayoutRect rect = {};
         [nativeValue getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) rect.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -8518,7 +8580,7 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
         if (!nativeValue) continue;
         CCUILayoutRect rect = {};
         [nativeValue getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSUInteger page = ERPageForRect(rect);
         CGRect visibleFrame = [module.view convertRect:module.view.bounds toView:overlay.view];
@@ -9327,7 +9389,7 @@ static void ERStartPageSettleProbe(CALayer *layer) {
         if (!nativeValue || !module.view) continue;
         CCUILayoutRect logical = {};
         [nativeValue getValue:&logical];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) logical.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) logical.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -9564,7 +9626,7 @@ static BOOL ERGridAnchorMeasure(UIViewController *candidate, NSString *identifie
     if (!nativeValue) return NO;
     CCUILayoutRect logical = {};
     [nativeValue getValue:&logical];
-    NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+    NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
     if (origin.count >= 2) {
         logical.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
     }
@@ -9721,7 +9783,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (!nativeValue) continue;
         CCUILayoutRect rect = {};
         [nativeValue getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) rect.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -10019,6 +10081,12 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
                 [gERCustomSizes removeObjectForKey:staleID];
             }
         }
+        for (NSString *staleID in gERLandscapeOrigins.allKeys) {
+            if (!moduleByIdentifier[staleID] && ![enabledForPrune containsObject:staleID]) {
+                [gERLandscapeOrigins removeObjectForKey:staleID];
+                changed = YES;
+            }
+        }
     }
 
     for (NSString *identifier in order) {
@@ -10037,7 +10105,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (desired.size.width > 4) desired.size.width = 4;
         if (desired.size.height > kERMinimumGridRows) desired.size.height = kERMinimumGridRows;
 
-        NSArray<NSNumber *> *savedOrigin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *savedOrigin = ERStoredOriginForIdentifier(identifier);
         BOOL hadSavedOrigin = savedOrigin.count >= 2;
         if (hadSavedOrigin) desired.origin = (CCUILayoutPoint){savedOrigin[0].unsignedIntegerValue, savedOrigin[1].unsignedIntegerValue};
         BOOL crossesBoundary = (desired.origin.y % kERMinimumGridRows) + desired.size.height > kERMinimumGridRows;
@@ -10105,7 +10173,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (!nativeValue) continue;
         CCUILayoutRect rect = {};
         [nativeValue getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         // 1.0.6-7（第 4 条）：`showAdjacent` 原本是「任何页都算可见」，于是
         //     pageVisible = YES 被无条件写到底下那一行 layer.opacity = 1.0 上，
@@ -10633,7 +10701,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (!nativeValue) continue;
         CCUILayoutRect rect = {};
         [nativeValue getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         BOOL selected = ERPageForRect(rect) == gERCurrentPage;
         UIVisualEffectView *border = objc_getAssociatedObject(module.view, @selector(applyEditingToModule:editing:));
@@ -10691,7 +10759,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
                 if (!nativeValue) continue;
                 CCUILayoutRect rect = {};
                 [nativeValue getValue:&rect];
-                NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+                NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
                 if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
                 if (ERPageForRect(rect) == gERCurrentPage) [self applyEditingToModule:module editing:YES];
             }
@@ -11242,7 +11310,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             if (!nativeValue) continue;
             CCUILayoutRect rect = {};
             [nativeValue getValue:&rect];
-            NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+            NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
             if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
             if (ERPageForRect(rect) != candidate) continue;
             [module.view.layer removeAnimationForKey:@"EchoRebornPagerPopScale"];
@@ -14002,7 +14070,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         if (![present containsObject:existing]) continue;
         CCUILayoutRect rect = {};
         [gERNativeLayoutRects[existing] getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[existing];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(existing);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[existing];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
@@ -14124,7 +14192,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         if (![occupied containsObject:existing]) continue;
         CCUILayoutRect rect = {};
         [gERNativeLayoutRects[existing] getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[existing];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(existing);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[existing];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
@@ -14175,7 +14243,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         if (![present containsObject:existing]) continue;
         CCUILayoutRect rect = {};
         [gERNativeLayoutRects[existing] getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[existing];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(existing);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[existing];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
@@ -15203,10 +15271,9 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         }
     }
     NSUInteger pageStart = gERCurrentPage * kERMinimumGridRows;
-    gERCustomOrigins[sourceID] = @[@(sourceRect.origin.x), @(pageStart + sourceRect.origin.y)];
-    gERCustomOrigins[targetID] = @[@(targetRect.origin.x), @(pageStart + targetRect.origin.y)];
-    CFPreferencesSetAppValue(CFSTR("ModuleGridOrigins"), (__bridge CFPropertyListRef)[gERCustomOrigins copy], kERPrefsDomain);
-    CFPreferencesAppSynchronize(kERPrefsDomain);
+    ERStoreOriginForIdentifier(sourceID, sourceRect.origin.x, pageStart + sourceRect.origin.y);
+    ERStoreOriginForIdentifier(targetID, targetRect.origin.x, pageStart + targetRect.origin.y);
+    ERPersistStoredOrigins();
     UIViewController *collection = [self moduleCollectionControllerInOverlay:overlay];
     [collection.view setNeedsLayout];
     [UIView animateWithDuration:0.22 animations:^{ [collection.view layoutIfNeeded]; }];
@@ -15250,9 +15317,8 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         }
     }
     NSUInteger pageStart = page * kERMinimumGridRows;
-    gERCustomOrigins[sourceID] = @[@(destination.x), @(pageStart + destination.y)];
-    CFPreferencesSetAppValue(CFSTR("ModuleGridOrigins"), (__bridge CFPropertyListRef)[gERCustomOrigins copy], kERPrefsDomain);
-    CFPreferencesAppSynchronize(kERPrefsDomain);
+    ERStoreOriginForIdentifier(sourceID, destination.x, pageStart + destination.y);
+    ERPersistStoredOrigins();
     UIViewController *collection = [self moduleCollectionControllerInOverlay:overlay];
     [collection.view setNeedsLayout];
     [UIView animateWithDuration:0.22 animations:^{ [collection.view layoutIfNeeded]; }];
@@ -15340,17 +15406,16 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 
     // Commit every changed origin together only after the complete cascade fits.
     NSUInteger sourcePageStart = page * kERMinimumGridRows;
-    gERCustomOrigins[sourceID] = @[@(destination.x), @(sourcePageStart + destination.y)];
+    ERStoreOriginForIdentifier(sourceID, destination.x, sourcePageStart + destination.y);
     for (NSString *identifier in proposed) {
         CCUILayoutRect before = {}, after = {};
         [initial[identifier] getValue:&before]; [proposed[identifier] getValue:&after];
         if (before.origin.x != after.origin.x || before.origin.y != after.origin.y) {
             NSUInteger pageStart = page * kERMinimumGridRows;
-            gERCustomOrigins[identifier] = @[@(after.origin.x), @(pageStart + after.origin.y)];
+            ERStoreOriginForIdentifier(identifier, after.origin.x, pageStart + after.origin.y);
         }
     }
-    CFPreferencesSetAppValue(CFSTR("ModuleGridOrigins"), (__bridge CFPropertyListRef)[gERCustomOrigins copy], kERPrefsDomain);
-    CFPreferencesAppSynchronize(kERPrefsDomain);
+    ERPersistStoredOrigins();
     UIViewController *collection = [self moduleCollectionControllerInOverlay:overlay];
     [collection.view setNeedsLayout];
     [UIView animateWithDuration:0.22 animations:^{ [collection.view layoutIfNeeded]; }];
@@ -15390,7 +15455,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (!identifier.length || !nativeRect) continue;
         CCUILayoutRect effectiveRect = {};
         [nativeRect getValue:&effectiveRect];
-        NSArray<NSNumber *> *savedOrigin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *savedOrigin = ERStoredOriginForIdentifier(identifier);
         if (savedOrigin.count >= 2) effectiveRect.origin = (CCUILayoutPoint){savedOrigin[0].unsignedIntegerValue, savedOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *savedSize = gERCustomSizes[identifier];
         if (savedSize.count >= 2) effectiveRect.size = (CCUILayoutSize){savedSize[0].unsignedIntegerValue, savedSize[1].unsignedIntegerValue};
@@ -15429,7 +15494,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (!nativeRect) continue;
         CCUILayoutRect rect = {};
         [nativeRect getValue:&rect];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) rect.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -15498,11 +15563,12 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     for (NSString *identifier in proposed) {
         CCUILayoutRect before = {}, after = {};
         [initial[identifier] getValue:&before]; [proposed[identifier] getValue:&after];
-        if (before.origin.x != after.origin.x || before.origin.y != after.origin.y) gERCustomOrigins[identifier] = @[@(after.origin.x), @(pageStart + after.origin.y)];
+        if (before.origin.x != after.origin.x || before.origin.y != after.origin.y) ERStoreOriginForIdentifier(identifier, after.origin.x, pageStart + after.origin.y);
     }
-    [gERCustomOrigins addEntriesFromDictionary:overflowOrigins];
+    if (ERLandscapeLayoutActive()) [gERLandscapeOrigins addEntriesFromDictionary:overflowOrigins];
+    else [gERCustomOrigins addEntriesFromDictionary:overflowOrigins];
     gERCustomSizes[sourceID] = @[@(newSize.width), @(newSize.height)];
-    CFPreferencesSetAppValue(CFSTR("ModuleGridOrigins"), (__bridge CFPropertyListRef)[gERCustomOrigins copy], kERPrefsDomain);
+    ERPersistStoredOrigins();
     CFPreferencesSetAppValue(CFSTR("ModuleGridSizes"), (__bridge CFPropertyListRef)[gERCustomSizes copy], kERPrefsDomain);
     CFPreferencesAppSynchronize(kERPrefsDomain);
 
@@ -15688,7 +15754,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                 if (layoutValue) {
                     CCUILayoutRect rect = {};
                     [layoutValue getValue:&rect];
-                    NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+                    NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
                     if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
                     page = ERPageForRect(rect);
                 }
@@ -15973,7 +16039,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         NSValue *layoutValue = gERNativeLayoutRects[sourceID];
         if (layoutValue) {
             [layoutValue getValue:&sourceLogical];
-            NSArray<NSNumber *> *origin = gERCustomOrigins[sourceID];
+            NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(sourceID);
             if (origin.count >= 2) sourceLogical.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
             NSArray<NSNumber *> *size = gERCustomSizes[sourceID];
             if (size.count >= 2) sourceLogical.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -16221,16 +16287,24 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         BOOL didSwap = sourceIndex != NSNotFound && targetIndex != NSNotFound && sourceIndex != targetIndex;
         NSArray<NSNumber *> *landingOrigin = moved ? objc_getAssociatedObject(gesture, kERDragLandingOriginKey) : nil;
         BOOL didBlankMove = NO;
+        // 1.0.7-22：开启「保存布局」后横屏编辑网格是 8 列 × 4 行（= 页内 32 圆位），
+        // 落点是**横屏格位**；写入前反算成等价的竖屏格位（折叠是双射），竖屏那套
+        // 合法性 / 占用判定即可原样复用，横屏再按折叠渲染回同一格。
+        CCUILayoutPoint landingCell = {0, 0};
+        if (landingOrigin.count >= 2) {
+            landingCell = (CCUILayoutPoint){landingOrigin[0].unsignedIntegerValue, landingOrigin[1].unsignedIntegerValue};
+            if (ERLandscapeLayoutActive()) landingCell = ERPortraitCellFromLandscapeCell(landingCell);
+        }
         if (landingOrigin.count >= 2) {
             didBlankMove = [self applyExplicitGridMoveFrom:sourceID
-                                                  toOrigin:(CCUILayoutPoint){landingOrigin[0].unsignedIntegerValue, landingOrigin[1].unsignedIntegerValue}
+                                                  toOrigin:landingCell
                                                     onPage:dragPage
                                                    overlay:overlay];
             if (!didBlankMove) {
                 didBlankMove = [self applyExplicitGridInsertionFrom:sourceID
-                                                           toOrigin:(CCUILayoutPoint){landingOrigin[0].unsignedIntegerValue, landingOrigin[1].unsignedIntegerValue}
+                                                           toOrigin:landingCell
                                                              onPage:dragPage
-                                                            maxRows:grid.rows
+                                                            maxRows:ERLandscapeLayoutActive() ? kERMinimumGridRows : grid.rows
                                                             overlay:overlay];
             }
         }
@@ -16881,7 +16955,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (identifier.length && ERIsActiveDragModuleIdentifier(identifier)) continue;
         CCUILayoutRect logical = {};
         [nativeValue getValue:&logical];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) logical.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) logical.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -16934,7 +17008,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (!nativeValue) continue;
         CCUILayoutRect logical = {};
         [nativeValue getValue:&logical];
-        NSArray<NSNumber *> *origin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
         if (origin.count >= 2) logical.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *size = gERCustomSizes[identifier];
         if (size.count >= 2) logical.size = (CCUILayoutSize){size[0].unsignedIntegerValue, size[1].unsignedIntegerValue};
@@ -16953,7 +17027,19 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             for (NSUInteger dx = 0; dx < logical.size.width; dx++) {
                 NSUInteger column = logical.origin.x + dx;
                 if (column >= 4) continue;
-                [indexes addIndex:row * 4 + column];
+                if (ERLandscapeLayoutActive()) {
+                    // 横屏网格是 8 列 × 4 行：占用格按同一套折叠规则换算过去。
+                    NSUInteger foldedRow = row;
+                    NSUInteger foldedColumn = column;
+                    if (foldedRow >= kERLandscapeBlockRows) {
+                        foldedRow -= kERLandscapeBlockRows;
+                        foldedColumn += kERLandscapeBlockColumns;
+                    }
+                    if (foldedRow >= kERLandscapeBlockRows || foldedColumn >= (kERLandscapeBlockColumns * 2)) continue;
+                    [indexes addIndex:foldedRow * (kERLandscapeBlockColumns * 2) + foldedColumn];
+                } else {
+                    [indexes addIndex:row * 4 + column];
+                }
             }
         }
     }
@@ -16985,8 +17071,12 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                                 CGRectGetHeight(gridStack.bounds));
         CGPoint base = cachedBase;
         NSMutableArray<NSValue *> *slots = [NSMutableArray array];
-        for (NSUInteger row = 0; row < kERMinimumGridRows; row++) {
-            for (NSUInteger column = 0; column < 4; column++) {
+        // 1.0.7-22：开启「保存布局」时，横屏编辑网格就是折行后的 8 列 × 4 行 ——
+        // 也就是用户真正看到的 32 个圆位；关着的时候维持 4 列 × 8 行不变。
+        NSUInteger gridColumnCount = ERLandscapeLayoutActive() ? (NSUInteger)(kERLandscapeBlockColumns * 2) : 4;
+        NSUInteger gridRowCount = ERLandscapeLayoutActive() ? (NSUInteger)kERLandscapeBlockRows : (NSUInteger)kERMinimumGridRows;
+        for (NSUInteger row = 0; row < gridRowCount; row++) {
+            for (NSUInteger column = 0; column < gridColumnCount; column++) {
                 CGRect slot = CGRectMake(base.x + column * step, base.y + row * step, cell, cell);
                 if (CGRectGetMaxX(slot) <= CGRectGetWidth(grid.bounds) + 1.0 && CGRectGetMaxY(slot) <= CGRectGetHeight(grid.bounds) + 1.0) [slots addObject:[NSValue valueWithCGRect:slot]];
             }
@@ -16996,8 +17086,8 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         [occupiedIndexes enumerateIndexesUsingBlock:^(NSUInteger index, __unused BOOL *stop) {
             if (index < slots.count) [occupied addObject:slots[index]];
         }];
-        grid.columns = 4;
-        grid.rows = kERMinimumGridRows;
+        grid.columns = gridColumnCount;
+        grid.rows = gridRowCount;
         grid.slotRects = slots;
         grid.occupiedRects = occupied;
         grid.alpha = 1.0;
@@ -17610,7 +17700,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (identifier.length) {
         if (!gERBaseLayoutSizes[identifier]) gERBaseLayoutSizes[identifier] = [NSValue value:&rect.size withObjCType:@encode(CCUILayoutSize)];
         gERNativeLayoutRects[identifier] = [NSValue value:&rect withObjCType:@encode(CCUILayoutRect)];
-        NSArray<NSNumber *> *customOrigin = gERCustomOrigins[identifier];
+        NSArray<NSNumber *> *customOrigin = ERStoredOriginForIdentifier(identifier);
         if (customOrigin.count >= 2) rect.origin = (CCUILayoutPoint){customOrigin[0].unsignedIntegerValue, customOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[identifier];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
@@ -22368,6 +22458,9 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         CFPropertyListRef savedOrigins = CFPreferencesCopyAppValue(CFSTR("ModuleGridOrigins"), kERPrefsDomain);
         gERCustomOrigins = [(__bridge NSDictionary *)savedOrigins mutableCopy] ?: [NSMutableDictionary dictionary];
         if (savedOrigins) CFRelease(savedOrigins);
+        CFPropertyListRef savedLandscapeOrigins = CFPreferencesCopyAppValue(CFSTR("COSMICLandscapeOrigins"), kERPrefsDomain);
+        gERLandscapeOrigins = [(__bridge NSDictionary *)savedLandscapeOrigins mutableCopy] ?: [NSMutableDictionary dictionary];
+        if (savedLandscapeOrigins) CFRelease(savedLandscapeOrigins);
         CFPropertyListRef savedSizes = CFPreferencesCopyAppValue(CFSTR("ModuleGridSizes"), kERPrefsDomain);
         gERCustomSizes = [(__bridge NSDictionary *)savedSizes mutableCopy] ?: [NSMutableDictionary dictionary];
         if (savedSizes) CFRelease(savedSizes);
@@ -22379,6 +22472,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         // 也让迁移的并集合并不会留下成对的新旧前缀条目。
         ERNormalizeIdentifierKeys(gERDuplicateFamilies);
         ERNormalizeIdentifierKeys(gERCustomOrigins);
+        ERNormalizeIdentifierKeys(gERLandscapeOrigins);
         ERNormalizeIdentifierKeys(gERCustomSizes);
         // 1.0.6：归一化只保证「键与值的前缀一致」，不保证值存在。历史上落盘过
         // 「有键、值为空串」的条目，而空值条目既渲染不出来、又把对应控制项挡在
