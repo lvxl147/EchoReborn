@@ -499,6 +499,7 @@ static const void *kERQuickAccessGlyphNameKey = &kERQuickAccessGlyphNameKey;
 // 那条 key 被多处 capture/restore 共用，若它在位移生效之后才首次捕获，基准就会
 // 变成本身已经上移过的值，再叠加一次就成了双倍位移。自己存一份可以保证幂等。
 static const void *kERLandscapeChromeBaseTransformKey = &kERLandscapeChromeBaseTransformKey;
+static const void *kERChromeRetryStampKey = &kERChromeRetryStampKey;
 // 0.5.19：被平移过的「系统状态栏窗口」内的视图。这个窗口在 CC 收起后仍然存在，
 // 必须登记下来在竖屏 / CC 收起时还原，否则会把 App 自己的横屏状态栏一起带偏。
 static NSMutableArray<UIView *> *gERLandscapeSystemStatusBarMoved = nil;
@@ -8699,6 +8700,7 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
 // 0.5.17 横屏顶部 chrome
 - (void)updateQuickAccessGeometryForHost:(UIView *)host overlay:(UIViewController *)controller;
 - (void)applyLandscapeChromeRiseForOverlay:(UIViewController *)overlay;
+- (void)scheduleLandscapeChromeRetryForOverlay:(UIViewController *)overlay;
 - (CGFloat)landscapeChromeRiseForContainer:(UIView *)container landscape:(BOOL)landscape;
 - (void)applyLandscapeRise:(CGFloat)rise toView:(UIView *)view;
 - (void)dumpLandscapeChromeDiagnosticsForOverlay:(UIViewController *)overlay landscape:(BOOL)landscape matched:(NSArray<UIView *> *)matched;
@@ -12100,6 +12102,8 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     if (!gEnabled || !controller.view) return;
     [self installQuickAccessHostOnOverlay:controller];
     [self installTopFadeForOverlay:controller];
+    // 1.0.7-25：横屏 chrome 上升的保底触发链 —— 无论布局钩子是否走到都补几次。
+    [self scheduleLandscapeChromeRetryForOverlay:controller];
     if ([gOverlayControllers containsObject:controller]) return;
     if (gBlankSpaceGestureEnabled) {
         UILongPressGestureRecognizer *blankHold = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(blankHeld:)];
@@ -12144,6 +12148,30 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     [self syncOwnedDuplicateModulesForOverlay:controller];
     [self installPagingOnOverlay:controller];
     [self applyRestingModuleOffsetToOverlay:controller];
+}
+
+// 1.0.7-25 · 横屏 chrome 上升的保底触发链。
+//
+// 实机日志（2026-09-18 02:04，横屏会话，span=352 确认是横屏）里一次 CHROMADUMP 都没有：
+// 原来只靠 -viewDidLayoutSubviews（还带呈现状态门槛）触发，那条链在本机没走到。
+// 这里改在「安装」这条一定会执行的链路上补一组延迟重试：0.15 / 0.4 / 0.9 / 1.8s，
+// 每次都重新判定「CC 呈现 + 横屏」，命中就整体施加一次（applyLandscapeRise 幂等）。
+- (void)scheduleLandscapeChromeRetryForOverlay:(UIViewController *)overlay {
+    if (!overlay) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    NSNumber *last = objc_getAssociatedObject(overlay, kERChromeRetryStampKey);
+    if (last && now - last.doubleValue < 1.5) return;   // 节流：一次呈现最多排一轮
+    objc_setAssociatedObject(overlay, kERChromeRetryStampKey, @(now), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    __weak EchoRebornCoordinator *weakSelf = self;
+    __weak UIViewController *weakOverlay = overlay;
+    for (NSNumber *delay in @[ @0.15, @0.4, @0.9, @1.8 ]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIViewController *target = weakOverlay;
+            if (!target || !gEnabled) return;
+            if (!gERControlCenterPresented) return;
+            [weakSelf applyLandscapeChromeRiseForOverlay:target];
+        });
+    }
 }
 
 // 0.5.17: 原地刷新方向相关的几何。
@@ -12249,6 +12277,15 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             }
         }
         ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 fallback hits=%lu", (unsigned long)statusBar.count);
+    }
+    // 1.0.7-25：进入日志（每秒最多一条）—— 用它判断这条链到底有没有被走到。
+    static CFTimeInterval chromeEnterLoggedAt = 0.0;
+    CFTimeInterval chromeNow = CACurrentMediaTime();
+    if (chromeNow - chromeEnterLoggedAt > 1.0) {
+        chromeEnterLoggedAt = chromeNow;
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-25 enter landscape=%d active=%d presented=%d state=%lu hits=%lu",
+                   (int)landscape, (int)active, (int)gERControlCenterPresented,
+                   (unsigned long)gERControlCenterPresentationState, (unsigned long)statusBar.count);
     }
 
     // 诊断先于改写：这时读到的还是「原生/基准」位置。
@@ -22290,7 +22327,18 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         }
         [picker addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
         UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
+        // 1.0.7-25：iOS 15+ 多场景下 keyWindow 可能为 nil —— 那样 present 会静默失败，
+        // 表现正是「点了添加到文件夹没有任何反应」。这里按可见窗口兜底取一个。
+        if (!presenter) {
+            for (UIWindow *window in [UIApplication sharedApplication].windows) {
+                if (window.hidden || window.alpha < 0.01) continue;
+                if (window.rootViewController) { presenter = window.rootViewController; break; }
+            }
+        }
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+        ERLogInfo(@"QUICKADD ver=1.0.7-25 picker presenter=%@ windows=%lu",
+                  presenter ? NSStringFromClass(presenter.class) : @"(nil)",
+                  (unsigned long)[UIApplication sharedApplication].windows.count);
         if ([picker popoverPresentationController]) {
             [picker.popoverPresentationController setSourceView:iconView];
             CGRect sourceRect = CGRectMake(CGRectGetMidX(((UIView *)iconView).bounds) - 1.0, 0.0, 2.0, 1.0);
@@ -22386,6 +22434,17 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                           configurationForMenuAtLocation:(CGPoint)location {
     UIContextMenuConfiguration *original = %orig;
     @try {
+        // 1.0.7-25：进入日志（每秒最多一条）—— 判断长按菜单这条 hook 到底有没有被调用、
+        // 以及「快速添加」开关当前是开是关。
+        static CFTimeInterval quickAddMenuLoggedAt = 0.0;
+        CFTimeInterval quickAddNow = CACurrentMediaTime();
+        if (quickAddNow - quickAddMenuLoggedAt > 1.0) {
+            quickAddMenuLoggedAt = quickAddNow;
+            ERLogInfo(@"QUICKADD ver=1.0.7-25 menu-hook orig=%d enabled=%d name=%@",
+                       original ? 1 : 0,
+                       ERPreferenceBool(@"QuickAdd.Enabled", NO) ? 1 : 0,
+                       ERQuickAddActionName());
+        }
         if (!original) return original;
         if (!ERPreferenceBool(@"QuickAdd.Enabled", NO)) return original;
         NSString *name = ERQuickAddActionName();
