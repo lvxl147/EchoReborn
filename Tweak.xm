@@ -21983,63 +21983,40 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         if (!ERPreferenceBool(@"QuickAdd.Enabled", NO)) return original;
         NSString *name = ERQuickAddActionName();
         if (name.length == 0) return original;
-        SBIconView *view = self;
-        // Theos 自带的 SDK（iPhoneOS16.5）里 UIContextMenuConfiguration 的
-        // actionProvider / previewProvider / identifier 三个属性声明不可见
-        //（编译报 "property not found"），所以全部走 objc_msgSend 动态调用。
-        id provider = nil, preview = nil, identifier = nil;
-        if ([original respondsToSelector:@selector(actionProvider)]) {
-            provider = ((id (*)(id, SEL))objc_msgSend)(original, @selector(actionProvider));
-        }
-        if ([original respondsToSelector:@selector(previewProvider)]) {
-            preview = ((id (*)(id, SEL))objc_msgSend)(original, @selector(previewProvider));
-        }
-        if ([original respondsToSelector:@selector(identifier)]) {
-            identifier = ((id (*)(id, SEL))objc_msgSend)(original, @selector(identifier));
-        }
-        SEL make = NSSelectorFromString(@"configurationWithIdentifier:previewProvider:actionProvider:");
-        if (![original respondsToSelector:@selector(identifier)] ||
-            ![(id)original.class respondsToSelector:make]) {
-            return original;   // 系统连配置构造器都没有时，原样返回
-        }
-        __block id blockProvider = provider;
         __block NSString *blockName = [name copy];
-        __block __weak SBIconView *weakView = view;
-        id newActionProvider = ^id(NSArray *suggestedActions) {
-            // ARC 禁止把 ObjC 指针直接 C 强转成函数指针 —— 必须经 block 指针：
-            // 先 __bridge 成 block 类型再调用（block 本身就是 ObjC 对象）。
-            UIMenu *(^menuBlock)(NSArray<UIMenuElement *> *) =
-                (__bridge UIMenu *(^)(NSArray<UIMenuElement *> *))blockProvider;
-            UIMenu *menu = menuBlock
-                ? menuBlock(suggestedActions)
-                : [UIMenu menuWithTitle:@"" children:suggestedActions];
-            NSMutableArray *children = [NSMutableArray array];
-            for (UIMenuElement *element in menu.children) {
-                if ([element isKindOfClass:[UIAction class]] &&
-                    [((UIAction *)element).title isEqualToString:blockName]) {
-                    continue;   // 去重：shortcut-item 路径塞进来的同名项跳过
-                }
-                [children addObject:element];
-            }
+        __weak SBIconView *weakView = self;
+
+        // 不读 original 的 actionProvider/previewProvider/identifier —— Theos 的
+        // iPhoneOS16.5 SDK 里这三个属性声明不可见（property not found），而 ARC 又
+        // 禁止 id → 函数指针的强转。标准做法：用系统传进来的 suggestedActions
+        // 自建一份配置（actionProvider 收到的就是系统默认菜单项），把「添加到
+        // 文件夹」插在最前面。identifier / preview 传 nil，预览仍由 SBIconView
+        // 自己的 interaction delegate 提供，观感不变。
+        SEL make = NSSelectorFromString(@"configurationWithIdentifier:previewProvider:actionProvider:");
+        if (![original.class respondsToSelector:make]) return original;
+        id newProvider = ^UIMenu *(NSArray *suggestedActions) {
+            NSMutableArray<UIMenuElement *> *children = [NSMutableArray array];
+            for (UIMenuElement *element in suggestedActions) [children addObject:element];
             UIImage *image = [UIImage systemImageNamed:@"folder.badge.plus"];
+            __weak typeof(self) weakSelf = weakView;
             UIAction *add = [UIAction actionWithTitle:blockName
                                                 image:image
                                            identifier:nil
                                               handler:^(__unused UIAction *action) {
-                ERQuickAddShowPickerForIconView(weakView);
+                ERQuickAddShowPickerForIconView(weakSelf);
             }];
             [children insertObject:add atIndex:0];
-            return [UIMenu menuWithTitle:menu.title children:children];
+            return [UIMenu menuWithTitle:@"" children:children];
         };
-        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(original.class, make,
-                                                           identifier, preview, newActionProvider);
+        return ((id (*)(id, SEL, id, id, id))objc_msgSend)(
+            original.class, make, (id)nil, (id)nil, newProvider);
     } @catch (NSException *exception) {
         ERLogInfo(@"QUICKADD ver=1.0.7-19 menu EXC %@ -- %@", exception.name, exception.reason);
         return original;
     }
 }
 
-%end
+%end%end
 
 %hook SBIconController
 
