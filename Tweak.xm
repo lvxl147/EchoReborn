@@ -22016,7 +22016,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
     }
 }
 
-%end%end
+%end
 
 %hook SBIconController
 
