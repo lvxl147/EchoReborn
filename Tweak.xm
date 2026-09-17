@@ -22647,6 +22647,16 @@ static BOOL ERHasLandscapeChromeAncestor(UIView *view) {
     return NO;
 }
 
+// 1.0.7-27：Logos 对未声明的类默认按 NSObject 处理，self 传不进 UIView * 参数
+// （首次构建在 22657 行报 incompatible pointer type）。这里补上正确父类的声明 ——
+// 只做编译期类型检查，不引用类符号（%hook 走 objc_getClass 运行时查找），
+// 因此不会产生链接期的 Undefined symbols。
+@interface CCUIStatusBar : UIView
+@end
+
+@interface CCUIStatusLabel : UIView
+@end
+
 %hook CCUIStatusBar
 - (void)layoutSubviews {
     %orig;
