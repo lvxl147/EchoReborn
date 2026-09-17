@@ -12294,12 +12294,14 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     // 诊断先于改写：这时读到的还是「原生/基准」位置。
     [self dumpLandscapeChromeDiagnosticsForOverlay:overlay landscape:active matched:statusBar];
 
-    CGFloat statusRise = active ? kERLandscapeStatusBarFixedRise : 0.0;
+    // 1.0.7-27：rise 改为**逐视图反算**（base 顶边 − 16.5，夹取 [0,200]）。
+    // 023615 日志实测这条带在 y 43.7 —— 不是 0.5.19 当时的 78.5，固定 62 会把它
+    // 顶出屏幕外（43.7-62=-18.3）；反算后落到 16.5，与隐私指示头同一套打法。
     static BOOL statusRiseLogged = NO;
     if (active && !statusRiseLogged) {
         statusRiseLogged = YES;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 statusbar-rise rise=%.1f targetCenterY=%.1f hits=%lu",
-                   kERLandscapeStatusBarFixedRise, kERLandscapeStatusBarTargetCenterY,
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-27 statusbar-rise targetTop=%.1f targetCenterY=%.1f hits=%lu",
+                   kERLandscapeStatusBarTargetTop, kERLandscapeStatusBarTargetCenterY,
                    (unsigned long)statusBar.count);
     } else if (!active) {
         statusRiseLogged = NO;
@@ -12312,6 +12314,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         for (UIView *child in view.subviews) {
             if (child.tag == 181000) { hostsQuickAccess = YES; break; }
         }
+        CGFloat statusRise = [self landscapeChromeRiseForContainer:view landscape:active];
         if (hostsQuickAccess) {
             for (UIView *child in view.subviews) {
                 if (child.tag == 181000) continue;
@@ -12470,7 +12473,8 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             if (![gERLandscapeSystemStatusBarMoved containsObject:view]) {
                 [gERLandscapeSystemStatusBarMoved addObject:view];
             }
-            [self applyLandscapeRise:kERLandscapeStatusBarFixedRise toView:view];
+            CGFloat windowRise = [self landscapeChromeRiseForContainer:view landscape:YES];
+            if (windowRise > 0.0) [self applyLandscapeRise:windowRise toView:view];
             static NSMutableSet<NSString *> *systemLogged = nil;
             if (!systemLogged) systemLogged = [NSMutableSet set];
             NSString *key = NSStringFromClass(view.class);
@@ -22307,9 +22311,11 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
             [presenter presentViewController:empty animated:YES completion:nil];
             return;
         }
+        // 1.0.7-27：底部 ActionSheet 会被 dock 压住（用户截图：最后一行被 dock 盖住）。
+        // 改成居中 Alert：列表超长时系统自带滚动，且完全避开 dock 区域。
         UIAlertController *picker = [UIAlertController alertControllerWithTitle:@"添加到文件夹"
                                                                         message:nil
-                                                                 preferredStyle:UIAlertControllerStyleActionSheet];
+                                                                 preferredStyle:UIAlertControllerStyleAlert];
         for (id folderIcon in folderIcons) {
             NSString *title = nil;
             if ([folderIcon respondsToSelector:@selector(displayName)]) {
@@ -22617,6 +22623,52 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
     %orig;
 }
 
+%end
+
+// ---------------------------------------------------------------------------
+// 1.0.7-27 · 横屏状态栏上移的「逐帧补写」。
+//
+// 023615 日志实锤：CCUIStatusBar / CCUIStatusLabel 的 transform 会被系统持续重置
+// （verify 里 ty 在 0 与被移值之间来回翻），而同一棵树里的隐私指示头
+// （CCUISensorAttributionPrivacyHeaderView）用「反算 rise + 反复补写」一直稳稳
+// 落在 y 16.5。状态栏照搬同一套打法：在这两条带各自的 -layoutSubviews 里，
+// 系统每次重排完就把上移补回去 —— 视觉上即「稳定停在 16.5」。
+// 祖先守卫：若父链上已有 StatusBar / StatusLabel（两者可能互为父子），
+// 只让最外层补写，避免父子同时补成双倍位移。
+static BOOL ERHasLandscapeChromeAncestor(UIView *view) {
+    UIView *parent = view.superview;
+    NSInteger depth = 0;
+    while (parent && depth < 8) {
+        NSString *name = NSStringFromClass(parent.class);
+        if ([name containsString:@"StatusBar"] || [name containsString:@"StatusLabel"]) return YES;
+        parent = parent.superview;
+        depth++;
+    }
+    return NO;
+}
+
+%hook CCUIStatusBar
+- (void)layoutSubviews {
+    %orig;
+    if (!gEnabled || !gERControlCenterPresented || gERExpandedModuleOpen) return;
+    if (!ERLandscapePresentationActive() || gERControlCenterPresentationState == 3) return;
+    if (ERHasLandscapeChromeAncestor(self)) return;
+    EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
+    CGFloat rise = [coordinator landscapeChromeRiseForContainer:self landscape:YES];
+    if (rise > 0.0) [coordinator applyLandscapeRise:rise toView:self];
+}
+%end
+
+%hook CCUIStatusLabel
+- (void)layoutSubviews {
+    %orig;
+    if (!gEnabled || !gERControlCenterPresented || gERExpandedModuleOpen) return;
+    if (!ERLandscapePresentationActive() || gERControlCenterPresentationState == 3) return;
+    if (ERHasLandscapeChromeAncestor(self)) return;
+    EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
+    CGFloat rise = [coordinator landscapeChromeRiseForContainer:self landscape:YES];
+    if (rise > 0.0) [coordinator applyLandscapeRise:rise toView:self];
+}
 %end
 
 %ctor {
