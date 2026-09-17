@@ -8707,6 +8707,9 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
                              indicator:(NSMutableArray<UIView *> *)indicator
                                 inRoot:(UIView *)root
                                 window:(UIWindow *)window;
+- (void)collectLandscapeFallbackStatusBarViews:(NSMutableArray<UIView *> *)statusBar
+                                        inRoot:(UIView *)root
+                                        window:(UIWindow *)window;
 - (void)applyLandscapeRiseToSystemStatusBarExcludingWindow:(UIWindow *)excluded;
 - (void)restoreLandscapeSystemStatusBarIfNeeded;
 - (void)setQuickAccessButtonsHidden:(BOOL)hidden forOverlay:(UIViewController *)overlay animated:(BOOL)animated;
@@ -12155,7 +12158,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     CGFloat width = ERQuickAccessHostWidth(controller);
     if (widthConstraint && fabs(widthConstraint.constant - width) > 0.5) {
         widthConstraint.constant = width;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-21 host-width=%.1f", width);
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 host-width=%.1f", width);
     }
     CGFloat centerY = ERQuickAccessCenterYOffset(controller);
     // 1.0.1：横向缩进 / 按钮大小 / 字形尺寸也在这里原地刷新。
@@ -12233,6 +12236,20 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     NSMutableArray<UIView *> *statusBar = [NSMutableArray array];
     NSMutableArray<UIView *> *indicator = [NSMutableArray array];
     [self collectLandscapeStatusBarViews:statusBar indicator:indicator inRoot:overlay.view window:window];
+    // 1.0.7-24：类名一个都没命中时的几何兜底 —— 先在 CC 自己的窗口里找，
+    // 再退到系统状态栏窗口里找（那条带可能根本不在 overlay 子树里）。
+    if (active && statusBar.count == 0) {
+        [self collectLandscapeFallbackStatusBarViews:statusBar inRoot:overlay.view window:window];
+        if (statusBar.count == 0) {
+            for (UIWindow *w in ERAllApplicationWindows()) {
+                if (w == window) continue;
+                if (![NSStringFromClass(w.class) containsString:@"StatusBar"]) continue;
+                [self collectLandscapeFallbackStatusBarViews:statusBar inRoot:w window:w];
+                if (statusBar.count) break;
+            }
+        }
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 fallback hits=%lu", (unsigned long)statusBar.count);
+    }
 
     // 诊断先于改写：这时读到的还是「原生/基准」位置。
     [self dumpLandscapeChromeDiagnosticsForOverlay:overlay landscape:active matched:statusBar];
@@ -12241,7 +12258,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     static BOOL statusRiseLogged = NO;
     if (active && !statusRiseLogged) {
         statusRiseLogged = YES;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-21 statusbar-rise rise=%.1f targetCenterY=%.1f hits=%lu",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 statusbar-rise rise=%.1f targetCenterY=%.1f hits=%lu",
                    kERLandscapeStatusBarFixedRise, kERLandscapeStatusBarTargetCenterY,
                    (unsigned long)statusBar.count);
     } else if (!active) {
@@ -12322,7 +12339,48 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                 if (![self isLandscapeStatusBarLikeView:child inWindow:window]) continue;
                 if (statusBar && ![statusBar containsObject:child]) [statusBar addObject:child];
             }
-            continue;   // pocket 自身不平移，也不再往下递归
+            // 1.0.7-24：继续下探 pocket 的孙层。0.5.19 在这里直接 continue，
+            // 于是「pocket → 匿名容器 → StatusLabel」这种多一层的情况永远够不到 ——
+            // 实机「状态栏还是原样」的第一根因。
+            [queue addObjectsFromArray:candidate.subviews];
+            continue;   // pocket 自身不平移
+        }
+        [queue addObjectsFromArray:candidate.subviews];
+    }
+}
+
+// 1.0.7-24 · 几何兜底：类名认不出状态栏时的最后一道。
+//
+// 0.5.19 靠类名（StatusLabel / StatusBar）+ pocket 直接子视图认那条通栏状态栏。
+// 实机反馈「状态栏还是原样」，说明命中的不是真正显示出来的那条带 —— 可能类名变了，
+// 也可能它嵌得更深。这里的判定只用几何：横屏 + CC 呈现时，屏幕顶部 130pt 里
+// 「够宽（≥ 窗口一半）又够薄（≤ 60pt）」的视图，除了那条通栏状态栏（双卡 / WiFi /
+// 蓝牙 / 电量，实测高约 32pt），没有第二个候选：材质背景高约 90pt、「+」/电源只有
+// 40pt 宽、分页指示器在底部。
+- (void)collectLandscapeFallbackStatusBarViews:(NSMutableArray<UIView *> *)statusBar
+                                        inRoot:(UIView *)root
+                                        window:(UIWindow *)window {
+    if (!root || !window) return;
+    CGFloat windowWidth = CGRectGetWidth(window.bounds);
+    if (windowWidth <= 1.0) return;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSInteger visited = 0;
+    while (queue.count && visited < 4000) {
+        UIView *candidate = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        visited++;
+        // EchoReborn 自己的宿主、「+」/电源、编辑网格都不参与。
+        if (candidate.tag == 181000 || candidate.tag == 181001 || candidate.tag == 181002 ||
+            candidate.tag == kEREditGridTag) continue;
+        if (candidate.hidden || candidate.alpha < 0.05) continue;
+        CGRect rect = [candidate convertRect:candidate.bounds toView:window];
+        if (CGRectIsEmpty(rect)) continue;
+        BOOL wide = CGRectGetWidth(rect) >= windowWidth * kERLandscapeStatusBarMinWidthRatio;
+        BOOL thin = CGRectGetHeight(rect) <= kERLandscapeStatusBarMaxHeight;
+        BOOL top = CGRectGetMinY(rect) <= 130.0 && CGRectGetMaxY(rect) > 0.0;
+        if (wide && thin && top) {
+            if (![statusBar containsObject:candidate]) [statusBar addObject:candidate];
+            continue;   // 命中即停：父子同时命中会叠成双倍位移
         }
         [queue addObjectsFromArray:candidate.subviews];
     }
@@ -12367,6 +12425,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             }
             [queue addObjectsFromArray:candidate.subviews];
         }
+        if (!matches.count) [self collectLandscapeFallbackStatusBarViews:matches inRoot:window window:window];
         for (UIView *view in matches) {
             if (![gERLandscapeSystemStatusBarMoved containsObject:view]) {
                 [gERLandscapeSystemStatusBarMoved addObject:view];
@@ -12378,7 +12437,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             if (![systemLogged containsObject:key]) {
                 [systemLogged addObject:key];
                 CGRect r = [view convertRect:view.bounds toView:window];
-                ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-21 system-statusbar cls=%@ rise=%.1f y=%.1f h=%.1f w=%.1f",
+                ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 system-statusbar cls=%@ rise=%.1f y=%.1f h=%.1f w=%.1f",
                            key, kERLandscapeStatusBarFixedRise,
                            CGRectGetMinY(r), CGRectGetHeight(r), CGRectGetWidth(r));
             }
@@ -12422,7 +12481,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                      CGRectGetMinY(baseRect), rise];
     if (![landscapeChromeRiseLogged containsObject:key]) {
         [landscapeChromeRiseLogged addObject:key];
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-21 rise-plan cls=%@ baseTop=%.1f targetTop=%.1f rise=%.1f h=%.1f",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 rise-plan cls=%@ baseTop=%.1f targetTop=%.1f rise=%.1f h=%.1f",
                    NSStringFromClass(container.class), CGRectGetMinY(baseRect),
                    kERLandscapeStatusBarTargetTop, rise, CGRectGetHeight(baseRect));
     }
@@ -12443,7 +12502,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     UIWindow *window = overlay.view.window;
     CGRect winRect = window ? window.bounds : CGRectZero;
     CGSize screenSize = UIScreen.mainScreen.bounds.size;
-    ERLogInfo(@"CHROMADUMP ver=1.0.7-21 gate=%d win=%.1fx%.1f view=%.1fx%.1f screen=%.1fx%.1f inset(t=%.1f b=%.1f) overlays=%lu matched=%lu",
+    ERLogInfo(@"CHROMADUMP ver=1.0.7-24 gate=%d win=%.1fx%.1f view=%.1fx%.1f screen=%.1fx%.1f inset(t=%.1f b=%.1f) overlays=%lu matched=%lu",
                (int)ERLandscapePresentationActive(),
                CGRectGetWidth(winRect), CGRectGetHeight(winRect),
                CGRectGetWidth(overlay.view.bounds), CGRectGetHeight(overlay.view.bounds),
@@ -12453,14 +12512,14 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     // 0.5.19：把窗口清单和被命中的状态栏视图各打一遍。前一次日志证明「状态栏
     // 到底挂在哪个窗口 / 哪个类」是靠类名猜不出来的，这里直接读数。
     for (UIWindow *w in ERAllApplicationWindows()) {
-        ERLogInfo(@"CHROMADUMP ver=1.0.7-21 win cls=%@ y=%.1f h=%.1f w=%.1f lvl=%.1f hid=%d key=%d",
+        ERLogInfo(@"CHROMADUMP ver=1.0.7-24 win cls=%@ y=%.1f h=%.1f w=%.1f lvl=%.1f hid=%d key=%d",
                    NSStringFromClass(w.class), CGRectGetMinY(w.frame), CGRectGetHeight(w.frame),
                    CGRectGetWidth(w.frame), w.windowLevel, (int)w.hidden, (int)w.isKeyWindow);
     }
     for (UIView *v in matched) {
         UIWindow *hostWindow = v.window;
         CGRect r = hostWindow ? [v convertRect:v.bounds toView:hostWindow] : v.frame;
-        ERLogInfo(@"CHROMADUMP ver=1.0.7-21 hit cls=%@ y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d win=%@",
+        ERLogInfo(@"CHROMADUMP ver=1.0.7-24 hit cls=%@ y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d win=%@",
                    NSStringFromClass(v.class), CGRectGetMinY(r), CGRectGetHeight(r),
                    CGRectGetMinX(r), CGRectGetWidth(r), v.alpha, (int)v.hidden,
                    hostWindow ? NSStringFromClass(hostWindow.class) : @"(nil)");
@@ -12492,7 +12551,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     for (UIView *v in top) {
         if (n++ >= 48) break;
         CGRect r = window ? [v convertRect:v.bounds toView:window] : v.frame;
-        ERLogInfo(@"CHROMADUMP ver=1.0.7-21 top y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d matched=%d cls=%@",
+        ERLogInfo(@"CHROMADUMP ver=1.0.7-24 top y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d matched=%d cls=%@",
                    CGRectGetMinY(r), CGRectGetHeight(r), CGRectGetMinX(r), CGRectGetWidth(r),
                    v.alpha, (int)v.hidden, (int)[matched containsObject:v], NSStringFromClass(v.class));
     }
@@ -12518,8 +12577,10 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     NSString *key = [NSString stringWithFormat:@"%@/%.1f", NSStringFromClass(view.class), rise];
     if (![landscapeChromeLogged containsObject:key]) {
         [landscapeChromeLogged addObject:key];
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-21 class=%@ rise=%.1f frameY=%.1f h=%.1f",
-                   NSStringFromClass(view.class), rise, CGRectGetMinY(view.frame), CGRectGetHeight(view.frame));
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-24 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
+                   NSStringFromClass(view.class), rise, CGRectGetMinY(view.frame), CGRectGetHeight(view.frame),
+                   view.transform.ty,
+                   view.window ? CGRectGetMinY([view convertRect:view.bounds toView:view.window]) : -1.0);
     }
 }
 
