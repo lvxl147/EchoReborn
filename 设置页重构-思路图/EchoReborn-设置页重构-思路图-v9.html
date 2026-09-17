@@ -1,0 +1,618 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Echo Reborn 设置页重构 · v7（橙底三横线 · Siri 回粉色波形）</title>
+<style>
+  :root{
+    --bg:#f2f2f7;--card:#fff;--txt:#1c1c1e;--muted:#6b6b70;--faint:#8e8e93;--line:#e5e5ea;
+    --chip:#f2f2f7;--accent:#185FA5;--accentbg:#E6F1FB;--okbg:#EAF3DE;--oktxt:#3B6D11;
+    --warn:#BA7517;--warnbg:#FAEEDA;--badbg:#FCEBEB;--badtxt:#A32A2A;--mono:#f2f2f7;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#000;--card:#1c1c1e;--txt:#f2f2f7;--muted:#a1a1a6;--faint:#8e8e93;--line:#38383a;
+      --chip:#2c2c2e;--accent:#85B7EB;--accentbg:#042C53;--okbg:#27500A;--oktxt:#C0DD97;
+      --warn:#EF9F27;--warnbg:#412402;--badbg:#501313;--badtxt:#F7C1C1;--mono:#2c2c2e;}
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;
+    line-height:1.6;padding:32px 20px 72px;}
+  .wrap{max-width:760px;margin:0 auto;}
+  h1{font-size:20px;font-weight:500;margin:0 0 4px;}
+  .sub{font-size:13px;color:var(--muted);margin:0 0 8px;}
+  h2{font-size:14px;font-weight:500;margin:34px 0 12px;}
+  h3{font-size:13px;font-weight:500;margin:20px 0 8px;color:var(--muted);}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 0;}
+  .badge{display:inline-block;font-size:12px;padding:2px 10px;border-radius:20px;background:var(--warnbg);color:var(--warn);}
+  .badge.ok{background:var(--okbg);color:var(--oktxt);}
+  .badge.bad{background:var(--badbg);color:var(--badtxt);}
+  .card{background:var(--card);border:0.5px solid var(--line);border-radius:12px;
+    padding:11px 15px;margin-bottom:9px;display:flex;align-items:center;gap:12px;}
+  .card.hl{border-color:var(--accent);}
+  .card.new{border-color:var(--accent);border-width:1px;background:linear-gradient(0deg,var(--accentbg),var(--accentbg));}
+  .card.stack{align-items:flex-start;}
+  .body{flex:1;min-width:0;}
+  .t{font-size:14px;}
+  .n{font-size:12px;color:var(--faint);margin-top:2px;}
+  .pill{font-size:12px;padding:2px 10px;border-radius:20px;flex:none;background:var(--chip);color:var(--muted);}
+  .pill.on{background:var(--okbg);color:var(--oktxt);}
+  .pill.new{background:var(--accentbg);color:var(--accent);}
+  .chev{color:var(--faint);font-size:16px;flex:none;}
+  .subrow{display:flex;align-items:center;gap:10px;margin-top:9px;padding-top:9px;border-top:0.5px solid var(--line);}
+  .subrow .t{font-size:13px;}
+  .track{height:4px;border-radius:2px;background:var(--line);position:relative;flex:1;margin:0 8px;}
+  .track i{position:absolute;top:-4px;width:12px;height:12px;border-radius:50%;background:var(--accent);}
+  .arrow{font-size:13px;color:var(--accent);margin:16px 4px 12px;}
+  .ic{width:29px;height:29px;border-radius:7px;flex:none;display:flex;align-items:center;
+      justify-content:center;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08);}
+  .ic svg{width:17px;height:17px;display:block;}
+  .c-blue{background:#378ADC;} .c-purple{background:#7F77DE;} .c-teal{background:#1D9E76;}
+  .c-orange{background:#EF9F27;} .c-amber{background:#BA7517;} .c-red{background:#D94A30;}
+  .c-gray{background:#888680;} .c-indigo{background:#5B5BD6;} .c-pink{background:#D4537E;}
+  .c-green{background:#639922;}
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);
+    border:0.5px solid var(--line);border-radius:12px;overflow:hidden;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:0.5px solid var(--line);vertical-align:top;}
+  th{font-weight:500;color:var(--muted);font-size:12px;background:var(--chip);}
+  tr:last-child td{border-bottom:none;}
+  td.a{color:var(--muted);} td.b{font-weight:500;}
+  td.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;}
+  .ok{color:var(--oktxt);font-weight:500;} .no{color:var(--badtxt);font-weight:500;}
+  .del{color:var(--badtxt);text-decoration:line-through;}
+  .keep{color:var(--oktxt);font-weight:500;}
+  .note{font-size:12.5px;color:var(--muted);background:var(--card);border:0.5px solid var(--line);
+    border-radius:12px;padding:14px 16px;margin-top:12px;}
+  .note b{color:var(--txt);font-weight:500;}
+  .note.warn{border-color:var(--warn);}
+  .note.fix{border-color:var(--accent);}
+  .k{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--chip);padding:1px 5px;border-radius:4px;}
+  pre{margin:10px 0 0;padding:12px 14px;background:var(--mono);border-radius:10px;overflow-x:auto;
+    font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;line-height:1.55;color:var(--txt);}
+  ol{margin:8px 0 0;padding-left:22px;} ol li{margin-bottom:9px;font-size:13px;}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:12px;color:var(--muted);}
+  .legend span{display:inline-flex;align-items:center;gap:5px;}
+  .dot{width:11px;height:11px;border-radius:3px;display:inline-block;}
+  .cmp{display:flex;flex-wrap:wrap;gap:26px;margin-top:14px;}
+  .cmp .cell{text-align:center;font-size:12px;color:var(--muted);}
+  .cmp .cell b{display:block;color:var(--txt);font-weight:500;font-size:12.5px;margin-bottom:8px;}
+  .cmp .big{width:29px;height:29px;border-radius:7px;display:inline-flex;align-items:center;
+    justify-content:center;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08);}
+  .cmp .big svg{width:17px;height:17px;display:block;}
+  .cap{display:block;margin-top:7px;line-height:1.45;}
+  .win{display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;background:var(--okbg);
+    color:var(--oktxt);margin-top:5px;}
+  hr{border:none;border-top:0.5px solid var(--line);margin:26px 0 0;}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-power" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6v8.2M8.2 5.9a6.6 6.6 0 1 0 7.6 0"/></g></symbol>
+  <symbol id="i-sliders" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7h17M3.5 12h17M3.5 17h17"/></g><g fill="#fff"><circle cx="8.5" cy="7" r="2.1"/><circle cx="15" cy="12" r="2.1"/><circle cx="7" cy="17" r="2.1"/></g></symbol>
+  <symbol id="i-drop" viewBox="0 0 24 24"><g fill="#fff"><path d="M12 2.6c3.9 4.6 5.8 7.4 5.8 10.1a5.8 5.8 0 1 1-11.6 0C6.2 10 8.1 7.2 12 2.6z"/></g></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></g></symbol>
+  <symbol id="i-bolt" viewBox="0 0 24 24"><g fill="#fff"><path d="M13.6 2.2 5.9 13.4h4.9l-.9 8.4 7.9-11.6h-5z"/></g></symbol>
+  <symbol id="i-grid" viewBox="0 0 24 24"><g fill="#fff"><rect x="3.6" y="3.6" width="7.4" height="7.4" rx="1.8"/><rect x="13" y="3.6" width="7.4" height="7.4" rx="1.8"/><rect x="3.6" y="13" width="7.4" height="7.4" rx="1.8"/><rect x="13" y="13" width="7.4" height="7.4" rx="1.8"/></g></symbol>
+  <symbol id="i-doc" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6.4 3.4h7l4.6 4.6v12.6H6.4zM13.4 3.4v4.6h4.6M9.2 12.6h6M9.2 16h6"/></g></symbol>
+  <symbol id="i-lock" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="4.4" y="10.2" width="15.2" height="10.4" rx="2.6"/><path d="M8.1 10.2V7.6a3.9 3.9 0 0 1 7.8 0v2.6"/></g><g fill="#fff"><circle cx="12" cy="15.4" r="1.7"/></g></symbol>
+  <symbol id="i-wave" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 12h2.1M7.2 8.4v7.2M11 4.6v14.8M14.8 7.2v9.6M18.6 9.8v4.4M22.2 12h-1.1"/></g></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6.6 17.4h10.8l-1.4-2.2V10a4 4 0 0 0-8 0v5.2z"/><path d="M10.4 20.2a1.8 1.8 0 0 0 3.2 0"/></g></symbol>
+  <symbol id="i-camera" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3.4 8.6h3.3l1.5-2.4h7.6l1.5 2.4h3.3v10.4H3.4z"/><circle cx="12" cy="13.4" r="3.5"/></g></symbol>
+  <symbol id="i-dualcam" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2.6" y="5.4" width="18.8" height="13.2" rx="3"/><path d="M12 5.4v13.2"/><circle cx="7.4" cy="12" r="2"/><circle cx="16.6" cy="12" r="2"/></g></symbol>
+  <!-- v8 修订：根页「系统增强」用 iOS「设置」同款**实心齿轮** —— 8 个方齿 + 中心孔。
+       路径由脚本按 齿顶 R=9.9 / 齿根 7.3 / 中心孔 3.5 算出，fill-rule="evenodd" 挖空中心，
+       不是放射线也不是太阳纹，缩小到 17pt 后齿形仍然清楚。 -->
+  <symbol id="i-gear" viewBox="0 0 24 24"><path fill="#fff" fill-rule="evenodd" d="M9.84 5.03L10.47 2.22L13.53 2.22L14.16 5.03L14.37 5.10L14.58 5.17L14.79 5.26L15.00 5.35L15.20 5.44L15.41 5.54L17.84 4.00L20.00 6.16L18.46 8.59L18.56 8.80L18.65 9.00L18.74 9.21L18.83 9.42L18.90 9.63L18.97 9.84L21.78 10.47L21.78 13.53L18.97 14.16L18.90 14.37L18.83 14.58L18.74 14.79L18.65 15.00L18.56 15.20L18.46 15.41L20.00 17.84L17.84 20.00L15.41 18.46L15.20 18.56L15.00 18.65L14.79 18.74L14.58 18.83L14.37 18.90L14.16 18.97L13.53 21.78L10.47 21.78L9.84 18.97L9.63 18.90L9.42 18.83L9.21 18.74L9.00 18.65L8.80 18.56L8.59 18.46L6.16 20.00L4.00 17.84L5.54 15.41L5.44 15.20L5.35 15.00L5.26 14.79L5.17 14.58L5.10 14.37L5.03 14.16L2.22 13.53L2.22 10.47L5.03 9.84L5.10 9.63L5.17 9.42L5.26 9.21L5.35 9.00L5.44 8.80L5.54 8.59L4.00 6.16L6.16 4.00L8.59 5.54L8.80 5.44L9.00 5.35L9.21 5.26L9.42 5.17L9.63 5.10L9.84 5.03ZM12.0 8.5A3.5 3.5 0 1 0 12.0 15.5A3.5 3.5 0 1 0 12.0 8.5Z"/></symbol>
+</svg>
+
+<div class="wrap">
+  <h1>Echo Reborn 设置页重构 · v9</h1>
+  <p class="sub">在 v8 基础上新增：<b>液态玻璃子页两个开关</b>（编辑液态效果 / 顶部按钮液态，默认开）＋ 编辑态「⊖ 圆里那条横线」液态化 ＋ 顶部按钮加背景（参数参考 CCAster 0.2.2）</p>
+  <div class="badges">
+    <span class="badge ok">v8 全部内容保持不变</span>
+    <span class="badge">新增 2 个开关 + 2 处控制中心元素改造</span>
+    <span class="badge bad">有 3 处必须先跟你确认，否则一定做偏</span>
+  </div>
+
+  <h2>零、v9 净变更（先看这一屏）</h2>
+  <div class="note fix">
+    <b>只加、不改、不删。</b>v8 已确认过的行、key、颜色、机制<b>一个字都不动</b>。v9 只在三处追加：<br><br>
+    ① <b>「液态玻璃」子页</b> → 「模块液态效果」分组下追加<b>两行开关，默认开</b>：<br>
+    &nbsp;&nbsp;&nbsp;· <span class="k">编辑液态效果</span> —— 控制中心<b>编辑态</b>下「⊖ 圆里的那条横线」是否做液态处理；<br>
+    &nbsp;&nbsp;&nbsp;· <span class="k">顶部按钮</span> —— 顶部那个按钮是否套液态玻璃。<br>
+    ② 两行都<b>受总「液态玻璃」开关约束</b>：总开关关闭时一律保留原状，且这两行置灰不可点（避免出现「总开关关着但子项开着」的自相矛盾状态）。<br>
+    ③ <b>顶部按钮加背景</b>：尺寸/圆角参照 CCAster 0.2.2 的那套值（具体哪一组见 Q3）。
+  </div>
+
+  <h2>零之一、我必须先问清的三件事（请直接回我序号）</h2>
+  <div class="note warn">
+    <b>Q1 · 「左上角一个圆，里面有个横线和拖动条」到底是哪个元素？</b><br>
+    我按实机图（蓝箭头）读出两种可能，做出来完全不同：<br>
+    &nbsp;&nbsp;<b>读法 A</b>：控制中心<b>编辑态</b>里每个控件左上角那个 <b>⊖ 删除圆钮</b>（圆里那条「横线」＝减号）—— 箭头确实指在它上面；<br>
+    &nbsp;&nbsp;<b>读法 B</b>：磁贴<b>右下角那个白色缩放把柄</b>（即你说的「拖动条」），与左上角的 ⊖ 配套。<br>
+    我倾向 <b>A</b>。请确认两点：<b>(a)</b> 是 ⊖ 圆钮还是缩放把柄？<b>(b)</b> 要液态化的是那条「横线（减号）」本身，还是整个 ⊖ 圆钮？<br><br>
+    <b>Q2 · 第 2、3 条提到的「顶部按钮」是同一个东西吗？指哪一个？</b><br>
+    &nbsp;&nbsp;<b>候选 ①</b>：控制中心<b>编辑态</b>顶部那个按钮（与 Q1 同一区域）；<br>
+    &nbsp;&nbsp;<b>候选 ②</b>：相机 App 顶部栏「实况」左侧我刚加的双摄按钮（1.0.7-5 已上线）；<br>
+    &nbsp;&nbsp;<b>候选 ③</b>：控制中心里「+ 添加控制项」那一类顶部按钮。<br>
+    我按 <b>①</b> 写进设计稿 —— 这条错了整节都要重做，所以务必确认。<br><br>
+    <b>Q3 · CCAster 0.2.2 的「背景大小」具体是哪一组值？</b><br>
+    我在本机 CCAster 目录里<b>没有找到 0.2.2</b>：只有 <span class="k">CCAster-0.5.6.21 ~ 0.5.27-发布</span> 这些发布包，以及两份旧源码快照（<span class="k">_tools/_old_cca</span>、<span class="k">_tools/_er_diff_base</span>）。请给我任意一项即可：<br>
+    &nbsp;&nbsp;· 0.2.2 的 deb 或源码压缩包；或<br>
+    &nbsp;&nbsp;· 直接写数值（宽 × 高、圆角、相对按钮的内缩）；或<br>
+    &nbsp;&nbsp;· 那个偏好的名字（我把对应实现抠出来照抄，最稳）。
+  </div>
+
+  <h2>零、v8 相对 v7 的净变更（先看这一屏）</h2>
+  <div class="note fix">
+    <b>只加、不改、不删。</b>v7 已经确认过的行、key、颜色、机制<b>一个字都不动</b>，v8 只在三处追加：<br><br>
+    ① <b>根页面</b>：在「Siri」之后、「诊断日志」之前，插一个<b>空分组 + 一行独立卡片</b>（分组不设标题），标题文字为<b>系统增强</b>，图标用<b>齿轮（设置）符号</b>、绿底。<br>
+    ② <b>子页 C</b>：点「系统增强」进入，页面标题「系统增强」，内含一张分组标题为<b>相机增强</b>的卡，卡里一行 <b>相机双摄</b>。<br>
+    ③ <b>相机侧</b>：新增一个只注入 <span class="k">com.apple.camera</span> 的独立 dylib，在相机顶部栏「实况」图标<b>左边</b>插入一个双摄按钮，开关由上面那行控制。<br><br>
+    <b>另有一处必须同步：</b>CI 的包校验脚本把 dylib 数量写成了白名单
+    （<span class="k">expected = {EchoReborn.dylib, EchoRebornBackboardd.dylib}</span>），
+    多出来的 dylib 会<b>直接把构建判红</b>。    加第三支 dylib 必须同时改这一行，否则永远发不出去。
+  </div>
+
+  <h2>零之一、「系统增强」齿轮图标的实际样子</h2>
+  <div class="cmp">
+    <div class="cell">
+      <b>芯片内 17pt（真机大小）</b>
+      <span class="big c-green"><svg viewBox="0 0 24 24"><use href="#i-gear"/></svg></span>
+      <span class="cap">绿底 <span class="k">#639922</span><br>白色实心齿轮，8 齿 + 中心孔</span>
+    </div>
+    <div class="cell">
+      <b>放大到 44pt 看齿形</b>
+      <span class="big c-green" style="width:44px;height:44px;border-radius:11px"><svg viewBox="0 0 24 24" style="width:26px;height:26px"><use href="#i-gear"/></svg></span>
+      <span class="cap">齿顶 <span class="k">R=9.9</span> · 齿根 <span class="k">7.3</span> · 中心孔 <span class="k">3.5</span><br><span class="k">fill-rule="evenodd"</span> 挖空中心，缩到 17pt 齿仍清晰</span>
+      <span class="win">本次改定</span>
+    </div>
+  </div>
+  <div class="note">
+    <b>为什么不是上一版那个：</b>上一版是「中心圆 + 八条放射线」，缩小后读起来像太阳／亮度符号，不像设置。
+    这一版是 iOS「设置」同款的<b>实心齿轮</b>：外缘八个方齿、中心一个圆孔，靠
+    <span class="k">evenodd</span> 把孔挖穿 —— 缩到芯片里的 17pt 也能一眼认出是齿轮。
+  </div>
+
+  <h2>零、v7 首版的两个问题与最终处置</h2>
+  <div class="note fix">
+    <b>问题 1：Siri 图标模糊。</b>v7 首版把 iOS 27 的 Siri 图标（588×497 源图）直接内嵌成 29pt 芯片。源图是位图、
+    且被压到 <span class="k">29×29pt</span>（≈87px @3x），细节全部糊掉，观感反而不如原符号。
+    <b>处置：废弃 PNG，回退到 v6 的粉色芯片 + 白色波形符号</b>（<span class="k">#D4537E</span> + <span class="k">i-wave</span>）。
+    矢量符号在任意倍率下都锐利，这是位图做不到的。<br><br>
+    <b>问题 2：分类管理底色被我改错。</b>v7 首版把橙底一起换成了浅灰底 —— 你要的只是<b>换内部图标</b>，不是换底色。
+    <b>处置：底色保持橙色</b>（<span class="k">#EF9F27</span>），只把芯片内的字形从「文件夹」换成「三横线列表」。<br><br>
+    <b>净变更（相对 v6）：只有一行芯片的字形引用</b>
+    <span class="k">&lt;use href="#i-folder"/&gt;</span> → <span class="k">&lt;use href="#i-list"/&gt;</span>，
+    其余页面结构、key、默认值、机制、执行顺序<b>一个字都不变</b>。
+  </div>
+
+  <h2>零之二、两处图标的最终样式（按 29×29pt 芯片实际渲染）</h2>
+  <div class="cmp">
+    <div class="cell">
+      <b>分类管理</b>
+      <span class="big c-orange"><svg viewBox="0 0 24 24"><use href="#i-list"/></svg></span>
+      <span class="cap">橙底 <span class="k">#EF9F27</span><br>白色三横线（前两行通长、第三行短）</span>
+      <span class="win">最终</span>
+    </div>
+    <div class="cell">
+      <b>Siri</b>
+      <span class="big c-pink"><svg viewBox="0 0 24 24"><use href="#i-wave"/></svg></span>
+      <span class="cap">粉底 <span class="k">#D4537E</span><br>白色波形（矢量，任何倍率都锐）</span>
+      <span class="win">最终</span>
+    </div>
+  </div>
+  <div class="note">
+    <b>落成代码时的具体差异：</b>「分类管理」只需改 <span class="k">erIcon</span> 的符号名，
+    <span class="k">erIconColor</span> <b>仍是 orange</b>（不要改成 plain/gray）。
+    「Siri」继续沿用色表里的 <span class="k">pink</span>，<b>不需要新增任何 PNG 资源文件</b>，
+    因此 v7 首版提到的 <span class="k">prefs/Resources/icon_siri27.png</span> 与 <span class="k">iconImage</span> 读取方案<b>整体作废</b>。
+  </div>
+
+  <hr>
+
+  <h2>一、根页面</h2>
+  <div class="card"><span class="ic c-blue"><svg viewBox="0 0 24 24"><use href="#i-power"/></svg></span>
+    <div class="body"><div class="t">启动插件</div><div class="n">setMasterEnabled: · 保持不变</div></div>
+    <span class="pill on">开</span></div>
+
+  <div class="card"><span class="ic c-purple"><svg viewBox="0 0 24 24"><use href="#i-sliders"/></svg></span>
+    <div class="body"><div class="t">增强设置</div><div class="n">openEnhancedSettings:</div></div>
+    <span class="chev">›</span></div>
+
+  <h3>视觉效果</h3>
+  <div class="card"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-drop"/></svg></span>
+    <div class="body"><div class="t">液态玻璃</div><div class="n">openGlass:</div></div><span class="chev">›</span></div>
+
+  <h3>控制项分类</h3>
+  <div class="card hl"><span class="ic c-orange"><svg viewBox="0 0 24 24"><use href="#i-list"/></svg></span>
+    <div class="body"><div class="t">分类管理</div><div class="n">openCategoryOrder: · 图标已换为三横线（橙底不变）</div></div><span class="chev">›</span></div>
+  <div class="card"><span class="ic c-amber"><svg viewBox="0 0 24 24"><use href="#i-bolt"/></svg></span>
+    <div class="body"><div class="t">快捷指令</div><div class="n">openShortcuts:</div></div><span class="chev">›</span></div>
+  <div class="card"><span class="ic c-red"><svg viewBox="0 0 24 24"><use href="#i-grid"/></svg></span>
+    <div class="body"><div class="t">模块管理</div><div class="n">openModuleSettings:</div></div><span class="chev">›</span></div>
+
+  <h3>锁屏控制项 <span class="pill new" style="vertical-align:1px;">新增</span></h3>
+  <div class="card new"><span class="ic c-indigo"><svg viewBox="0 0 24 24"><use href="#i-lock"/></svg></span>
+    <div class="body"><div class="t">锁屏控件</div><div class="n">openSokoSettings: → 子页标题「锁屏控制项」</div></div>
+    <span class="chev">›</span></div>
+
+  <h3>iOS27 Siri <span class="pill new" style="vertical-align:1px;">新增 · 后做</span></h3>
+  <div class="card new"><span class="ic c-pink"><svg viewBox="0 0 24 24"><use href="#i-wave"/></svg></span>
+    <div class="body"><div class="t">Siri</div><div class="n">openSiriSettings: → 子页标题「iOS27 Siri」· 粉色波形芯片</div></div>
+    <span class="chev">›</span></div>
+
+  <!-- v8 新增：空分组（不设标题）+ 一张独立卡片 -->
+  <div class="card new" style="border-style:dashed;opacity:.55"><span class="ic" style="background:transparent;box-shadow:none"></span>
+    <div class="body"><div class="t" style="color:var(--faint)">PSGroupCell · 无 label（只留间距，不显示分组标题）</div></div></div>
+
+  <div class="card new"><span class="ic c-green"><svg viewBox="0 0 24 24"><use href="#i-gear"/></svg></span>
+    <div class="body"><div class="t">系统增强</div><div class="n">openSystemEnhance: → 子页标题「系统增强」· v8 新增 · 绿底<b>实心齿轮</b>芯片（iOS 设置同款：8 齿 + 中心孔）</div></div>
+    <span class="chev">›</span></div>
+
+  <h3>诊断日志</h3>
+  <div class="card"><span class="ic c-gray"><svg viewBox="0 0 24 24"><use href="#i-doc"/></svg></span>
+    <div class="body"><div class="t">启用日志记录</div><div class="n">setLoggingEnabled: · 保持不变</div></div>
+    <span class="pill">关</span></div>
+  <div class="card"><div class="body"><div class="t">当前日志 / 导出日志 / 清空日志</div><div class="n">保持不变</div></div></div>
+
+  <div class="legend">
+    <span><i class="dot c-blue"></i>blue</span><span><i class="dot c-purple"></i>purple</span>
+    <span><i class="dot c-teal"></i>teal</span><span><i class="dot c-orange"></i>orange</span>
+    <span><i class="dot c-amber"></i>amber</span><span><i class="dot c-red"></i>red</span>
+    <span><i class="dot c-gray"></i>gray</span>
+    <span><i class="dot c-indigo"></i>indigo（新）</span><span><i class="dot c-pink"></i>pink（新）</span>
+    <span><i class="dot c-green"></i>green（v8 新 · 色表已有、此前无人占用）</span>
+  </div>
+
+  <div class="note">两个新分组各放一行，位置在<b>「控制项分类」之后、「诊断日志」之前</b>。新入口用新芯片色 <span class="k">indigo</span> / <span class="k">pink</span>，与既有 7 行区分。</div>
+
+  <hr>
+
+  <h2>二、子页 A · 锁屏控制项（Soko）</h2>
+  <div class="arrow">↓ 点「锁屏控件」进入 · 页面标题「锁屏控制项」· 无聚合总闸，改为两个功能各自带开关</div>
+
+  <div class="card stack"><span class="ic c-indigo"><svg viewBox="0 0 24 24"><use href="#i-lock"/></svg></span>
+    <div class="body">
+      <div class="t">锁屏控件</div><div class="n">原「Widgets」</div>
+      <div class="subrow"><span class="t">调整锁屏控件位置</span><span class="pill on" style="margin-left:auto;">开</span></div>
+      <div class="subrow"><span class="t">垂直偏移</span><span class="track"><i style="left:42%"></i></span><span class="pill">−18</span></div>
+      <div class="subrow"><span class="t" style="color:var(--accent)">重置控件偏移</span><span class="pill" style="margin-left:auto;">点按</span></div>
+    </div></div>
+
+  <div class="card stack"><span class="ic c-indigo"><svg viewBox="0 0 24 24"><use href="#i-bell"/></svg></span>
+    <div class="body">
+      <div class="t">通知</div><div class="n">原「Notifications」</div>
+      <div class="subrow"><span class="t">调整通知位置</span><span class="pill on" style="margin-left:auto;">开</span></div>
+      <div class="subrow"><span class="t">垂直偏移</span><span class="track"><i style="left:75%"></i></span><span class="pill">60</span></div>
+      <div class="subrow"><span class="t" style="color:var(--accent)">重置通知偏移</span><span class="pill" style="margin-left:auto;">点按</span></div>
+    </div></div>
+
+  <h3>该页的键与默认值</h3>
+  <table>
+    <thead><tr><th style="width:44%">plist 里要写的 key</th><th style="width:24%">类型 / 范围</th><th style="width:32%">默认</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">soko_widgetsEnabled</td><td>开关</td><td class="b">开（true）</td></tr>
+      <tr><td class="mono">soko_widgetOffset</td><td>滑杆 −120 ~ 120</td><td class="b">−18</td></tr>
+      <tr><td class="mono">soko_notificationsEnabled</td><td>开关</td><td class="b">开（true）</td></tr>
+      <tr><td class="mono">soko_notificationOffset</td><td>滑杆 −120 ~ 120</td><td class="b">60</td></tr>
+      <tr><td class="a">域（defaults）</td><td colspan="2" class="mono">moe.waru.soko.preferences</td></tr>
+      <tr><td class="a">通知（PostNotification）</td><td colspan="2" class="mono">moe.waru.soko.preferences.reload</td></tr>
+    </tbody>
+  </table>
+  <div class="note warn">
+    <b>最容易写错的一处：</b>原版 Soko 的 <span class="k">Root.plist</span> 里 key 写的是 <span class="k">widgetOffset</span>（不带前缀），前缀是它的 Swift 控制器在写入时补的
+    （<span class="k">setValue(v, forKey: "soko_" + key)</span>）。改成纯 plist 直写后框架不再补前缀，
+    所以必须直接写 <span class="k">soko_widgetOffset</span>。写成不带前缀会「滑杆能拖、锁屏没反应」—— 静默失效。
+  </div>
+  <div class="note">
+    <b>关于 Soko 要不要再加一个聚合总闸</b>：本轮不加 —— Soko 原版就没有总开关，且你要求「各功能可自由开关」，
+    两个功能各自带开关已覆盖全部范围。若你希望它和 LiquidSiri 一样也有一个总闸，说一声，加一行 <span class="k">PSSwitchCell</span> + 一个 early-return 即可。
+  </div>
+
+  <hr>
+
+  <h2>三、子页 B · iOS27 Siri（LiquidSiri）</h2>
+  <div class="arrow">↓ 点「Siri」进入 · 页面标题「iOS27 Siri」· 总开关<b>保留</b> · 无「应用更改」</div>
+
+  <div class="card hl stack"><span class="ic c-pink"><svg viewBox="0 0 24 24"><use href="#i-power"/></svg></span>
+    <div class="body">
+      <div class="t">总开关</div>
+      <div class="n">原「Liquid Siri Settings」· key <span class="k">enabled</span> · 关掉即整包不生效</div>
+      <div class="subrow"><span class="t">启用</span><span class="pill on" style="margin-left:auto;">开</span></div>
+    </div></div>
+
+  <div class="card stack"><span class="ic c-pink"><svg viewBox="0 0 24 24"><use href="#i-wave"/></svg></span>
+    <div class="body">
+      <div class="t">外观</div><div class="n">原「Appearance」· 6 项内联在同一张卡</div>
+      <div class="subrow"><span class="t">垂直位置（上下偏移）</span><span class="track"><i style="left:50%"></i></span><span class="pill">0</span></div>
+      <div class="subrow"><span class="t">光球尺寸（缩放）</span><span class="track"><i style="left:25%"></i></span><span class="pill">1.0×</span></div>
+      <div class="subrow"><span class="t">宽度（缩放）</span><span class="track"><i style="left:25%"></i></span><span class="pill">1.0×</span></div>
+      <div class="subrow"><span class="t">高度（缩放）</span><span class="track"><i style="left:25%"></i></span><span class="pill">1.0×</span></div>
+      <div class="subrow"><span class="t">圆角半径</span><span class="track"><i style="left:50%"></i></span><span class="pill">1.0</span></div>
+      <div class="subrow"><span class="t">玻璃折射强度</span><span class="track"><i style="left:28%"></i></span><span class="pill">1.4</span></div>
+      <div class="subrow"><span class="t" style="color:var(--accent)">重置位置与尺寸</span><span class="pill" style="margin-left:auto;">点按</span></div>
+    </div></div>
+
+  <div class="card" style="border-style:dashed;opacity:.62">
+    <div class="body"><div class="t" style="text-decoration:line-through">应用更改</div>
+      <div class="n" style="text-decoration:line-through">Apply Changes + 注销按钮</div></div>
+    <span class="pill" style="text-decoration:line-through">注销</span></div>
+
+  <h3>该页的键与默认值</h3>
+  <table>
+    <thead><tr><th style="width:44%">key</th><th style="width:24%">范围</th><th style="width:32%">默认</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">enabled</td><td>开关</td><td class="b">开（true）· 保留</td></tr>
+      <tr><td class="mono">yOffset</td><td>−100 ~ 100</td><td class="b">0</td></tr>
+      <tr><td class="mono">orbScale</td><td>0.5 ~ 2.5</td><td class="b">1.0</td></tr>
+      <tr><td class="mono">customWidth</td><td>0.5 ~ 2.5</td><td class="b">1.0</td></tr>
+      <tr><td class="mono">customHeight</td><td>0.5 ~ 2.5</td><td class="b">1.0</td></tr>
+      <tr><td class="mono">customCorner</td><td>0.0 ~ 2.0</td><td class="b">1.0</td></tr>
+      <tr><td class="mono">customRefraction</td><td>0.0 ~ 5.0</td><td class="b">1.4</td></tr>
+      <tr><td class="a">域（defaults）</td><td colspan="2" class="mono">com.yourcompany.liquidsiri.prefs</td></tr>
+    </tbody>
+  </table>
+  <div class="note">这 7 个 key <b>都不带前缀</b>（与 Soko 相反），直接照抄原版 <span class="k">Root.plist</span> 的 key 名即可。</div>
+  <div class="note warn">
+    <b>删掉注销按钮后的一个副作用（须知悉）：</b>本轮不做注销，所以改完外观<b>不会立刻看到变化</b> ——
+    需等 Siri 自身重新出现（或你后续另行添加的注销入口）才生效。这不是缺陷，是「按你要求不做注销」的必然结果。
+    真正的写入是即时落盘的，Siri 下次读取即为新值。
+  </div>
+
+  <hr>
+
+  <h2>四、移除项对照</h2>
+  <table>
+    <thead><tr><th style="width:30%">对象</th><th style="width:32%">处置</th><th style="width:38%">说明</th></tr></thead>
+    <tbody>
+      <tr><td class="b">Liquid Siri Settings / 启用</td><td class="keep">✔ 保留</td><td>key <span class="k">enabled</span>，默认开。它是整包总闸，与逐项滑杆不同层级。</td></tr>
+      <tr><td class="b">Apply Changes / 注销</td><td class="ok">删除</td><td>你后续会在别处另行添加入口。</td></tr>
+      <tr><td class="b">Soko 的聚合总闸</td><td class="ok">不实现</td><td>原版无；两功能各有开关。待你确认。</td></tr>
+      <tr><td class="b">Tweak 侧 <span class="k">%ctor</span> 的 <span class="k">enabled</span> 判断</td><td class="keep">✔ 保持原样</td><td>总开关保留，此处一行都不用动，风险归零。</td></tr>
+      <tr><td class="b">Siri 的 PNG 图标资源</td><td class="no">作废</td><td>清晰度不达标，回退矢量符号；不新增任何图片文件。</td></tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <h2>五、实现机制</h2>
+  <table>
+    <thead><tr><th style="width:34%">方案</th><th style="width:66%">评估</th></tr></thead>
+    <tbody>
+      <tr><td class="b">A · 跨 bundle PSLinkCell<br><span class="n" style="color:var(--faint)">bundle=SokoPreferences<br>detail=SokoPreferences.RootListController</span></td><td class="no">不采用。依赖另一个 PreferenceBundle 已 dlopen 且类可跨 bundle 解析；Echo Reborn 自己的注释里就记着这个坑。失败特征是「点了没反应」或整页空白。</td></tr>
+      <tr><td class="b">B · 本 bundle 手推 plist 页<br><span class="n" style="color:var(--faint)">Soko.plist / Siri.plist<br>openSokoSettings: / openSiriSettings:</span></td><td class="ok">采用。与已上线的 <span class="k">openEnhancedSettings:</span> 同一条路径：控制器手推 + 自己 <span class="k">loadSpecifiers(fromPlistName:)</span>，不依赖跨 bundle 类解析。写值域与通知名指向对方项目。</td></tr>
+      <tr><td class="b">C · 保持两个独立 PreferenceLoader 入口</td><td>备选。改动最小，但<b>做不到「在控制项下方」</b>的版式。</td></tr>
+    </tbody>
+  </table>
+  <div class="note">
+    选 B 后，<b>两个项目的偏好域和 key 一个字都不改</b>，两个 Tweak 的读取代码完全不受 UI 搬家影响 —— 换的只是「谁来画这一页」。
+    另外建议把 <span class="k">SokoPreferences.plist</span> / <span class="k">liquidsiriprefs.plist</span> 两个独立入口移除，否则同一功能会在「设置」根列表和 Echo Reborn 页各出现一次。
+  </div>
+
+  <h2>六、要动的文件</h2>
+  <div class="note">
+    <b>Echo Reborn 侧（主体）</b><br>
+    · <span class="k">prefs/Resources/Root.plist</span> —— 两个新 PSGroupCell + 两行 <span class="k">EREntryButtonCell</span>，插在「控制项分类」与「诊断日志」之间；「分类管理」一行的 <span class="k">erIcon</span> 改为三横线符号（<span class="k">erIconColor</span> <b>仍为 orange</b>）<br>
+    · <span class="k">prefs/Resources/Soko.plist</span>（新增）—— 两卡 + 两开关 + 两滑杆 + 两重置<br>
+    · <span class="k">prefs/Resources/Siri.plist</span>（新增）—— 总开关卡 + 外观卡（6 滑杆 + 重置）<br>
+    · <span class="k">prefs/ERRootListController.m</span> —— <span class="k">openSokoSettings:</span> / <span class="k">openSiriSettings:</span> + 三个重置 action<br>
+    · <span class="k">prefs/ERUIHelpers.m</span> —— 图标色表补 <span class="k">indigo</span> / <span class="k">pink</span>；三横线符号的路径数据<br>
+    · <span class="k">prefs/Makefile</span> —— 两个新 plist 入包；版本号 +1<br><br>
+    <b>Soko 侧</b><br>
+    · <span class="k">Shared/Preferences/Preferences.swift</span> —— 新增 2 个 Bool；<b>改为逐 key 直读</b>（避免新增字段时把已调好的偏移一起重置）<br>
+    · <span class="k">Tweak/Layout/*.swift</span> —— 两个偏移消费点加 early-return<br>
+    · <span class="k">layout/DEBIAN/control</span> —— 名称/描述汉化、版本号<br><br>
+    <b>LiquidSiri 侧</b><br>
+    · <span class="k">control</span> / <span class="k">Makefile</span> —— 部署目标抬升、roothide 打包、依赖补 ellekit<br>
+    · <span class="k">Tweak.x</span> —— <b>不动</b>（总开关保留）<br><br>
+    <b>本轮不新增</b><span class="k">prefs/Resources/icon_siri27.png</span>（PNG 方案作废）。
+  </div>
+
+  <h2>七、执行顺序与待确认</h2>
+  <ol>
+    <li><b>先 Soko，后 LiquidSiri</b> —— 按你的指定。</li>
+    <li><b>Soko 是否也要一个聚合总闸</b> —— 我按「不加」处理（原版无、两功能各有开关）。要加请说。</li>
+    <li><b>两个独立 PreferenceLoader 入口是否移除</b> —— 建议移除，避免重复入口。</li>
+    <li><b>两个新入口是否加「未安装时隐藏」</b> —— 建议加，否则没装 Soko 时那一行点了没反应。</li>
+  </ol>
+
+  <div class="note">回「开」我就开工，先出 Soko。</div>
+
+  <hr>
+
+  <h2>八、子页 C · 系统增强（v8 新增）</h2>
+  <div class="arrow">↓ 点「系统增强」进入 · 页面标题「系统增强」· 该页目前只有一张卡</div>
+
+  <div class="card new stack"><span class="ic c-green"><svg viewBox="0 0 24 24"><use href="#i-camera"/></svg></span>
+    <div class="body">
+      <div class="t">相机增强</div><div class="n">分组标题（PSGroupCell 带 label）· 卡内一行开关</div>
+      <div class="subrow"><span class="ic c-green" style="width:24px;height:24px;border-radius:6px"><svg viewBox="0 0 24 24"><use href="#i-dualcam"/></svg></span>
+        <span class="t">相机双摄</span><span class="pill" style="margin-left:auto;">关</span></div>
+    </div></div>
+
+  <div class="note">
+    <b>footerText：</b>开启后，相机 App 顶部「实况」图标左侧会出现一个双摄按钮，点击即可同时调用前后摄像头拍摄。关闭时该按钮不出现，且相机进程不会加载双摄组件。
+  </div>
+
+  <h3>该页的键与默认值</h3>
+  <table>
+    <thead><tr><th style="width:44%">plist 里要写的 key</th><th style="width:24%">类型 / 范围</th><th style="width:32%">默认</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">DualCamEnabled</td><td>开关</td><td class="b">关（false）</td></tr>
+      <tr><td class="a">域（defaults）</td><td colspan="2" class="mono">com.strive.echoreborn.preferences</td></tr>
+      <tr><td class="a">通知（PostNotification）</td><td colspan="2" class="mono">com.strive.echoreborn/ReloadPrefs</td></tr>
+    </tbody>
+  </table>
+  <div class="note warn">
+    <b>默认必须是「关」。</b>这是一条会启动摄像头、占用两份视频流、并把系统相机会话暂停的功能，默认打开等于所有人在不知情的情况下承担功耗与兼容性风险。
+  </div>
+
+  <hr>
+
+  <h2>九、相机侧：双摄怎么落（v8 新增）</h2>
+
+  <h3>9.1 为什么单独一支 dylib，而不是塞进主 tweak</h3>
+  <table>
+    <thead><tr><th style="width:34%">方案</th><th style="width:66%">评估</th></tr></thead>
+    <tbody>
+      <tr><td class="b">A · 往 <span class="k">EchoReborn.plist</span> 的 filter 里加 <span class="k">com.apple.camera</span></td><td class="no">不采用。主 dylib 含 1.1MB 的 <span class="k">Tweak.xm</span> + Soko + LiquidSiri，全部灌进相机进程；控制中心那套代码在相机里没有任何用途，却要一起承担加载成本与崩溃风险（前面「点模块管理闪退」就是这类连带）。</td></tr>
+      <tr><td class="b">B · 新建 <span class="k">DualCam/</span> 子工程，产物 <span class="k">EchoRebornDualCam.dylib</span> + 自己的 filter plist</td><td class="ok">采用。与既有 <span class="k">BackboarddGlass / EchoRebornBackboardd.dylib</span> 同一模式：只在 <span class="k">com.apple.camera</span> 里加载，开关关闭时几乎零开销。</td></tr>
+      <tr><td class="b">C · 直接把参考源码原样并入</td><td>不采用。它的入口是浮在右上角的自制按钮（<span class="k">x = width-84, y=74</span>），与相机 UI 无关，也不受开关控制 —— 与你要的「顶部栏实况图标左边」不符。</td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.2 你给的源码现状（DualCamTweak 1.3.0）</h3>
+  <table>
+    <thead><tr><th style="width:30%">部分</th><th style="width:70%">现状</th></tr></thead>
+    <tbody>
+      <tr><td class="b">filter</td><td class="mono">com.apple.camera</td></tr>
+      <tr><td class="b">会话</td><td><span class="k">AVCaptureMultiCamSession</span>，后置 <span class="k">builtInWideAngleCamera</span> + 前置同类型；两路 <span class="k">AVSampleBufferDisplayLayer</span> 预览</td></tr>
+      <tr><td class="b">拍照</td><td>两个 <span class="k">AVCapturePhotoOutput</span> 同时 capture，两张都写入相册</td></tr>
+      <tr><td class="b">录像</td><td><span class="k">AVAssetWriter</span> + PixelBufferAdaptor</td></tr>
+      <tr><td class="b">与系统相机互斥</td><td>hook <span class="k">-[AVCaptureSession startRunning]</span>，用 <span class="k">NSHashTable weakObjects</span> 收集会话；双摄开启时拦住系统会话，退出时恢复</td></tr>
+      <tr><td class="b">入口</td><td class="no">悬浮按钮「双摄 v1.3.0」浮在 <span class="k">UIWindowLevelAlert+1</span> 的自建窗口上 —— <b>这一处要换掉</b></td></tr>
+      <tr><td class="b">门控</td><td class="no">无条件显示按钮 —— <b>这一处要换成读 <span class="k">DualCamEnabled</span></b></td></tr>
+    </tbody>
+  </table>
+
+  <h3>9.3 顶部栏按钮：不猜死类名，用「运行时发现 + 兜底 + 诊断」</h3>
+  <div class="note">
+    相机顶部栏是私有类，版本间会变。<b>不把类名写死</b>，按 EchoReborn 一贯的做法：<br>
+    ① hook 顶部栏视图（<span class="k">CAMTopBar</span> 一类）的 <span class="k">-layoutSubviews</span> / <span class="k">-didMoveToWindow</span>；<br>
+    ② 在其子视图里找类名含 <span class="k">LivePhoto</span> 的按钮；<br>
+    ③ <b>找到</b> → 把双摄按钮插到它<b>左边</b>（同父视图、同样的尺寸与间距、同一套 tint）；<br>
+    ④ <b>找不到</b> → 记一行 <span class="k">DUALCAM</span> 日志，把顶部栏全部子视图的类名打出来，并退回固定在右上角内侧 —— 保证<b>第一版即使猜错类名也不会「按钮不出现且无从下手」</b>；<br>
+    ⑤ 整个插入过程包 <span class="k">@try/@catch</span> 并幂等（已插入就跳过），绝不因为加一个按钮把相机 App 弄崩。
+  </div>
+
+  <h3>9.4 风险与边界（需你知悉）</h3>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:70%">说明</th></tr></thead>
+    <tbody>
+      <tr><td class="b">多摄与系统相机会话互斥</td><td>进入双摄时原生取景会停（参考源码的既定做法）。退出即恢复。</td></tr>
+      <tr><td class="b">设备要求</td><td><span class="k">AVCaptureMultiCamSession.isMultiCamSupported</span>；你的 iPhone16,2 / iOS 17.2.1 满足。不满足时双摄按钮自动不出现。</td></tr>
+      <tr><td class="b">相册写入</td><td>复用相机 App 已有的相册权限，不额外申请。</td></tr>
+      <tr><td class="b">范围</td><td>只作用于系统相机（filter 只有 <span class="k">com.apple.camera</span>），第三方相机 App 不在本次范围。</td></tr>
+      <tr><td class="b">画质</td><td>低光下前置画质有限，属硬件限制，不是实现问题。</td></tr>
+      <tr><td class="b">CI</td><td class="no">必须同步放宽 <span class="k">build.yml</span> 的 dylib 白名单，否则构建直接判红（见第零节）。</td></tr>
+    </tbody>
+  </table>
+
+  <hr>
+
+  <h2>十、v8 要动的文件（在 v7 清单之外追加）</h2>
+  <div class="note">
+    <b>设置页（纯 UI，零风险，先做）</b><br>
+    · <span class="k">prefs/Resources/Root.plist</span> —— Siri 之后插一个<b>空 PSGroupCell</b> + 一行 <span class="k">EREntryButtonCell</span>（label 系统增强，action <span class="k">openSystemEnhance:</span>，erIcon <b>齿轮符号</b>，erIconColor <span class="k">green</span>）<br>
+    · <span class="k">prefs/Resources/SystemEnhance.plist</span>（新增）—— 分组「相机增强」+ <span class="k">PSSwitchCell</span>（key <span class="k">DualCamEnabled</span>，默认关）+ footerText<br>
+    · <span class="k">prefs/ERRootListController.m</span> —— 一个 <span class="k">openSystemEnhance:</span><br>
+    · <span class="k">prefs/ERUIHelpers.m</span> —— 新增<b>齿轮符号</b>与双摄符号的路径数据（颜色 <span class="k">green</span> 色表里已存在，无需加）<br>
+    · <span class="k">prefs/Makefile</span> —— 新 plist 入包<br><br>
+    <b>相机侧（后做）</b><br>
+    · <span class="k">DualCam/</span>（新增子工程）—— <span class="k">Tweak.xm</span> + <span class="k">Makefile</span><br>
+    · <span class="k">EchoRebornDualCam.plist</span>（新增）—— Filter Bundles = <span class="k">com.apple.camera</span><br>
+    · <span class="k">Makefile</span>（根）—— 把 DualCam 编成第三支 dylib 并装入 deb<br>
+    · <span class="k">.github/workflows/build.yml</span> —— <b>dylib 白名单加 <span class="k">EchoRebornDualCam.dylib</span></b><br><br>
+    <b>版本号</b>：这是新功能，建议 <b>1.0.7</b>（而不是 1.0.6-17）。你指定哪个都行。
+  </div>
+
+  <h2>十一、执行顺序与待确认</h2>
+  <ol>
+    <li><b>先设置页，后相机侧</b> —— 设置页是纯 UI，先落地不影响任何既有功能。</li>
+    <li><b>「相机双摄」这一行是开关还是入口？</b> 我按<b>开关</b>设计（控制相机里那个图标出不出）。要改成「点进去还有二级页」请说。</li>
+    <li><b>芯片配色与图标</b>：<span class="badge ok">已定</span>卡片用 <span class="k">green</span>（色表已有、目前没人占用），<b>根页用齿轮符号（本次改定）</b>，子页那行用双摄符号。</li>
+    <li><b>拍完怎么存</b>：我按「前后两张<b>分别存</b>进相册」设计（与参考源码一致）。要改成「拼成一张上下图」请说 —— 那会多一步合成与保存逻辑。</li>
+    <li><b>版本号</b>：1.0.7 还是 1.0.6-17？</li>
+  </ol>
+
+  <div class="note">以上 5 点你确认后我再动代码；确认前不改任何文件（本文件除外）。</div>
+
+  <hr>
+
+  <h2>十二、液态玻璃子页：新增两个开关（v9 新增）</h2>
+  <div class="arrow">↓ 「液态玻璃」子页 → 「模块液态效果」分组内追加两行，默认<b>开</b></div>
+
+  <div class="card hl stack"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-drop"/></svg></span>
+    <div class="body">
+      <div class="t">模块液态效果</div>
+      <div class="n">该分组原有的行保持不变，下面两行是 v9 追加</div>
+      <div class="subrow"><span class="t" style="color:var(--accent)">编辑液态效果</span><span class="pill on" style="margin-left:auto;">开</span></div>
+      <div class="subrow"><span class="t" style="color:var(--accent)">顶部按钮</span><span class="pill on" style="margin-left:auto;">开</span></div>
+    </div></div>
+
+  <h3>该页新增的键与默认值</h3>
+  <table>
+    <thead><tr><th style="width:44%">plist 里要写的 key</th><th style="width:24%">类型 / 范围</th><th style="width:32%">默认</th></tr></thead>
+    <tbody>
+      <tr><td class="mono">EditChromeGlassEnabled</td><td>开关</td><td class="b">开（true）</td></tr>
+      <tr><td class="mono">TopButtonGlassEnabled</td><td>开关</td><td class="b">开（true）</td></tr>
+      <tr><td class="a">域（defaults）</td><td colspan="2" class="mono">com.strive.echoreborn.preferences</td></tr>
+      <tr><td class="a">通知（PostNotification）</td><td colspan="2" class="mono">com.strive.echoreborn/ReloadPrefs</td></tr>
+    </tbody>
+  </table>
+  <div class="note warn">
+    <b>与总「液态玻璃」开关的关系（这是需求里明确要求的）：</b>两个新开关都只是<b>子项</b>。
+    总开关（<span class="k">GlassEnabled</span>）关闭时：
+    ① 一律保留原状（不做任何液态处理）；
+    ② 这两行在 UI 上置灰、不可点 —— 避免出现「总开关关着、子项开着」的自相矛盾状态。
+  </div>
+
+  <h2>十三、控制中心侧两处改造（v9 新增）</h2>
+
+  <h3>13.1 编辑态「⊖ 圆里那条横线」液态化</h3>
+  <div class="note">
+    <b>目标（按 Q1 的读法 A 写）：</b>控制中心进入编辑态后，每个控件左上角出现 ⊖ 圆钮，圆里是一条横向减号。
+    开启「编辑液态效果」且总开关开启时，给这条横线套上<b>与磁贴同一套液态玻璃</b>（同一份
+    <span class="k">LGLiveBackdropView</span> / 同一份滤镜参数），未开启时<b>保留原状</b>（一个普通白色横线）。
+  </div>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:70%">设计</th></tr></thead>
+    <tbody>
+      <tr><td class="b">挂载点</td><td>不写死类名：在编辑态 chrome 里按「圆形 + 内含横线」的几何特征找候选，再按类名关键字（<span class="k">Remove</span> / <span class="k">Delete</span> / <span class="k">Minus</span> / <span class="k">Close</span>）兜底；两轮都失败就 dump 一次编辑态子视图类名</td></tr>
+      <tr><td class="b">液态层</td><td>复用 GlassKit 的玻璃构造，圆角取该圆钮的实测圆角，尺寸严格跟随圆钮 bounds（每次布局重算，幂等、只写变化值）</td></tr>
+      <tr><td class="b">生命周期</td><td>只在编辑态存在；退出编辑态立即摘除玻璃层，回到系统原状</td></tr>
+      <tr><td class="b">失败降级</td><td>整段包 <span class="k">@try</span>；拿不到圆钮就什么都不做，绝不出现「消失的 ⊖」</td></tr>
+      <tr><td class="b">诊断</td><td>落 <span class="k">EDITGLASS</span> 日志：是否找到圆钮、类名、圆角、玻璃是否真的附着（<span class="k">lgFilterAttached</span>）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>13.2 顶部按钮：加背景 + 液态玻璃</h3>
+  <div class="note">
+    <b>目标：</b>顶部按钮（按 Q2 的候选 ① 写）默认<b>没有背景</b>，本版给它加一层背景
+    （尺寸/圆角按 Q3 给出的 CCAster 0.2.2 参数），并在「顶部按钮」开关开启且总开关开启时，
+    把该背景做成<b>液态玻璃</b>；关闭时回到「有背景但无液态」的原状。
+  </div>
+  <table>
+    <thead><tr><th style="width:30%">项</th><th style="width:70%">设计</th></tr></thead>
+    <tbody>
+      <tr><td class="b">背景来源</td><td>克隆系统同款材质（<span class="k">EREnsureTileMaterial</span> 的做法），拿不到再退回合成模糊 —— 与七个连接磁贴同一条路，保证与系统观感同源</td></tr>
+      <tr><td class="b">尺寸</td><td><b>待 Q3</b>：宽 × 高、圆角、相对按钮的内缩，全部照抄 CCAster 0.2.2</td></tr>
+      <tr><td class="b">与液态玻璃的关系</td><td>玻璃在场时材质隐藏、玻璃独占背景（同七个磁贴）；玻璃没装成时至少还有材质，不会变成「一个洞」</td></tr>
+      <tr><td class="b">幂等</td><td>每次布局重算 frame/圆角，只写真正变化的值；稳态零开销</td></tr>
+    </tbody>
+  </table>
+
+  <h2>十四、v9 要动的文件（在 v8 清单之外追加）</h2>
+  <div class="note">
+    · <span class="k">prefs/Resources/Glass.plist</span> —— 「模块液态效果」分组下追加两行 <span class="k">PSSwitchCell</span>（<span class="k">EditChromeGlassEnabled</span> / <span class="k">TopButtonGlassEnabled</span>，默认开）+ 总开关关闭时置灰的逻辑<br>
+    · <span class="k">prefs/ERGlassListController.m</span> —— 置灰/联动的读取逻辑<br>
+    · <span class="k">Tweak.xm</span> —— ① 编辑态 ⊖ 圆钮的液态处理（新函数 + 编辑态进出时的挂载/摘除）；② 顶部按钮的背景注入 + 液态；③ 两个新偏好键的读取与 <span class="k">ReloadPrefs</span> 响应；④ <span class="k">EDITGLASS</span> / <span class="k">TOPBTN</span> 诊断日志<br>
+    · <span class="k">prefs/ERUIHelpers.m</span> —— 若新增图标符号才需要改；本次两行<b>不需要新图标</b>，可不动<br>
+    <b>不新增 dylib</b>：两处改造都在 SpringBoard 侧（主 dylib），不涉及新的注入目标。
+  </div>
+
+  <h2>十五、执行顺序与待确认（v9）</h2>
+  <ol>
+    <li><b>先设置页两行，后控制中心两处</b> —— 设置页是纯 UI、零风险；两个开关先落地后，控制中心侧逐项接。</li>
+    <li><b>Q1</b>：编辑态那个元素是 <b>⊖ 圆钮</b> 还是 <b>右下角缩放把柄</b>？要液态化的是「横线」还是整个圆钮？</li>
+    <li><b>Q2</b>：第 2、3 条的「顶部按钮」是同一个吗？是控制中心编辑态顶部、相机顶部栏双摄按钮、还是「+ 添加控制项」？</li>
+    <li><b>Q3</b>：CCAstter 0.2.2 的背景参数（源码包 / 数值 / 偏好名，任一即可）。</li>
+    <li><b>默认值</b>：两个新开关都按<b>开</b>（与你的要求一致），确认吗？</li>
+  </ol>
+
+  <div class="note">以上 Q1–Q3 + 默认值确认后我再动代码；确认前不碰任何文件（本文件除外）。</div>
+</div>
+</body>
+</html>

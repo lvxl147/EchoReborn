@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>iOS27 Siri</string>
+
+	<!--
+	  v7 子页 B · iOS27 Siri（LiquidSiri）
+
+	  偏好域沿用上游原版 com.yourcompany.liquidsiri.prefs，键名不带前缀
+	  （enabled / yOffset / orbScale / customWidth / customHeight /
+	    customCorner / customRefraction），与 LiquidSiri 原版 Root.plist 一致。
+
+	  `defaults` 逐 specifier 写 —— 写在根节点框架解析不到偏好域，default 会被
+	  忽略，开关显示「关」、滑杆显示 0 / min。
+
+	  1.0.0 改动：
+	    · 标题去掉所有括号及括号内文字（按 v7 稿）。
+	    · 每个滑杆加 `height` = 54，配合 ERSliderTrackCell 的版式（标题在左、
+	      滑杆在中、读数在右，同一行），六个滑杆宽度逐行一致。
+	    · 缩放类三行加 `erValueSuffix` = ×，读数显示成「1.0×」，与 v7 稿一致。
+
+	  总开关保留、无「应用更改 / 注销」：写入是即时落盘的，Siri 下次读取即新值。
+	-->
+
+	<key>items</key>
+	<array>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>总开关</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>启用</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>enabled</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>外观</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>垂直位置</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>yOffset</string>
+			<key>default</key>
+			<real>0</real>
+			<key>min</key>
+			<real>-100</real>
+			<key>max</key>
+			<real>100</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>光球尺寸</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>orbScale</string>
+			<key>default</key>
+			<real>1.0</real>
+			<key>min</key>
+			<real>0.5</real>
+			<key>max</key>
+			<real>2.5</real>
+			<key>height</key>
+			<real>54</real>
+			<key>erValueSuffix</key>
+			<string>×</string>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>宽度</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>customWidth</string>
+			<key>default</key>
+			<real>1.0</real>
+			<key>min</key>
+			<real>0.5</real>
+			<key>max</key>
+			<real>2.5</real>
+			<key>height</key>
+			<real>54</real>
+			<key>erValueSuffix</key>
+			<string>×</string>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>高度</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>customHeight</string>
+			<key>default</key>
+			<real>1.0</real>
+			<key>min</key>
+			<real>0.5</real>
+			<key>max</key>
+			<real>2.5</real>
+			<key>height</key>
+			<real>54</real>
+			<key>erValueSuffix</key>
+			<string>×</string>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>圆角半径</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>customCorner</string>
+			<key>default</key>
+			<real>1.0</real>
+			<key>min</key>
+			<real>0.0</real>
+			<key>max</key>
+			<real>2.0</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>玻璃折射强度</string>
+			<key>defaults</key>
+			<string>com.yourcompany.liquidsiri.prefs</string>
+			<key>key</key>
+			<string>customRefraction</string>
+			<key>default</key>
+			<real>1.4</real>
+			<key>min</key>
+			<real>0.0</real>
+			<key>max</key>
+			<real>5.0</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>重置位置与尺寸</string>
+			<key>action</key>
+			<string>resetSliders</string>
+		</dict>
+
+	</array>
+</dict>
+</plist>

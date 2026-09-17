@@ -1,0 +1,93 @@
+#pragma once
+
+#include <stddef.h>
+#include <string.h>
+
+typedef struct {
+    const char *identifier;
+    const char *filterType;
+    const char *preferencePrefix;
+    float cornerRadiusRatio;
+    float bezelWidthPoints;
+    float glassThickness;
+    float refractionScale;
+    float refractiveIndex;
+    float blur;
+    float specularOpacity;
+    float dispersionStrength;
+    const char *lightTintHex;
+    const char *darkTintHex;
+} LGHostDefinition;
+
+//    host            filter                            pref             corner          bezel      thick   refr  index  blur  spec   disp   light        dark
+#define LG_HOST_REGISTRY(X) \
+    X(Default,        "echoreborn.liquidglass.refraction",   "Default",         28.0f / 220.0f, 20.00f,    108.0f, 2.6f, 1.80f, 1.0f, 1.0f,  2.00f, "#FFFFFF1A", "#00000000") \
+    X(FolderIcon,     "echoreborn.liquidglass.folder",       "FolderIcon",      28.0f / 220.0f, 13.75f,    108.0f, 2.6f, 1.80f, 1.0f, 1.0f,  1.00f, "#FFFFFF1A", "#00000000") \
+    X(OpenFolder,     "echoreborn.liquidglass.openfolder",   "OpenFolder",      28.0f / 220.0f, 36.00f,    108.0f, 2.6f, 1.80f, 0.0f, 1.0f,  0.00f, "#FFFFFF1A", "#00000000") \
+    X(Dock,           "echoreborn.liquidglass.dock",         "Dock",            0.35f,          17.50f,    120.0f, 2.6f, 1.60f, 3.0f, 1.0f,  0.00f, "#FFFFFF1A", "#00000000") \
+    X(Banner,         "echoreborn.liquidglass.banner",       "Banner",          28.0f / 220.0f, 20.75f,    132.0f, 1.6f, 1.60f, 3.0f, 1.0f,  0.00f, "#FFFFFFCC", "#00000080") \
+    X(Notification,   "echoreborn.liquidglass.notification", "Notification",    28.0f / 220.0f, 20.75f,    132.0f, 1.6f, 1.60f, 3.0f, 1.0f,  0.00f, "#FFFFFF00", "#00000000") \
+    X(ControlCenter,  "echoreborn.liquidglass.cc",           "ControlCenter",   28.0f / 220.0f, 15.50f,    120.0f, 1.8f, 1.60f, 0.0f, 1.0f,  2.00f, "#FFFFFF1A", "#00000000") \
+    X(AppLibrary,     "echoreborn.liquidglass.applibpod",    "AppLibrary",      28.0f / 220.0f, 25.00f,    120.0f, 2.2f, 1.60f, 0.0f, 1.0f,  2.00f, "#FFFFFF1A", "#00000000") \
+    X(AppLibSearch,   "echoreborn.liquidglass.applibsearch", "AppLibSearch",    0.50f,          25.00f,    108.0f, 1.8f, 1.60f, 0.0f, 1.0f,  2.00f, "#FFFFFF1A", "#00000000") \
+    X(Spotlight,      "echoreborn.liquidglass.spotlight",    "Spotlight",       0.50f,          25.00f,    108.0f, 1.8f, 1.60f, 0.0f, 1.0f,  2.00f, "#FFFFFFCC", "#0000004d") \
+    X(SearchPill,     "echoreborn.liquidglass.searchpill",   "SearchPill",      0.50f,          10.00f,    108.0f, 1.6f, 1.60f, 1.0f, 1.0f,  1.00f, "#FFFFFF1A", "#00000000") \
+    X(Widgets,        "echoreborn.liquidglass.widget",       "Widgets",         28.0f / 220.0f, 30.00f,    120.0f, 2.2f, 1.60f, 1.0f, 1.0f,  0.00f, "#FFFFFF1A", "#0000004D") \
+    X(ContextMenu,    "echoreborn.liquidglass.contextmenu",  "ContextMenu",     28.0f / 220.0f, 32.00f,    120.0f, 1.8f, 1.80f, 8.0f, 1.0f,  0.00f, "#FFFFFFCC", "#0000004c") \
+    X(Alerts,         "echoreborn.liquidglass.alerts",       "Alerts",          28.0f / 220.0f, 32.00f,    120.0f, 1.6f, 1.60f, 3.0f, 1.0f,  0.00f, "#FFFFFFCC", "#0000004c") \
+    X(QuickActions,   "echoreborn.liquidglass.quickaction",  "QuickActions",    0.50f,          12.00f,    96.00f, 1.6f, 1.40f, 1.0f, 1.0f,  1.00f, "#FFFFFF1A", "#00000000") \
+    X(Passcode,       "echoreborn.liquidglass.passcode",     "Passcode",        0.50f,          28.00f,    96.00f, 2.2f, 1.60f, 1.0f, 1.0f,  1.00f, "#FFFFFF1A", "#0000001F") \
+    X(Clock,          "echoreborn.liquidglass.clock",        "Clock",           0.00f,          12.00f,    120.0f, 1.6f, 1.60f, 2.0f, 1.0f,  0.00f, "#FFFFFF4C", "#FFFFFF4C") \
+    X(PrefsSlider,    "echoreborn.liquidglass.prefsslider",  "PrefsSlider",     0.50f,          10.00f,    108.0f, 2.6f, 1.60f, 0.0f, 1.0f,  1.00f, "#FFFFFF1A", "#00000000") \
+    X(PrefsSwitch,    "echoreborn.liquidglass.prefsswitch",  "PrefsSwitch",     0.50f,          6.500f,    108.0f, 2.6f, 1.60f, 0.0f, 1.0f,  1.00f, "#FFFFFF1A", "#00000000") \
+    X(PrefsButton,    "echoreborn.liquidglass.prefsbutton",  "PrefsButton",     0.50f,          16.00f,    108.0f, 2.0f, 1.60f, 3.0f, 1.0f,  1.00f, "#FFFFFFCC", "#2A2A2D80") \
+    X(PrefsSegment,   "echoreborn.liquidglass.prefssegment", "PrefsSegment",    0.50f,          8.000f,    132.0f, 1.4f, 1.60f, 0.0f, 1.0f,  0.50f, "#FFFFFF1A", "#00000000") \
+    X(CoverSheet,     "echoreborn.liquidglass.coversheet",   "CoverSheet",      0.00f,          64.00f,    192.0f, 1.4f, 1.60f, 0.0f, 0.0f,  2.00f, "#0000002E", "#0000002E") \
+    X(TabBar,         "echoreborn.liquidglass.tabbar",       "TabBar",          0.50f,          20.00f,    108.0f, 2.2f, 1.80f, 3.0f, 1.0f,  2.00f, "#FFFFFF80", "#2A2A2D80") \
+    X(TabBarSelection,"echoreborn.liquidglass.tabbarselect", "TabBarSelection", 0.50f,          12.00f,    132.0f, 1.4f, 1.60f, 0.0f, 1.0f,  0.50f, "#FFFFFF1A", "#FFFFFF0D") \
+    X(Keyboard,       "echoreborn.liquidglass.keyboard",     "Keyboard",        28.0f / 220.0f, 26.00f,    120.0f, 1.8f, 1.60f, 8.0f, 0.0f,  0.00f, "#D1D3D980", "#0000004d") \
+    X(AppIcons,       "echoreborn.liquidglass.appicons",     "AppIcons",        28.0f / 220.0f, 13.75f,    108.0f, 2.6f, 1.80f, 1.0f, 1.0f,  1.00f, "#FFFFFF1A", "#00000000") \
+    X(AssistiveTouch, "echoreborn.liquidglass.assistivetouch","AssistiveTouch", 0.50f,          22.80f,    18.00f, 2.75f, 2.10f, 0.5f, 0.35f, 0.00f, "#00000000", "#00000000") \
+    X(VolumeHUD,      "echoreborn.liquidglass.volumehud",    "VolumeHUD",       0.50f,          28.00f,    280.0f, 3.00f, 3.20f, 5.0f, 0.35f, 1.20f, "#B8B8B8CC", "#666666CC") \
+    X(PillHUD,        "echoreborn.liquidglass.pillhud",      "PillHUD",         0.50f,          17.50f,    120.0f, 2.2f, 1.70f, 1.0f, 0.35f, 1.20f, "#FFFFFF1A", "#0000002E")
+
+enum LGHostIdentifier {
+#define LG_HOST_ENUM(identifier, ...) LGHostIdentifier##identifier,
+    LG_HOST_REGISTRY(LG_HOST_ENUM)
+#undef LG_HOST_ENUM
+    LGHostIdentifierCount
+};
+
+static const LGHostDefinition kLGHostRegistry[LGHostIdentifierCount] = {
+#define LG_HOST_ENTRY(identifier, filter, prefix, radius, bezel, thickness, refraction, index, blurValue, specular, dispersion, lightTint, darkTint) \
+    { #identifier, filter, prefix, radius, bezel, thickness, refraction, index, blurValue, specular, dispersion, lightTint, darkTint },
+    LG_HOST_REGISTRY(LG_HOST_ENTRY)
+#undef LG_HOST_ENTRY
+};
+
+static inline enum LGHostIdentifier LGHostIdentifierForDefinition(const LGHostDefinition *host) {
+    return host ? (enum LGHostIdentifier)(host - kLGHostRegistry) : LGHostIdentifierCount;
+}
+
+static inline const LGHostDefinition *LGHostDefinitionForPreferencePrefix(const char *prefix) {
+    if (!prefix) return NULL;
+    for (size_t i = 0; i < LGHostIdentifierCount; ++i)
+        if (strcmp(kLGHostRegistry[i].preferencePrefix, prefix) == 0) return &kLGHostRegistry[i];
+    return NULL;
+}
+
+static inline const LGHostDefinition *LGHostDefinitionForFilterType(const char *filterType) {
+    if (!filterType) return NULL;
+    for (size_t i = 0; i < LGHostIdentifierCount; ++i) {
+        const char *base = kLGHostRegistry[i].filterType;
+        size_t length = strlen(base);
+
+        if (strncmp(filterType, base, length) == 0 &&
+            (filterType[length] == '\0' || filterType[length] == '.')) return &kLGHostRegistry[i];
+    }
+    return NULL;
+}
+
+static inline enum LGHostIdentifier LGHostIdentifierForFilterType(const char *filterType) {
+    return LGHostIdentifierForDefinition(LGHostDefinitionForFilterType(filterType));
+}

@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>title</key><string>液态玻璃</string>
+<key>items</key><array>
+<dict><key>cell</key><string>PSGroupCell</string></dict>
+<dict><key>cell</key><string>PSSwitchCell</string><key>label</key><string>启用液态玻璃</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>Global.Enabled</string><key>default</key><true/><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSGroupCell</string><key>label</key><string>控制中心模块</string><key>footerText</key><string>为控制中心中的模块与滑块注入液态玻璃。首次启用或彻底关闭后，建议注销一次以获得最佳效果；日常开关实时生效。</string></dict>
+<dict><key>cell</key><string>PSSwitchCell</string><key>label</key><string>模块液态效果</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>ControlCenter.Enabled</string><key>default</key><true/><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSSwitchCell</string><key>label</key><string>编辑液态效果</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>ControlCenter.EditChromeGlass</string><key>default</key><true/><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSSwitchCell</string><key>label</key><string>顶部按钮</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>ControlCenter.TopButtonGlass</string><key>default</key><true/><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSGroupCell</string><key>label</key><string>高光</string><key>footerText</key><string>玻璃边缘的高光描边，以及随设备倾斜角度变化的高光视差。</string></dict>
+<dict><key>cell</key><string>PSSwitchCell</string><key>label</key><string>边缘高光</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>ControlCenter.SpecularEnabled</string><key>default</key><true/><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSSwitchCell</string><key>label</key><string>动态高光（视差）</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>Specular.Motion.Enabled</string><key>default</key><true/><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSSliderCell</string><key>cellClass</key><string>ERSliderTrackCell</string><key>label</key><string>视差灵敏度</string><key>defaults</key><string>com.strive.echoreborn.preferences</string><key>key</key><string>Specular.Motion.Sensitivity</string><key>default</key><real>2</real><key>min</key><real>0.5</real><key>max</key><real>5</real><key>height</key><real>54</real><key>showValue</key><true/><key>isContinuous</key><false/><key>erIcon</key><string>gyroscope</string><key>erIconColor</key><string>teal</string><key>PostNotification</key><string>com.strive.echoreborn/ReloadPrefs</string></dict>
+<dict><key>cell</key><string>PSGroupCell</string><key>footerText</key><string>渲染由系统渲染服务（backboardd）内的 EchoRebornBackboardd 组件完成，与控制中心样式（Echo Reborn 主开关）相互独立。若出现花屏或性能问题，可先关闭「模块液态效果」验证。</string></dict>
+</array>
+</dict></plist>

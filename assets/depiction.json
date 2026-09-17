@@ -1,0 +1,612 @@
+{
+  "minVersion": "0.1",
+  "class": "DepictionTabView",
+  "headerImage": "https://raw.githubusercontent.com/lvxl789/EchoReborn/main/assets/banner.png",
+  "tintColor": "#00C7BE",
+  "tabs": [
+    {
+      "tabname": "Details",
+      "class": "DepictionStackView",
+      "views": [
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "A modern, editable Control Center experience for iOS 16.\n\nArrange and resize controls on an 8x4 grid, add controls from Echo Reborn's custom sheet, move between multiple pages, and reach editing and power actions from the Control Center header.",
+          "useSpacing": true
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionHeaderView",
+          "title": "Package Info"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Author",
+          "text": "Strive"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Version",
+          "text": "1.0.7-17"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Requires",
+          "text": "iOS 16"
+        },
+        {
+          "class": "DepictionTableTextView",
+          "title": "Section",
+          "text": "Tweaks"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionTableButtonView",
+          "title": "项目主页",
+          "action": "https://github.com/lvxl789/EchoReborn",
+          "openExternal": true
+        }
+      ]
+    },
+    {
+      "tabname": "Changelog",
+      "class": "DepictionStackView",
+      "views": [
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-17",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **快捷指令磁贴跟随翻页（实装修正）**：1.0.7-16 的更新说明里写了「方案 A 已做」，但**实际没有落码**——实机复测「没发生任何改变」完全正确，是我的疏漏。本版真正实装：快捷指令磁贴的宿主层（EROwnedDuplicateHostView）加入与系统模块同一条落位补间（起点平移 = 旧偏移 − 新偏移，终点 = 0），磁贴与系统模块同步滑动。\n- **相机按钮位置与外观**（按你的截图标注）：兜底模式下在顶栏区域（y<120、高 24–60 的小视图）里找**最靠右的图标**，按钮贴到它左边（即你画的绿框位置）；**去掉图标外面的圆底**，只保留图标。\n- **双摄拍摄恢复源代码状态**：前置画面以画中画合成进后置照片，**只存一张**（撤回 1.0.7-14 的分开保存）。\n- **双摄画面常驻返回按钮**：双摄全屏接管后，退出途径不再依赖顶栏按钮——双摄画面左上角有常驻的「‹」返回按钮，点一下退回相机（修复「返回图标会消失」）。\n- **快捷指令子页行图标**：设置子页每行左侧显示与磁贴相同的图标（同一套颜色解码 + glyph→符号映射，WorkflowKit 的 WFSystemImageNameForGlyphCharacter 在 Settings 进程同样可用）。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-16",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **相机按钮：诊断信号定位成功**。日志显示 `heartbeat` + `state.notopbar`——dylib 已加载、开关已读到开，卡在「类名含 TopBar 的视图找不到」：我的类名启发式在这台 iOS 上猜错了。本版两级修正：①顶部栏发现加**几何判据**（y<100、高 30–70、宽过半屏），不再依赖类名；②仍找不到时**兜底**——按钮直接挂到 key window 顶部左侧（半透明芯片底），保证出现且可用，信号名区分 `nowindow` / `emptytree` / `fallback`。\n- **快速添加：注入点修正**。长按图标时一条 `QUICKADD` 都没有——`-[SBIconView applicationShortcutItems]` 在这台系统上从未被调用，注入点选错了。对照参考包元数据（`applicationShortcutItems` 与 `applicationBundleIdentifier`/`displayName` 并列）改为 hook **`-[SBApplication applicationShortcutItems]`**（快捷菜单条目本来就是按应用取的），原视图层 hook 保留作兜底，日志用 `(app)` / `(view)` 后缀区分两条路径。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-15",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **「启动插件」开关搬家**：它实际只控制控制中心的启停，放在根页顶层已无意义。现移到 **「界面优化」子页顶部** 的新卡片「**控制中心开关**」内（行名「启动」，图标沿用 power / blue）。**key（Enabled）、set 方法（setMasterEnabled:specifier:）、PostNotification 全部原样保留**——联动行为与以前完全一致；实现上把这套逻辑下沉为 PSListController 的分类方法，根页与子页的 controller 都能响应。\n- **根页新增「插件作者」卡**（原开关位置）：分组标题「插件作者」，卡片左侧为插件图标（方底圆角，主屏图标同款式），右侧两行左对齐文字——上行 Strive，下行「不要为了升级，放弃越狱的乐趣！」。静态卡，不可点击。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-14",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **新增：快速添加**（系统增强子页，无标题卡）。「快速添加」开关（**默认关**，图标 folder.badge.plus / teal）+「名称设置」文本框（默认「添加到文件夹」，图标 pencil / teal）。\n  开启后，长按主屏幕任意图标，快捷菜单**顶部**出现一行你设置的文字：点击 → 弹出手机上已有的文件夹列表（按名称排序）→ 点一个文件夹，图标即移入。\n  实现路径逐项对照 AddToFolder 1.4 的 ObjC 元数据（用户提供参考包后解剖所得）：菜单条目经 `-[SBIconView applicationShortcutItems]` 注入（type = com.strive.echoreborn.quickadd，插到顶部），点击经 `-[SBIconController activateShortcut:withBundleIdentifier:forIconView:]` 拦截响应，文件夹经 `iconModel.rootFolder → _folders` 枚举（SBFolderIcon，按 displayName 排序），移动调用 `addIcons:intoFolderIcon:openFolderOnFinish:completion:`（旧系统退 `…complete:` 变体）。\n  全链路 `@try`：菜单/模型/文件夹任一步拿不到就不注入，长按菜单本身永远不受影响；关键步骤落 `QUICKADD` 日志。**不加新 dylib、不改 CI。**"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-13",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **回退：拖动扶手的弧线宽度恢复原生 12.5pt，不再收细**。你要的只是液态材质，外形一律不动——玻璃模式下仅把弧带材质从毛玻璃换成玻璃，粗细/形状/位置与原来完全一致。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-12",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **拖动扶手：弧线本身改细，玻璃才看得出来**。1.0.7-11 只是把毛玻璃换成了玻璃，但那条 **12.5pt、82% 白**的原生粗弧线原样压在玻璃上面，所以看起来还是「白色胖逗号」。本版：玻璃模式下弧线收细到 **5pt**（与参考图的细玻璃环一致），玻璃遮罩同步收窄到 6pt；关闭液态玻璃时恢复 12.5pt 原生观感。⊖ 保持 1.0.7-9 你认可的样式，一字未动。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-11",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **相机：心跳诊断成功** —— 日志里出现了 `DUALCAM-HEARTBEAT … dylib IS loaded in the camera process`，证明 **dylib 已经加载进相机进程**，问题锁定在「加载之后的按钮安装环节」。本版把安装流程每一步的结论改成用**通知名本身**发出来（`state.off` 开关被读成关 / `state.notopbar` 没找到顶部栏 / `state.installed` 按钮已装上），下一次日志会直接写明卡在哪一步。\n- **⊖ 回退到你认可的 1.0.7-9 效果**（玻璃独占背景，毛玻璃圆底隐藏）——1.0.7-10 那次「保留毛玻璃」的改动已撤销。\n- **拖动扶手照 ⊖ 的 1.0.7-9 效果做**：扶手的可见材质是一段被弧线描边遮罩的毛玻璃，本版玻璃用**同一条弧线遮罩**与之逐点重合、替换毛玻璃（开=玻璃弧带，关=毛玻璃弧带回来），白色弧线保持在上。撤掉 1.0.7-10 被你否定的同心圆盘。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-10",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **拖动扶手（右下角四分之一圆弧）同款液态玻璃**：与 ⊖ 同一套做法（LiquidAss 模式），玻璃做成与弧线同心的圆盘垫在弧线之下，开关沿用「顶部按钮」。\n- **⊖ 背景永不透明**：上一版把毛玻璃圆底藏掉，玻璃一旦没渲染出来 ⊖ 就成了透明洞（「底色是系统模块背景」就是这个）。本版毛玻璃圆底保留、玻璃叠在其上——渲染成功是 iOS26，没成功也还有原来的毛玻璃，绝不会露出模块背景。\n- **相机双摄加「心跳」诊断**：相机进程写日志文件可能被沙盒拒绝（这就是连续几版一条 `[DUALCAM]` 都看不到的最合理解释），所以现在相机侧改为 post 一条 Darwin 通知（**跨进程、跨沙盒**），SpringBoard 侧收到后代写日志。日志里出现 `DUALCAM-HEARTBEAT` = dylib 确实加载进了相机；一直没有 = 问题在注入层，方向就完全不同了。\n- 翻页：探针数据显示新曲线已是平滑 S 形（-48→-71→-116→…→-968，无第一帧猛蹿，42 帧仅 2 帧轻微掉帧），`layout` 耗时 5.85→7.15ms 无恶化。若仍觉得卡，剩余嫌疑在玻璃滤镜随页面移动的实时重渲染，需要你确认后再动。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-9",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **相机双摄没按钮：找到最可能的原因了**。对照你给的参考包逐字节解剖后确认 filter 完全一致，差异在**运行时**：① 参考 DualCamTweak 不读偏好（所以相机沙盒读不到偏好也没影响），我的版本要先读 `DualCamEnabled`——相机 App 是沙盒进程，很可能读不到那份偏好，于是永远不出按钮；② 我写 `%ctor` 时漏了 `%init`，Logos 的 hook 全部没有初始化。本版：`%ctor` 补 `%init`；偏好读取改三级回退（CFPreferences → 标记文件 → **默认开**）；日志改走 NSLog（相机沙盒里也能留痕）。\n- **⊖ 圆钮按「关=iOS / 开=iOS26」重做**：「顶部按钮」开 → 毛玻璃圆底隐藏、玻璃独占背景（LiquidAss 同款 `base.hidden = YES`），关 → 毛玻璃圆底回来 = iOS 原样；「编辑液态效果」开 → 横线从黑色改成白色高光（iOS26 玻璃上的高光就是白的）。上一版那个被你否定的「黑环」已删除。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-8",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **重新实现：编辑态 ⊖ 圆钮的液态玻璃（完全按 LiquidAss 的做法）**。上一版失败的原因是我用错了接口：`LGInstallRegisteredGlassInMaterial` 是给「真材质视图」用的，我却把它装到一个**模块大小**的点击区按钮上 —— 既没生效，又留下残层（退出编辑态错乱）。\n  本版逐条对照 LiquidAss 源码（`Hooks/PillHUD.x`）来实现：玻璃**自建**（`LGCreateRegisteredGlass`，不挂材质）→ `lgTrackGlass` 注册 → `frame` 精确等于那颗 26×26 圆底、`radius=13` → **`applyFilters()`**（上一版漏了这一步，所以什么都没显示）→ 开关切换用 `glass.hidden`，不移除不重建。\n  两层玻璃：**背景**（整个圆钮，开关「顶部按钮」）与**横线的胶囊**（开关「编辑液态效果」），横线始终保持在玻璃之上不被糊掉。\n- 液态玻璃子页的两行开关随之恢复（默认开、无图标）。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-7",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **修复翻页「向上停留然后落下」（根因终于有实测数据）**：在控制中心滑一次就能拿到 42 帧的落位采样，4 次真实翻页的数据是 —— `from=0.0 → to=-968.0 dur=0.46`、`from=-1116 → -1936 dur=0.28`……第一帧就冲掉全程的 **37%**（0 → -359pt），剩下 600pt 用 0.4 秒慢慢挪。这不是起点取错，而是落位曲线 `(0.18, 0.88, 0.20, 1.0)` 的起始斜率高达 **4.9**，本质是一条「急停」曲线。本版全部换成 `ease-in-out`（三处），并把时长上限从 0.62s 收到 0.42s。\n- **撤回 1.0.7-6 的编辑态 ⊖ 液态玻璃**：实机反馈出现「多出来一个圆」「退出编辑态严重错乱」。根因是我把玻璃装到了一个**模块大小**的按钮上（⊖ 只是它左上角 26×26 的装饰），而且编辑态退出时没有清理。已整块撤回（含两行开关），等按 LiquidAss 的做法重新设计后再上。\n- `COLLAPSECHROME` 探针保留，用于后续把折叠收尾的耗时量出来再决定减负方式。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-6",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **新增两个液态玻璃子开关（液态玻璃子页，默认都开）**：\n  · **编辑液态效果** —— 控制中心编辑态里那个 ⊖ 圆钮的「横线」加上液态处理；\n  · **顶部按钮** —— 给这个 ⊖ 圆钮的背景套液态玻璃。\n  两个都是**子开关**：总开关「启用液态玻璃」关闭时一律保留原状。两行都**不带图标**（按你的要求；该页其他行未做改动）。\n- **安全设计（重要）**：玻璃是**叠加**在原有毛玻璃圆底之上，绝不替换/隐藏它。七个连接磁贴那边是「玻璃在场就隐藏材质」，因为它们下面有保底层兜底；这个 ⊖ 只有 26pt，一旦玻璃没渲染出来就是「⊖ 整个消失」——你会以为模块删不掉。叠加法则把最坏情况钉死在「和以前一模一样」。\n- **诊断**：状态变化时落一行 `EDITGLASS master=? bg=? line=? bnd={WxH} r=?`，用于核对两个子开关是否生效、圆钮实测尺寸与圆角。\n- **待你给一组数**：⊖ 圆钮目前的背景是 26×26、圆角 13（沿用原有硬编码）。你提到的「CCAster 0.2.2 的背景大小」我本机没有那个版本（只有 0.4.x/0.5.x 快照），拿到数值后我改两个常数即可。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-5",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **新增：相机双摄（第三支独立 dylib）**。设置页「系统增强 → 相机增强 → 相机双摄」的开关现在真正生效：开启后，相机 App 顶部**「实况」图标左侧**会出现一个双摄按钮，点一下进入前后同拍，再点一下退出。\n  为什么是独立 dylib 而不是把 `com.apple.camera` 加进主 filter：主 dylib 里是 1.18MB 的 `Tweak.xm` + Soko + LiquidSiri + GlassKit，其中大量 hook 只对 SpringBoard / 控制中心成立；把它们一并注入相机进程等于让相机承担一整套无关的 hook 与崩溃面。现在只有双摄代码注入相机（filter 见 `EchoRebornDualCam.plist`）。\n  入口不写死私有类名：按类名含 `TopBar` 找顶部栏、含 `LivePhoto` 找锚点，按钮插在锚点左边；找不到锚点时退到右上角内侧并 dump 一次顶部栏子视图类名，保证功能可用且下一轮能精确对齐。相机进程内的一切插入都包 `@try`，加个按钮绝不会把相机弄崩。\n  开关关闭时：不建按钮、不进双摄，`toggleDualCam` 也会直接拒绝执行。设置页改开关会即时生效（监听重载通知），不需要重启相机。\n- **翻页：装帧级探针（不再盲改）**：连续 5 个版本在这个问题上都是拿「起点/终点/时长」三个数在推，日志里根本没有中间过程。本版在落位后用 `CADisplayLink` 逐帧记录**呈现层真实位置**（42 帧 ≈ 0.7s），一次滑动即可判定属于哪种：一路单调走到底 / 先冲过头再回落 / 中间卡帧 / 走到底又被挪回去。`SETTLEPROBE` 行。\n- **编辑态白底改为确定性方案**：上一版用的是「容器两轴达到磁贴尺寸 60% 才算外轮廓」的比例判据 —— 它依赖容器瞬时尺寸，会飘，正是你说的「有时候满了、有时候还是老样子」。日志已证明非编辑态求交集**什么都没裁掉**（surf 与 bnd 相同），所以现在一律以磁贴 bounds 为准：正常态逐像素不变，编辑态不再塌成 27pt 横条。\n- **`OFFBGFIX` 增加容器 frame（`ctr=`）**：作为验证用的反例探针 —— 若哪天出现 `ctr` 明显小于 `bnd` 的布局，日志会直接暴露出来，届时再用确定性判据重新引入裁剪。\n- **折叠退回耗时探针**：`COLLAPSECHROME modules=N cost=X ms`。收尾那一圈要遍历全部模块（实测 39 个）逐个重刷材质+圆角+白底，是整条路径上唯一的主线程重活，且正好压在折叠动画收尾那一帧（`ERPERF` 里紧随其后出现过 `layout=16.30ms`，刚好一帧）。先量出来再决定减负还是挪帧。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-4",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **已退回 1.0.7-2 基线（撤销 1.0.7-3 的全部精简改动）**：经实测确认那些改动对二进制零影响（`__text` 段大小逐字节相同），既然没有收益就不留在代码里。源码已与 1.0.7-2 逐文件 md5 校验一致。\n- **修复翻页「向上停留然后落下」**：落位补间的起点取自**呈现层**，而呈现层比模型滞后 1–2 帧。日志实证：模型已跟手走到 `-75.3`，呈现层还停在 `-4.3`，补间于是从 `-4.3` 开始跑完整整 968pt —— 画面就是「先弹回手指起点、再整页滑落」。改为取模型值（拖动期间所有写入都是无动画的，模型值本身就是屏幕上的位置）。\n- **修复编辑态「开启状态白色背景没填满」**：日志实证同一块磁贴非编辑态 `surf={0,0,163x75}`（铺满），编辑态 `surf={0,48,163x27}` —— 容器在编辑态只剩一条 27pt 高的横条，白底跟着塌掉，而圆角仍是 37.5，于是渲染成盖在标题上的白色水洼。现在容器两轴都达到磁贴尺寸 60% 才认它是外轮廓，否则落回磁贴自身：编辑态 36% → 铺满；非编辑态 100% → 走容器（既有行为不变）。\n- **修复长按连接组件退回后的重叠**：折叠退回路径此前只重刷材质与圆角，没有重刷白底 frame，被压小的白底就一直留在那里。现在折叠后补一次重对齐（只在数值真变化时写入，稳态零开销）。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-2",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **「系统增强」入口换掉派发机制（第三次修复）**：1.0.7 / 1.0.7-1 两版都卡在「action 派发」这一环，而设置进程写不进我们的日志文件（`[PREFS]` 从未在导出日志里出现过，连模块管理页的历史日志也没有），既观测不到也无法保证。本版不再赌 action：改用 Preferences **自身的 detail 推入机制**（系统设置每个二级页都是这么进的），`detail` 直接传**类对象**，不做任何跨 bundle 字符串查找。点击由框架自己实例化并推入，不存在「派发没派发」。\n- **翻页落位改成真正的滑动，并同帧收敛磁贴可见性**：这条链路此前三种状态对应三次反馈 —— 动画在播时磁贴还停在「两页都可见」（闪一下）→ 删掉动画变成硬切（卡）→ 只在 animated 分支修时序但实际翻页走的是 animated:NO 分支（没修到）。本版：恢复 sublayerTransform 滑动补间（先抓呈现值、再改模型、从旧值滑到新值），并在**同帧**收敛磁贴可见性 —— 目标页磁贴从第一帧就在，不再有 pop。\n- **模块管理：天气行的开关移到右边**：与七个连接行同款原生布局（此前天气行走的是开关在左的自定义 cell）。读写、通知、图标链路不变。\n- **快捷指令磁贴背景回到与七个磁贴完全一致**：撤掉 1.0.6-16 垫的那层 0.85 暗色毛玻璃（它反而更暗），玻璃在场时保底层隐藏、玻璃独占背景 —— 与七个独立磁贴从构造上完全相同（同一份材质注入 + 同一份玻璃同步）。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7-1",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **修复「系统增强」点了没反应**：1.0.7 首版把这一行写在 Root.plist 里，实机上「行显示出来了、点击无反应」—— 行能显示说明 plist 解析到了，点击无反应说明 action 没被派发到控制器。本版改为在装载完成后**用代码原地重建这一行**：target 直接在构造参数里给到控制器、cellClass 传类对象、action 同时写字符串属性并补 `setAction:`。位置仍由 plist 占位决定，派发路径不再依赖装载过程。若 plist 里没有这一行（旧包/解析失败），自动追加到页尾，保证入口永远存在。\n- **入口链路全程落日志**：`root: openSystemEnhance tapped` / `pushed system-enhance` / `system-enhance: plist loaded N` 每一环都有记录，坏在哪一环一查便知。\n- **子页兜底**：plist 装载为空时代码构造同一张卡、同一个开关（键名/默认值/通知名逐字一致），不会再出现一页空白。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.7",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **新增「系统增强」入口（设置页，本轮只做这一层）**：根页 Siri 下方新增一张独立卡片（不设分组标题），齿轮图标、绿底；点击进入子页「系统增强」，内含一张「相机增强」卡，卡里一行「相机双摄」开关（写入 `DualCamEnabled`，默认关）。\n  本轮只实现设置这一层：开关的语义就是把偏好值落盘并广播重载。**相机侧的双摄组件（顶部栏「实况」图标左侧的按钮、前后同拍）在下一轮做**，届时它会读取同一个键。\n- **翻页改为 0.22s 短滑动，并与磁贴可见性同帧**：1.0.6-14 删掉动画后变成一次硬切，读感是「卡」。回看更早版本「闪一下」的真正来源：slide 播放期间磁贴透明度还停在拖动时的「两页都可见」，要等动画结束才 settle，目标页磁贴在最后一帧才冒出来。现在可见性与页面跳转同帧生效，动画收回 0.22s。\n- **快捷指令磁贴亮度对齐系统模块**：截图对比确认快捷指令磁贴比旁边的系统模块暗。根本原因是两家的玻璃不是同一套 —— 系统模块的玻璃由 liquidass 画在它自己的原生材质上，快捷指令磁贴的玻璃由 GlassKit 画且自带一圈高光描边。垫克隆材质的路走不通（GlassKit hook 了 `-[MTMaterialView setHidden:]`，挂着玻璃就强制隐藏），所以改为在玻璃下垫一层 0.85 的系统同款毛玻璃。\n- **天气：刷新入口按候选表逐个试**：上一版日志显示选中的 model 没有 `executeModelUpdateWithCompletion:`，只能读缓存（只有一个城市名）。现在按 6 个候选名逐个试刷新入口，并记录命中了哪个。\n- **天气磁贴位置诊断**：`viewDidAppear` 打印窗口坐标系里的真实位置，用来区分「内容被盖住」与「整块磁贴被排到屏幕外」。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-16",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **翻页改为 0.22s 短滑动，并与磁贴可见性同帧**：1.0.6-14 删掉动画后变成一次硬切，读感是「卡」。回看更早版本「闪一下」的真正来源：slide 播放的整段时间里磁贴透明度还停在拖动时的「两页都可见」，要等动画结束才 settle，目标页磁贴在最后一帧才冒出来。现在可见性与页面跳转同帧生效，动画收回 0.22s。\n- **快捷指令磁贴亮度对齐系统模块**：截图对比确认快捷指令磁贴比旁边的系统模块暗。根本原因是两家的玻璃不是同一套 —— 系统模块的玻璃由 liquidass 画在它自己的原生材质上，快捷指令磁贴的玻璃由 GlassKit 画且自带一圈高光描边。垫克隆材质的路走不通（GlassKit hook 了 `-[MTMaterialView setHidden:]`，挂着玻璃就强制隐藏），所以改为在玻璃下垫一层 0.85 的系统同款毛玻璃。\n- **天气：刷新入口按候选表逐个试**：上一版日志显示选中的 model 没有 `executeModelUpdateWithCompletion:`，只能读缓存（只有一个城市名）。现在按 6 个候选名逐个试刷新入口，并记录命中了哪个。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-15",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **翻页落位后的「再挪一下」**：翻页动画移除后暴露出来的连带问题。原生滚动视图的偏移在整段翻页期间都不做夹紧（跟手时每帧夹紧太贵），以前这个缺口被 0.52s 的滑动动画盖住，现在页面瞬间到位、基线却要等下一帧才拉回，于是「先落位、再被挪一下」。现在在提交点（每页仅一次，不是每帧）先夹紧再落位，两步合成一帧。\n- **天气取数逻辑重写（根因已定位）**：日志证明桥接确实拿到了 model，但 `resolved keys: none` —— `forecastModel` / `city` / `currentForecast` / `dayForecasts` / `hourlyForecasts` 一个都读不出来，而 `executeModelUpdateWithCompletion:` 直接回调 NSError。原因是原来「取到第一个非 nil 就停」，停在了一个没有位置与数据的空壳实例上。现在改为：类方法工厂优先于裸 `init`、收集全部候选、逐个试着读、取第一个真能读出预报字段的；某个候选刷新失败会顺序试下一个；NSError 的 domain / code / 描述全部落盘。\n- **天气磁贴位置诊断**：`viewDidAppear` 现在打印窗口坐标系里的真实位置，用来区分「内容被盖住」与「整块磁贴被排到屏幕外」这两种剩余可能。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-14",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **天气模块归入「实用工具」，删除「实用功能」分类**：「添加控制项」里原本同时存在「实用工具」与「实用功能」两个分组，天气在后者里。现在删掉「实用功能」这一分类，天气与低电量模式、反馈助手等一起归到「实用工具」；设置页「模块管理」里那一组的标题同步由「实用功能」改为「实用工具」，两边同名。\n  同时堵住一个必然的连带问题：天气 bundle 装在 `/Library` 下，落进兜底分类后会被「非 /System 目录 bundle + 兜底分类 → 第三方插件」这条规则改名。现在 EchoReborn 自研模块（七个连接磁贴 + 天气）统一不参与该重标。\n- **移除翻页动画**：滑动翻页不再有补间。拖动阶段原本会给 `sublayerTransform` 挂一条 0.52s 的 `EchoRebornPageStackSlide`，松手后再对 transform / sublayerTransform / bounds / opacity 各挂一条 settle 补间（日志里 `PAGESETTLE dur=0.24~0.27`）——模型值其实早已到位，这两段补间结束瞬间的回弹就是那一下「闪」。现在页面直接落位，收尾的状态归零与可见性收敛逻辑全部保留（仍在下一个 runloop 执行，时序不变）。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-13",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **修复点击「模块管理」闪退**：`PSSpecifier` 的 `cellClass` 必须传**类对象**。此前把 plist 里的字符串原样写进去，而 `PSListController` 会对这个属性直接发 `-isSubclassOfClass:`，字符串不响应 → `NSInvalidArgumentException` → 设置进程 abort（崩溃日志栈顶正是 `-[PSListController tableView:cellForRowAtIndexPath:]`）。现在先 `NSClassFromString` 取到类再写入；类没注册则退回原生 `PSSwitchCell`，不再崩溃。\n- **七个连接磁贴：注销后进入控制中心不再错版**：白色选中底的圆角改为以磁贴上的玻璃层**实测圆角**为第一真值源（其次容器、其次磁贴自身、最后 pill）。七个磁贴的圆角自 1.0.6-11 起由 liquidass 拥有，EchoReborn 对它们只写 `cornerCurve` / `masksToBounds`，`moduleView.layer.cornerRadius` 实测为 0 —— 白底照 0 铺出来就是一块直角色块，四角压在圆角磁贴之外；进编辑态会重新写一次圆角，所以「进编辑界面自动恢复正常」。\n- **4×2 大卡圆角收敛**：音乐 / 天气的 4×2（含 2×4 / 4×4）统一到 32，与同网格里 2×2 取同一个数，不再「某一块特别圆」。同时修掉天气 4×2 的圆角离谱问题：它此前走到 pill 兜底（半径 = 材质短边一半，≈81pt），比壳体圆一倍多。现在 4 格级大卡的玻璃一律跟随壳体圆角，不再只认「正在播放」。\n- **去掉快捷指令磁贴的背景**：「添加控制项」里的预览此前用带彩色圆角方块底的图标，而控制中心里的磁贴本体一直是纯字形，同一个快捷指令两副样子。现在两处统一取无背景字形图，并去掉预览图上那圈只为切背景而存在的圆角与裁剪。\n- **天气分类硬裁决 + 诊断**：自研天气标识符无条件归入「实用功能」，不再受「非 /System 目录 bundle + 兜底分类 → 第三方插件」这条重标规则影响；目录每次重建写一行 `WEATHERCAT` 日志（标识符 / 分类 / isTweak / bundle 路径），导出一次即可确认实机分类。\n- **天气磁贴可观测性**：新增 `viewDidLoad` / `viewDidAppear` 两行日志（bounds、window、宿主类名、是否有实时数据），用于区分「bundle 根本没被加载」与「加载了但拿不到数据」这两种完全不同的故障。Weather 私有类候选表补 `WATodayAutoupdatingLocationModel` 与 `WAForecastModel`；全部失败时仍然是占位态，不会出现空白磁贴。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-12",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "- **音乐模块圆角（4×2 / 2×4 / 4×4 统一）**：三个尺寸现在取同一个圆角值，开启与关闭液态玻璃完全一致。此前 4×4 走通用规则得 32、4×2 走「大卡」分支得 36，两者根本不相等；玻璃层又另按「小模块记忆」（≈37.5）算一套。现在玻璃圆角一律跟随模块自身圆角，拖成 4×2 后与 4×4 的圆角相同。\n- **天气磁贴新增 4×1 单行版式**：与参考插件同一形态（天气图标 · 城市 · 当前温度 · 天气状况 · 最高/最低）。在编辑态把磁贴拖大后会自动切换到 4×2 双行版式（大号温度 + 明细行 + 逐小时预报）。控制项里仍然只有一条「天气」，不会多出条目。\n- **七个连接磁贴：开启态四角不再多出一点**：白色选中底的圆角与边界改为读取磁贴容器（`CCUIContentModuleContainerView`）的真实几何，而不是 `moduleView.layer.cornerRadius` 的快照值。此前两者不是同一个视图、不是同一个数，圆弧与磁贴轮廓错开，于是四角要么溢出白底、要么露出底下的材质/玻璃。\n- **点击路径稳定性**：「添加控制项」选择、模块移除、模块点击等入口加了异常兜底。抛异常时不再让进程闪退，而是把异常名、原因与栈顶符号写进 `ERGUARD` 日志，下次导出日志即可定位根因。\n- **诊断增强**：`OFFBGFIX` 日志新增 `cR`（容器实际圆角）与 `sR`（白色选中底圆角），稳态下两者必须相等，一轮日志即可判定是否对齐。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-10",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "先说清楚：这一版里 **① 卡顿 / ③ 快捷指令磁贴透明 / ④ 按钮位置** 三条都改完了，**② 设置→模块管理闪退** 我停下来了 —— 原因在下面单列，需要你给一样东西才能动。\n\n### ③ 快捷指令磁贴透明（你指的最大问题）\n\n两条原因，都能在代码里直接指出来。\n\n**一、重断言漏了快捷指令磁贴。**\n\n`ERPrefsChanged`（设置变更回调）里只重新断言了**七个连通性磁贴**的背景不变量，快捷指令磁贴不在其中。而切换液态玻璃时 GlassKit 会主动把玻璃层从材质上摘掉；材质当初又是被 `ERRestoreConvertedTileMaterial` 按「玻璃在场」隐藏的。于是存在一个窗口 —— **玻璃已经摘掉、材质还是隐藏**，磁贴没有任何一层在画东西，就是一块透明的洞，直到下一次重建磁贴才恢复。\n\n这正好解释了你说的「偏偏快捷指令模块透明」：**连通性磁贴有重断言、快捷指令磁贴没有**，这份不对称本身就是那条 bug。\n\n**二、双路挂玻璃，状态不稳。**\n\n快捷指令磁贴的底板（tag `181038`）被两路同时处理：一路是磁贴自己的 `ERSyncConnectivityTileGlass`，另一路是 GlassKit 的材质路由 —— 它对连通性底板 `181054` 排除了，**唯独漏了 `181038`**，两路共用同一个关联键，路由每次布局还会再挂一遍。本版把 `181038` 与 `181054` 同样排除，路由不再插手这块底板。\n\n**结构性保证：保底背景。**\n\n新增一层完全由 EchoReborn 自己拥有的毛玻璃，插在最底层。判据只用可观测量，**不去猜「像素到底出来没有」**（进程内没有 API 能读到这一点）：\n\n- 材质可见 **或** 玻璃在场 → 保底层隐藏，观感与现在完全一致；\n- 两者皆无 → 保底层露出。**透明在结构上不再可能。**\n\n顺带说明一句：`-lgFilterAttached` 只表示滤镜对象进了 `layer.filters`，**不等于**渲染出了像素 —— 1.0.6-6 的日志里就出现过 `glass=1 fa=1` 却是透明洞。所以任何判断都不能建立在它上面，这也是保底层存在的理由。\n\n### ① 卡顿\n\n这是日志里量出来的，不是感觉：\n\n- 55 秒会话里 `ERPERF` 的慢帧计数器从 **618 涨到 732** —— 约 **2.1 次/秒**把 60Hz 的单帧预算打爆；\n- 同一时段 `layout` 单次耗时 **5～16ms**（60Hz 的预算是 16.7ms）。\n\n同时发现诊断日志**自己就是主线程负担**：`SHORTCUTGRID` 618 行 + `SHORTCUTVIS` 400 行 + `SHORTCUTANCHOR` 48 行 = 1066 行长字符串，而且是**突发式**落盘（23:49:05.442→.481 这 40 毫秒里就有 30 行），正好都压在翻页手势的帧上。\n\n本版给这三条加限流闸门（每条每秒 1 行），并且把 `SHORTCUTGRID` 的闸门**前移到函数入口**，连字符串构造一起省掉，而不只是少写一行盘。诊断不丢 —— 每秒 1 行足以判断收敛。\n\n### ④ 添加控制项上移\n\n按你说的「距底 4 → 6，增加二分之一」整体上移 **2pt**。\n\n这里要纠正一个方向问题：`origin.y = 高度 − bottomInset − 按钮高`，所以**增大** bottomInset 才是上移。此前记录的改法（−14 → −16）方向是反的，实际会下移 2pt。本版两个分支同时 +2：常规分支 `−14 → −12`，下限分支 `16 → 18`，这样无论设备是否命中下限，位移都恰好是 2pt。\n\n### ② 设置 → 模块管理闪退（需要你配合）\n\n**这一条我没有改代码，因为现有证据不足以定位，猜着改只会把别处弄坏。**\n\n已经做过的核查：\n\n- 静态审查了模块管理页的全部代码路径（`ERModuleSettingsController` 及其 cell / helper）；\n- 与 1.0.6-2 的备份逐行比对：**完全一致**（205 行 = 205 行，无差异），自 1.0.6-2 起未改动，而这之前的版本没有报过这个闪退；\n- 八份日志里**没有任何崩溃痕迹**，只有正常的 `prefs enabled=1 ...` 一类记录。\n\n所以崩溃要么来自这条子页之外的链路，要么依赖一个我没能复现的操作序列。请给我其中**任意一项**即可直接定位：\n\n1. **崩溃日志**：`/var/mobile/Library/Logs/CrashReporter/` 里找 `EchoRebornPrefs` 或 `Preferences` 的 `.ips`（设备的「设置 → 隐私与安全性 → 分析与改进 → 分析数据」里也能翻到）；\n2. **复现步骤**：是「一进模块管理就崩」，还是「进去点了某个开关才崩」，如果是后者请指明是哪一个。\n\n### 本版请回传\n\n1. **`SHORTCUTBG` 那一行**（本版字段变多了：`fb` / `fbA` / `matVis`）。重点看 `fb=1` 有没有出现 —— 出现说明保底层在兜底，也就是玻璃确实没出像素；一直不出现说明玻璃一直是正常的。这一行现在**每次状态变化或每 2 秒**都会记一条，不会再被内存里的去重集合吃掉（这正是 1.0.6-7 / 1.0.6-9 两份日志里它一次都没出现的原因：`module.view` 在 SpringBoard 内跨多次打开控制中心会被复用）。\n2. **`SHORTCUTFB`**：`mode=reassert` 表示重断言执行过；`shown=1` 表示保底层确实在工作。\n3. 翻页是否还「不跟手」，以及 `ERPERF` 里 `slow` 的增速（旧版 54 秒 +114，可作为对照）。\n4. 编辑态「添加控制项」现在的位置是否合适。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-9",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "上一版把 **第 ④ 条（退出残留）** 与 **第 ③ 条（网格对齐）** 改完了。这一版处理你新报的四条。\n\n### ① 编辑模式下拖动快捷指令磁贴 → 32 个落点圆错位\n\n先说清楚那 32 个圆是什么：**它们是本 tweak 自己画的**（`EREditGridView`），不是系统的。每个空格子画一个圆，位置由「编辑网格基准」决定。\n\n这个基准的求法是对页面上**所有**模块的实测 frame 取最小值反推网格原点。而**正在被手指拖动的那个模块也在其中** —— 它的 frame 正随手指跑，一旦离开原位就把最小值带偏，于是**整页 32 个圆跟着一起错位**。更麻烦的是这个被污染的基准会被写进缓存一直留着，松手之后仍然用错基准。\n\n本文件其它位置（分页可见性、编辑按钮、本版新写的锚点选择）早就用「排除拖动源」处理过了，**只有这一处漏了**。本版补上。\n\n同时加了 `EREDITGRID` 探针，把三层数值一次打全：`grid` 的基准、`gridStack` 的翻页位移、`gridStack` 的抓取补偿，并附上「第一格圆换算到屏幕坐标后的实际位置」。**这一行就能判定到底是哪一层跑偏**，不用再猜。\n\n### ② 七个模块的液态玻璃：透明\n\n**根因**：玻璃在场 ≠ 玻璃在渲染。\n\n`LGLiveBackdropView` 只有在 `CAFilter` 已注册时才能把 backdrop 滤镜挂上去；挂不上时 `-applyFilters` 直接返回，这块玻璃就是**一层全透明的空层**。而系统模块的既定行为是「装上玻璃即隐藏原生材质」（GlassKit 甚至 hook 了 `-[MTMaterialView setHidden:]`，只要材质上挂着玻璃就把 `hidden` 强制改回 YES）。两件事叠在一起，磁贴就变成**透的** —— 也就是你看到的那一块。\n\nGlassKit 自带的重试只在注入后的 1.5 / 3 / 5 / 8 / 12 秒那五次，**用尽之后没人再管**。本版接一条**有界**自愈：\n\n- 玻璃被看到之后，第 0.35 / 0.70 / 1.05 / 1.40 / 1.75 秒各补挂一次滤镜，**共 5 次**；\n- 五次用尽、且已过 2.5 秒仍不渲染 → 判定这块玻璃不可能渲染，**摘掉它**并给材质打上放弃标记，让原生材质回来。\n\n代价被严格限制在「每块磁贴最多 5 次 `applyFilters`」——**不是**每次布局一次（0.5.11 曾经就是每次布局一次，那是主线程被拖住的来源之一）。玻璃正常渲染时，这条路径一次都不会触发。\n\n### ③ 只有第 3 页滑过去时模块慢慢落下来一点\n\n**根因在锚点（网格基准）的选择规则。** 上一版是「选出第一个能用的原生模块」，而**出没出现取决于遍历顺序**，它可能是**任意一页**的模块。跨页时磁贴位置 = 锚点Y + 行差 × 88 + **页差 × 页跨度** —— 页差越大，页跨度本身的误差被放大得越多，磁贴的落点就越依赖一个离得很远的基准。第 3 页正好是「同页没有可用的原生模块」的那一页，于是命中了这条最不可靠的路径。\n\n本版把规则改成**确定性的**：\n\n- **同页优先**，其次**页距最近优先**（不再是「碰到的第一个」）；\n- 排除**正在被拖动**的模块（它的 frame 正随手指跑，不是基准）；\n- 选中的结果按页记住、跨帧复用：每帧只对这一个视图量一次坐标换算，不再逐页、逐轮全量遍历。\n\n新增 `SHORTCUTANCHOR` 一行诊断，直接给出**每一页选中的基准是谁、在哪一页、距离多远、frame 是多少**。第 3 页的基准是谁，这一行就能确认。\n\n### ④ 控制中心卡顿\n\n**先说结论：最主要的一处开销是上一版自己引入的，本版已消除。**\n\n上一版的锚点求解放在布局函数里，写法是「每页各跑一遍、最多两轮」。它跑在**展示同步 display link 的每帧路径**上，于是代价随页数线性增长 —— 6 页最坏就是 **12 次全量视图控制器遍历 + 12 次跨视图坐标换算，每帧**。\n\n本版：\n\n- **一次遍历供所有页共用**（12 次 → 1 次）；\n- 锚点按页缓存标识符，**每帧只量一个视图**（12 次坐标换算 → 页数次，且只在选择发生变化时重新筛选）；\n- 展示同步函数里那次「无条件遍历」改成**按需触发**：它只有「非快捷指令磁贴」的下半段用得上，而你的页面上往往全是快捷指令磁贴 —— 上一版每帧都白跑一次。\n\n另外加了 `ERPERF` **耗时探头**：单帧布局超过 4ms（60Hz 下四分之一的预算）就落一行，并给出这次布局处理的磁贴数、模块数、以及是否处于编辑 / 翻页 / 同步状态。**「卡」从此是可量化的数字**，而不是感觉 —— 若下一份日志里 `ERPERF` 频繁出现且 `layout=` 数值大，请把这行发我，我按数据继续压。\n\n---\n\n### 本版请回传\n\n1. **`SHORTCUTANCHOR`**（第 ③ 条）：看第 3 页的 `anchor=` 是谁、`dist=` 多远。若第 3 页仍是 `anchor=(none)`，说明整页（含其它页）都没有可用的原生模块，那要换思路。\n2. **`ERPERF`**（第 ④ 条）：是否出现、`layout=` 数值、`tiles=` 与 `modules=`。\n3. **`EREDITGRID`**（第 ① 条）：编辑模式下拖动时的那几行。\n4. **`OFFBGFIX`**（第 ② 条）：关键看 `glass=1` 时的 `fa=`。`fa=0` 即「玻璃在但滤镜没挂上」，正是透明的原因；本版会接着打出 `GLASSHEAL`。\n5. 第 ① 条的截图或录屏（编辑模式拖动瞬间）—— 用来确认那 32 个圆的位置变化方向。\n\n日志请在**注销 / 重启 SpringBoard 之后**再导出：只清空日志文件不会重置内存里的去重集合，`SHORTCUTANCHOR` / `ERPERF` 这类只在状态变化时打印的行可能整段不再出现。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-8",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "这一版把剩下两条**从根因上**改掉，两条都给了可自证的判据。第 ② / ⑤ 条（4×4 变正圆）上版已修复，本版不动。\n\n### ④ 退出控制中心后磁贴还留在屏幕上 / 退出时闪一下\n\n**根因是那句 0.18 秒的退出淡出从来没有执行过一次。** 退出路径上的调用顺序是：\n\n1. `dismissAnimated:` 先调 `beginOwnedDuplicateHostPresentationSync` —— 这一步会**建好**展示同步用的 display link；\n2. 紧接着调 `animateOwnedDuplicateHostForOverlay:presented:NO`；\n3. 而后者开头的第一件事就是「display link 还在 → 直接 return」。\n\n于是淡出整段被跳过，磁贴始终停在 `opacity = 1`。唯一能收尾的是 display link 到期时那条兜底隐藏，可**同一个回调每帧还会把宿主重新显示一次**（`presentationAlpha:1.0`），退出后磁贴就白留最长 0.85 秒。更关键的是：磁贴宿主是原生模块集合视图的**兄弟节点**，不随原生的消失动画一起走 —— 它不会自己消失。\n\n本版的处理：\n\n- 退出方向不再因为 display link 存在而跳过：先把 link 停掉，再把淡出跑完；\n- 淡出完成即隐藏，**不再附加任何前提**（原来那句「且没有 display link 在跑」等于把唯一一次兜底也跳过了）；\n- 圈出一段 0.23 秒的「淡出专享窗口」：窗口内所有会点亮磁贴的路径（每帧的宿主同步、布局尾部）一律让路 —— 它们写的是**同一个属性**，谁后写谁赢，这件事不可能靠调用顺序去约定；\n- 补一道「方向闸门」：只要最近一次呈现方向是「走」且不处于呈现态，就不许把刚淡掉的磁贴再点亮回来。这条堵的是上面那个时间漏洞（淡出 0.18 秒，而收起动画通常更长）；\n- 收起动画一开始（presentation state 3）就让磁贴跟着淡出，不再等“完全收起”那一刻 —— 你截图里「控制中心都没了、磁贴还在」那一幕正出在这里。\n\n### ③ 添加的磁贴与网格不对齐 / 像「没固定在上面」\n\n**原实现的两个错误，一份日志里就能同时读出来。** 同一次采样、`cur=2`、`trans=0`：\n\n```\n原生 LowPower (row 0) frame.y = 114.0\n原生 general  (row 1) frame.y = 202.0     <- 步距精确 88，系统网格本身没问题\n磁贴 row 3 / 4 / 5  self.y = 426 / 514 / 602\n                   按行应为 378 / 466 / 554\n```\n\n三块磁贴**同时、同量低了 48pt** —— 是常数偏移，与尺寸、与步距都无关。第二条：同一份日志里，原生参照的 Y 随手指拖动精确平移（`1218.0 → 1177.7`，正好 −40.3），而磁贴**纹丝不动**。原因是纵向基准公式里减了一次拖动位移、磁贴定位又加了一次，恰好互相抵消 —— 所以拖动时磁贴完全不跟手，观感就是「浮着的」。\n\n**修法：不再自己造网格基准，直接锚在一块原生模块的实测 frame 上。** 原生模块由系统按真实网格摆放，它就是眼睛里那套基准，而且它的 frame 天然带着翻页/拖动位移。于是\n\n```\n磁贴Y = 锚点Y + (磁贴行 − 锚点行) × 88 + (磁贴页 − 锚点页) × 页跨度\n```\n\n既自动落在同一格上（消掉那 48pt），又自动跟手（不再有抵消），也不再需要「当前页」这个变量 —— 少一个自由度，就少一处能算错的地方。横向（X）保持原样：日志里列方向一直是整数格，本来就是对的。整页只有快捷指令磁贴、找不到原生参照时，自动退回原来的算法。\n\n---\n\n### 本版请回传\n\n1. **`SHORTCUTGRID`（第 ③ 条）**：本版新增 `predY` / `dPred` 两个字段。`dPred ≈ 0` 且 `dCells.y` 是整数，即表示磁贴已与原生网格同格；若 `dPred` 明显不为 0，说明那一页没有可用的原生模块、走了回退算法。\n2. **退出控制中心后的画面（第 ④ 条）**：是否还残留磁贴、大致停留多久。\n3. 日志请在**注销 / 重启 SpringBoard 之后**再导出：只清空日志文件不会重置内存里的去重集合，`SHORTCUTGRID` / `SHORTCUTVIS` 可能整段不再打印，那样的日志会误导判断。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-7",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "本轮把上一条尚未定性的问题**从根因上**定位并修掉：第 ④ 条的闪屏此前改错了位置，第 ② / ⑤ 条 4×4 变正圆的成因也找到了。\n\n### ④ 滑动退出时闪屏 —— 根因不在前两版改的那两处\n\n前两版（1.0.6-5 / 1.0.6-6）改的是「磁贴被**谁**点亮」，方向对、但位置不对：真正往 `layer.opacity` 写值的就是**分页裁剪本身**。\n\n裁剪判据原本是：\n\n```objc\nBOOL pageVisible = showAdjacent || ERPageForRect(rect) == gERCurrentPage;\n```\n\n`showAdjacent` 一旦为真，**任何页都算可见**，于是 `pageVisible = YES` 被无条件写到底下那行 `layer.opacity` 上。而拖拽 / 翻页过程中本文件有多处传 `showAdjacent:YES`，**隔着两页**的磁贴也一起被点亮；随后裁剪回合再把它们压回 0 —— 中间就露出那一帧。实机日志里这一步是直接可读的：\n\n```\nSHORTCUTVIS ... page=2 cur=0 onPage=0 opacity=1.00     <- 隔着两页却被点亮\n```\n\n「相邻页保持可见」的本意是**相邻（±1 页）**，不是**任意页**。现在把 `showAdjacent` 收窄成 ±1 页：拖拽时真正可能出现在屏幕上的那两页照旧可见，隔了两页以上的一律保持裁剪值。\n\n### ② / ⑤ 液态玻璃下 4×4 图标变成正圆 —— 圆角来源错了\n\n**根因**：快捷指令磁贴的玻璃圆角取自「材质短边的一半」（`ERGlassPillRadius`）。这个取法**只在 1×1 附近才与正确值巧合一致**（75pt → 37.5pt，与系统 1×1 模块逐项相同）；一旦把磁贴拖大，「短边一半」就变成 **81.5pt**，而 163pt 的方形拿到 81.5pt 圆角 —— **那就是一个正圆**。这正是「拖成 4×4 尺寸后开启液态玻璃，图标已变成正圆」的全部成因。\n\n**修法**：圆角来源按磁贴分两路。\n\n- **七个连通性磁贴**：保持原取法，**一行不改**（它们的尺寸由系统决定、不可能被拖大；实机核对玻璃 r=37.5 一直是对的）—— 杜绝回归。\n- **快捷指令磁贴**：改取**磁贴自身的圆角**。1×1 仍是 37.5（与现在逐点相同，**不改变 1×1 的观感**）；2×2 变成 32，与系统同类大模块一致。\n\n### ③ 添加时无法与网格对齐 —— 诊断已修好，本轮仍不改位置算法\n\n上一条补的 `refCell` / `dRows` 读出来了，但**参照物选错了**：旧代码只按自定义尺寸表比尺寸，而真实系统模块根本不在那张表里，于是参照会随手取到尺寸不同的模块（实测日志里出现过「磁贴 75×75 对参照 163×75」）。两种尺寸的基准混在一起，`d.y` 就分不出「基准问题」还是「步距问题」—— 这正是不能硬改的原因。\n\n本版把参照改成**按实测几何**挑：第一轮要求尺寸与磁贴一致（±1pt），拿不到才退回同页任意模块；并把 `cur` / `span` / `trans` 一并打进 `SHORTCUTGRID`。配合同一刻的 `BASEGEO`（`base`），磁贴的**预期**位置可以直接算出来：\n\n```\npredicted = base.y + (cell.y % 8) x step + (page - cur) x span + trans\n```\n\n`predicted` 与实测 `self` 逐点相等、而与 `ref` 差一个常数 ⇒ **基准**问题；两者斜率不同 ⇒ **步距**问题。请把下一份日志里的 `BASEGEO` + `SHORTCUTGRID` 发我，我据此做定点修正。\n\n---\n\n### 本版请回传三样\n\n1. **`SHORTCUTVIS`**（第 ④ 条）：关键看是否还出现 `onPage=0` 却 `opacity=1.00` 的行。\n2. **`BASEGEO` + `SHORTCUTGRID`**（第 ③ 条）：定位网格对齐偏移。\n3. 4×4 磁贴开启液态玻璃的截图（第 ⑤ 条复验）。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-6",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "本轮按你列出的五条逐一处理。四条已修复，第三条先补齐定位所需的那一项诊断（原因见文末）。\n\n### ① 运行快捷指令的延时：0.3 秒 → 0.2 秒\n\n点按磁贴后，控制中心开始收起、随后发出运行请求的那段固定延时由 **0.3 秒改为 0.2 秒**，点按手感更跟手。\n\n这个延时只为保证「先退出控制中心、再运行快捷指令」的视觉顺序，不是等待收起完成 —— 进程内运行本身不依赖窗口状态，所以缩短它不会影响运行成功率。\n\n### ② 液态玻璃下与七个独立模块显示不一致\n\n**根因**：七个连通性磁贴的底衬由 `ERSyncConnectivityTileChrome` 收尾，那里对每块磁贴都调了一次 `ERRestoreConvertedTileMaterial` —— 液态玻璃在场时**隐藏原生材质、让玻璃独占背景**（系统模块就是这么做的）。快捷指令磁贴此前只建了材质、装了玻璃，**缺的正是这一步**，于是材质与玻璃**两层同时可见**；两者的圆角与 backdrop 分组并不相同，叠出来的观感自然与七个模块不一样。\n\n**修法**：在快捷指令磁贴分支补上同一个调用（未选中、可用），让它的底衬与七个模块**逐项同源**。断言每次布局都会执行，因此开关液态玻璃实时生效，不需要重建磁贴。\n\n### ③ 添加时无法与网格对齐 / 添加后布局错乱\n\n**本轮先补诊断，未改位置算法** —— 理由是数据还差一项，硬改会瞎改。\n\n上一版加入的 `SHORTCUTGRID` 已经能读出「磁贴与同页原生模块的位置差」（实测约 38pt），但**读不出参照模块自己落在哪个格子**，于是无法区分两种完全不同的成因：\n\n- 若是**网格基准**不同 → 差值是常数，只需修正基准；\n- 若是**步距**不同 → 差值是比例，必须改步距。\n\n两者的修法完全不同。本版给诊断补上 `refCell`（参照的格子坐标）、`refRow` / `selfRow`（两者页内行号）与 `dRows`（行号差）。下一次日志即可直接算出：\n\n```\n偏移 = d.y − dRows × step\n```\n\n为常数即基准问题、随格子变化即步距问题 —— 读到数就能定点修正，不用再猜。\n\n### ④ 滑动退出时仍然闪屏\n\n**根因（两处，都在\"无条件点亮页外磁贴\"）**：\n\n1. `layoutOwnedDuplicateModulesForOverlay:` 末尾会把**所有**磁贴的呈现层不透明度和 alpha 无条件拉满，其中就包括页外磁贴；而分页裁剪只在裁剪回合里把它们压回 0。本文件有多处只调布局、不跟一次裁剪，页外磁贴于是以不透明状态露出一帧。\n2. `updateOwnedDuplicateHostForOverlay:` 里对快捷指令磁贴的「特殊豁免」分支，会把**三层可见性全部拉满** —— 其中 `view.layer.opacity` **正是分页裁剪所写的那个属性**。于是只要这个函数被调到，页外磁贴就被重新点亮一次。\n\n**修法**：两处都改为**只对当前页磁贴**拉满；页外磁贴的可见性完全交还给分页裁剪（那里才是唯一权威）。另外补了一个保护：退出控制中心时有一段约 0.18 秒的整体淡出，若恰好在这段时间里跑布局，会把正在淡出的不透明度硬设回 1 —— 现在通过呈现层与模型层是否背离来判断「是否真的在动画中」，动画期间让路，静态时照旧。\n\n### ⑤ 4×4 布局 + 液态玻璃下图标变成正圆\n\n与第 ② 条同源：快捷指令磁贴的玻璃与材质两层叠加时会出现多余的圆形轮廓。补上「玻璃独占背景」之后，它的底衬与七个模块走的是同一条路径，该轮廓随之消失。请一并复验。\n\n---\n\n### 本版请重点看两组日志\n\n1. **`SHORTCUTGRID`** —— 第 ③ 条的关键。新增的 `refCell` / `refRow` / `selfRow` / `dRows` 会直接给出参照的格子坐标，请把这几行发我，我据此做网格对齐的定点修正。\n2. **`SHORTCUTBG`** —— 本版新增，验证第 ② / ⑤ 条：`system` 表示底衬用的是系统材质、`glass=1` 表示玻璃在场；**关键在于 `hid=1`** —— 它表示材质已被隐藏、玻璃独占背景（与七个模块一致）。若 `hid=0` 而 `glass=1`，请把这行发我。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-5",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "本轮针对「快捷指令」页反馈的五个问题逐条处理。其中四条已在本版修复，第一条先加入定位诊断（见文末说明）。\n\n### ① 快捷指令磁贴：网格对齐诊断已加入\n\n第三页的 4×8 网格与磁贴的实际落位存在偏差（用户描述为「位置偏移或错半格」）。这类偏差的修法取决于偏差的**方向与量值**（是由基线取整引入的半格，还是页跨距累积的整格），从代码单侧无法唯一确定，因此本版先加入 `SHORTCUTGRID` 诊断：\n\n它会取同一页、同样尺寸的系统原生模块作为参照，把磁贴与参照都换算到同一覆盖层坐标系，直接输出两者的差值（点数 `d={dx,dy}` 与格数 `dCells={列,行}`），并记录磁贴所属页号（`page=`）。下一次实机日志即可读出精确偏差，再据此做定点修正 —— 不做未经验证的猜测性改动。\n\n### ② 快捷指令磁贴：修复滑动退出时的一帧闪烁\n\n滑动退出快捷指令页、回到桌面时会闪一下「该页全部快捷指令模块」，随后消失。\n\n根因在磁贴的「钉成可见」处理原先**无条件执行**：每轮布局都把磁贴点亮一次，紧接着按页裁剪的回合又把页外磁贴压回 `opacity 0`，两个回合之间就多露了一帧。日志中可直接看到 `opacity=1.00 → 0.00 → 1.00` 的三步。\n\n现改为**仅当磁贴确实属于当前页时**才钉成可见；页外磁贴的可见性完全交给分页可见性回合（`updatePagedModuleVisibilityForOverlay:`），那里才是分页语义的唯一权威。\n\n### ③ 快捷指令磁贴：底板改用系统同款材质\n\n磁贴底板此前用的是 Echo Reborn 自造的 `SystemUltraThinMaterialDark` 合成模糊，与系统模块真实使用的 `MTMaterialView` **并非同源**，并排看差一档。\n\n现改为走七个连通性磁贴那条同一路径：克隆系统 platter 材质（保留 recipe 与 groupName）→ 叠加 GlassKit 玻璃 → 仅在确实借不到时才退回合成模糊。因此快捷指令磁贴的关闭态背景与页面上其余模块**同源**。同时保留一次自愈升级：若磁贴创建时页面尚未布局完、退回成了模糊，后续会原地同位替换为系统材质。\n\n### ④ 快捷指令磁贴：点击后能正常收起控制中心\n\n此前点按磁贴后既不收起控制中心、快捷指令也不运行，日志里只出现 `TAPHAPTIC / TAPHAPTIC-OK` 两行。\n\n根因是收起动作依赖 `dismissViewControllerAnimated:completion:` 的回调，而 UIKit 语义规定「目标控制器没有可收起内容时 completion 不会被调用」；控制中心的呈现由 `SBControlCenterController` 驱动，并非普通 `present`，所以该回调一次都没来 —— 运行请求也因此始终没被发出。\n\n现改为调用 SpringBoard 的权威入口 `-[SBControlCenterController dismissAnimated:]`，运行请求改由固定延时发出（约 0.3 秒，与收起转场相当），不再挂在那个可能永不回调的 completion 上。视觉顺序仍是「先退出控制中心，再运行快捷指令」。\n\n### ⑤ 快捷指令磁贴：去掉图标自带的彩色圆角方块\n\n磁贴上的 1×1 图标原先自带一层彩色圆角方块，这层方框不需要保留。\n\n现改为只绘制**白色图形**本身：图标渲染拆成「带彩色底」与「只有白色图形」两种画法，控制中心磁贴取后者，设置页与目录列表仍取前者（保持原样）。查不到快捷指令记录时的回退图标也同步取「只有白色图形」那一份，否则回退时方框会重新出现。\n\n磁贴底板（第 ③ 项处理的那一层）与最底部的背景均保持不变。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-4",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "### 快捷指令磁贴：运行不再打开快捷指令 App，也不再卡几秒\n\n运行方式由「打开一个 `shortcuts://run-shortcut` 链接」改为**进程内直接运行工作流**。这条链接的语义本身就是**前台化快捷指令 App**，所以「不要打开 App」是改参数改不掉的；而用户感觉到的「卡好几秒」，那几秒正是 App 的冷启动。换成进程内运行后，两个问题一并消失：不再亮出 App，运行发起也没有了冷启动等待。\n\n运行路径按可用性三级下退，任一级不可用就往下一级走，最后一级是原来的链接方式 —— 保证不会出现「点了完全没反应」：\n\n1. `WFSpringBoardWorkflowRunnerClient` —— 系统内部的工作流运行器，按工作流 UUID 直接运行，不前台化任何 App；\n2. `WFWorkflowRunnerClient` + `WFWorkflowRunRequest` —— 先用工作流描述符查一次，再发起运行请求；\n3. 前两级都不可用时，退回原来的链接方式。\n\n### 快捷指令磁贴：先收起控制中心，再运行\n\n运行发起的时机固定为「控制中心收起**完成**」之后，不再和收起转场抢主线程。同时新增 `SHORTCUTRUN` 埋点，把「收起耗时」与「运行耗时」分开记成毫秒（`t_dismiss` / `t_run` / `t_total`），后续如有变慢可以直接定位到是哪一段。\n\n### 快捷指令磁贴：底板修正（1.0.6-3 的一处误判已撤销）\n\n1.0.6-3 把磁贴自绘的底板当成「方块背景」删掉了，这是判断错误：那条参考分支上的磁贴是**真实的系统槽位模块**、本来就有系统底板，而本线的磁贴是自绘的、没有系统底板，删掉之后图标就孤零零浮在控制中心背景上。现已按原实现**一字不差地加回来**。\n\n用户反馈的「方框」其实是**另一层**：`ERApplyShrunkModulePresentation` 给缩小态原生模块垫的圆角材质（圆角 = 短边 ×0.34）。清理它的调用只有三处、全在音乐模块与通用分支里，快捷指令磁贴这条分支从未摘过它 —— 磁贴是「先克隆一个原生模块、再改成快捷指令标识符」生成的，在改标识符之前走过的通用分支把材质留在了视图上。现在这条分支会主动摘掉它。\n\n摘除时**只摘材质、不碰原生内容显隐**：`ERRemoveShrunkModulePresentation()` 会顺带把原生内容放出来，磁贴就会多出一个原生图标（即此前修过的「双图标」），所以这里不调用它。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-3",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "### 快捷指令磁贴：修掉「点一下卡几秒 + 控制中心关闭后快捷指令没打开」\n\n根因不在快捷指令本身，而在「模块单击震动」那个观察型手势识别器：它的「只装一次」守卫读的是**宿主视图**，标记却写在**识别器**上，守卫永远不成立。于是宿主每次布局都会再叠加一个识别器 —— 实机日志里同一次点击被识别成 **43 次**，45 秒后同一宿主涨到 **71 次**。\n\n71 次 × 每触发一次写两行日志 = 142 次 `fopen/append/fclose`，而这段日志是写在 **SpringBoard 主线程**上的，全部压在 **9 毫秒**内。主线程被打满有两个直接后果：控制中心「收起」的转场完成后，紧接着要执行的打开动作拿不到主线程，于是**只剩收起、没有打开**；日志也在那一毫秒硬中断，说明进程已被看门狗回收。\n\n现在标记补写一份到宿主，守卫恢复生效；并加了一段自愈 —— 升级后按识别器标记清掉旧版本遗留的重复实例，避免旧状态被带过来。\n\n### 快捷指令磁贴：去掉自绘的深色底板\n\n快捷指令磁贴原本会被插一层 `UIBlurEffectStyleSystemUltraThinMaterialDark` 底板。那种材质是**写死的深色**，在浅色控制中心背景上就是一个突兀的深色方块 —— 即反馈的「方块背景」。现在磁贴只画图标与文字，背景交回控制中心；同时清掉旧版本已经插进去的那一层（宿主视图会被复用，不清理会残留）。\n\n同样的两笔在老开发线 `fix/0.5.4.1` 上就做过（0.5.6.0「磁贴只画在系统背景上 —— 去掉自绘底板」、0.5.6.1「剥掉深色底板」），那条分支从未并入 main，所以问题在 1.0.x 上重新出现。\n\n### 关于「模块管理」子页面的「实用功能」卡片\n\n该卡片与 4×2 天气模块在 1.0.6-2 已随包发布，代码路径与相邻七行**完全相同**、且是无条件加入。若设备上仍看不到，请导出**打开该页面之后**的日志（与主插件同一个 `echoreborn.log`）：里面应出现一行 `[PREFS] … modulePane: built 7 connectivity + 1 utility row(s)`。没有这一行，说明设置加载的仍是旧版本偏好包，而不是面板代码的问题。"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-2",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• **「模块管理」新增「实用功能」卡片**：接在「连接」下方，内含一个 4×2 的天气模块（满宽 × 一个标准行 —— 与工程内「连接模块 2×2、音量/亮度 1×2」的标定同尺）。该行开关位于**卡片左侧**，由运行期注册的 `ERUtilitySwitchCell`（`PSSwitchCell` 子类）实现；类没注册成功时自动退回原生 `PSSwitchCell`，开关跑到右边但读写与通知完全正常，不会变成点不动\n• 开关写入共享偏好域 `com.strive.echoreborn.preferences` 下的 `ModuleEnabled_com.strive.echoreborn.weather` 并发布 `ReloadPrefs`：打开后「添加控制项」里出现「实用功能」分类与「天气」条目，关闭后立刻从列表移除。「添加控制项」原本就会在每次打开面板时重建目录，所以这个开关**不需要注销或重启**即可生效\n• 天气模块本体是一块独立的自绘内容模块 `ERWeatherModule.bundle`（`com.strive.echoreborn.weather`），走 `CCUIContentModule` **协议**路径而不是继承 CCUI 基类 —— 与参考插件（`com.simon.ccweathermodule`）同一套注册方式。版面对齐参考实现：头部行（城市 + 条件图标）、大号温度、明细行（天气 / 最高最低 / 降水）、分割线、横向滚动的小时条\n• 数据来自系统**私有的 Weather 框架**（与参考插件一致：不联网、不需要 API key、复用系统已缓存并已授权的天气数据）。因为私有类与选择器跨 iOS 版本会变、又无法离线验证，这一层刻意写成全防御式：框架用 `dlopen` 而非链接（缺 `.tbd` 不会导致构建或加载失败），每个类与选择器按名解析并逐个判空，每次读取都包在 `@try` 里，任何一步失败都只降级、不中断\n• 取不到数据时磁贴**不会空白**：显示占位（灰度图标 + 「天气」+ `--°` + 「天气数据暂不可用」），图标另有一层 SF Symbol 兜底链。空白磁贴看起来就是 bug，这与连接模块字形回落链存在的理由是同一条\n• 新增 `[WEATHER]` 诊断，写进与设置侧同一个日志文件，逐步记录 `dlopen` 结果、`dlsym` 到的函数、model 的解析路径、以及 `snapshot` 的实测值。私有框架只能靠这一层日志定位，所以每一步都留了痕\n• 「添加控制项」新增「实用功能」分类，并排进分类顺序表（在「实用工具」之后、「快捷指令」之前）。老用户已保存的分类顺序不含它也没关系 —— 排序逻辑会把保存列表里没提到的分类追加到末尾\n• 本轮只新增功能与一个分类，未改动其余页面与既有七个连接模块的行为；快捷指令磁贴的分页修复（1.0.6-1）保持不变"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6-1",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• **修复快捷指令磁贴在控制中心里始终不显示**：1.0.6 判定为「磁贴账本坏账」，但实机日志否定了这个判断 —— `ledger: repaired` 一行都没有，而 `sync: ledger=13 attached=13` 说明 13 块磁贴**全部真的创建出来了**。真正的根因在分页网格的基准偏移：`gridBaseOriginForOverlay:` 里的 `frame` 是用 `container.layer.position` 还原的**模型矩形**，它不随翻页移动，但补偿项仍写成 `−(page − cur) × span`；而布局阶段又把 `+(page − cur) × span` 加了回去 —— `cur` 被**完全抵消**，磁贴纵向位置只剩 `190 + page × span`，与当前页无关。实测 13 块磁贴落在第 2 页（`y ≈ 2126`）、1 块落在第 3 页（`y ≈ 3094`），全部在屏幕外，所以「翻到第 2 页 → 分页裁剪放行了它 → 坐标仍在屏幕外」→ 存在、但任何页都看不见。现在模型矩形只减它自己所属的页：`− (CGFloat)(NSInteger)page * span`，最终 `y = 190 + (page − cur) × span`，`cur == page` 时回到 `y ≈ 190` 正常显示，其余页正确隐藏\n• 编辑网格处有一处字面相同的公式**故意未改**：那里取的是 `convertRect:` 的**表现矩形**，它会随翻页移动，`−(page − cur)` 对它是正确的。两处都加了注释固化这条边界 ——**`(page − cur)` 补偿项只能配表现矩形，不能配模型矩形**\n• 新增 `BASEGEO` 诊断，打印 `base / span / step / cur / pages / trans`，与 `SHORTCUTVIS` 对照即可一眼确认磁贴位置是否随翻页变化\n• 本轮**只改几何公式与诊断**，未改动任何功能行为；1.0.6 的账本修复（`ERRepairDuplicateLedger()` 等）完整保留 —— 它在本机未触发，但对曾经落盘过坏账的其他用户仍然有效\n• 安装后请 **respring 或重启一次**，再逐页翻看控制中心：第 2 页应出现 13 块快捷指令磁贴，第 3 页应出现另 1 块，回到第 0 页时它们应当消失（这是正确行为）"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.6",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• 修复快捷指令磁贴在控制中心里不显示：磁贴账本 `COSMICDuplicateFamilies` 里存在「键正确、值为空串」的坏账条目。这类条目会让磁贴**根本不被创建**（同步时被 `!baseIdentifier.length` 直接跳过，连诊断都不会为它打印一行），却又让「添加控制项」把它判成「已经在控制中心里了」而永久隐藏 —— 于是既看不见、也加不回来。现在在读盘之后、任何使用之前就地补成合法值（只补齐、不删除、幂等），同步流程本身也加了兜底\n• 磁贴账本与布局账本的**键与值**现在会同时归一化到当前标识符前缀，不再留下「新前缀的键 → 老前缀的值」这种半迁移状态\n• 快捷指令磁贴在几何确定后新增一次可见性断言（所在页 == 当前页 ⇒ 必须真的可见），并补上 `layer.opacity` / 页码 / 屏幕坐标诊断 —— 之前的分页裁剪写的是 `layer.opacity`，而诊断只读 `view.hidden` 与 `view.alpha`，盲区正好落在唯一还会让磁贴消失的那条路径上\n• 启动日志不再把账本条目数谎报为「已注册磁贴数」，改为分别报告账本条目数与实际挂载数\n• 插件描述改为纯功能介绍，更新日志统一放在本分页，不再往包描述里追加"
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.5",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• 快捷指令重新在控制中心显示：更名把偏好域与磁贴标识前缀一起换掉了，旧版只做「新域没有就搬一次」的迁移 —— 只要用户在新版里点过任何一个开关，新域就已经有值，迁移被整段跳过，老磁贴再也回不来。现在改为**幂等的并集合并**（数组取并集、字典逐键补齐，新域已有内容优先保留），并把 `ShortcutCatalog` 与布局账本一起纳入；读取侧另加一层「新域没有就回落到 CCAster 老域」的兜底，落盘的三份账本还会把老前缀标识符归一化，不再出现同一条快捷指令在新旧前缀下各存一份的情况；「添加控制项」也不再要求目录必须命中才肯放行\n• 电源面板按参考图重做：浅色毛玻璃圆角卡片，五个满宽条目（注销桌面 / 安全模式 / 用户空间重启 / 重新启动 / 关机），文字左对齐、图标右对齐，行间一条通栏细分割线，去掉了原来的「电源」标题栏、彩色色块与 chevron\n• 修复电源面板「点一下没反应、多点几下进安全模式」：旧版在把菜单挂进宿主视图**之前**就激活了「面板 ↔ 宿主安全区」的约束，两者当时还没有共同祖先，UIKit 会当场抛异常并中断展示 —— 面板根本不会出现；现在改为先入层级再用 frame 布局，彻底不用 Auto Layout。同时把「动画跑完才解禁点击」换成「展示后 0.28 秒内忽略点击」，后者既能挡住误触「安全模式」的那一下，也不会像原来那样一旦动画没收尾就永久点不动\n• Sileo 图标：`Icon:` 路径改为跟随越狱方案 —— rootless 用 `/var/jb/Library/...`，roothide 用 jbroot 相对的 `/Library/...`。roothide 的 jbroot 是每台设备随机的，写死 `/var/jb` 在它上面必然解析不到\n• 滑轨两侧的 − / + 按钮加入震动反馈。原来用的是局部生成器，方法一返回就被释放，而震动是异步派发的，于是「点了没震动」且不报错；现在改为全程强引用并在每次点击前 prepare\n• 「增强设置」改为「界面优化」（图标不变）；「音量控制」改为「音量百分比」、「亮度控制」改为「亮度百分比」",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.4",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• 修复 Sileo 中包图标不显示：`Icon:` 字段原来写的是包内相对路径（`file:///Library/...`），而实际安装位置在 jailbreak root 之下，rootless / roothide 都解析不到；改为带 jbroot 的绝对路径\n• 修复「模块管理」子页里蓝牙与隔空投送的图标只有底色没有字形：两者都不是 SF Symbol（AirDrop 的真字形在 ConnectivityModule.bundle 资源目录里，蓝牙是 CAPackage），改为「SF Symbol → 系统资源目录 → 首字」三级回落\n• 子页导航栏标题回到「独立模块」，页内顶部文案改为「连接」\n• 设置页底部居中显示版本号，改为运行期读取 Info.plist，版本号不再与包版本脱节\n• 一次性迁移更名前的偏好域与磁贴标识符前缀：更名前加进控制中心的快捷指令磁贴不再失联\n• 电源面板在展示动画跑完前不接受点击，避免误触到尚不可见的「安全模式」条目",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 1.0.0",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• 项目更名为 Echo Reborn，包标识改为 com.strive.echoreborn，作者统一为 Strive，并更换全新图标",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• 重写滑杆控件：Siri 外观分区的滑块与数值恢复显示，宽度逐行统一，标题去掉括号说明",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• 修复「从桌面回到设置后左侧图标消失」",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 0.2.2",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Added some layout fixes for larger device sizes",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Home-button device layout improvements are planned for a future update",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 0.2.1",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Fixed 3D-touch modules expanding while in edit mode",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Fixed modules trying to fight dragging to move while in edit mode",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 0.0.2-1 - Beta 1 Hotfix",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Added arm64e support for newer devices",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionSeparatorView"
+        },
+        {
+          "class": "DepictionSubheaderView",
+          "title": "Version 0.0.2 - Beta 1",
+          "useBoldText": true,
+          "useBottomMargin": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Added editable multi-page 8x4 Control Center layouts",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Added Echo Reborn's control sheet, module resizing, and Quick Access Buttons",
+          "useSpacing": false
+        },
+        {
+          "class": "DepictionMarkdownView",
+          "markdown": "• Added an option to preserve saved pages while limiting Control Center to page one",
+          "useSpacing": false
+        }
+      ]
+    }
+  ]
+}

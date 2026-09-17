@@ -1,0 +1,251 @@
+name: Build Echo Reborn
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.scheme }})
+    # macOS is required because Echo Reborn compiles two Swift ports (Soko and
+    # LiquidSiri) into its own dylib; Theos cannot cross-compile Swift from a
+    # Linux runner.
+    #
+    # macos-14 (not macos-latest) is deliberate, and it is the whole reason this
+    # builds.  Its default Xcode ships a Swift 5.x compiler, which is what can
+    # read the SwiftUI.swiftinterface inside Theos' iPhoneOS16.5.sdk.  That
+    # interface was produced by Apple Swift 5.8, and every Swift 6.x compiler
+    # rejects it outright:
+    #
+    #   SwiftUI.swiftinterface:17964:59: error: string interpolation cannot be
+    #   used in this context; if you are calling an os_log function, try a
+    #   different overload
+    #     -> error: failed to build module 'SwiftUI'; this SDK is not supported
+    #        by the compiler (the SDK is built with 'Apple Swift version 5.8',
+    #        while this compiler is 'Apple Swift version 6.3.3')
+    #
+    # so on macos-latest `import SwiftUI` can never succeed, no matter what the
+    # project source says.  Neither Soko nor LiquidSiri uses any API newer than
+    # iOS 16.4, so the 16.5 SDK is fully sufficient for both - the only thing
+    # that ever needed a newer SDK was the compiler.  Vendoring a modern SDK in
+    # to satisfy it was tried and reverted: it silently loses the Swift overlay
+    # .tbd stubs (libswiftUIKit and friends), which is exactly what ld64 needs
+    # to resolve the __swift_FORCE_LOAD_$_swiftUIKit reference that Swift emits
+    # for `import UIKit`:
+    #
+    #   "__swift_FORCE_LOAD_$_swiftUIKit", referenced from:
+    #       __swift_FORCE_LOAD_$_swiftUIKit_$_Soko in Soko.swift.26b48e1b.o
+    runs-on: macos-14
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: [rootless, roothide]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Swift-capable Theos
+        uses: waruhachi/theos-action@v2.4.6
+        with:
+          theos-src: 'waruhachi/theos'
+          theos-branch: 'main'
+          sdks-src: 'waruhachi/sdks'
+          sdks-branch: 'main'
+
+      # Fail loudly and early if the runner image ever moves to a Swift 6.x
+      # compiler, instead of burning a whole build and dying deep inside
+      # Apple's SwiftUI interface with a message that looks like our bug.
+      - name: Show and vet toolchain
+        run: |
+          set -e
+          sw_vers
+          xcodebuild -version
+          xcrun swiftc --version
+          echo "--- Theos SDKs ---"
+          ls -1 "${THEOS}/sdks"
+          if [ ! -d "${THEOS}/sdks/iPhoneOS16.5.sdk" ]; then
+            echo "::error::${THEOS}/sdks/iPhoneOS16.5.sdk is missing, so TARGET=iphone:clang:16.5:16.0 cannot resolve."
+            exit 1
+          fi
+          # "Apple Swift version 5.10 (swiftlang-5.10.0.13 clang-1500.3.9.4)"
+          # must yield 5, so anchor on "Swift version " - a loose "last
+          # number.number" match picks up clang's build number instead.
+          major="$(xcrun swiftc --version | sed -nE 's/.*Swift version ([0-9]+).*/\1/p' | head -1)"
+          echo "detected Swift major: ${major}"
+          if [ -z "${major}" ]; then
+            echo "::error::could not parse the Swift compiler version"
+            exit 1
+          fi
+          if [ "${major}" -ge 6 ]; then
+            echo "::error::Swift ${major}.x cannot import the SwiftUI.swiftinterface in Theos' iPhoneOS16.5.sdk (built with Swift 5.8). Pin this job to a macOS image whose default Xcode ships Swift 5.x, e.g. macos-14."
+            exit 1
+          fi
+
+      - name: Build package
+        run: |
+          set -e -o pipefail
+          : "${THEOS:?THEOS is not set}"
+          rm -rf packages dist
+          make clean package THEOS_PACKAGE_SCHEME=${{ matrix.scheme }} FINALPACKAGE=1 2>&1 | tee build_output.txt
+
+      - name: Rename and stage deb
+        if: always()
+        run: |
+          set -e
+          rm -rf dist
+          mkdir -p dist
+          shopt -s nullglob
+          debs=(packages/*.deb)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "::error::no .deb was produced - the build failed"
+            exit 1
+          fi
+          deb="${debs[0]}"
+          echo "Built: $deb"
+          version=$(sed -n 's/^Version:[[:space:]]*//p' control | tr -d '\r')
+          arch=$(sed -n 's/^Architecture:[[:space:]]*//p' control | tr -d '\r')
+          out="dist/com.strive.echoreborn_${version}_${arch}_${{ matrix.scheme }}.deb"
+          cp "$deb" "$out"
+          echo "Artifact: $out"
+          ls -lh dist
+
+      # A silently-missing preference bundle or a missing subproject dylib would
+      # still produce a green build and ship a broken deb.  Fail loudly here.
+      # `dpkg-deb` does not exist on macOS runners and Theos packages with its
+      # bundled dm.pl, so the deb is walked directly (ar + tar) in Python.
+      - name: Verify package contents
+        if: always()
+        env:
+          SCHEME: ${{ matrix.scheme }}
+        run: |
+          set -e
+          shopt -s nullglob
+          debs=(packages/*.deb)
+          if [ ${#debs[@]} -eq 0 ]; then
+            echo "::error::no .deb to verify"
+            exit 1
+          fi
+          deb="${debs[0]}"
+          echo "== ${deb} =="
+          python3 - "$deb" <<'PY'
+          import sys, os, io, lzma, gzip, tarfile
+
+          path = sys.argv[1]
+          data = open(path, 'rb').read()
+          if data[:8] != b'!<arch>\n':
+              sys.exit('not an ar archive: %r' % data[:8])
+
+          off, members = 8, {}
+          while off + 60 <= len(data):
+              hdr = data[off:off + 60]
+              name = hdr[0:16].decode('utf-8', 'replace').strip()
+              size = int(hdr[48:58].decode('utf-8', 'replace').strip())
+              body = data[off + 60:off + 60 + size]
+              if name.startswith('#1/'):
+                  n = int(name[3:])
+                  name, body = body[:n].decode('utf-8', 'replace'), body[n:]
+              if name:
+                  members[name.rstrip('/')] = body
+              off += 60 + size + (size & 1)
+          print('ar members:', sorted(members))
+
+          key = next((k for k in members if k.startswith('data.tar')), None)
+          if key is None:
+              sys.exit('no data.tar member in the deb')
+          raw = members[key]
+          if key.endswith(('.lzma', '.xz')):
+              raw = lzma.decompress(raw)
+          elif key.endswith('.gz'):
+              raw = gzip.decompress(raw)
+          elif key.endswith('.bz2'):
+              import bz2
+              raw = bz2.decompress(raw)
+
+          names = set()
+          with tarfile.open(fileobj=io.BytesIO(raw)) as tf:
+              for m in tf.getmembers():
+                  names.add(m.name.lstrip('./'))
+          print('payload entries:', len(names))
+
+          # Theos merges the *contents* of a directory called `layout` at the
+          # project root into the package root, and macOS' case-insensitive
+          # APFS/HFS+ makes that convention match a directory named `Layout`
+          # too.  That is exactly how Soko's six layout sources once shipped as
+          # /SokoLayout.swift ... /SokoWidgetLayout.swift.  Never again: no
+          # payload entry may be a source file, and nothing may appear at the
+          # package root outside the directories Theos is meant to populate.
+          leaked = sorted(x for x in names if x.lower().endswith(
+              ('.swift', '.swiftinterface', '.m', '.mm', '.h', '.xm', '.x', '.s', '.cpp')))
+          if leaked:
+              sys.exit('::error::source files leaked into the package payload: %s'
+                       % ', '.join(leaked))
+
+          scheme = os.environ.get('SCHEME', '')
+          base = 'var/jb/' if scheme == 'rootless' else ''
+          allowed_roots = {'Library', 'usr', 'System', 'DEBIAN'}
+          stray = sorted({x[len(base):].split('/')[0] for x in names
+                          if x.startswith(base) and x[len(base):].strip()})
+          stray = [s for s in stray if s not in allowed_roots]
+          if stray:
+              sys.exit('::error::unexpected top-level payload entries: %s' % ', '.join(stray))
+          print('payload root layout OK for scheme %r' % scheme)
+
+          required = ['EchoRebornPrefs', 'EchoReborn.dylib', 'EchoRebornBackboardd.dylib',
+                      'EchoRebornDualCam.dylib', 'EchoReborn.plist',
+                      'EchoRebornDualCam.plist']
+          missing = []
+          for req in required:
+              hits = sorted(x for x in names if req in x)
+              if hits:
+                  print('OK   %-20s -> %s' % (req, hits[0]))
+              else:
+                  print('MISS %-20s' % req)
+                  missing.append(req)
+          if missing:
+              sys.exit('::error::missing from deb: %s' % ', '.join(missing))
+
+          # 0.5.26: Soko and LiquidSiri are compiled into EchoReborn.dylib instead
+          # of shipping as their own dylibs. A second copy of LGLiveBackdropView
+          # loaded into SpringBoard respring-loops the device, so guard the
+          # dylib count explicitly - this is the regression that bricked 0.5.25.
+          dylibs = sorted(x.rsplit('/', 1)[-1] for x in names if x.endswith('.dylib'))
+          # 1.0.7-5: EchoRebornDualCam.dylib 是第三支合法 dylib —— 相机双摄只注入
+          # com.apple.camera（见 EchoRebornDualCam.plist），与主 dylib 互不重叠。
+          expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib'}
+          extra = sorted(set(dylibs) - expected)
+          print('dylibs in payload:', dylibs)
+          for gone in ('Soko.dylib', 'LiquidSiri.dylib'):
+              if gone in dylibs:
+                  sys.exit('::error::%s is back - it must stay merged into EchoReborn.dylib' % gone)
+          if extra:
+              sys.exit('::error::unexpected dylibs in the package: %s' % ', '.join(extra))
+          if not expected.issubset(set(dylibs)):
+              sys.exit('::error::expected both EchoReborn.dylib and EchoRebornBackboardd.dylib, got: %s'
+                       % ', '.join(dylibs))
+          print('dylib set OK: exactly the two expected dylibs')
+
+          print('--- payload (filtered) ---')
+          for x in sorted(names):
+              if any(k in x for k in ('.dylib', 'PreferenceBundles', 'PreferenceLoader', 'DEBIAN')):
+                  print('  ', x)
+          print('all required files present')
+          PY
+
+      - name: Upload build log (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.scheme }}
+          path: build_output.txt
+          if-no-files-found: warn
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: echoreborn-${{ matrix.scheme }}
+          path: dist/*.deb
+          if-no-files-found: warn

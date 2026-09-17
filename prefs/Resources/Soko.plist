@@ -1,0 +1,139 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>锁屏控制项</string>
+
+	<!--
+	  v7 子页 A · 锁屏控制项（Soko）
+
+	  `defaults` 必须逐 specifier 写，不能只写在本文件的根节点上。
+	  Preferences 只在 specifier 自带 defaults 时才能解析出偏好域；写在根节点
+	  框架取不到域，readPreferenceValue: 返回 nil，`default` 被整体忽略 ——
+	  于是开关一律显示「关」、滑杆读成 0（再被 min 夹住，看上去就是滑杆停在最
+	  左端），而 Tweak 侧 Swift 发现 key 不存在会回落自己的默认值
+	  true / -18 / 60，最终表现就是「开关关着但效果生效」。
+	  Root.plist / Enhanced.plist / Glass.plist 用的都是逐 specifier 写 defaults
+	  的写法，这三页一直正常。
+
+	  key 必须带 `soko_` 前缀：上游 Soko 的前缀是它的 Swift 控制器写入时补的，
+	  改成纯 plist 直写后框架不再补前缀，漏掉就是「滑杆能拖、锁屏没反应」。
+	-->
+
+	<key>items</key>
+	<array>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>锁屏控件</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>调整锁屏控件位置</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>soko_widgetsEnabled</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>垂直偏移</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>soko_widgetOffset</string>
+			<key>default</key>
+			<real>-18</real>
+			<key>min</key>
+			<real>-120</real>
+			<key>max</key>
+			<real>120</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>重置控件偏移</string>
+			<key>action</key>
+			<string>resetWidgetOffset</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>通知</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>调整通知位置</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>soko_notificationsEnabled</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>垂直偏移</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>soko_notificationOffset</string>
+			<key>default</key>
+			<real>60</real>
+			<key>min</key>
+			<real>-120</real>
+			<key>max</key>
+			<real>120</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>重置通知偏移</string>
+			<key>action</key>
+			<string>resetNotificationOffset</string>
+		</dict>
+
+	</array>
+</dict>
+</plist>

@@ -1,0 +1,11 @@
+{
+    Filter = {
+        Bundles = (
+            "com.apple.springboard",
+            "com.apple.PosterBoard",
+            "com.apple.SiriViewService",
+            "com.apple.siri.SystemUI",
+            "com.apple.SiriUI"
+        );
+    };
+}

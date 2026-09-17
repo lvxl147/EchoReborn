@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>zh_CN</string>
+	<key>CFBundleExecutable</key>
+	<string>ERWeatherModule</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.strive.echoreborn.weather</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<!-- CFBundleName is the executable-ish name Control Center derives a tile
+	     label from when better metadata is missing; ERFriendlyNameForIdentifier
+	     in Tweak.xm also maps this identifier to 天气, so both paths agree. -->
+	<key>CFBundleName</key>
+	<string>天气</string>
+	<key>CFBundleDisplayName</key>
+	<string>天气</string>
+	<key>CFBundlePackageType</key>
+	<string>BNDL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleSupportedPlatforms</key>
+	<array>
+		<string>iPhoneOS</string>
+	</array>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>MinimumOSVersion</key>
+	<string>16.0</string>
+	<!-- Protocol-based content module (see ERWeatherModule.h). Control Center
+	     instantiates this class and asks it for a contentViewController. -->
+	<key>NSPrincipalClass</key>
+	<string>ERWeatherModule</string>
+	<key>UIDeviceFamily</key>
+	<array>
+		<integer>1</integer>
+		<integer>2</integer>
+	</array>
+	<!-- Declared footprint: 满宽 × 一个标准行 = 4×1，与参考插件
+	     (com.simon.ccweathermodule 1.0.4) 一致。
+	     Calibration (see Tweak.xm's catalogLayoutSizeForIdentifier:): the grid
+	     unit is one column wide and one standard module row tall, so the stock
+	     连接 block is 2×2, and 音量 / 亮度 are 1×2. Width 4 is the full grid.
+	     1.0.6-12：4×2 不再靠声明得到 —— 用户在编辑态把磁贴拖大之后由 EchoReborn
+	     的 gERCustomSizes 记录，ERWeatherContentViewController 按实测高度在
+	     「4×1 单行」与「4×2 双行」两套版式之间切换。这样一个 identifier 覆盖两个
+	     尺寸，控制项里也不会多出条目。 -->
+	<key>CCSGetModuleSizeAtRuntime</key>
+	<false/>
+	<key>CCSModuleSize</key>
+	<dict>
+		<key>Landscape</key>
+		<dict>
+			<key>Height</key>
+			<integer>1</integer>
+			<key>Width</key>
+			<integer>4</integer>
+		</dict>
+		<key>Portrait</key>
+		<dict>
+			<key>Height</key>
+			<integer>1</integer>
+			<key>Width</key>
+			<integer>4</integer>
+		</dict>
+	</dict>
+	<key>ModuleSize</key>
+	<dict>
+		<key>Landscape</key>
+		<dict>
+			<key>Height</key>
+			<integer>1</integer>
+			<key>Width</key>
+			<integer>4</integer>
+		</dict>
+		<key>Portrait</key>
+		<dict>
+			<key>Height</key>
+			<integer>1</integer>
+			<key>Width</key>
+			<integer>4</integer>
+		</dict>
+	</dict>
+</dict>
+</plist>
