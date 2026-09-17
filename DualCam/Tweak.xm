@@ -6,7 +6,7 @@
 
 // 版本串同时用于日志与预览层标题。EchoReborn 侧的版本号由 scripts/er_set_version.py
 // 统一写入（本文件里的 ver= 与 EchoRebornRebornDualCam 段一并同步）。
-static NSString *const kDualCamVersion = @"1.0.7-20";
+static NSString *const kDualCamVersion = @"1.0.7-21";
 static BOOL g_dualCamOn = NO;
 static NSHashTable *g_appSessions = nil;
 static UIWindow *g_overlayWindow = nil;
@@ -1202,6 +1202,17 @@ static void dualCamUpdateButtonAppearance(void) {
     g_toggleBtn.accessibilityLabel = g_dualCamOn ? @"关闭双摄" : @"开启双摄";
 }
 
+// 1.0.7-21（用户第 2 条 · 「先和实况图标重叠，约 1 秒后才回位」）：
+// 锚点（实况图标）在相机启动的头 0.4–1.5s 内还不存在。旧实现此时把按钮摆到
+// 「顶部栏右上角内侧」固定位 —— 那里正是实况图标所在，观感就是先重叠、再跳位。
+// 新策略：锚点未就绪时先隐藏按钮 + 0.12s 快速轮询（最多约 2.5s），锚点一出现
+// 就出现在正确位置；宽限耗尽仍无锚点才退回固定位（老设备/改版布局的兜底）。
+static BOOL g_dualCamAnchorResolved = NO;      // 至少一次拿到可用锚点（或宽限耗尽）
+static BOOL g_dualCamGraceExpired = NO;        // 轮询宽限耗尽 → 允许固定位兜底
+static BOOL g_dualCamRetryLoopActive = NO;     // 轮询循环进行中（防重复调度）
+static NSInteger g_dualCamRetryIndex = 0;      // 已重试次数
+static void dualCamScheduleAnchorRetries(void);
+
 // 把按钮摆到「实况」图标左边。每次布局都调用（幂等），因此不用依赖任何一次性时机。
 // 1.0.7-16：宿主可能是整棵 key window（兜底路径），此时锚点在深层容器里，
 // 必须用 convertRect 把锚点换算到宿主坐标系，不能直接用 anchor.frame。
@@ -1234,10 +1245,19 @@ static void dualCamLayoutButton(void) {
             }
         }
     }
+    if (!anchored && !g_dualCamAnchorResolved && !g_dualCamGraceExpired) {
+        // 锚点还没就绪：先隐藏 + 快速轮询（见本函数上方的说明），不要摆到右上角固定位
+        // —— 那会压在实况图标上，正是用户看到的「先重叠约 1 秒后跳位」。
+        g_toggleBtn.hidden = YES;
+        dualCamScheduleAnchorRetries();
+        return;
+    }
     if (!anchored) {
-        // 没有实况图标可对齐（不同版本布局不同）——摆到顶部栏右上角内侧，
-        // 至少保证功能可用；同时把顶部栏的子视图类名 dump 一次，供下一轮精确对齐。
+        // 没有实况图标可对齐（不同版本布局不同；宽限已耗尽时才走到这里）——
+        // 摆到顶部栏右上角内侧，至少保证功能可用；同时把顶部栏的子视图类名
+        // dump 一次，供下一轮精确对齐。
         frame = CGRectMake(CGRectGetWidth(g_topBarHost.bounds) - width - 12.0, 8.0, width, height);
+        g_toggleBtn.hidden = NO;
         if (!g_topBarDumpDone) {
             g_topBarDumpDone = YES;
             NSMutableArray *names = [NSMutableArray array];
@@ -1247,6 +1267,10 @@ static void dualCamLayoutButton(void) {
             DualCamLog(@"DUALCAM topbar children (anchor missing): %@",
                        [names componentsJoinedByString:@", "]);
         }
+    } else {
+        // 锚点就绪：记下已解决并显示按钮（首次出现即落在正确位置，不再有重叠帧）。
+        g_dualCamAnchorResolved = YES;
+        g_toggleBtn.hidden = NO;
     }
     if (!CGRectEqualToRect(g_toggleBtn.frame, frame)) g_toggleBtn.frame = frame;
     // 真·顶部栏里按钮保持透明（融入顶栏）；只有 key-window 兜底模式才上芯片底
@@ -1272,6 +1296,11 @@ static void dualCamInstallIntoTopBar(UIView *topBar) {
                 action:@selector(toggle)
       forControlEvents:UIControlEventTouchUpInside];
         g_toggleBtn = btn;
+        // 1.0.7-21：全新按钮 = 全新会话，锚点状态一并重置（重试循环随之归零）。
+        g_dualCamAnchorResolved = NO;
+        g_dualCamGraceExpired = NO;
+        g_dualCamRetryLoopActive = NO;
+        g_dualCamRetryIndex = 0;
         DualCamLog(@"DUALCAM installed top-bar button in %@", NSStringFromClass(topBar.class));
     }
     dualCamLayoutButton();
@@ -1293,6 +1322,11 @@ static void dualCamRefreshInstallation(void) {
             g_toggleBtn = nil;
         }
         g_topBarHost = nil;
+        // 1.0.7-21：功能关闭时把锚点状态一并复位，重新打开时重新走「隐藏 + 轮询」。
+        g_dualCamAnchorResolved = NO;
+        g_dualCamGraceExpired = NO;
+        g_dualCamRetryLoopActive = NO;
+        g_dualCamRetryIndex = 0;
         DualCamPostState(@"off");
         return;
     }
@@ -1382,8 +1416,21 @@ static void dualCamApplyWindowFallbackLayout(UIWindow *window) {
                            NSStringFromClass(rightmost.class), NSStringFromCGRect(frame));
             }
         } else {
+            // 1.0.7-21：实况与右缘图标都没扫到 —— 锚点未就绪时先隐藏 + 轮询，
+            // 避免把按钮压在右上角（实况图标位置）上；宽限耗尽才退回固定位。
+            if (!g_dualCamAnchorResolved && !g_dualCamGraceExpired) {
+                g_toggleBtn.hidden = YES;
+                dualCamScheduleAnchorRetries();
+                return;
+            }
             frame = CGRectMake(CGRectGetWidth(window.bounds) - side - 14.0, 64.0, side, side);
         }
+    }
+    if (placed) {
+        g_dualCamAnchorResolved = YES;
+        g_toggleBtn.hidden = NO;
+    } else {
+        g_toggleBtn.hidden = NO;   // 宽限耗尽后的固定位兜底，保持可用
     }
     if (!CGRectEqualToRect(g_toggleBtn.frame, frame)) g_toggleBtn.frame = frame;
     g_toggleBtn.backgroundColor = UIColor.clearColor;   // 用户要求：去掉外面的圆
@@ -1391,6 +1438,53 @@ static void dualCamApplyWindowFallbackLayout(UIWindow *window) {
     g_toggleBtn.layer.masksToBounds = NO;
     dualCamUpdateButtonAppearance();
     [window bringSubviewToFront:g_toggleBtn];
+}
+
+// 1.0.7-21（用户第 2 条）：锚点轮询循环。0.12s × 6 + 0.30s × 6 ≈ 2.5s。
+// 每次触发先按当前宿主重跑一次摆放（顶部栏或窗口兜底）；一旦拿到锚点，
+// 摆放函数会置 g_dualCamAnchorResolved 并显示按钮，循环自行结束。
+static void dualCamRunAnchorRetry(void) {
+    if (!g_dualCamFeatureEnabled || !g_toggleBtn) {
+        g_dualCamRetryLoopActive = NO;
+        return;
+    }
+    if (g_dualCamAnchorResolved) {
+        g_dualCamRetryLoopActive = NO;
+        return;
+    }
+    g_dualCamRetryIndex++;
+    if (g_dualCamRetryIndex > 12) {
+        g_dualCamRetryLoopActive = NO;
+        g_dualCamGraceExpired = YES;
+        DualCamLog(@"DUALCAM anchor grace expired -> fixed fallback");
+        dualCamRefreshInstallation();   // 宽限耗尽，用固定位摆一次（此时放行兜底）
+        return;
+    }
+    if (g_topBarHost && ![g_topBarHost isKindOfClass:[UIWindow class]]) {
+        dualCamLayoutButton();
+    } else if (g_topBarHost) {
+        dualCamApplyWindowFallbackLayout((UIWindow *)g_topBarHost);
+    }
+    if (g_dualCamAnchorResolved) {
+        g_dualCamRetryLoopActive = NO;
+        return;
+    }
+    NSTimeInterval delay = (g_dualCamRetryIndex < 6) ? 0.12 : 0.30;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        dualCamRunAnchorRetry();
+    });
+}
+
+static void dualCamScheduleAnchorRetries(void) {
+    if (g_dualCamAnchorResolved || g_dualCamGraceExpired || g_dualCamRetryLoopActive) return;
+    if (!g_dualCamFeatureEnabled || !g_toggleBtn) return;
+    g_dualCamRetryLoopActive = YES;
+    g_dualCamRetryIndex = 0;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.02 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        dualCamRunAnchorRetry();
+    });
 }
 
 

@@ -68,12 +68,13 @@
 
             [_nameLabel.leadingAnchor constraintEqualToAnchor:_avatar.trailingAnchor constant:12.0],
             [_nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.contentView.trailingAnchor constant:-16.0],
-            [_nameLabel.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:15.0],
+            // 1.0.7-21（用户第 2 条）：卡片顶部留白过大 → 减半（15 → 8）。
+            [_nameLabel.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:8.0],
 
             [_subtitleLabel.leadingAnchor constraintEqualToAnchor:_nameLabel.leadingAnchor],
             [_subtitleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.contentView.trailingAnchor constant:-16.0],
             [_subtitleLabel.topAnchor constraintEqualToAnchor:_nameLabel.bottomAnchor constant:3.0],
-            [_subtitleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-14.0],
+            [_subtitleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-12.0],
         ]];
     }
     return self;

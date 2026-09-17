@@ -154,6 +154,17 @@ static void ERPrefsLog(NSString *format, ...) {
     // 为带 erIcon/erIconColor 的 specifier 注入彩色圆角图标，并注册「回到前台重挂」
     // 的兜底（Preferences 回到前台会重建 specifier，iconImage 会丢）。
     [self erActivateIconRefresh];
+    // 1.0.7-21（用户第 2 条）：根页「插件作者」距页顶空白过大 → 减半。
+    // iOS 15 起分组表的 section header 上方默认多垫一段 sectionHeaderTopPadding
+    // （首段之上尤其明显）。置 0 收掉这层，让首段贴向导航栏；只作用于本页表视图。
+    if (@available(iOS 15.0, *)) {
+        @try {
+            UITableView *table = [self valueForKey:@"table"];
+            if ([table isKindOfClass:[UITableView class]]) {
+                table.sectionHeaderTopPadding = 0.0;
+            }
+        } @catch (__unused NSException *exception) {}
+    }
 }
 
 - (void)viewWillAppear:(BOOL)animated {

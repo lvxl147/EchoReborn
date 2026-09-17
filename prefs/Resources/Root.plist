@@ -20,7 +20,7 @@
 			<key>cellClass</key>
 			<string>ERAuthorCell</string>
 			<key>height</key>
-			<real>74</real>
+			<real>64</real>
 		</dict>
 		<dict>
 			<key>cell</key>
