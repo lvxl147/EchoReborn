@@ -5,6 +5,7 @@
 #import "ERModuleSettingsController.h"
 #import "EREnhancedSettingsController.h"
 #import "ERSokoController.h"
+#import "ERBottomComponentsController.h"
 #import "ERSiriController.h"
 #import "ERSystemEnhanceController.h"
 #import "ERUIHelpers.h"
@@ -241,6 +242,14 @@ static void ERPrefsLog(NSString *format, ...) {
     ERSokoController *controller = [[ERSokoController alloc] init];
     if (!controller) return;
     controller.title = @"锁屏控制项";
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+// 1.0.7-29：底部组件子页（音乐胶囊 + 后续新增的锁屏底部组件都在这页里）。
+- (void)openBottomComponents:(__unused PSSpecifier *)specifier {
+    ERBottomComponentsController *controller = [[ERBottomComponentsController alloc] init];
+    if (!controller) return;
+    controller.title = @"底部组件";
     [self.navigationController pushViewController:controller animated:YES];
 }
 

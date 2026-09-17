@@ -22594,6 +22594,581 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 1.0.7-29 · 底部组件 —— 音乐胶囊（LSMusicCapsule 移植）
+//
+// 位置：锁屏底部「手电筒 ↔ 相机」之间的水平中心（默认参数就落在那一行）。
+// 结构：[圆形封面] [歌名 / 歌手] [圆形播放键]
+// 视觉：毛玻璃 + 低透明度浅灰 + 0.5px 白描边 + even-odd 内阴影 + 白色外发光。
+// 数据：MediaRemote 私有框架（运行时 dlopen/dlsym，不参与链接）；回退 SBMediaController。
+//
+// 源工程 LSMusicCapsule 的类名 / 函数名在此统一加 ERMusic 前缀 —— 同一台设备上若还
+// 装着独立的 LSMusicCapsule，两边同名类会在 SpringBoard 里撞车。
+// 设置入口：根页面「锁屏控制项」组 →「底部组件」子页（BottomComponents.plist）。
+// ---------------------------------------------------------------------------
+static NSString *const kERMusicCapsuleEnabledKey = @"MusicCapsule.Enabled";
+static NSString *const kERMusicCapsuleInsetKey   = @"MusicCapsule.WidthInset";
+static NSString *const kERMusicCapsuleOffsetKey  = @"MusicCapsule.OffsetY";
+static NSString *const kERMusicCapsuleHeightKey  = @"MusicCapsule.Height";
+
+#pragma mark - 音乐胶囊 · MediaRemote（运行时解析）
+
+typedef void (^ERMusicNowPlayingBlock)(NSDictionary *info);
+
+static void *(*ERMusic_MRGetNowPlayingInfo)(dispatch_queue_t, ERMusicNowPlayingBlock) = NULL;
+static void  (*ERMusic_MRSendCommand)(int, NSDictionary *, void (^)(NSError *)) = NULL;
+static void  (*ERMusic_MRRegisterForNowPlayingNotifications)(dispatch_queue_t) = NULL;
+
+// MRMediaRemoteCommand：TogglePlayPause == 2
+static const int kERMusicCommandTogglePlayPause = 2;
+
+static NSString *const kERMusicMRTitle       = @"kMRMediaRemoteNowPlayingInfoTitle";
+static NSString *const kERMusicMRArtist      = @"kMRMediaRemoteNowPlayingInfoArtist";
+static NSString *const kERMusicMRArtworkData = @"kMRMediaRemoteNowPlayingInfoArtworkData";
+static NSString *const kERMusicMRRate        = @"kMRMediaRemoteNowPlayingInfoPlaybackRate";
+static NSString *const kERMusicMRInfoDidChange    = @"kMRMediaRemoteNowPlayingInfoDidChangeNotification";
+static NSString *const kERMusicMRPlayingDidChange = @"kMRMediaRemoteApplicationIsPlayingDidChangeNotification";
+
+static void ERMusicResolveMediaRemote(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        void *handle = dlopen("/System/Library/PrivateFrameworks/MediaRemote.framework/MediaRemote", RTLD_NOW);
+        if (!handle) handle = dlopen("/System/Library/Frameworks/MediaRemote.framework/MediaRemote", RTLD_NOW);
+        if (!handle) return;
+        ERMusic_MRGetNowPlayingInfo =
+            (void *(*)(dispatch_queue_t, ERMusicNowPlayingBlock))dlsym(handle, "MRMediaRemoteGetNowPlayingInfo");
+        ERMusic_MRSendCommand =
+            (void (*)(int, NSDictionary *, void (^)(NSError *)))dlsym(handle, "MRMediaRemoteSendCommand");
+        ERMusic_MRRegisterForNowPlayingNotifications =
+            (void (*)(dispatch_queue_t))dlsym(handle, "MRMediaRemoteRegisterForNowPlayingNotifications");
+        if (ERMusic_MRRegisterForNowPlayingNotifications) {
+            ERMusic_MRRegisterForNowPlayingNotifications(dispatch_get_main_queue());
+        }
+    });
+}
+
+#pragma mark - 音乐胶囊 · 视图
+
+@interface ERMusicCapsuleView : UIControl
+@property (nonatomic, strong) UIView             *clipView;
+@property (nonatomic, strong) UIVisualEffectView *blurView;
+@property (nonatomic, strong) UIView             *tintView;
+@property (nonatomic, strong) UIImageView        *artworkView;
+@property (nonatomic, strong) UILabel            *titleLabel;
+@property (nonatomic, strong) UILabel            *artistLabel;
+@property (nonatomic, strong) UIButton           *playPauseButton;
+@property (nonatomic, assign) BOOL               playing;
+@property (nonatomic, assign) CGFloat            capsuleHeight;
+- (void)setTitleText:(NSString *)title
+          artistText:(NSString *)artist
+             artwork:(UIImage *)artwork
+             playing:(BOOL)playing;
+@end
+
+// 柔和内阴影：even-odd 环形路径 + 圆角遮罩，只保留胶囊内部的一圈
+static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
+    for (CALayer *layer in [host.layer.sublayers copy]) {
+        if ([layer.name isEqualToString:@"ERMusicInnerShadow"]) { [layer removeFromSuperlayer]; }
+    }
+
+    CAShapeLayer *shadow = [CAShapeLayer layer];
+    shadow.name = @"ERMusicInnerShadow";
+    shadow.frame = host.bounds;
+
+    CGFloat bleed = 24.0;
+    CGRect outer = CGRectInset(host.bounds, -bleed, -bleed);
+    UIBezierPath *path = [UIBezierPath bezierPathWithRect:outer];
+    UIBezierPath *inner = [UIBezierPath bezierPathWithRoundedRect:host.bounds cornerRadius:radius];
+    [path appendPath:inner];
+    path.usesEvenOddFillRule = YES;
+
+    shadow.path = path.CGPath;
+    shadow.fillRule = kCAFillRuleEvenOdd;
+    shadow.fillColor = [UIColor clearColor].CGColor;
+    shadow.shadowColor = [UIColor colorWithWhite:1.0 alpha:1.0].CGColor;
+    shadow.shadowOpacity = 0.16;
+    shadow.shadowRadius = 5.0;
+    shadow.shadowOffset = CGSizeMake(0, 1);
+
+    CAShapeLayer *mask = [CAShapeLayer layer];
+    mask.frame = host.bounds;
+    mask.path = [UIBezierPath bezierPathWithRoundedRect:host.bounds cornerRadius:radius].CGPath;
+    shadow.mask = mask;
+
+    [host.layer addSublayer:shadow];
+}
+
+@implementation ERMusicCapsuleView {
+    CGRect _lastInnerBounds;
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (!self) { return nil; }
+
+    self.backgroundColor = [UIColor clearColor];
+    self.capsuleHeight = 56.0;
+
+    // 外层：白色外发光（不裁剪，阴影才画得出来）
+    self.layer.shadowColor = [UIColor whiteColor].CGColor;
+    self.layer.shadowOpacity = 0.22;
+    self.layer.shadowRadius = 14.0;
+    self.layer.shadowOffset = CGSizeMake(0, 0);
+
+    // 内层：圆角裁剪，承载毛玻璃
+    UIView *clip = [[UIView alloc] initWithFrame:self.bounds];
+    clip.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    clip.backgroundColor = [UIColor clearColor];
+    clip.layer.cornerRadius = self.capsuleHeight / 2.0;
+    if (@available(iOS 13.0, *)) { clip.layer.cornerCurve = kCACornerCurveContinuous; }
+    clip.clipsToBounds = YES;
+    clip.userInteractionEnabled = NO;
+    [self addSubview:clip];
+    self.clipView = clip;
+
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:effect];
+    blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    blur.frame = clip.bounds;
+    blur.userInteractionEnabled = NO;
+    [clip addSubview:blur];
+    self.blurView = blur;
+
+    UIView *tint = [[UIView alloc] initWithFrame:clip.bounds];
+    tint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    tint.backgroundColor = [UIColor colorWithWhite:0.92 alpha:0.12];
+    tint.userInteractionEnabled = NO;
+    [clip addSubview:tint];
+    self.tintView = tint;
+
+    // 极细白色半透明描边（画在裁剪层之上，避免被裁掉）
+    CAShapeLayer *border = [CAShapeLayer layer];
+    border.name = @"ERMusicBorder";
+    border.fillColor = [UIColor clearColor].CGColor;
+    border.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.22].CGColor;
+    border.lineWidth = 0.5;
+    [self.layer addSublayer:border];
+
+    // 内容：封面
+    UIImageView *art = [[UIImageView alloc] initWithFrame:CGRectMake(12, 8, 40, 40)];
+    art.contentMode = UIViewContentModeScaleAspectFill;
+    art.clipsToBounds = YES;
+    art.layer.cornerRadius = 20.0;
+    if (@available(iOS 13.0, *)) { art.layer.cornerCurve = kCACornerCurveContinuous; }
+    art.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.10];
+    art.image = [UIImage systemImageNamed:@"music.note"];
+    art.tintColor = [UIColor colorWithWhite:1.0 alpha:0.75];
+    [self addSubview:art];
+    self.artworkView = art;
+
+    // 内容：两行文字
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectZero];
+    title.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightSemibold];
+    title.textColor = [UIColor whiteColor];
+    title.textAlignment = NSTextAlignmentLeft;
+    title.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self addSubview:title];
+    self.titleLabel = title;
+
+    UILabel *artist = [[UILabel alloc] initWithFrame:CGRectZero];
+    artist.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightRegular];
+    artist.textColor = [UIColor colorWithWhite:1.0 alpha:0.62];
+    artist.textAlignment = NSTextAlignmentLeft;
+    artist.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self addSubview:artist];
+    self.artistLabel = artist;
+
+    // 内容：圆形半透明播放/暂停按钮
+    UIButton *button = [UIButton buttonWithType:UIButtonTypeCustom];
+    button.frame = CGRectZero;
+    button.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+    button.layer.cornerRadius = 18.0;
+    button.layer.borderWidth = 0.5;
+    button.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.25].CGColor;
+    UIImage *icon = [UIImage systemImageNamed:@"pause.fill"];
+    [button setImage:[icon imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate]
+            forState:UIControlStateNormal];
+    button.tintColor = [UIColor whiteColor];
+    button.adjustsImageWhenHighlighted = YES;
+    [button addTarget:self action:@selector(erMusicTogglePlayPause:) forControlEvents:UIControlEventTouchUpInside];
+    [self addSubview:button];
+    self.playPauseButton = button;
+
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+
+    CGFloat h = self.bounds.size.height;
+    CGFloat w = self.bounds.size.width;
+    CGFloat r = h / 2.0;
+
+    self.clipView.frame = self.bounds;
+    self.clipView.layer.cornerRadius = r;
+    self.blurView.frame = self.clipView.bounds;
+    self.tintView.frame = self.clipView.bounds;
+
+    for (CALayer *layer in self.layer.sublayers) {
+        if ([layer.name isEqualToString:@"ERMusicBorder"]) {
+            ((CAShapeLayer *)layer).frame = self.bounds;
+            ((CAShapeLayer *)layer).path =
+                [UIBezierPath bezierPathWithRoundedRect:self.bounds cornerRadius:r].CGPath;
+        }
+    }
+
+    // 内阴影只在尺寸变化时重建（锁屏滚动时 layoutSubviews 会被高频调用）
+    if (!CGRectEqualToRect(_lastInnerBounds, self.clipView.bounds)) {
+        _lastInnerBounds = self.clipView.bounds;
+        ERMusicInstallInnerShadow(self.clipView, r);
+    }
+
+    CGFloat artSize = h - 16.0;
+    self.artworkView.frame = CGRectMake(12.0, 8.0, artSize, artSize);
+    self.artworkView.layer.cornerRadius = artSize / 2.0;
+
+    CGFloat btnSize = 36.0;
+    self.playPauseButton.frame = CGRectMake(w - btnSize - 10.0, (h - btnSize) / 2.0, btnSize, btnSize);
+    self.playPauseButton.layer.cornerRadius = btnSize / 2.0;
+
+    CGFloat textX = CGRectGetMaxX(self.artworkView.frame) + 10.0;
+    CGFloat textW = MAX(20.0, CGRectGetMinX(self.playPauseButton.frame) - textX - 10.0);
+    self.titleLabel.frame  = CGRectMake(textX, 10.0, textW, 19.0);
+    self.artistLabel.frame = CGRectMake(textX, 29.0, textW, 17.0);
+}
+
+- (void)setTitleText:(NSString *)title
+          artistText:(NSString *)artist
+             artwork:(UIImage *)artwork
+             playing:(BOOL)playing {
+    self.titleLabel.text  = title.length  ? title  : @"未在播放";
+    self.artistLabel.text = artist.length ? artist : @"";
+
+    if (artwork) {
+        self.artworkView.image = artwork;
+        self.artworkView.tintColor = nil;
+        self.artworkView.contentMode = UIViewContentModeScaleAspectFill;
+    } else {
+        self.artworkView.image =
+            [[UIImage systemImageNamed:@"music.note"] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        self.artworkView.tintColor = [UIColor colorWithWhite:1.0 alpha:0.75];
+        self.artworkView.contentMode = UIViewContentModeCenter;
+    }
+
+    self.playing = playing;
+    NSString *name = playing ? @"pause.fill" : @"play.fill";
+    UIImage *icon = [[UIImage systemImageNamed:name] imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    [self.playPauseButton setImage:icon forState:UIControlStateNormal];
+}
+
+- (void)erMusicTogglePlayPause:(id)sender {
+    ERMusicResolveMediaRemote();
+    if (ERMusic_MRSendCommand) {
+        ERMusic_MRSendCommand(kERMusicCommandTogglePlayPause, nil, nil);
+    } else {
+        Class mediaControllerClass = NSClassFromString(@"SBMediaController");
+        if ([mediaControllerClass respondsToSelector:@selector(sharedInstance)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            id mediaController = [mediaControllerClass performSelector:@selector(sharedInstance)];
+            if ([mediaController respondsToSelector:@selector(togglePlayPause)]) {
+                [mediaController performSelector:@selector(togglePlayPause)];
+            }
+#pragma clang diagnostic pop
+        }
+    }
+    UIImpactFeedbackGenerator *generator =
+        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [generator impactOccurred];
+}
+
+// 胶囊空白处不拦截触摸，透传给下层锁屏
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    UIView *view = [super hitTest:point withEvent:event];
+    if (view == self) { return nil; }
+    return view;
+}
+
+@end
+
+#pragma mark - 音乐胶囊 · 管理器
+
+static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *observer,
+                                        CFStringRef name, const void *object,
+                                        CFDictionaryRef userInfo);
+
+@interface ERMusicCapsuleManager : NSObject
+@property (nonatomic, strong) ERMusicCapsuleView *capsule;
+@property (nonatomic, weak)   UIView *hostView;
+@property (nonatomic, weak)   UIView *quickActionsView;
+@property (nonatomic, assign) BOOL hasContent;
+@property (nonatomic, assign) BOOL enabled;
+@property (nonatomic, assign) CGFloat widthInset;
+@property (nonatomic, assign) CGFloat offsetY;
+@property (nonatomic, assign) CGFloat capsuleHeight;
++ (instancetype)shared;
+- (void)reloadPrefs;
+- (void)attachToCoverSheetView:(UIView *)view;
+- (void)setVisible:(BOOL)visible animated:(BOOL)animated;
+- (void)refresh;
+@end
+
+@implementation ERMusicCapsuleManager {
+    CFTimeInterval _prefsLoadedAt;
+}
+
++ (instancetype)shared {
+    static ERMusicCapsuleManager *manager;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ manager = [[ERMusicCapsuleManager alloc] init]; });
+    return manager;
+}
+
+- (instancetype)init {
+    self = [super init];
+    if (!self) { return nil; }
+
+    self.capsule = [[ERMusicCapsuleView alloc] initWithFrame:CGRectMake(0, 0, 240, 56)];
+    self.capsule.alpha = 0.0;
+    self.capsule.hidden = YES;
+
+    _widthInset = 88.0;
+    _offsetY = 0.0;
+    _capsuleHeight = 56.0;
+    [self reloadPrefs];
+
+    ERMusicResolveMediaRemote();
+    NSNotificationCenter *center = [NSNotificationCenter defaultCenter];
+    [center addObserver:self selector:@selector(refresh) name:kERMusicMRInfoDidChange object:nil];
+    [center addObserver:self selector:@selector(refresh) name:kERMusicMRPlayingDidChange object:nil];
+    [center addObserver:self
+               selector:@selector(erMusicApplicationDidBecomeActive)
+                   name:UIApplicationDidBecomeActiveNotification
+                 object:nil];
+
+    // 1.0.7-29：本插件统一的偏好变更通知 —— 设置页改完立即生效，无需注销。
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    NULL,
+                                    ERMusicPrefsChangedCallback,
+                                    (__bridge CFStringRef)kERReloadNotification,
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
+    return self;
+}
+
+- (void)reloadPrefs {
+    self.enabled = ERPreferenceBool(kERMusicCapsuleEnabledKey, NO);
+    self.widthInset = ERPreferenceDouble(kERMusicCapsuleInsetKey, 88.0);
+    self.offsetY = ERPreferenceDouble(kERMusicCapsuleOffsetKey, 0.0);
+    self.capsuleHeight = ERPreferenceDouble(kERMusicCapsuleHeightKey, 56.0);
+    _prefsLoadedAt = CACurrentMediaTime();
+}
+
+// 锁屏滚动时 viewDidLayoutSubviews 每帧都来 —— 偏好值最多每秒重读一次。
+- (void)reloadPrefsIfStale {
+    if (CACurrentMediaTime() - _prefsLoadedAt < 1.0) return;
+    [self reloadPrefs];
+}
+
+- (void)erMusicApplicationDidBecomeActive {
+    [self reloadPrefs];
+    [self refresh];
+}
+
+// 在视图树里找锁屏底部快捷按钮容器（类名含 QuickActions）
+- (UIView *)findQuickActionsIn:(UIView *)root {
+    if (!root) return nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSUInteger head = 0;
+    NSUInteger guard = 0;
+    while (head < queue.count && guard++ < 400) {
+        UIView *candidate = queue[head++];
+        if ([NSStringFromClass(candidate.class) rangeOfString:@"QuickActions"].location != NSNotFound) {
+            return candidate;
+        }
+        if (candidate.subviews.count) { [queue addObjectsFromArray:candidate.subviews]; }
+    }
+    return nil;
+}
+
+- (void)attachToCoverSheetView:(UIView *)view {
+    if (!view) return;
+    [self reloadPrefsIfStale];
+    if (!self.enabled) { [self setVisible:NO animated:NO]; return; }
+
+    // 已定位过且仍挂在窗口上就复用，避免每次布局都做整棵树遍历
+    UIView *quickActions = self.quickActionsView;
+    if (!(quickActions && quickActions.window && quickActions.superview)) {
+        quickActions = [self findQuickActionsIn:view];
+        self.quickActionsView = quickActions;
+        static BOOL loggedLookup = NO;
+        if (!loggedLookup) {
+            loggedLookup = YES;
+            if (quickActions) {
+                ERLogInfo(@"MUSICCAPSULE ver=1.0.7-29 quickactions=%@ super=%@",
+                           NSStringFromClass(quickActions.class),
+                           NSStringFromClass(quickActions.superview.class));
+            } else {
+                ERLogInfo(@"MUSICCAPSULE ver=1.0.7-29 quickactions NOT found in %@",
+                           NSStringFromClass(view.class));
+            }
+        }
+    }
+
+    UIView *host = quickActions ? quickActions.superview : view;
+    if (!host) return;
+
+    if (self.capsule.superview != host) {
+        [self.capsule removeFromSuperview];
+        [host addSubview:self.capsule];
+    }
+    [host bringSubviewToFront:self.capsule];
+    self.hostView = host;
+
+    CGFloat screenW = host.bounds.size.width;
+    CGFloat height = MAX(44.0, self.capsuleHeight);
+    CGFloat width = screenW - 2.0 * self.widthInset;
+    width = MIN(340.0, MAX(180.0, width));
+
+    self.capsule.bounds = CGRectMake(0, 0, width, height);
+    self.capsule.capsuleHeight = height;
+
+    // 垂直：与手电筒/相机同一水平线（取容器中心），可用设置项微调
+    CGFloat centerY;
+    if (quickActions) {
+        centerY = quickActions.center.y + self.offsetY;
+    } else {
+        CGFloat safeBottom = host.safeAreaInsets.bottom;
+        centerY = host.bounds.size.height - safeBottom - 46.0 + self.offsetY;
+    }
+
+    self.capsule.center = CGPointMake(host.bounds.size.width / 2.0, centerY);
+    [self.capsule setNeedsLayout];
+}
+
+- (void)setVisible:(BOOL)visible animated:(BOOL)animated {
+    if (visible && (!self.enabled || !self.hasContent)) { visible = NO; }
+
+    // 已是目标状态就直接返回 —— 逐帧的布局路径不会堆叠重复动画
+    CGFloat target = visible ? 1.0 : 0.0;
+    if (self.capsule.hidden == !visible && fabs(self.capsule.alpha - target) < 0.01) { return; }
+
+    if (visible) { self.capsule.hidden = NO; }
+    [UIView animateWithDuration:(animated ? 0.28 : 0.0)
+                          delay:0
+                        options:UIViewAnimationOptionAllowUserInteraction
+                     animations:^{
+        self.capsule.alpha = visible ? 1.0 : 0.0;
+    } completion:^(BOOL finished) {
+        if (!visible) { self.capsule.hidden = YES; }
+    }];
+}
+
+- (void)refresh {
+    [self reloadPrefsIfStale];
+    if (!self.enabled) { [self setVisible:NO animated:YES]; return; }
+
+    __weak typeof(self) weakSelf = self;
+    ERMusicResolveMediaRemote();
+
+    void (^apply)(NSDictionary *) = ^(NSDictionary *info) {
+        NSString *title  = info[kERMusicMRTitle];
+        NSString *artist = info[kERMusicMRArtist];
+        NSNumber *rate   = info[kERMusicMRRate];
+        NSData *artData  = info[kERMusicMRArtworkData];
+
+        UIImage *image = nil;
+        if (artData.length) { image = [UIImage imageWithData:artData]; }
+
+        BOOL playing = rate ? ([rate doubleValue] > 0.01) : NO;
+        weakSelf.hasContent = (title.length > 0);
+
+        [weakSelf.capsule setTitleText:title artistText:artist artwork:image playing:playing];
+        [weakSelf setVisible:weakSelf.hasContent animated:YES];
+    };
+
+    if (ERMusic_MRGetNowPlayingInfo) {
+        ERMusic_MRGetNowPlayingInfo(dispatch_get_main_queue(), ^(NSDictionary *info) {
+            dispatch_async(dispatch_get_main_queue(), ^{ apply(info); });
+        });
+        return;
+    }
+
+    // 回退：SBMediaController（仅文本，无封面）
+    NSString *title = nil, *artist = nil;
+    Class mediaControllerClass = NSClassFromString(@"SBMediaController");
+    if ([mediaControllerClass respondsToSelector:@selector(sharedInstance)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+        id mediaController = [mediaControllerClass performSelector:@selector(sharedInstance)];
+        if ([mediaController respondsToSelector:NSSelectorFromString(@"nowPlayingTitle")]) {
+            title = [mediaController performSelector:NSSelectorFromString(@"nowPlayingTitle")];
+        }
+        if ([mediaController respondsToSelector:NSSelectorFromString(@"nowPlayingArtist")]) {
+            artist = [mediaController performSelector:NSSelectorFromString(@"nowPlayingArtist")];
+        }
+#pragma clang diagnostic pop
+    }
+    apply(@{ kERMusicMRTitle: title ?: @"", kERMusicMRArtist: artist ?: @"" });
+}
+
+@end
+
+static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *observer,
+                                        CFStringRef name, const void *object,
+                                        CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
+        [manager reloadPrefs];
+        [manager refresh];
+        UIView *host = manager.hostView;
+        if (host && host.window) [manager attachToCoverSheetView:host];
+        [manager setVisible:manager.enabled && manager.hasContent animated:NO];
+    });
+}
+
+#pragma mark - 音乐胶囊 · Hooks
+
+@interface CSCoverSheetViewController : UIViewController
+@end
+
+%hook CSCoverSheetViewController
+
+- (void)viewDidAppear:(BOOL)animated {
+    %orig;
+    if (!gEnabled) return;
+    ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
+    [manager reloadPrefs];
+    if (!manager.enabled) { [manager setVisible:NO animated:NO]; return; }
+
+    UIView *coverSheetView = self.view;
+    [manager attachToCoverSheetView:coverSheetView];
+    [manager refresh];
+    // 锁屏视图树可能尚未布局完成，0.35s 后复查一次（原工程行为）
+    __weak UIView *weakView = coverSheetView;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        UIView *view = weakView;
+        if (!view) return;
+        ERMusicCapsuleManager *inner = [ERMusicCapsuleManager shared];
+        [inner attachToCoverSheetView:view];
+        [inner refresh];
+    });
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    %orig;
+    [[ERMusicCapsuleManager shared] setVisible:NO animated:NO];
+}
+
+- (void)viewDidLayoutSubviews {
+    %orig;
+    if (!gEnabled) return;
+    [[ERMusicCapsuleManager shared] attachToCoverSheetView:self.view];
+}
+
+%end
+
 %hook SBApplication
 
 // 1.0.7-16：注入点从 SBIconView **改为 SBApplication**。

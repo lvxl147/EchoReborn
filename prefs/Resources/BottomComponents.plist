@@ -1,0 +1,156 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>title</key>
+	<string>底部组件</string>
+
+	<!--
+	  1.0.7-29 · 子页「底部组件」（LSMusicCapsule 移植）
+
+	  页名与入口行叫「底部组件」而不是「音乐胶囊」：后续可能不止音乐，
+	  新组件继续往本文件里加分组即可。
+
+	  `defaults` 逐 specifier 写（与其它页一致）；滑杆样式对标「操作按钮」：
+	  ERSliderTrackCell / height 54 / showValue / isContinuous false。
+	  本页没有「注销」按钮 —— 改动经 PostNotification 实时生效。
+	-->
+
+	<key>items</key>
+	<array>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>音乐胶囊</string>
+			<key>footerText</key>
+			<string>锁屏底部「手电筒 ↔ 相机」之间的玻璃拟态音乐条：封面 + 歌名/歌手 + 播放键；无播放内容时自动隐藏，空白处点击透传。默认参数即落在手电筒与相机那一行、水平居中。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>启用</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>MusicCapsule.Enabled</string>
+			<key>default</key>
+			<false/>
+			<key>erIcon</key>
+			<string>music.note</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>music.note</string>
+				<string>music.note.list</string>
+				<string>waveform</string>
+			</array>
+			<key>erIconColor</key>
+			<string>pink</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
+			<string>布局</string>
+			<key>footerText</key>
+			<string>左右留白决定胶囊宽度（宽 = 屏宽 − 2×留白，自适应 180–340pt）；垂直偏移以手电筒/相机那条水平线为基准，负值向上。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>左右留白</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>MusicCapsule.WidthInset</string>
+			<key>default</key>
+			<real>88</real>
+			<key>min</key>
+			<real>0</real>
+			<key>max</key>
+			<real>140</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>erIcon</key>
+			<string>arrow.left.and.right</string>
+			<key>erIconColor</key>
+			<string>pink</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>垂直偏移</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>MusicCapsule.OffsetY</string>
+			<key>default</key>
+			<real>0</real>
+			<key>min</key>
+			<real>-60</real>
+			<key>max</key>
+			<real>60</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>erIcon</key>
+			<string>arrow.up.and.down</string>
+			<key>erIconColor</key>
+			<string>pink</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>胶囊高度</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>MusicCapsule.Height</string>
+			<key>default</key>
+			<real>56</real>
+			<key>min</key>
+			<real>44</real>
+			<key>max</key>
+			<real>72</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>erIcon</key>
+			<string>arrow.up.left.and.arrow.down.right</string>
+			<key>erIconColor</key>
+			<string>pink</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+
+	</array>
+</dict>
+</plist>

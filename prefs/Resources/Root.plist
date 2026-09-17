@@ -142,6 +142,28 @@
 		</dict>
 		<dict>
 			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>cellClass</key>
+			<string>EREntryButtonCell</string>
+			<key>alignment</key>
+			<integer>0</integer>
+			<key>label</key>
+			<string>底部组件</string>
+			<key>action</key>
+			<string>openBottomComponents:</string>
+			<key>erIcon</key>
+			<string>dock.rectangle</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>dock.rectangle</string>
+				<string>rectangle.bottomthird.inset.filled</string>
+				<string>music.note</string>
+			</array>
+			<key>erIconColor</key>
+			<string>pink</string>
+		</dict>
+		<dict>
+			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>iOS27 Siri</string>
