@@ -82,6 +82,22 @@ static void ERSystemLog(NSString *format, ...) {
                                                       @"green")
                      forKey:@"iconImage"];
             [specs addObject:sw];
+            // 1.0.7-20：plist 装载失败时的代码兜底也要与 plist 逐项对齐，
+            // 否则「小窗位置」会只在 plist 正常时才出现。
+            PSSpecifier *corner = [PSSpecifier preferenceSpecifierNamed:@"小窗位置"
+                                                                 target:self
+                                                                    set:@selector(setPreferenceValue:specifier:)
+                                                                    get:@selector(readPreferenceValue:)
+                                                                 detail:Nil
+                                                                   cell:PSTitleValueCell
+                                                                  edit:Nil];
+            [corner setProperty:@"ERSegmentedCell" forKey:@"cellClass"];
+            [corner setProperty:@"DualCam.Corner" forKey:@"key"];
+            [corner setProperty:kERSystemSuite forKey:@"defaults"];
+            [corner setProperty:@1 forKey:@"default"];
+            [corner setProperty:@[@"左上", @"右上", @"左下", @"右下"] forKey:@"erSegmentTitles"];
+            [corner setProperty:@"com.strive.echoreborn/ReloadPrefs" forKey:@"PostNotification"];
+            [specs addObject:corner];
             _specifiers = specs;
             ERSystemLog(@"system-enhance: plist EMPTY -> built %lu specifier(s) in code",
                        (unsigned long)specs.count);

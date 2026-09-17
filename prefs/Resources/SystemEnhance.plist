@@ -12,7 +12,7 @@
 			<key>label</key>
 			<string>相机增强</string>
 			<key>footerText</key>
-			<string>开启后，相机 App 顶部「实况」图标左侧会出现一个双摄按钮，点击即可同时调用前后摄像头拍摄，前后两张照片分别存入相册。关闭时该按钮不会出现，相机进程也不会加载双摄组件。</string>
+			<string>开启后，相机 App 顶部「实况」图标左侧会出现一个双摄按钮，点击即可同时调用前后摄像头拍摄：前置画面以小窗合入后置画面，只保存一张照片。下面的「小窗位置」决定这个小窗落在四个角中的哪一个 —— 双摄画面、照片与录像三处同源。关闭双摄时不建按钮，相机进程也不会加载双摄组件。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -36,6 +36,29 @@
 			</array>
 			<key>erIconColor</key>
 			<string>green</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSTitleValueCell</string>
+			<key>cellClass</key>
+			<string>ERSegmentedCell</string>
+			<key>label</key>
+			<string>小窗位置</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>DualCam.Corner</string>
+			<key>default</key>
+			<integer>1</integer>
+			<key>erSegmentTitles</key>
+			<array>
+				<string>左上</string>
+				<string>右上</string>
+				<string>左下</string>
+				<string>右下</string>
+			</array>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>

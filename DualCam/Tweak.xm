@@ -6,7 +6,7 @@
 
 // 版本串同时用于日志与预览层标题。EchoReborn 侧的版本号由 scripts/er_set_version.py
 // 统一写入（本文件里的 ver= 与 EchoRebornRebornDualCam 段一并同步）。
-static NSString *const kDualCamVersion = @"1.0.7-19";
+static NSString *const kDualCamVersion = @"1.0.7-20";
 static BOOL g_dualCamOn = NO;
 static NSHashTable *g_appSessions = nil;
 static UIWindow *g_overlayWindow = nil;
@@ -191,12 +191,51 @@ static void shootPhoto(void) {
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
+    CGFloat sw = self.view.bounds.size.width, sh = self.view.bounds.size.height;
     self.backLayer.frame = self.view.bounds;
+
+    // 1.0.7-20：安全区一次性算好，下面两处都用它。
+    // 相机双摄窗口是全屏覆盖窗，safeAreaInsets.top 就是状态栏高度（灵动岛机型 59pt）。
+    // 万一拿不到（<24），按灵动岛机型兜底 —— 宁可低一点，也不要压在状态栏上。
+    CGFloat topInset = self.view.safeAreaInsets.top;
+    if (topInset < 24.0) topInset = 59.0;
+
+    // 1.0.7-20（用户第 3 条）：小窗落点由设置页的「小窗位置」决定。
+    // 顶端一排的边距要避开状态栏/灵动岛，底端一排要避开快门那一行（cy = sh-130）。
     CGFloat w = 130, h = 180;
-    self.frontLayer.frame = CGRectMake(self.view.bounds.size.width - w - 16, 80, w, h);
+    CGFloat topMargin = MAX(topInset + 14.0, 80.0);
+    CGFloat bottomMargin = 150.0;
+    NSInteger corner = DualCamCornerValue();
+    BOOL pipLeft = (corner == ERDualCamCornerTopLeft || corner == ERDualCamCornerBottomLeft);
+    BOOL pipTop = (corner == ERDualCamCornerTopLeft || corner == ERDualCamCornerTopRight);
+    CGFloat pipX = pipLeft ? 16.0 : sw - w - 16.0;
+    CGFloat pipY = pipTop ? topMargin : (sh - bottomMargin - h);
+    self.frontLayer.frame = CGRectMake(pipX, pipY, w, h);
+    {
+        static NSInteger lastLoggedCorner = -1;
+        if (lastLoggedCorner != corner) {
+            lastLoggedCorner = corner;
+            DualCamLog(@"DUALCAM pip corner=%@ (%ld) frame=%@",
+                       DualCamCornerName(corner), (long)corner, NSStringFromCGRect(self.frontLayer.frame));
+        }
+    }
+
+    // 1.0.7-20（用户第 2 条）：常驻返回键原来写死 y=18 —— 15 Pro Max 的状态栏/灵动岛
+    // 高 59pt，它整个压在状态栏上（实机截图已确认）。改成贴安全区下沿往下 8pt。
+    // 小窗若正好占着左上角，再顺到小窗下面 —— 两个控件不能叠在一起。
+    if (self.closeButton) {
+        CGFloat closeY = MAX(topInset + 8.0, 44.0);
+        if (pipTop && pipLeft && self.frontLayer) {
+            closeY = CGRectGetMaxY(self.frontLayer.frame) + 12.0;
+        }
+        CGRect closeFrame = self.closeButton.frame;
+        closeFrame.origin.y = closeY;
+        closeFrame.origin.x = 18.0;
+        self.closeButton.frame = closeFrame;
+    }
+
     self.statusLabel.frame = CGRectMake(30, self.view.bounds.size.height / 2 - 60,
                                         self.view.bounds.size.width - 60, 120);
-    CGFloat sw = self.view.bounds.size.width, sh = self.view.bounds.size.height;
     CGFloat cy = sh - 130;
     self.shutterButton.frame = CGRectMake(sw / 2 - 35, cy, 70, 70);
     self.flashButton.frame = CGRectMake(sw / 2 - 160, cy + 13, 44, 44);
@@ -691,9 +730,13 @@ static void releaseFrameCopy(void *info, const void *data, size_t size) {
         CGFloat pw = self.recordW * 0.28;
         CGFloat fAspect = swap ? ((CGFloat)fw / fh) : ((CGFloat)fh / fw);
         CGFloat ph = pw * fAspect;
-        CGFloat px = self.recordW - pw - self.recordW * 0.03;
-        CGFloat py = self.recordH - ph - self.recordH * 0.03;
-        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(px, py, pw, ph) cornerRadius:14];
+        // 1.0.7-20（用户第 3 条）：录像里的小窗落点与照片、与双摄画面同源。
+        CGRect pip = DualCamCornerRect(DualCamCornerValue(),
+                                       CGSizeMake(self.recordW, self.recordH),
+                                       CGSizeMake(pw, ph),
+                                       self.recordW * 0.03, self.recordH * 0.03);
+        CGFloat px = pip.origin.x, py = pip.origin.y;
+        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:pip cornerRadius:14];
         CGContextSaveGState(c);
         [path addClip];
         [self drawCGImage:frontImg inContext:c at:CGPointMake(px + pw / 2, py + ph / 2)
@@ -758,19 +801,22 @@ static void releaseFrameCopy(void *info, const void *data, size_t size) {
 
 // 1.0.7-17：**恢复源代码状态** —— 前置画面以画中画合成到后置照片上，只存一张。
 // （1.0.7-14 按当时的要求改成了前后分开存；用户实测后要求回到源代码的画中画状态。）
+// 1.0.7-20（用户第 3 条）：小窗落点改为跟随设置页的「小窗位置」—— 与双摄画面里
+// 看到的落点**逐角一致**，四个角可选。
 - (UIImage *)composeShot {
     CGSize bs = g_backShot.size;
     if (bs.width < 1 || bs.height < 1) return nil;
+    NSInteger corner = DualCamCornerValue();
     UIGraphicsImageRenderer *r = [[UIGraphicsImageRenderer alloc] initWithSize:bs];
-    return [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
+    UIImage *composed = [r imageWithActions:^(UIGraphicsImageRendererContext *ctx) {
         [g_backShot drawInRect:CGRectMake(0, 0, bs.width, bs.height)];
         CGSize fs = g_frontShot.size;
         if (fs.width < 1 || fs.height < 1) return;
         CGFloat pw = bs.width * 0.28;
         CGFloat ph = pw * fs.height / fs.width;
-        CGFloat px = bs.width - pw - bs.width * 0.03;
-        CGFloat py = bs.height - ph - bs.height * 0.03;
-        CGRect pip = CGRectMake(px, py, pw, ph);
+        CGRect pip = DualCamCornerRect(corner, bs, CGSizeMake(pw, ph),
+                                       bs.width * 0.03, bs.height * 0.03);
+        CGFloat px = pip.origin.x, py = pip.origin.y;
         UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:pip cornerRadius:14];
         CGContextSaveGState(ctx.CGContext);
         [path addClip];
@@ -782,6 +828,9 @@ static void releaseFrameCopy(void *info, const void *data, size_t size) {
         path.lineWidth = 4;
         [path stroke];
     }];
+    DualCamLog(@"DUALCAM compose corner=%@ (%ld) size=%.0fx%.0f",
+               DualCamCornerName(corner), (long)corner, bs.width, bs.height);
+    return composed;
 }
 
 - (void)trySaveIfBothReady {
@@ -885,6 +934,74 @@ static BOOL DualCamFeatureEnabled(void) {
     return YES;
 }
 
+// 1.0.7-20：**小窗位置**（用户第 3 条）。四个角对应「前置画面在后置画面里的落点」，
+// 既决定双摄画面里那小窗的位置，也决定合成后存进相册那张图里小窗的位置 ——
+// 二者同源，不再出现「画面在右上、照片在右下」这种不一致。
+// 取值 0/1/2/3 = 左上/右上/左下/右下，默认 1（右上，与 1.0.7-19 的画面位置一致）。
+// 相机是沙盒进程，读不到偏好时走与开关同一条标记文件回退链。
+static NSString *const kERDualCamCornerKey = @"DualCam.Corner";
+
+typedef NS_ENUM(NSInteger, ERDualCamCorner) {
+    ERDualCamCornerTopLeft = 0,
+    ERDualCamCornerTopRight = 1,
+    ERDualCamCornerBottomLeft = 2,
+    ERDualCamCornerBottomRight = 3,
+};
+
+static NSInteger DualCamCornerValue(void) {
+    // 本函数每次布局都会被调用 —— 日志只在**首次**落一行，避免刷屏
+    //（真正需要看的是「最终生效角」，那个由 viewDidLayoutSubviews 在角变化时记）。
+    static BOOL sLoggedCornerSource = NO;
+    @try {
+        NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kERDualCamPrefsDomain];
+        if ([defaults objectForKey:kERDualCamCornerKey] != nil) {
+            NSInteger value = [defaults integerForKey:kERDualCamCornerKey];
+            if (!sLoggedCornerSource) {
+                sLoggedCornerSource = YES;
+                DualCamLog(@"DUALCAM corner source=prefs value=%ld", (long)value);
+            }
+            return MIN(3, MAX(0, value));
+        }
+    } @catch (__unused NSException *exception) {
+    }
+    NSString *flag = @"/var/mobile/Library/Logs/EchoReborn/dualcam_corner";
+    NSData *data = [NSFileManager.defaultManager contentsAtPath:flag];
+    if (data) {
+        NSString *raw = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+        raw = [raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSInteger value = raw.integerValue;
+        if (!sLoggedCornerSource) {
+            sLoggedCornerSource = YES;
+            DualCamLog(@"DUALCAM corner source=flagfile value=%ld", (long)value);
+        }
+        return MIN(3, MAX(0, value));
+    }
+    if (!sLoggedCornerSource) {
+        sLoggedCornerSource = YES;
+        DualCamLog(@"DUALCAM corner source=default value=%d", (int)ERDualCamCornerTopRight);
+    }
+    return ERDualCamCornerTopRight;
+}
+
+static NSString *DualCamCornerName(NSInteger corner) {
+    switch (corner) {
+        case ERDualCamCornerTopLeft:     return @"左上";
+        case ERDualCamCornerBottomLeft:  return @"左下";
+        case ERDualCamCornerBottomRight: return @"右下";
+        default:                         return @"右上";
+    }
+}
+
+// 小窗在 hostSize 里的落点。边距分开传：画面按点数、照片按比例（3%）。
+static CGRect DualCamCornerRect(NSInteger corner, CGSize hostSize, CGSize windowSize,
+                                CGFloat marginX, CGFloat marginY) {
+    BOOL left = (corner == ERDualCamCornerTopLeft || corner == ERDualCamCornerBottomLeft);
+    BOOL top = (corner == ERDualCamCornerTopLeft || corner == ERDualCamCornerTopRight);
+    CGFloat x = left ? marginX : hostSize.width - windowSize.width - marginX;
+    CGFloat y = top ? marginY : hostSize.height - windowSize.height - marginY;
+    return CGRectMake(x, y, windowSize.width, windowSize.height);
+}
+
 // 1.0.7-11：把安装流程的每一步结论**用通知名本身**发出去。
 // Darwin 通知带不了数据，但名字可以区分状态；相机沙盒写不进日志文件，
 // 而 SpringBoard 侧的主 tweak 会把这些名字代写进共用日志 —— 这是唯一可靠的
@@ -974,6 +1091,67 @@ static UIView *dualCamFindLivePhotoAnchor(UIView *topBar) {
     return fallback;
 }
 
+// 1.0.7-20（用户第 2 条）：**字形级**间距。
+//
+// 实机截图实测（597px 宽的顶栏裁切，比例约 1.388px/pt）：
+//     左侧两个系统按钮（闪光灯 ↔ 实况）  可见字形间距 17px ≈ 12pt
+//     我们的双摄按钮 ↔ 实况              可见字形间距 82px ≈ 59pt  ← 用户报的「间距太大」
+// 差在哪：代码是拿**锚点视图的 frame** 对齐的，而系统按钮的 frame 常比字形宽一大截
+//（含容器/内边距），按 frame 相邻量出来的视觉间距就大得多。用户给的参照是左侧那对
+// 系统按钮的**可见间距**，所以这里也按可见字形对齐。
+static CGFloat const kERDualCamGlyphGap = 12.0;
+
+// 找出「真正在画的那个字形」的矩形：系统按钮内部一般有一个小的图像视图。
+// 找不到就退回视图自身的矩形（行为与旧版一致，不会更差）。
+static CGRect dualCamGlyphRectInHost(UIView *view, UIView *host) {
+    if (!view || !host) return CGRectNull;
+    UIView *glyph = nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:view];
+    NSInteger guard = 0;
+    while (queue.count && guard++ < 96) {
+        UIView *candidate = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        NSString *name = NSStringFromClass(candidate.class);
+        BOOL sameWindow = (candidate.window == host.window);
+        CGRect rect = sameWindow ? [host convertRect:candidate.bounds fromView:candidate] : CGRectNull;
+        BOOL sane = !CGRectIsNull(rect) &&
+                    CGRectGetWidth(rect) >= 8.0 && CGRectGetWidth(rect) <= 48.0 &&
+                    CGRectGetHeight(rect) >= 8.0 && CGRectGetHeight(rect) <= 48.0;
+        BOOL looksLikeGlyph = [candidate isKindOfClass:[UIImageView class]] ||
+                              [name containsString:@"ImageView"] ||
+                              [name containsString:@"Glyph"] ||
+                              [name containsString:@"Icon"];
+        if (sane && looksLikeGlyph) { glyph = candidate; break; }
+        for (UIView *child in candidate.subviews) [queue addObject:child];
+    }
+    UIView *rectView = glyph ?: view;
+    if (rectView.window != host.window) return CGRectNull;
+    return [host convertRect:rectView.bounds fromView:rectView];
+}
+
+// 我们自己的字形宽度（按钮内部那张图）。取不到就按按钮宽度的 0.82 估。
+static CGFloat dualCamButtonGlyphWidth(UIButton *button, CGFloat fallback) {
+    if (!button) return fallback;
+    UIImage *image = [button imageForState:UIControlStateNormal] ?: button.currentImage;
+    return (image.size.width > 1.0) ? image.size.width : fallback;
+}
+
+// 把按钮摆到锚点**字形**左边 kERDualCamGlyphGap 处，纵向与锚点字形居中。
+// 返回 NO 表示拿不到可用几何，调用方走原来的兜底。
+static BOOL dualCamPlaceButtonLeftOfAnchorGlyph(UIView *anchor, UIView *host,
+                                                CGRect *outFrame, CGFloat side) {
+    if (!anchor || !host || !outFrame) return NO;
+    CGRect theirGlyph = dualCamGlyphRectInHost(anchor, host);
+    if (CGRectIsNull(theirGlyph) || CGRectIsEmpty(theirGlyph)) return NO;
+    if (!CGRectIntersectsRect(theirGlyph, host.bounds)) return NO;
+    CGFloat ourGlyphW = dualCamButtonGlyphWidth(g_toggleBtn, side * 0.82);
+    CGFloat ourCenterX = CGRectGetMinX(theirGlyph) - kERDualCamGlyphGap - ourGlyphW * 0.5;
+    *outFrame = CGRectMake(ourCenterX - side * 0.5,
+                           CGRectGetMidY(theirGlyph) - side * 0.5,
+                           side, side);
+    return YES;
+}
+
 static UIImage *dualCamButtonImage(void) {
     // 候选符号逐个试（低版本缺某个 SF Symbol 时自动退下一个），全失败则退回文字。
     for (NSString *name in @[@"camera.on.rectangle", @"rectangle.on.rectangle",
@@ -1002,19 +1180,24 @@ static void dualCamLayoutButton(void) {
     UIView *anchor = dualCamFindLivePhotoAnchor(g_topBarHost);
     CGFloat height = 32.0;
     CGFloat width = 32.0;
-    CGFloat gap = 8.0;
     CGRect frame;
     BOOL anchored = NO;
+    // 1.0.7-20（用户第 2 条）：先按**实况图标的可见字形**对齐（间距 = 左侧系统按钮对
+    // 的实测值 12pt）；拿不到字形几何时再退回原来的 frame 相邻法。
     if (anchor) {
-        // 锚点换算到宿主坐标系（跨层级安全），并做合理性检查：
-        // 只接受「在宿主可见范围内」的锚点，防止把按钮摆到屏幕外。
-        CGRect anchorRect = [g_topBarHost convertRect:anchor.bounds fromView:anchor];
-        if (!CGRectIsNull(anchorRect) && CGRectIntersectsRect(anchorRect, g_topBarHost.bounds)) {
-            frame = anchorRect;
-            frame.origin.x = CGRectGetMinX(anchorRect) - width - gap;
-            frame.size = CGSizeMake(width, height);
-            frame.origin.y = CGRectGetMidY(anchorRect) - height * 0.5;
+        CGRect glyphFrame = CGRectZero;
+        if (dualCamPlaceButtonLeftOfAnchorGlyph(anchor, g_topBarHost, &glyphFrame, width)) {
+            frame = glyphFrame;
             anchored = YES;
+        } else {
+            CGRect anchorRect = [g_topBarHost convertRect:anchor.bounds fromView:anchor];
+            if (!CGRectIsNull(anchorRect) && CGRectIntersectsRect(anchorRect, g_topBarHost.bounds)) {
+                frame = anchorRect;
+                frame.origin.x = CGRectGetMinX(anchorRect) - width - kERDualCamGlyphGap;
+                frame.size = CGSizeMake(width, height);
+                frame.origin.y = CGRectGetMidY(anchorRect) - height * 0.5;
+                anchored = YES;
+            }
         }
     }
     if (!anchored) {
@@ -1111,38 +1294,62 @@ static void dualCamRefreshInstallation(void) {
 static void dualCamApplyWindowFallbackLayout(UIWindow *window) {
     if (!g_toggleBtn || !window) return;
     CGFloat side = 34.0;
-    CGFloat gap = 10.0;
+
+    // 1.0.7-20（用户第 2 条）：先按**实况按钮的可见字形**对齐。
+    // 1.0.7-19 这条兜底路径是按 frame 相邻摆的，实机量出来可见间距 59pt，而用户给的
+    // 参照（左侧闪光灯 ↔ 实况）只有 12pt。判据与顶部栏那条路统一：先类名找实况，
+    // 再字形级对齐；都不行才退回原来的几何扫描。
+    CGRect frame = CGRectZero;
+    BOOL placed = NO;
+    UIView *livePhoto = dualCamFindLivePhotoAnchor(window);
+    if (livePhoto) {
+        placed = dualCamPlaceButtonLeftOfAnchorGlyph(livePhoto, window, &frame, side);
+        if (placed) {
+            DualCamLog(@"DUALCAM fallback glyph-anchored left of %@ frame=%@",
+                       NSStringFromClass(livePhoto.class), NSStringFromCGRect(frame));
+        }
+    }
 
     // 在 window 的两层子树里找顶栏区域最靠右的图标视图（坐标统一换算到 window）
     UIView *rightmost = nil;
-    CGFloat bestMaxX = -1.0;
-    CGFloat screenWidth = CGRectGetWidth(window.bounds);
-    for (UIView *level1 in window.subviews) {
-        NSArray<UIView *> *scan = @[level1];
-        for (UIView *child in level1.subviews) scan = [scan arrayByAddingObject:child];
-        for (UIView *view in scan) {
-            if (view == g_toggleBtn) continue;
-            CGRect f = [window convertRect:view.bounds fromView:view];
-            if (f.origin.y > 120.0) continue;
-            if (CGRectGetHeight(f) < 24.0 || CGRectGetHeight(f) > 60.0) continue;
-            if (CGRectGetWidth(f) < 24.0 || CGRectGetWidth(f) > 64.0) continue;
-            CGFloat maxX = CGRectGetMaxX(f);
-            if (screenWidth > 1.0 && maxX > screenWidth * 0.75 && maxX > bestMaxX) {
-                bestMaxX = maxX;
-                rightmost = view;
+    if (!placed) {
+        CGFloat bestMaxX = -1.0;
+        CGFloat screenWidth = CGRectGetWidth(window.bounds);
+        for (UIView *level1 in window.subviews) {
+            NSArray<UIView *> *scan = @[level1];
+            for (UIView *child in level1.subviews) scan = [scan arrayByAddingObject:child];
+            for (UIView *view in scan) {
+                if (view == g_toggleBtn) continue;
+                CGRect f = [window convertRect:view.bounds fromView:view];
+                if (f.origin.y > 120.0) continue;
+                if (CGRectGetHeight(f) < 24.0 || CGRectGetHeight(f) > 60.0) continue;
+                if (CGRectGetWidth(f) < 24.0 || CGRectGetWidth(f) > 64.0) continue;
+                CGFloat maxX = CGRectGetMaxX(f);
+                if (screenWidth > 1.0 && maxX > screenWidth * 0.75 && maxX > bestMaxX) {
+                    bestMaxX = maxX;
+                    rightmost = view;
+                }
             }
         }
     }
 
-    CGRect frame;
-    if (rightmost) {
-        CGRect rightmostInWindow = [window convertRect:rightmost.bounds fromView:rightmost];
-        frame = CGRectMake(CGRectGetMinX(rightmostInWindow) - side - gap,
-                           CGRectGetMidY(rightmostInWindow) - side * 0.5, side, side);
-        DualCamLog(@"DUALCAM fallback anchored left of %@ frame=%@",
-                   NSStringFromClass(rightmost.class), NSStringFromCGRect(frame));
-    } else {
-        frame = CGRectMake(CGRectGetWidth(window.bounds) - side - 14.0, 64.0, side, side);
+    if (!placed) {
+        if (rightmost) {
+            placed = dualCamPlaceButtonLeftOfAnchorGlyph(rightmost, window, &frame, side);
+            if (placed) {
+                DualCamLog(@"DUALCAM fallback glyph-anchored left of %@ frame=%@",
+                           NSStringFromClass(rightmost.class), NSStringFromCGRect(frame));
+            } else {
+                CGRect rightmostInWindow = [window convertRect:rightmost.bounds fromView:rightmost];
+                frame = CGRectMake(CGRectGetMinX(rightmostInWindow) - side - kERDualCamGlyphGap,
+                                   CGRectGetMidY(rightmostInWindow) - side * 0.5, side, side);
+                placed = YES;
+                DualCamLog(@"DUALCAM fallback frame-anchored left of %@ frame=%@",
+                           NSStringFromClass(rightmost.class), NSStringFromCGRect(frame));
+            }
+        } else {
+            frame = CGRectMake(CGRectGetWidth(window.bounds) - side - 14.0, 64.0, side, side);
+        }
     }
     if (!CGRectEqualToRect(g_toggleBtn.frame, frame)) g_toggleBtn.frame = frame;
     g_toggleBtn.backgroundColor = UIColor.clearColor;   // 用户要求：去掉外面的圆

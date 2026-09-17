@@ -34,6 +34,17 @@ static NSString *ERSegmentDomain(PSSpecifier *specifier) {
     return [domain length] ? domain : kERSegmentFallbackDomain;
 }
 
+// 1.0.7-20：段数不再写死 3。相机双摄的「小窗位置」是四段（左上/右上/左下/右下），
+// 老实现把读到的值一律钳在 0..2 —— 选「右下」（3）会显示成「左下」（2），
+// 而写进去的却是 3，设置页与实际行为对不上。现在按 erSegmentTitles 的实际段数钳。
+static NSInteger ERSegmentMaxIndex(PSSpecifier *specifier) {
+    NSArray *titles = [specifier propertyForKey:@"erSegmentTitles"];
+    if ([titles isKindOfClass:[NSArray class]] && titles.count >= 2) {
+        return (NSInteger)titles.count - 1;
+    }
+    return 2;   // 没有声明段名时的历史默认（轻 / 中 / 重）
+}
+
 // 读：先查偏好域，查不到（用户从未改过）才回落到 plist 的 default。
 // 绝不经过控制器 —— 这正是 0.5.20 崩溃与 0.5.21 显示值不确定的共同源头。
 static NSInteger ERSegmentReadValue(PSSpecifier *specifier) {
@@ -65,8 +76,9 @@ static NSInteger ERSegmentReadValue(PSSpecifier *specifier) {
         }
     }
 
+    NSInteger maxIndex = ERSegmentMaxIndex(specifier);
     if (value < 0) value = 0;
-    if (value > 2) value = 2;
+    if (value > maxIndex) value = maxIndex;
     return value;
 }
 
@@ -113,7 +125,9 @@ static void ERSegmentWriteValue(PSSpecifier *specifier, NSInteger value) {
            forControlEvents:UIControlEventValueChanged];
         [_segment sizeToFit];
         CGRect frame = _segment.frame;
-        frame.size.width = MAX(frame.size.width, 156.0);
+        // 1.0.7-20：四段（左上/右上/左下/右下）需要更宽；三段（轻/中/重）保持原值。
+        CGFloat minWidth = titles.count >= 4 ? 188.0 : 156.0;
+        frame.size.width = MAX(frame.size.width, minWidth);
         frame.size.height = 28.0;
         _segment.frame = frame;
         // 构建标记：既是无障碍标识，也是产物校验脚本用来确认「这一版确实带
