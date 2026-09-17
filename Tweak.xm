@@ -22610,6 +22610,7 @@ static NSString *const kERMusicCapsuleEnabledKey = @"MusicCapsule.Enabled";
 static NSString *const kERMusicCapsuleInsetKey   = @"MusicCapsule.WidthInset";
 static NSString *const kERMusicCapsuleOffsetKey  = @"MusicCapsule.OffsetY";
 static NSString *const kERMusicCapsuleHeightKey  = @"MusicCapsule.Height";
+static NSString *const kERMusicCapsuleHideSystemKey = @"MusicCapsule.HideSystemNowPlaying";
 
 #pragma mark - 音乐胶囊 · MediaRemote（运行时解析）
 
@@ -22903,6 +22904,8 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
 @property (nonatomic, weak)   UIView *quickActionsView;
 @property (nonatomic, assign) BOOL hasContent;
 @property (nonatomic, assign) BOOL enabled;
+@property (nonatomic, assign) BOOL hideSystemNowPlaying;
+@property (nonatomic, weak)   UIView *systemNowPlayingView;
 @property (nonatomic, assign) CGFloat widthInset;
 @property (nonatomic, assign) CGFloat offsetY;
 @property (nonatomic, assign) CGFloat capsuleHeight;
@@ -22961,6 +22964,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     self.widthInset = ERPreferenceDouble(kERMusicCapsuleInsetKey, 88.0);
     self.offsetY = ERPreferenceDouble(kERMusicCapsuleOffsetKey, 0.0);
     self.capsuleHeight = ERPreferenceDouble(kERMusicCapsuleHeightKey, 56.0);
+    self.hideSystemNowPlaying = ERPreferenceBool(kERMusicCapsuleHideSystemKey, YES);
     _prefsLoadedAt = CACurrentMediaTime();
 }
 
@@ -23015,17 +23019,25 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         }
     }
 
-    UIView *host = quickActions ? quickActions.superview : view;
+    // 1.0.7-30：坐标系问题修复。
+    //
+    // 原来把胶囊挂到 quickActions.superview 并用 quickActions.center 定位。实机报告
+    // 「胶囊出现在屏幕正中间」—— 说明那次命中的容器并不是屏幕底部那一行，或它的
+    // 坐标系不是全屏。这里改成：**一律挂在锁屏根视图上、一律用根视图坐标**，
+    // 底部锚定为默认（手电筒/相机行就在底部安全区上方约 46pt），
+    // 只有当 QuickActions 容器**确实落在屏幕下半部**时才采信它的中心。
+    UIView *host = view;
     if (!host) return;
 
     if (self.capsule.superview != host) {
         [self.capsule removeFromSuperview];
         [host addSubview:self.capsule];
+        [host bringSubviewToFront:self.capsule];
     }
-    [host bringSubviewToFront:self.capsule];
     self.hostView = host;
 
     CGFloat screenW = host.bounds.size.width;
+    CGFloat screenH = host.bounds.size.height;
     CGFloat height = MAX(44.0, self.capsuleHeight);
     CGFloat width = screenW - 2.0 * self.widthInset;
     width = MIN(340.0, MAX(180.0, width));
@@ -23033,17 +23045,79 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     self.capsule.bounds = CGRectMake(0, 0, width, height);
     self.capsule.capsuleHeight = height;
 
-    // 垂直：与手电筒/相机同一水平线（取容器中心），可用设置项微调
-    CGFloat centerY;
+    CGFloat safeBottom = host.safeAreaInsets.bottom;
+    CGFloat centerY = screenH - safeBottom - 46.0 + self.offsetY;   // 默认：手电筒/相机那一行
+    BOOL usedQuickActions = NO;
     if (quickActions) {
-        centerY = quickActions.center.y + self.offsetY;
-    } else {
-        CGFloat safeBottom = host.safeAreaInsets.bottom;
-        centerY = host.bounds.size.height - safeBottom - 46.0 + self.offsetY;
+        CGRect qaRect = [quickActions convertRect:quickActions.bounds toView:host];
+        CGFloat candidate = CGRectGetMidY(qaRect) + self.offsetY;
+        if (qaRect.size.height > 4.0 && candidate > screenH * 0.55 && candidate < screenH - 6.0) {
+            centerY = candidate;
+            usedQuickActions = YES;
+        }
     }
 
-    self.capsule.center = CGPointMake(host.bounds.size.width / 2.0, centerY);
+    self.capsule.center = CGPointMake(screenW / 2.0, centerY);
     [self.capsule setNeedsLayout];
+
+    [self applySystemNowPlayingHiddenInRoot:host];
+
+    static BOOL loggedPlacement = NO;
+    if (!loggedPlacement) {
+        loggedPlacement = YES;
+        CGRect qaRect = quickActions ? [quickActions convertRect:quickActions.bounds toView:host] : CGRectZero;
+        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-30 place host=%@ screen=%.0fx%.0f y=%.1f viaQA=%d qa={%.0f,%.0f,%.0fx%.0f} safe=%.0f",
+                   NSStringFromClass(host.class), screenW, screenH, centerY, (int)usedQuickActions,
+                   qaRect.origin.x, qaRect.origin.y, qaRect.size.width, qaRect.size.height, safeBottom);
+    }
+}
+
+// 1.0.7-30：系统自带的锁屏音乐组件（iOS 16/17 上是 CSMediaControlsViewController
+// 那一支；更老的系统上是 CSNowPlayingViewController）。按类名子串从外到内找**最外层**
+// 的候选容器，开关打开时把它隐藏掉，关掉即恢复。
+- (UIView *)findSystemNowPlayingIn:(UIView *)root {
+    if (!root) return nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSUInteger head = 0;
+    NSUInteger guard = 0;
+    UIView *nowPlayingFallback = nil;
+    while (head < queue.count && guard++ < 900) {
+        UIView *candidate = queue[head++];
+        if ([candidate isKindOfClass:[ERMusicCapsuleView class]]) continue;   // 绝不碰自己的胶囊
+        NSString *name = NSStringFromClass(candidate.class);
+        CGRect rect = candidate.bounds;
+        BOOL plausible = rect.size.height > 40.0 && rect.size.width > 80.0;
+        if (plausible && [name rangeOfString:@"MediaControls"].location != NSNotFound) {
+            return candidate;
+        }
+        if (plausible && !nowPlayingFallback && [name rangeOfString:@"NowPlaying"].location != NSNotFound) {
+            nowPlayingFallback = candidate;   // BFS：第一个即最外层
+        }
+        if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
+    }
+    return nowPlayingFallback;
+}
+
+- (void)applySystemNowPlayingHiddenInRoot:(UIView *)root {
+    UIView *target = self.systemNowPlayingView;
+    if (!(target && target.window)) {
+        target = [self findSystemNowPlayingIn:root];
+        self.systemNowPlayingView = target;
+        static BOOL loggedSystemTarget = NO;
+        if (!loggedSystemTarget && target) {
+            loggedSystemTarget = YES;
+            ERLogInfo(@"MUSICCAPSULE ver=1.0.7-30 system-nowplaying=%@ super=%@",
+                       NSStringFromClass(target.class),
+                       target.superview ? NSStringFromClass(target.superview.class) : @"(nil)");
+        }
+    }
+    if (!target) return;
+    BOOL shouldHide = (self.enabled && self.hideSystemNowPlaying);
+    if (target.hidden != shouldHide) {
+        target.hidden = shouldHide;
+        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-30 system-nowplaying %@ (cls=%@)",
+                   shouldHide ? @"hidden" : @"restored", NSStringFromClass(target.class));
+    }
 }
 
 - (void)setVisible:(BOOL)visible animated:(BOOL)animated {

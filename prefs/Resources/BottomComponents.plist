@@ -25,7 +25,7 @@
 			<key>label</key>
 			<string>音乐胶囊</string>
 			<key>footerText</key>
-			<string>锁屏底部「手电筒 ↔ 相机」之间的玻璃拟态音乐条：封面 + 歌名/歌手 + 播放键；无播放内容时自动隐藏，空白处点击透传。默认参数即落在手电筒与相机那一行、水平居中。</string>
+			<string>锁屏底部「手电筒 ↔ 相机」之间的玻璃拟态音乐条：封面 + 歌名/歌手 + 播放键；无播放内容时自动隐藏，空白处点击透传。默认参数即落在手电筒与相机那一行、水平居中。开启「隐藏系统锁屏音乐」后，系统自带的那块音乐组件会被藏起来，避免两处重复显示。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -45,6 +45,30 @@
 				<string>music.note</string>
 				<string>music.note.list</string>
 				<string>waveform</string>
+			</array>
+			<key>erIconColor</key>
+			<string>pink</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>隐藏系统锁屏音乐</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>MusicCapsule.HideSystemNowPlaying</string>
+			<key>default</key>
+			<true/>
+			<key>erIcon</key>
+			<string>eye.slash.fill</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>eye.slash.fill</string>
+				<string>eye.slash</string>
 			</array>
 			<key>erIconColor</key>
 			<string>pink</string>
