@@ -651,6 +651,11 @@ static CGFloat const kERLandscapeStatusBarMaxRise = 200.0;
 static CGFloat const kERLandscapeCornerButtonDrop = 76.0;
 // 状态栏本体固定上移量（由上面的实测反算）。
 static CGFloat const kERLandscapeStatusBarFixedRise = 62.0;
+// 1.0.7-23 · 横屏顶部保留带（v2 思路图 R1/R2）。
+// 状态栏带（上升后 16.5 – 46.1）与系统隐私指示器（定位药丸实测底 54、相机绿点 /
+// 麦克风橙点排在状态栏带端部）同处这一条带里。网格只能落在它下方，
+// 这样指示器出现与否网格都不动，模块也不会被顶到带里或被裁掉。
+static CGFloat const kERLandscapeReservedTop = 56.0;
 // 「够宽够薄」判定：宽 ≥ 窗口一半、高 ≤ 60pt。只会命中那条通栏状态栏，
 // 40pt 的「+」/电源按钮、整块材质背景（高 ≈ 90pt）都不会被误伤。
 static CGFloat const kERLandscapeStatusBarMinWidthRatio = 0.5;
@@ -707,6 +712,8 @@ static CGFloat ERGridVerticalCenteringCompensationForFrame(CGRect frame, CCUILay
     CGFloat extent = (CGFloat)kERLandscapeBlockRows * kERGridStep - kERGridGap;
     CGFloat centered = (containerHeight - extent) * 0.5;
     CGFloat floorY = MAX(0.0, topInset);
+    // 1.0.7-23：横屏给顶部保留带让位（状态栏 + 隐私指示器）—— 网格不得高于它。
+    if (ERLandscapePresentationActive()) floorY = MAX(floorY, kERLandscapeReservedTop);
     CGFloat ceiling = containerHeight - MAX(0.0, bottomInset) - extent;
     if (ceiling < floorY) ceiling = floorY;
     CGFloat target = MIN(MAX(centered, floorY), ceiling);
@@ -1194,7 +1201,7 @@ static void ERStoreOriginForIdentifier(NSString *identifier, NSUInteger column, 
     BOOL landscape = ERLandscapeLayoutActive();
     if (landscape) gERLandscapeOrigins[identifier] = value;
     else gERCustomOrigins[identifier] = value;
-    ERLogInfo(@"LANDSCAPE ver=1.0.7-22 store id=%@ cell={%lu,%lu} ledger=%@",
+    ERLogInfo(@"LANDSCAPE ver=1.0.7-23 store id=%@ cell={%lu,%lu} ledger=%@",
               identifier, (unsigned long)column, (unsigned long)absoluteRow,
               landscape ? @"landscape" : @"portrait");
 }
@@ -2288,6 +2295,13 @@ static void ERLoadPrefs(void) {
     gBrightnessControlEnabled = ERPreferenceBool(@"BrightnessControlEnabled", YES);
     gERLoggingEnabled = ERPreferenceBool(@"LoggingEnabled", NO);
     gERLandscapeLayoutEnabled = ERPreferenceBool(@"LandscapeLayout.Enabled", NO);
+    // 1.0.7-23：横屏账本每次重载都重读一遍 —— 设置页的「恢复横屏布局」删掉
+    // COSMICLandscapeOrigins 后，不需要注销就能立刻回到折行布局。
+    CFPropertyListRef reloadedLandscape = CFPreferencesCopyAppValue(CFSTR("COSMICLandscapeOrigins"), kERPrefsDomain);
+    gERLandscapeOrigins = [(__bridge NSDictionary *)reloadedLandscape mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (reloadedLandscape) CFRelease(reloadedLandscape);
+    ERLogInfo(@"LANDSCAPE ver=1.0.7-23 ledger=%lu enabled=%d",
+              (unsigned long)gERLandscapeOrigins.count, gERLandscapeLayoutEnabled ? 1 : 0);
     ERLogPrefs();
 }
 
@@ -16287,13 +16301,14 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         BOOL didSwap = sourceIndex != NSNotFound && targetIndex != NSNotFound && sourceIndex != targetIndex;
         NSArray<NSNumber *> *landingOrigin = moved ? objc_getAssociatedObject(gesture, kERDragLandingOriginKey) : nil;
         BOOL didBlankMove = NO;
-        // 1.0.7-22：开启「保存布局」后横屏编辑网格是 8 列 × 4 行（= 页内 32 圆位），
+        // 1.0.7-23：横屏编辑网格是 8 列 × 4 行（= 页内 32 圆位，且在顶部保留带之下），
         // 落点是**横屏格位**；写入前反算成等价的竖屏格位（折叠是双射），竖屏那套
         // 合法性 / 占用判定即可原样复用，横屏再按折叠渲染回同一格。
+        // 写进哪本账本由「保存布局」开关决定（ERStoreOriginForIdentifier）。
         CCUILayoutPoint landingCell = {0, 0};
         if (landingOrigin.count >= 2) {
             landingCell = (CCUILayoutPoint){landingOrigin[0].unsignedIntegerValue, landingOrigin[1].unsignedIntegerValue};
-            if (ERLandscapeLayoutActive()) landingCell = ERPortraitCellFromLandscapeCell(landingCell);
+            if (ERLandscapePresentationActive()) landingCell = ERPortraitCellFromLandscapeCell(landingCell);
         }
         if (landingOrigin.count >= 2) {
             didBlankMove = [self applyExplicitGridMoveFrom:sourceID
@@ -16304,7 +16319,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                 didBlankMove = [self applyExplicitGridInsertionFrom:sourceID
                                                            toOrigin:landingCell
                                                              onPage:dragPage
-                                                            maxRows:ERLandscapeLayoutActive() ? kERMinimumGridRows : grid.rows
+                                                            maxRows:ERLandscapePresentationActive() ? kERMinimumGridRows : grid.rows
                                                             overlay:overlay];
             }
         }
@@ -17027,7 +17042,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             for (NSUInteger dx = 0; dx < logical.size.width; dx++) {
                 NSUInteger column = logical.origin.x + dx;
                 if (column >= 4) continue;
-                if (ERLandscapeLayoutActive()) {
+                if (ERLandscapePresentationActive()) {
                     // 横屏网格是 8 列 × 4 行：占用格按同一套折叠规则换算过去。
                     NSUInteger foldedRow = row;
                     NSUInteger foldedColumn = column;
@@ -17071,10 +17086,11 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                                 CGRectGetHeight(gridStack.bounds));
         CGPoint base = cachedBase;
         NSMutableArray<NSValue *> *slots = [NSMutableArray array];
-        // 1.0.7-22：开启「保存布局」时，横屏编辑网格就是折行后的 8 列 × 4 行 ——
-        // 也就是用户真正看到的 32 个圆位；关着的时候维持 4 列 × 8 行不变。
-        NSUInteger gridColumnCount = ERLandscapeLayoutActive() ? (NSUInteger)(kERLandscapeBlockColumns * 2) : 4;
-        NSUInteger gridRowCount = ERLandscapeLayoutActive() ? (NSUInteger)kERLandscapeBlockRows : (NSUInteger)kERMinimumGridRows;
+        // 1.0.7-23：横屏编辑网格**一律**按折行后的 8 列 × 4 行重建 —— 也就是用户
+        // 真正看到的 32 个圆位（此前只有 4 列、右块的圆被高度裁掉，落点够不着）。
+        // 竖屏仍是 4 列 × 8 行。整块必须落在顶部保留带之下（见 R1/R2）。
+        NSUInteger gridColumnCount = ERLandscapePresentationActive() ? (NSUInteger)(kERLandscapeBlockColumns * 2) : 4;
+        NSUInteger gridRowCount = ERLandscapePresentationActive() ? (NSUInteger)kERLandscapeBlockRows : (NSUInteger)kERMinimumGridRows;
         for (NSUInteger row = 0; row < gridRowCount; row++) {
             for (NSUInteger column = 0; column < gridColumnCount; column++) {
                 CGRect slot = CGRectMake(base.x + column * step, base.y + row * step, cell, cell);
@@ -21879,6 +21895,8 @@ static void ERPrefsChanged(__unused CFNotificationCenterRef center, __unused voi
             BOOL hideQuickAccess = !gEnabled || !gQuickAccessButtonsEnabled || !gERControlCenterPresented || gERExpandedModuleOpen;
             [coordinator setQuickAccessButtonsHidden:hideQuickAccess forOverlay:overlay animated:NO];
             [coordinator installPagingOnOverlay:overlay];
+            // 1.0.7-23：恢复横屏布局后，若控制中心正开着，立刻让整棵树重排一次。
+            [overlay.view setNeedsLayout];
             for (UIViewController *module in ERCollectModuleControllers(overlay)) [coordinator applyRefinedLookToModule:module];
             // 切换液态玻璃后玻璃层可能被 GlassKit 移除，重新断言七个连通性磁贴的背景不变量。
             for (UIViewController *module in ERCollectModuleControllers(overlay)) {

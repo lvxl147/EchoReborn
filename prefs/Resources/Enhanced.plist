@@ -266,7 +266,7 @@
 			<key>label</key>
 			<string>保存横屏布局</string>
 			<key>footerText</key>
-			<string>开启后，横屏下的布局可单独摆放并保存，与竖屏互不干扰；关闭时横屏按竖屏布局一分为二展示（左 1–4 行 / 右 5–8 行）。摆放方式：控制中心编辑态里直接拖动，落点吸附到页内 32 个圆位（8 列 × 4 行），松手即保存（横屏专用）。</string>
+			<string>开启后，横屏下的布局可单独摆放并保存，与竖屏互不干扰；关闭时横屏按竖屏布局一分为二展示（左 1–4 行 / 右 5–8 行）。摆放方式：控制中心编辑态里直接拖动，落点吸附到页内 32 个圆位（8 列 × 4 行），松手即保存（横屏专用）。横屏顶部为状态栏与定位 / 相机 / 麦克风指示保留，圆位整体在其下方。想还原时点下面的「恢复横屏布局」（有二次确认）。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -285,6 +285,18 @@
 			<string>blue</string>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSTableCell</string>
+			<key>cellClass</key>
+			<string>ERLandscapeResetCell</string>
+			<key>label</key>
+			<string>恢复横屏布局</string>
+			<key>erIcon</key>
+			<string>arrow.counterclockwise</string>
+			<key>erIconColor</key>
+			<string>red</string>
 		</dict>
 	</array>
 </dict>
