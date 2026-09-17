@@ -1224,6 +1224,12 @@ static CCUILayoutPoint ERPortraitCellFromLandscapeCell(CCUILayoutPoint cell) {
     return cell;
 }
 
+// 1.0.7-28：状态栏位移的目标选择 / 节奏补写（定义在文件后部、hook 之前）。
+static UIView *ERLandscapeStatusChromeTarget(UIView *view);
+static void ERChromeReassertRegisterView(UIView *view, CGFloat rise);
+static void ERStartLandscapeChromeReassertIfNeeded(void);
+static void ERStopLandscapeChromeReassert(void);
+
 static CGRect ERRemoveButtonFrameForModuleFrame(CGRect moduleFrame) {
     CGFloat originOffset = kERRemoveVisualCenterOffset - kERRemoveHitSize * 0.5;
     return CGRectMake(CGRectGetMinX(moduleFrame) + originOffset,
@@ -12306,27 +12312,40 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     } else if (!active) {
         statusRiseLogged = NO;
     }
+    // 1.0.7-28：位移改落在**外层容器**上。
+    // 023615 日志里可见那条带（CCUIStatusBar）的 transform 会被系统在两次写入之间
+    // 重置；叶子视图追不上，但它的外层容器（HeaderPocket / 匿名容器）不由系统逐帧驱动。
+    NSMutableDictionary<UIView *, NSNumber *> *chromeApplied = [NSMutableDictionary dictionary];
     for (UIView *view in statusBar) {
-        // 若这个容器自己就装着快速访问 host（tag 181000），就不能整体平移：
-        // host 是它的子视图，整体平移会把「+」/电源按钮一起带走，正好抵消掉
-        // kERLandscapeCornerButtonDrop 想要的下移量。这种情况只平移其余子视图。
+        UIView *target = ERLandscapeStatusChromeTarget(view);
+        if (!target) continue;
         BOOL hostsQuickAccess = NO;
-        for (UIView *child in view.subviews) {
+        for (UIView *child in target.subviews) {
             if (child.tag == 181000) { hostsQuickAccess = YES; break; }
         }
-        CGFloat statusRise = [self landscapeChromeRiseForContainer:view landscape:active];
+        CGFloat statusRise = [self landscapeChromeRiseForContainer:target landscape:active];
         if (hostsQuickAccess) {
-            for (UIView *child in view.subviews) {
-                if (child.tag == 181000) continue;
-                [self applyLandscapeRise:statusRise toView:child];
+            // 容器整体平移会把「+」/电源一起抬走 —— 给它们反向补偿，保持原位。
+            [self applyLandscapeRise:statusRise toView:target];
+            for (UIView *child in target.subviews) {
+                if (child.tag != 181000) continue;
+                [self applyLandscapeRise:-statusRise toView:child];
             }
         } else {
-            [self applyLandscapeRise:statusRise toView:view];
+            [self applyLandscapeRise:statusRise toView:target];
         }
+        if (statusRise > 0.0) chromeApplied[target] = @(statusRise);
     }
     for (UIView *view in indicator) {
         CGFloat rise = [self landscapeChromeRiseForContainer:view landscape:active];
         [self applyLandscapeRise:rise toView:view];
+        if (rise > 0.0) chromeApplied[view] = @(rise);
+    }
+    if (active && chromeApplied.count) {
+        for (UIView *view in chromeApplied) ERChromeReassertRegisterView(view, chromeApplied[view].doubleValue);
+        ERStartLandscapeChromeReassertIfNeeded();
+    } else if (!active) {
+        ERStopLandscapeChromeReassert();
     }
 
     // 系统状态栏窗口（CC 里那条状态栏可能挂在这儿，不在 overlay 子树里）。
@@ -22209,6 +22228,150 @@ static NSString *ERQuickAddActionName(void) {
 }
 
 // 文件夹选择面板 + 移动。所有系统调用前都做 respondsToSelector 探测。
+// ---------------------------------------------------------------------------
+// 1.0.7-28 · QuickAdd 底部选择面板 —— 底部出现，但整体停在 dock 上方。
+//
+// 用户明确要求：不要居中，要「底部出现」，而且不能被 dock 压住（原 ActionSheet 的
+// 末行会被 dock 盖住）。ActionSheet 只会贴屏幕底边、无法抬高，所以这里自绘同款面板：
+//   · 半透明遮罩（点一下取消）+ 毛玻璃圆角面板
+//   · 面板底边 = 安全区底 + kERQuickAddSheetLift —— 正好落在 dock 图标行之上
+//   · 行高 48、文件夹多时面板内部滚动；点「取消」或遮罩关闭
+// ---------------------------------------------------------------------------
+static CGFloat const kERQuickAddSheetLift = 64.0;
+
+@interface ERQuickAddSheetController : UIViewController
+@property (nonatomic, copy) NSArray<NSString *> *titles;
+@property (nonatomic, copy) void (^onPick)(NSInteger index);
+@end
+
+@implementation ERQuickAddSheetController {
+    UIView *_erDim;
+    UIVisualEffectView *_erSheet;
+    UIScrollView *_erScroll;
+    NSMutableArray<UIView *> *_erStack;
+    NSMutableArray<NSNumber *> *_erHeights;
+    BOOL _erDismissing;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.view.backgroundColor = UIColor.clearColor;
+
+    _erDim = [[UIView alloc] initWithFrame:self.view.bounds];
+    _erDim.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.2];
+    _erDim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    [_erDim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(erCancelTapped)]];
+    [self.view addSubview:_erDim];
+
+    _erSheet = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+    _erSheet.layer.cornerRadius = 14.0;
+    _erSheet.clipsToBounds = YES;
+    [self.view addSubview:_erSheet];
+
+    _erScroll = [[UIScrollView alloc] initWithFrame:CGRectZero];
+    _erScroll.alwaysBounceVertical = NO;
+    [_erSheet.contentView addSubview:_erScroll];
+
+    _erStack = [NSMutableArray array];
+    _erHeights = [NSMutableArray array];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectZero];
+    title.text = @"添加到文件夹";
+    title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
+    title.textColor = [UIColor secondaryLabelColor];
+    title.textAlignment = NSTextAlignmentCenter;
+    [_erScroll addSubview:title];
+    [_erStack addObject:title];
+    [_erHeights addObject:@42.0];
+
+    NSArray<NSString *> *titles = self.titles ?: @[];
+    for (NSUInteger index = 0; index < titles.count; index++) {
+        UIButton *row = [UIButton buttonWithType:UIButtonTypeCustom];
+        [row setTitle:titles[index] forState:UIControlStateNormal];
+        [row setTitleColor:[UIColor labelColor] forState:UIControlStateNormal];
+        row.titleLabel.font = [UIFont systemFontOfSize:17.0];
+        row.tag = (NSInteger)index + 1;
+        [row addTarget:self action:@selector(erRowTapped:) forControlEvents:UIControlEventTouchUpInside];
+        [_erScroll addSubview:row];
+        [_erStack addObject:row];
+        [_erHeights addObject:@48.0];
+
+        UIView *line = [[UIView alloc] initWithFrame:CGRectZero];
+        line.backgroundColor = [UIColor colorWithWhite:0.5 alpha:0.22];
+        [_erScroll addSubview:line];
+        [_erStack addObject:line];
+        [_erHeights addObject:@0.5];
+    }
+
+    UIButton *cancel = [UIButton buttonWithType:UIButtonTypeCustom];
+    [cancel setTitle:@"取消" forState:UIControlStateNormal];
+    [cancel setTitleColor:[UIColor systemBlueColor] forState:UIControlStateNormal];
+    cancel.titleLabel.font = [UIFont boldSystemFontOfSize:17.0];
+    [cancel addTarget:self action:@selector(erCancelTapped) forControlEvents:UIControlEventTouchUpInside];
+    [_erScroll addSubview:cancel];
+    [_erStack addObject:cancel];
+    [_erHeights addObject:@52.0];
+}
+
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    _erDim.alpha = 0.0;
+    _erSheet.transform = CGAffineTransformMakeTranslation(0.0, CGRectGetHeight(_erSheet.bounds) + 40.0);
+    [UIView animateWithDuration:0.25 delay:0.0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+        self->_erDim.alpha = 1.0;
+        self->_erSheet.transform = CGAffineTransformIdentity;
+    } completion:nil];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    UIEdgeInsets insets = self.view.safeAreaInsets;
+    CGFloat width = CGRectGetWidth(self.view.bounds);
+    CGFloat height = CGRectGetHeight(self.view.bounds);
+    _erDim.frame = self.view.bounds;
+
+    CGFloat contentHeight = 0.0;
+    for (NSNumber *value in _erHeights) contentHeight += value.doubleValue;
+    CGFloat bottomInset = insets.bottom + kERQuickAddSheetLift;
+    CGFloat maxHeight = height - insets.top - 20.0 - bottomInset;
+    CGFloat sheetHeight = MIN(contentHeight, MAX(140.0, maxHeight));
+    _erSheet.frame = CGRectMake(8.0, height - bottomInset - sheetHeight, width - 16.0, sheetHeight);
+    _erScroll.frame = _erSheet.bounds;
+
+    CGFloat y = 0.0;
+    for (NSUInteger index = 0; index < _erStack.count; index++) {
+        UIView *view = _erStack[index];
+        CGFloat rowHeight = _erHeights[index].doubleValue;
+        view.frame = CGRectMake(0.0, y, CGRectGetWidth(_erScroll.bounds), rowHeight);
+        y += rowHeight;
+    }
+    _erScroll.contentSize = CGSizeMake(CGRectGetWidth(_erScroll.bounds), MAX(y, 1.0));
+}
+
+- (void)erRowTapped:(UIButton *)sender {
+    [self erDismissWithIndex:sender.tag - 1];
+}
+
+- (void)erCancelTapped {
+    [self erDismissWithIndex:-1];
+}
+
+- (void)erDismissWithIndex:(NSInteger)index {
+    if (_erDismissing) return;
+    _erDismissing = YES;
+    void (^handler)(NSInteger) = self.onPick;
+    [UIView animateWithDuration:0.2 animations:^{
+        self->_erDim.alpha = 0.0;
+        self->_erSheet.transform = CGAffineTransformMakeTranslation(0.0, CGRectGetHeight(self->_erSheet.bounds) + 40.0);
+    } completion:^(__unused BOOL finished) {
+        [self dismissViewControllerAnimated:NO completion:^{
+            if (index >= 0 && handler) handler(index);
+        }];
+    }];
+}
+
+@end
+
 static void ERQuickAddShowPickerForIconView(id iconView) {
     @try {
         SBIcon *icon = [iconView respondsToSelector:@selector(icon)] ? ((SBIcon *(*)(id, SEL))objc_msgSend)(iconView, @selector(icon)) : nil;
@@ -22311,11 +22474,8 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
             [presenter presentViewController:empty animated:YES completion:nil];
             return;
         }
-        // 1.0.7-27：底部 ActionSheet 会被 dock 压住（用户截图：最后一行被 dock 盖住）。
-        // 改成居中 Alert：列表超长时系统自带滚动，且完全避开 dock 区域。
-        UIAlertController *picker = [UIAlertController alertControllerWithTitle:@"添加到文件夹"
-                                                                        message:nil
-                                                                 preferredStyle:UIAlertControllerStyleAlert];
+        // 1.0.7-28：底部出现、且整体停在 dock 上方（自绘面板，见 ERQuickAddSheetController）。
+        NSMutableArray<NSString *> *rowTitles = [NSMutableArray array];
         for (id folderIcon in folderIcons) {
             NSString *title = nil;
             if ([folderIcon respondsToSelector:@selector(displayName)]) {
@@ -22327,11 +22487,16 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                     title = ((NSString *(*)(id, SEL))objc_msgSend)(folder, @selector(displayName));
                 }
             }
-            NSString *rowTitle = title ?: @"文件夹";
-            [picker addAction:[UIAlertAction actionWithTitle:rowTitle
-                                                       style:UIAlertActionStyleDefault
-                                                     handler:^(__unused UIAlertAction *action) {
-                @try {
+            [rowTitles addObject:(title ?: @"文件夹")];
+        }
+        ERQuickAddSheetController *sheet = [[ERQuickAddSheetController alloc] init];
+        sheet.titles = rowTitles;
+        NSArray<id> *folders = [folderIcons copy];
+        sheet.onPick = ^(NSInteger index) {
+            if (index < 0 || index >= (NSInteger)folders.count) return;
+            id folderIcon = folders[(NSUInteger)index];
+            NSString *rowTitle = rowTitles[(NSUInteger)index];
+            @try {
                     // 1.0.7-26：iOS 17.2.1 实机日志证明 SBIconController 与 iconModel
                     // 都不再响应 addIcons:intoFolderIcon:…（“点了没反应”的真正收尾点）。
                     // 这里不再猜选择器，改成运行时发现：先把候选目标里所有含
@@ -22401,12 +22566,10 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                     }
                     if (!invoked) ERLogInfo(@"QUICKADD ver=1.0.7-26 move: no target/selector on %lu candidate(s)",
                                             (unsigned long)targets.count);
-                } @catch (NSException *exception) {
-                    ERLogInfo(@"QUICKADD ver=1.0.7-26 move EXC %@ -- %@", exception.name, exception.reason);
-                }
-            }]];
-        }
-        [picker addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+            } @catch (NSException *exception) {
+                ERLogInfo(@"QUICKADD ver=1.0.7-26 move EXC %@ -- %@", exception.name, exception.reason);
+            }
+        };
         UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
         // 1.0.7-25：iOS 15+ 多场景下 keyWindow 可能为 nil —— 那样 present 会静默失败，
         // 表现正是「点了添加到文件夹没有任何反应」。这里按可见窗口兜底取一个。
@@ -22417,15 +22580,12 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
             }
         }
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-        ERLogInfo(@"QUICKADD ver=1.0.7-25 picker presenter=%@ windows=%lu",
+        ERLogInfo(@"QUICKADD ver=1.0.7-28 picker presenter=%@ folders=%lu",
                   presenter ? NSStringFromClass(presenter.class) : @"(nil)",
-                  (unsigned long)[UIApplication sharedApplication].windows.count);
-        if ([picker popoverPresentationController]) {
-            [picker.popoverPresentationController setSourceView:iconView];
-            CGRect sourceRect = CGRectMake(CGRectGetMidX(((UIView *)iconView).bounds) - 1.0, 0.0, 2.0, 1.0);
-            [picker.popoverPresentationController setSourceRect:sourceRect];
-        }
-        [presenter presentViewController:picker animated:YES completion:nil];
+                  (unsigned long)folders.count);
+        sheet.modalPresentationStyle = UIModalPresentationOverFullScreen;
+        sheet.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+        [presenter presentViewController:sheet animated:NO completion:nil];
     } @catch (NSException *exception) {
         ERLogInfo(@"QUICKADD ver=1.0.7-21 picker EXC %@ -- %@", exception.name, exception.reason);
     }
@@ -22633,18 +22793,76 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
 // （CCUISensorAttributionPrivacyHeaderView）用「反算 rise + 反复补写」一直稳稳
 // 落在 y 16.5。状态栏照搬同一套打法：在这两条带各自的 -layoutSubviews 里，
 // 系统每次重排完就把上移补回去 —— 视觉上即「稳定停在 16.5」。
-// 祖先守卫：若父链上已有 StatusBar / StatusLabel（两者可能互为父子），
-// 只让最外层补写，避免父子同时补成双倍位移。
-static BOOL ERHasLandscapeChromeAncestor(UIView *view) {
+// 1.0.7-28 · 状态栏位移的目标选择。
+//
+// 023615 日志：可见那条带（CCUIStatusBar，a=1.0/hid=0）挂在 SBControlCenterWindow，
+// 而它的 transform 在两次写入之间被系统反复重置 —— 直接写叶子追不上。
+// 改为优先平移它的外层容器（HeaderPocket / 顶层匿名容器），容器不由系统逐帧驱动。
+static UIView *ERLandscapeStatusChromeTarget(UIView *view) {
+    if (!view) return nil;
     UIView *parent = view.superview;
     NSInteger depth = 0;
-    while (parent && depth < 8) {
+    while (parent && depth < 6) {
         NSString *name = NSStringFromClass(parent.class);
-        if ([name containsString:@"StatusBar"] || [name containsString:@"StatusLabel"]) return YES;
+        if ([name containsString:@"HeaderPocket"]) return parent;
         parent = parent.superview;
         depth++;
     }
-    return NO;
+    UIView *direct = view.superview;
+    UIWindow *window = direct.window;
+    if (direct && [NSStringFromClass(direct.class) isEqualToString:@"UIView"] && window) {
+        CGRect rect = [direct convertRect:direct.bounds toView:window];
+        BOOL wide = CGRectGetWidth(window.bounds) > 1.0 &&
+                    CGRectGetWidth(rect) >= CGRectGetWidth(window.bounds) * 0.9;
+        if (wide && CGRectGetHeight(rect) <= 140.0) return direct;
+    }
+    return view;
+}
+
+// 1.0.7-28 · 位移的「节奏补写」（20Hz）。
+// 系统会在两次写入之间重置这条带的 transform，单靠 layoutSubviews 后补写可能赶不上。
+// 这里在「横屏 + CC 呈现」期间以 20Hz 对**上次命中的目标视图**重新贴位移
+// （缓存视图、不重新遍历视图树，成本极低），直到 CC 收起 / 转回竖屏。
+static dispatch_source_t gERChromeReassertTimer = nil;
+static NSMapTable<UIView *, NSNumber *> *gERChromeReassertRises = nil;
+
+static void ERStopLandscapeChromeReassert(void) {
+    if (gERChromeReassertTimer) {
+        dispatch_source_cancel(gERChromeReassertTimer);
+        gERChromeReassertTimer = nil;
+    }
+    [gERChromeReassertRises removeAllObjects];
+}
+
+static void ERChromeReassertRegisterView(UIView *view, CGFloat rise) {
+    if (!view) return;
+    if (!gERChromeReassertRises) gERChromeReassertRises = [NSMapTable weakToStrongObjectsMapTable];
+    [gERChromeReassertRises setObject:@(rise) forKey:view];
+}
+
+static void ERStartLandscapeChromeReassertIfNeeded(void) {
+    if (gERChromeReassertTimer) return;
+    if (!gERChromeReassertRises) gERChromeReassertRises = [NSMapTable weakToStrongObjectsMapTable];
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    dispatch_source_set_timer(timer,
+                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                              (uint64_t)(0.05 * NSEC_PER_SEC),
+                              (uint64_t)(0.01 * NSEC_PER_SEC));
+    dispatch_source_set_event_handler(timer, ^{
+        if (!gEnabled || !gERControlCenterPresented || !ERLandscapePresentationActive()) {
+            ERStopLandscapeChromeReassert();
+            return;
+        }
+        NSMutableArray<UIView *> *dead = [NSMutableArray array];
+        for (UIView *view in gERChromeReassertRises.keyEnumerator) {
+            NSNumber *rise = [gERChromeReassertRises objectForKey:view];
+            if (!view.window) { [dead addObject:view]; continue; }
+            [[EchoRebornCoordinator shared] applyLandscapeRise:rise.doubleValue toView:view];
+        }
+        for (UIView *view in dead) [gERChromeReassertRises removeObjectForKey:view];
+    });
+    dispatch_resume(timer);
+    gERChromeReassertTimer = timer;
 }
 
 // 1.0.7-27：Logos 对未声明的类默认按 NSObject 处理，self 传不进 UIView * 参数
@@ -22662,10 +22880,11 @@ static BOOL ERHasLandscapeChromeAncestor(UIView *view) {
     %orig;
     if (!gEnabled || !gERControlCenterPresented || gERExpandedModuleOpen) return;
     if (!ERLandscapePresentationActive() || gERControlCenterPresentationState == 3) return;
-    if (ERHasLandscapeChromeAncestor(self)) return;
+    UIView *target = ERLandscapeStatusChromeTarget(self);
+    if (!target) return;
     EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
-    CGFloat rise = [coordinator landscapeChromeRiseForContainer:self landscape:YES];
-    if (rise > 0.0) [coordinator applyLandscapeRise:rise toView:self];
+    CGFloat rise = [coordinator landscapeChromeRiseForContainer:target landscape:YES];
+    if (rise > 0.0) [coordinator applyLandscapeRise:rise toView:target];
 }
 %end
 
@@ -22674,10 +22893,11 @@ static BOOL ERHasLandscapeChromeAncestor(UIView *view) {
     %orig;
     if (!gEnabled || !gERControlCenterPresented || gERExpandedModuleOpen) return;
     if (!ERLandscapePresentationActive() || gERControlCenterPresentationState == 3) return;
-    if (ERHasLandscapeChromeAncestor(self)) return;
+    UIView *target = ERLandscapeStatusChromeTarget(self);
+    if (!target) return;
     EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
-    CGFloat rise = [coordinator landscapeChromeRiseForContainer:self landscape:YES];
-    if (rise > 0.0) [coordinator applyLandscapeRise:rise toView:self];
+    CGFloat rise = [coordinator landscapeChromeRiseForContainer:target landscape:YES];
+    if (rise > 0.0) [coordinator applyLandscapeRise:rise toView:target];
 }
 %end
 
