@@ -22240,7 +22240,8 @@ static NSString *ERQuickAddActionName(void) {
 //   · 面板底边 = 安全区底 + kERQuickAddSheetLift —— 正好落在 dock 图标行之上
 //   · 行高 48、文件夹多时面板内部滚动；点「取消」或遮罩关闭
 // ---------------------------------------------------------------------------
-static CGFloat const kERQuickAddSheetLift = 64.0;
+// 1.0.7-31：面板不再抬高 —— 改为在更高层级的窗口里整体盖住 dock。
+static CGFloat const kERQuickAddSheetLift = 0.0;
 
 @interface ERQuickAddSheetController : UIViewController
 @property (nonatomic, copy) NSArray<NSString *> *titles;
@@ -22335,7 +22336,7 @@ static CGFloat const kERQuickAddSheetLift = 64.0;
 
     CGFloat contentHeight = 0.0;
     for (NSNumber *value in _erHeights) contentHeight += value.doubleValue;
-    CGFloat bottomInset = insets.bottom + kERQuickAddSheetLift;
+    CGFloat bottomInset = insets.bottom + kERQuickAddSheetLift;   // 0 = 正常底部弹出位（盖住 dock）
     CGFloat maxHeight = height - insets.top - 20.0 - bottomInset;
     CGFloat sheetHeight = MIN(contentHeight, MAX(140.0, maxHeight));
     _erSheet.frame = CGRectMake(8.0, height - bottomInset - sheetHeight, width - 16.0, sheetHeight);
@@ -22349,6 +22350,31 @@ static CGFloat const kERQuickAddSheetLift = 64.0;
         y += rowHeight;
     }
     _erScroll.contentSize = CGSizeMake(CGRectGetWidth(_erScroll.bounds), MAX(y, 1.0));
+}
+
+// 1.0.7-31 · 面板由「更高层级的临时窗口」承载。
+//
+// 为什么要这样：dock 所在的窗口层级比主屏窗口高，无论 ActionSheet 还是普通 present，
+// 面板永远画在 dock **下面**（用户截图里最后一行被 dock 压住）。要「显示在 dock 上面」，
+// 只能把面板放进一个比它更高的窗口里 —— 层级取 UIWindowLevelAlert + 1。
+static UIWindow *gERQuickAddSheetWindow = nil;
+
+- (void)presentOverDock {
+    UIWindow *host = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    host.backgroundColor = UIColor.clearColor;
+    host.opaque = NO;
+    host.windowLevel = UIWindowLevelAlert + 1;   // 高于 dock / 系统面板
+    host.rootViewController = self;
+    gERQuickAddSheetWindow = host;
+    host.hidden = NO;
+}
+
+- (void)tearDownAfterDismiss {
+    UIWindow *host = gERQuickAddSheetWindow;
+    gERQuickAddSheetWindow = nil;
+    if (!host) return;
+    host.hidden = YES;
+    host.rootViewController = nil;
 }
 
 - (void)erRowTapped:(UIButton *)sender {
@@ -22367,9 +22393,8 @@ static CGFloat const kERQuickAddSheetLift = 64.0;
         self->_erDim.alpha = 0.0;
         self->_erSheet.transform = CGAffineTransformMakeTranslation(0.0, CGRectGetHeight(self->_erSheet.bounds) + 40.0);
     } completion:^(__unused BOOL finished) {
-        [self dismissViewControllerAnimated:NO completion:^{
-            if (index >= 0 && handler) handler(index);
-        }];
+        [self tearDownAfterDismiss];
+        if (index >= 0 && handler) handler(index);
     }];
 }
 
@@ -22583,12 +22608,11 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
             }
         }
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-        ERLogInfo(@"QUICKADD ver=1.0.7-28 picker presenter=%@ folders=%lu",
+        ERLogInfo(@"QUICKADD ver=1.0.7-31 picker host=%@ folders=%lu",
                   presenter ? NSStringFromClass(presenter.class) : @"(nil)",
                   (unsigned long)folderList.count);
-        sheet.modalPresentationStyle = UIModalPresentationOverFullScreen;
-        sheet.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
-        [presenter presentViewController:sheet animated:NO completion:nil];
+        // 1.0.7-31：放进更高层级的窗口 —— 面板盖在 dock 上面（而不是绕开它）。
+        [sheet presentOverDock];
     } @catch (NSException *exception) {
         ERLogInfo(@"QUICKADD ver=1.0.7-21 picker EXC %@ -- %@", exception.name, exception.reason);
     }
@@ -22905,7 +22929,8 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
 @property (nonatomic, assign) BOOL hasContent;
 @property (nonatomic, assign) BOOL enabled;
 @property (nonatomic, assign) BOOL hideSystemNowPlaying;
-@property (nonatomic, weak)   UIView *systemNowPlayingView;
+@property (nonatomic, strong) NSArray<UIView *> *systemNowPlayingViews;
+@property (nonatomic, weak)   UIViewController *coverSheetController;
 @property (nonatomic, assign) CGFloat widthInset;
 @property (nonatomic, assign) CGFloat offsetY;
 @property (nonatomic, assign) CGFloat capsuleHeight;
@@ -23072,51 +23097,120 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     }
 }
 
-// 1.0.7-30：系统自带的锁屏音乐组件（iOS 16/17 上是 CSMediaControlsViewController
-// 那一支；更老的系统上是 CSNowPlayingViewController）。按类名子串从外到内找**最外层**
-// 的候选容器，开关打开时把它隐藏掉，关掉即恢复。
-- (UIView *)findSystemNowPlayingIn:(UIView *)root {
-    if (!root) return nil;
-    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
-    NSUInteger head = 0;
-    NSUInteger guard = 0;
-    UIView *nowPlayingFallback = nil;
-    while (head < queue.count && guard++ < 900) {
-        UIView *candidate = queue[head++];
-        if ([candidate isKindOfClass:[ERMusicCapsuleView class]]) continue;   // 绝不碰自己的胶囊
-        NSString *name = NSStringFromClass(candidate.class);
-        CGRect rect = candidate.bounds;
-        BOOL plausible = rect.size.height > 40.0 && rect.size.width > 80.0;
-        if (plausible && [name rangeOfString:@"MediaControls"].location != NSNotFound) {
-            return candidate;
+// 1.0.7-31 · 系统锁屏音乐定位：**控制器树 + 视图树**双扫描。
+//
+// 1.0.7-30 只按「视图类名」找，实机反馈「没有效果」—— 最可能的原因是那块组件的
+// 类名在**控制器**上（例如 CSMediaControlsViewController，而它的 view 就是普通 UIView），
+// 视图类名里根本没有 MediaControls / NowPlaying 字样。现在两条路都走：
+//   ① 控制器树：类名含 MediaControls / NowPlaying → 取它的 view；
+//   ② 视图树：类名命中且尺寸合理（高 > 40、宽 > 80）→ 取最外层。
+// 命中的**所有**候选一起隐藏；开关关闭即恢复。一个都找不到时打印现场清单
+// （控制器名列表 + 中下部大视图名列表），下一次日志即可定名。
+static BOOL ERMusicClassLooksLikeSystemNowPlaying(NSString *name) {
+    if (!name.length) return NO;
+    return [name rangeOfString:@"MediaControls"].location != NSNotFound ||
+           [name rangeOfString:@"NowPlaying"].location != NSNotFound;
+}
+
+- (NSArray<UIView *> *)systemNowPlayingCandidatesInRoot:(UIView *)root {
+    NSMutableArray<UIView *> *candidates = [NSMutableArray array];
+
+    UIViewController *controlRoot = self.coverSheetController;
+    if (controlRoot) {
+        NSMutableArray<UIViewController *> *queue = [NSMutableArray arrayWithObject:controlRoot];
+        NSUInteger head = 0, guard = 0;
+        while (head < queue.count && guard++ < 400) {
+            UIViewController *controller = queue[head++];
+            if (ERMusicClassLooksLikeSystemNowPlaying(NSStringFromClass(controller.class))) {
+                UIView *view = controller.view;
+                if (view && ![candidates containsObject:view]) [candidates addObject:view];
+            }
+            [queue addObjectsFromArray:controller.childViewControllers];
+            if (controller.presentedViewController) [queue addObject:controller.presentedViewController];
         }
-        if (plausible && !nowPlayingFallback && [name rangeOfString:@"NowPlaying"].location != NSNotFound) {
-            nowPlayingFallback = candidate;   // BFS：第一个即最外层
+    }
+
+    if (root) {
+        NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+        NSUInteger head = 0, guard = 0;
+        while (head < queue.count && guard++ < 1200) {
+            UIView *candidate = queue[head++];
+            if ([candidate isKindOfClass:[ERMusicCapsuleView class]]) continue;   // 绝不碰自己的胶囊
+            if (ERMusicClassLooksLikeSystemNowPlaying(NSStringFromClass(candidate.class)) &&
+                candidate.bounds.size.height > 40.0 && candidate.bounds.size.width > 80.0) {
+                if (![candidates containsObject:candidate]) [candidates addObject:candidate];
+                continue;   // 命中即不再下探，避免父子重复
+            }
+            if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
+        }
+    }
+    return candidates;
+}
+
+- (BOOL)anySystemNowPlayingTargetAlive {
+    for (UIView *view in self.systemNowPlayingViews) { if (view.window) return YES; }
+    return NO;
+}
+
+- (void)dumpSystemNowPlayingDiagnosticsInRoot:(UIView *)root {
+    static BOOL dumped = NO;
+    if (dumped) return;
+    dumped = YES;
+
+    NSMutableArray<NSString *> *controllerNames = [NSMutableArray array];
+    UIViewController *controlRoot = self.coverSheetController;
+    if (controlRoot) {
+        NSMutableArray<UIViewController *> *queue = [NSMutableArray arrayWithObject:controlRoot];
+        NSUInteger head = 0, guard = 0;
+        while (head < queue.count && guard++ < 400 && controllerNames.count < 40) {
+            UIViewController *controller = queue[head++];
+            [controllerNames addObject:NSStringFromClass(controller.class)];
+            [queue addObjectsFromArray:controller.childViewControllers];
+            if (controller.presentedViewController) [queue addObject:controller.presentedViewController];
+        }
+    }
+    ERLogInfo(@"MUSICCAPSULE ver=1.0.7-31 nowplaying-dump vcs=%@", controllerNames);
+
+    if (!root) return;
+    NSMutableArray<NSString *> *viewNames = [NSMutableArray array];
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:root];
+    NSUInteger head = 0, guard = 0;
+    while (head < queue.count && guard++ < 1500 && viewNames.count < 40) {
+        UIView *candidate = queue[head++];
+        CGRect frame = candidate.frame;
+        if (frame.size.height >= 40.0 && frame.size.width >= 150.0) {
+            [viewNames addObject:[NSString stringWithFormat:@"%@(%.0f,%.0f %.0fx%.0f)",
+                                  NSStringFromClass(candidate.class),
+                                  frame.origin.x, frame.origin.y, frame.size.width, frame.size.height]];
         }
         if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
     }
-    return nowPlayingFallback;
+    ERLogInfo(@"MUSICCAPSULE ver=1.0.7-31 nowplaying-dump views=%@", viewNames);
 }
 
 - (void)applySystemNowPlayingHiddenInRoot:(UIView *)root {
-    UIView *target = self.systemNowPlayingView;
-    if (!(target && target.window)) {
-        target = [self findSystemNowPlayingIn:root];
-        self.systemNowPlayingView = target;
-        static BOOL loggedSystemTarget = NO;
-        if (!loggedSystemTarget && target) {
-            loggedSystemTarget = YES;
-            ERLogInfo(@"MUSICCAPSULE ver=1.0.7-30 system-nowplaying=%@ super=%@",
-                       NSStringFromClass(target.class),
-                       target.superview ? NSStringFromClass(target.superview.class) : @"(nil)");
+    NSArray<UIView *> *targets = self.systemNowPlayingViews;
+    if (!targets.count || ![self anySystemNowPlayingTargetAlive]) {
+        targets = [self systemNowPlayingCandidatesInRoot:root];
+        self.systemNowPlayingViews = targets;
+        static BOOL loggedSystemTargets = NO;
+        if (!loggedSystemTargets && targets.count) {
+            loggedSystemTargets = YES;
+            NSMutableArray<NSString *> *names = [NSMutableArray array];
+            for (UIView *view in targets) [names addObject:NSStringFromClass(view.class)];
+            ERLogInfo(@"MUSICCAPSULE ver=1.0.7-31 system-nowplaying targets=%@", names);
+        }
+        if (!targets.count) {
+            [self dumpSystemNowPlayingDiagnosticsInRoot:root];
+            return;
         }
     }
-    if (!target) return;
     BOOL shouldHide = (self.enabled && self.hideSystemNowPlaying);
-    if (target.hidden != shouldHide) {
-        target.hidden = shouldHide;
-        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-30 system-nowplaying %@ (cls=%@)",
-                   shouldHide ? @"hidden" : @"restored", NSStringFromClass(target.class));
+    for (UIView *view in targets) {
+        if (view.hidden == shouldHide) continue;
+        view.hidden = shouldHide;
+        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-31 system-nowplaying %@ (cls=%@)",
+                   shouldHide ? @"hidden" : @"restored", NSStringFromClass(view.class));
     }
 }
 
@@ -23212,6 +23306,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     %orig;
     if (!gEnabled) return;
     ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
+    manager.coverSheetController = self;
     [manager reloadPrefs];
     if (!manager.enabled) { [manager setVisible:NO animated:NO]; return; }
 
@@ -23238,7 +23333,9 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
 - (void)viewDidLayoutSubviews {
     %orig;
     if (!gEnabled) return;
-    [[ERMusicCapsuleManager shared] attachToCoverSheetView:self.view];
+    ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
+    if (!manager.coverSheetController) manager.coverSheetController = self;
+    [manager attachToCoverSheetView:self.view];
 }
 
 %end
