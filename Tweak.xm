@@ -22006,8 +22006,9 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         __block NSString *blockName = [name copy];
         __block __weak SBIconView *weakView = view;
         id newActionProvider = ^id(NSArray *suggestedActions) {
-            UIMenu *menu = blockProvider ? blockProvider(suggestedActions)
-                                         : [UIMenu menuWithTitle:@"" children:suggestedActions];
+            UIMenu *menu = blockProvider
+                ? ((UIMenu *(*)(NSArray<UIMenuElement *> *))blockProvider)(suggestedActions)
+                : [UIMenu menuWithTitle:@"" children:suggestedActions];
             NSMutableArray *children = [NSMutableArray array];
             for (UIMenuElement *element in menu.children) {
                 if ([element isKindOfClass:[UIAction class]] &&
