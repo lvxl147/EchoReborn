@@ -175,6 +175,59 @@ static void ERPrefsLog(NSString *format, ...) {
     [self erRefreshLogStatus];
 }
 
+// 1.0.8-1（用户第 2 条）：根页面**上方**那片留白。
+//
+// 1.0.7-21 只把 sectionHeaderTopPadding 置 0，实测（截图的绿框）仍有约 37pt 空白。
+// iOS 15+ 分组表在首段之上还有两层来源：表视图自己的 contentInset.top，以及第一段
+// PSGroupCell 自身的高度。这里把 contentInset.top / scrollIndicatorInsets.top 一并
+// 收到 0，并**只打一次**诊断把三个真实读数写进日志 —— 下一次就能凭数据确定到底是哪一层，
+// 不必再靠猜。
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    UITableView *table = nil;
+    @try {
+        id candidate = [self valueForKey:@"table"];
+        if ([candidate isKindOfClass:[UITableView class]]) table = (UITableView *)candidate;
+    } @catch (__unused NSException *exception) {}
+    if (!table) return;
+
+    UIEdgeInsets inset = table.contentInset;
+    if (inset.top > 0.0) {
+        inset.top = 0.0;
+        table.contentInset = inset;
+    }
+    UIEdgeInsets indicator = table.scrollIndicatorInsets;
+    if (indicator.top > 0.0) {
+        indicator.top = 0.0;
+        table.scrollIndicatorInsets = indicator;
+    }
+
+    static BOOL erLoggedRootTopInset = NO;
+    if (erLoggedRootTopInset) return;
+    erLoggedRootTopInset = YES;
+    CGFloat firstGroupY = -1.0;
+    if ([table numberOfSections] > 0) {
+        firstGroupY = CGRectGetMinY([table rectForHeaderInSection:0]);
+    }
+    // prefs 侧没有共享的日志宏，直接按 Tweak 侧同一份文件追加一行 —— 导出的日志才会带上它。
+    NSString *line = [NSString stringWithFormat:
+        @"ERUI ver=1.0.8 root-top inset.top=%.1f shp=%.1f firstGroupY=%.1f tableY=%.1f\n",
+        table.contentInset.top, table.sectionHeaderTopPadding, firstGroupY,
+        CGRectGetMinY(table.frame)];
+    NSFileManager *manager = [NSFileManager defaultManager];
+    [manager createDirectoryAtPath:kERLogDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *path = [kERLogDirectory stringByAppendingPathComponent:kERLogFileName];
+    if (![manager fileExistsAtPath:path]) {
+        [manager createFileAtPath:path contents:nil attributes:nil];
+    }
+    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
+    @try {
+        [handle seekToEndOfFile];
+        [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        [handle closeFile];
+    } @catch (__unused NSException *exception) {}
+}
+
 // Pushed by hand rather than declared as a PSLinkCell in Root.plist. A link
 // cell naming a controller that lives in this bundle has to survive the
 // Preferences framework's cross-bundle class lookup, which is what produced

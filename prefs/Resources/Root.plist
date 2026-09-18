@@ -12,7 +12,7 @@
 			<key>label</key>
 			<string>插件作者</string>
 			<key>headerHeight</key>
-			<real>6</real>
+			<real>14</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -20,11 +20,14 @@
 			<key>cellClass</key>
 			<string>ERAuthorCell</string>
 			<key>height</key>
-			<real>56</real>
+			<real>64</real>
 		</dict>
-		<!-- 1.0.8：这里原来还有一个无标题的 PSGroupCell。
-		     它没有内容，只在「插件作者」之后渲染出一条空白卡片带 —— 正是根页面顶部
-		     那片留白。删掉它，作者行直接接下一张卡片。 -->
+		<!-- 1.0.8-1：这条空分组是「作者行」与下方卡片之间的分隔带，用户明确要求**不要动下面**，
+		     所以按原样保留。（上一版误删了它、去动下面，已被要求改回来。） -->
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
