@@ -507,7 +507,6 @@ static CGFloat gERStatusBandRise = 0.0;
 static BOOL gERStatusBandRiseValid = NO;
 
 static const void *kERLandscapeChromeBaseTransformKey = &kERLandscapeChromeBaseTransformKey;
-static const void *kERLandscapeChromeBaseTransformKey = &kERLandscapeChromeBaseTransformKey;
 static const void *kERChromeRetryStampKey = &kERChromeRetryStampKey;
 // 0.5.19：被平移过的「系统状态栏窗口」内的视图。这个窗口在 CC 收起后仍然存在，
 // 必须登记下来在竖屏 / CC 收起时还原，否则会把 App 自己的横屏状态栏一起带偏。
