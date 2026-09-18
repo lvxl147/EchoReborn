@@ -22089,6 +22089,57 @@ static NSString *ERQuickAddFolderSubtitle(id folderIcon) {
     return @"文件夹";
 }
 
+// 新建文件夹：运行时发现接口；找不到就记一行日志，绝不崩、绝不静默无果。
+static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon) {
+    if (!icon) return;
+    @try {
+        NSMutableArray<id> *targets = [NSMutableArray array];
+        for (NSString *className in @[@"SBIconController", @"SBIconManager"]) {
+            Class cls = NSClassFromString(className);
+            if (!cls || ![cls respondsToSelector:@selector(sharedInstance)]) continue;
+            @try { [targets addObject:((id (*)(id, SEL))objc_msgSend)(cls, @selector(sharedInstance))]; }
+            @catch (__unused NSException *e) {}
+        }
+        NSArray *icons = @[icon];
+        for (id target in targets) {
+            unsigned int count = 0;
+            Method *methods = class_copyMethodList([target class], &count);
+            NSMutableArray<NSString *> *hits = [NSMutableArray array];
+            for (unsigned int index = 0; index < count; index++) {
+                NSString *name = NSStringFromSelector(method_getName(methods[index]));
+                if ([name containsString:@"Folder"] &&
+                    ([name containsString:@"reate"] || [name containsString:@"ew Fol"])) {
+                    if (![hits containsObject:name]) [hits addObject:name];
+                }
+            }
+            free(methods);
+            ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder api-dump cls=%@ hits=%@",
+                      NSStringFromClass([target class]), hits);
+            for (NSString *name in hits) {
+                SEL sel = NSSelectorFromString(name);
+                if (![target respondsToSelector:sel]) continue;
+                @try {
+                    NSMethodSignature *sig = [target methodSignatureForSelector:sel];
+                    if (!sig || sig.numberOfArguments < 3) continue;
+                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
+                    inv.selector = sel;
+                    [inv setArgument:&icons atIndex:2];
+                    [inv invokeWithTarget:target];
+                    ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder via %@ %@",
+                              NSStringFromClass([target class]), name);
+                    return;
+                } @catch (NSException *e) {
+                    ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder EXC %@ -- %@", e.name, e.reason);
+                }
+            }
+        }
+        ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder: no usable api on %lu target(s)",
+                  (unsigned long)targets.count);
+    } @catch (NSException *e) {
+        ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder EXC %@ -- %@", e.name, e.reason);
+    }
+}
+
 #pragma mark - 文件夹单元格
 
 @interface ERQuickAddFolderCell : UITableViewCell
