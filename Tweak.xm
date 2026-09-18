@@ -6523,6 +6523,54 @@ static UIView *EREnsureConnectivityTileMaterial(UIView *moduleView) {
     return EREnsureTileMaterial(moduleView, kERConnectivityTileMaterialTag);
 }
 
+// 1.0.7-32：快捷指令磁贴**背景回退**（对照 0.5.6.24 已知好行为）。
+//
+// 0.5.6.24 的快捷指令磁贴是真实的系统控制中心模块，背景由系统画。现版把它改成了
+// 自绘 proxy tile，并在底板之上叠了 GlassKit 玻璃 + 保底 UIVisualEffectView 两层。
+// 玻璃的 CABackdropLayer 一旦不渲染像素（进程内无 API 可读），磁贴就整块透明 —— 这正是
+// 用户报的「快捷指令模块显示不正确」。
+//
+// 本函数复用 EREnsureTileMaterial 的「建底板」核心（优先克隆系统 platter 同源材质，
+// 拿不到才退回合成模糊），但**刻意不装 GlassKit 玻璃、不隐藏材质、不建保底层**：
+// 磁贴唯一的背景就是这块系统同源材质本身，与 0.5.6.24 的观感对齐，且不再依赖任何
+// 私有玻璃 API 的渲染成功。连通性磁贴（7 个）仍走带玻璃的 EREnsureTileMaterial，不受影响。
+static UIView *EREnsureShortcutTileMaterial(UIView *moduleView) {
+    if (!moduleView) return nil;
+    UIView *platter = [moduleView viewWithTag:kERShortcutTileBackgroundTag];
+    if (!platter) {
+        UIView *material = nil;
+        NSString *source = @"blur";
+        UIView *reference = ERSystemPlatterMaterialForTile(moduleView);
+        if (reference) {
+            material = ERClonePlatterMaterial(reference);
+            if (material) source = @"system";
+        }
+        if (!material) {
+            UIVisualEffectView *blur =
+                [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThinMaterialDark]];
+            blur.contentView.backgroundColor = [UIColor.whiteColor colorWithAlphaComponent:0.055];
+            material = blur;
+        }
+        material.tag = kERShortcutTileBackgroundTag;
+        material.userInteractionEnabled = NO;
+        material.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        material.layer.cornerCurve = kCACornerCurveContinuous;
+        material.clipsToBounds = YES;
+        material.hidden = NO;
+        material.alpha = 1.0;
+        material.backgroundColor = UIColor.clearColor;
+        [moduleView insertSubview:material atIndex:0];
+        platter = material;
+        ERLogInfo(@"SHORTCUTBG ver=1.0.7-32 id=%@ src=%@ (no-glass fallback)",
+                  ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)", source);
+    }
+    platter.frame = moduleView.bounds;
+    platter.layer.cornerRadius = moduleView.layer.cornerRadius;
+    // 1.0.7-32：不再调用 ERSyncConnectivityTileGlass / ERRestoreConvertedTileMaterial。
+    // 底板本身就是可见背景，保持 hidden=NO / alpha=1，玻璃层完全不参与。
+    return platter;
+}
+
 // 把「创建时没借到系统材质、退回成合成模糊」的兜底就地升级成系统同款材质。
 //
 // 磁贴第一次创建可能发生在页面里其它模块完成布局之前，那一刻借不到系统 platter，
@@ -8082,82 +8130,33 @@ static void ERConfigureOddResizedModuleLayoutInner(UIViewController *module) {
         //    背景样式」。
         UIView *staleShrunkMaterial = [module.view viewWithTag:kERShrunkModuleMaterialTag];
         if (staleShrunkMaterial) [staleShrunkMaterial removeFromSuperview];
-        UIView *tileBackground = EREnsureTileMaterial(module.view, kERShortcutTileBackgroundTag);
+        // 1.0.7-32：背景回退 —— 用「不装玻璃」的底板函数。底板由系统同源材质（或退回
+        // 合成模糊）单独承担，磁贴永远有一层可见背景，不再依赖 GlassKit 玻璃的渲染成功，
+        // 彻底消除「玻璃不渲染 → 整块透明」这一结构性失效。
+        UIView *tileBackground = EREnsureShortcutTileMaterial(module.view);
         // 创建时页面可能还没布局完、借不到系统材质而退回模糊；这里补一次升级，
         // 让「底板 = 系统同款材质」这个不变量最终收敛，而不是永久停在模糊上。
         tileBackground = ERUpgradeTileMaterialIfNeeded(module.view, tileBackground, kERShortcutTileBackgroundTag);
         if (tileBackground) {
             tileBackground.frame = module.view.bounds;
             tileBackground.layer.cornerRadius = module.view.layer.cornerRadius;
-            // 1.0.6-6（第 2 / 5 条）：与七个独立模块**逐项同源**的最后一步。
-            //
-            // 七个连通性磁贴的底板由 ERSyncConnectivityTileChrome 收尾，那里对每块磁贴
-            // 都调了 ERRestoreConvertedTileMaterial —— 液态玻璃在场时**隐藏原生材质、让
-            // 玻璃独占背景**（系统模块的做法也是如此）。快捷指令磁贴此前只建了材质、装了
-            // 玻璃，缺的正是这一步，于是材质与玻璃**两层同时可见**；两者的圆角与 backdrop
-            // 分组并不相同，叠出来的观感就与七个模块不一样，也是 4x4 下那圈多余圆形轮廓
-            // （用户描述的「图标变成正圆」）的来源。
-            //
-            // 这里补上同一个调用：visible=YES、available=YES。玻璃在场时材质被隐藏、玻璃
-            // 独占背景；关闭液态玻璃后玻璃被摘掉，材质会在下一次刷新时重新露出。断言每次
-            // 布局都执行，因此开关液态玻璃实时生效，不需要重建磁贴。
-            ERRestoreConvertedTileMaterial(tileBackground, YES, YES);
-
-            // 1.0.6-10（第 3 条）：**保底背景** —— 这是「快捷指令磁贴整块透明」的结构性修复。
-            //
-            // 成因（代码级可证）：GlassKit 为了模拟系统行为 hook 了 -[MTMaterialView setHidden:]，
-            // 只要材质上挂着玻璃就把 hidden 强制改回 YES。于是这条磁贴的可见背景**只有**
-            // 那层玻璃。一旦玻璃层被移除（切换液态玻璃时 GlassKit 会摘、判定不渲染时
-            // kERGlassGiveUpKey 那条路也会摘），而材质还停在 hidden=YES，磁贴就没有任何
-            // 一层在画东西了 —— 这正是用户看到的整块透明。而修复它的重断言此前只覆盖了
-            // 七个连通性磁贴（ERPrefsChanged 里的循环），快捷指令磁贴没有份，这条不对称
-            // 就是「偏偏只有快捷指令模块透明」的直接来源。
-            //
-            // 判据只用可观测量，不去猜「像素到底出来没有」（进程内没有任何 API 能读到这一点；
-            // -lgFilterAttached 只表示滤镜对象进了 layer.filters）：
-            //     材质可见 或 玻璃在场  ⇒ 正常，保底层隐藏（不改动任何既有观感）
-            //     两者皆无              ⇒ 病态组合，保底层露出（有背景永远优于透明）
-            UIView *fallback = EREnsureShortcutTileFallbackBackdrop(module.view);
-            BOOL tileMaterialVisible = !tileBackground.hidden;
-            BOOL tileGlassPresent = ERTileGlassPresent(tileBackground);
-            if (fallback) {
-                // 1.0.7-2（第 4 条）：**回到与七个连接磁贴完全一致的状态** ——
-                // 玻璃在场时保底层隐藏，玻璃独占背景。
-                //
-                // 1.0.6-16 我把它改成「玻璃在场时垫 0.85 的暗色毛玻璃」，本意是提亮；
-                // 实际效果是给玻璃下面又垫了一层 SystemThinMaterialDark，反而比系统
-                // 模块更暗。用户这轮明确要求「对齐系统模块，参考 7 个独立模块背景和
-                // 天气模块背景」——那两家的玻璃层下面都没有垫任何东西，玻璃独占背景。
-                // 所以这里退回 1.0.6-15 的行为：材质被 GlassKit 强制隐藏、保底层隐藏、
-                // 只剩玻璃 —— 与七个磁贴从构造上完全相同（同一份 EREnsureTileMaterial
-                // + 同一份 ERSyncConnectivityTileGlass）。
-                fallback.hidden = tileMaterialVisible || tileGlassPresent;
-                fallback.alpha = 1.0;
-                [module.view sendSubviewToBack:fallback];
-            }
-            // 与 OFFBGFIX 同口径的一行诊断。闸门改为「状态变化 **或** 距上次 ≥2 秒」：
-            // 原来只按 module.view 上的关联对象去重，而 module.view 在 SpringBoard 内跨
-            // 多次打开控制中心会被复用，于是同一进程里第二次之后完全不再记录 —— 1.0.6-7 /
-            // 1.0.6-9 两份日志里这条标签一次都没出现（1.0.6-6 有两次），那不是代码没跑，
-            // 是去重把证据吃掉了。每秒一条即可判断收敛，代价可忽略。
+            // 1.0.7-32：不再调用 ERRestoreConvertedTileMaterial（不再隐藏材质让玻璃独占），
+            // 也不再建 / 调 EREnsureShortcutTileFallbackBackdrop（保底层已废弃）。
+            // 底板保持 hidden=NO / alpha=1，是磁贴唯一的背景层。
+            tileBackground.hidden = NO;
+            tileBackground.alpha = 1.0;
+            // 诊断：只记录底板来源与圆角，去掉玻璃 / 保底相关字段。
             {
-                LGLiveBackdropView *tileGlass = ERTileGlassForMaterial(tileBackground);
-                NSString *bgState = [NSString stringWithFormat:@"%@ glass=%d fa=%d hid=%d r=%.1f tileR=%.1f fb=%d fbA=%.2f matVis=%d",
+                NSString *bgState = [NSString stringWithFormat:@"%@ hid=%d tileR=%.1f",
                                      [NSStringFromClass(tileBackground.class) isEqualToString:@"MTMaterialView"] ? @"system" : @"blur",
-                                     tileGlass ? 1 : 0,
-                                     tileGlass ? (tileGlass.lgFilterAttached ? 1 : 0) : -1,
                                      tileBackground.hidden ? 1 : 0,
-                                     tileGlass ? tileGlass.layer.cornerRadius : -1.0,
-                                     module.view.layer.cornerRadius,
-                                     (fallback && !fallback.hidden) ? 1 : 0,
-                                     fallback ? fallback.alpha : -1.0,
-                                     tileMaterialVisible ? 1 : 0];
+                                     module.view.layer.cornerRadius];
                 BOOL changed = ![objc_getAssociatedObject(module.view, kERTileChromeLogStateKey) isEqual:bgState];
                 if (changed || ERDiagShouldLog(@"SHORTCUTBG", 2.0)) {
                     if (changed) {
                         objc_setAssociatedObject(module.view, kERTileChromeLogStateKey, bgState, OBJC_ASSOCIATION_COPY_NONATOMIC);
                     }
-                    ERLogInfo(@"SHORTCUTBG ver=1.0.7-21 id=%@ %@", identifier, bgState);
+                    ERLogInfo(@"SHORTCUTBG ver=1.0.7-32 id=%@ %@", identifier, bgState);
                 }
             }
         }
