@@ -196,11 +196,9 @@ static void ERPrefsLog(NSString *format, ...) {
         inset.top = 0.0;
         table.contentInset = inset;
     }
-    UIEdgeInsets indicator = table.scrollIndicatorInsets;
-    if (indicator.top > 0.0) {
-        indicator.top = 0.0;
-        table.scrollIndicatorInsets = indicator;
-    }
+    // 滚动条内边距这里**不动**：`scrollIndicatorInsets` 自 iOS 13 起已废弃，而本工程
+    // 开了 -Werror，引用它直接编译失败（1.0.8-1 第一次构建就是这么挂的）。它对顶部
+    // 留白没有影响，属于纯粹的视觉细节，去掉最省事也最安全。
 
     static BOOL erLoggedRootTopInset = NO;
     if (erLoggedRootTopInset) return;
