@@ -22046,33 +22046,6 @@ static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon) {
     }
 }
 
-// 1.0.8-5 ·「添加到文件夹」面板 —— 完全重写。
-//
-// 旧实现是一张贴底的 ActionSheet 样式面板（左右 8pt、底部贴边、无副标题、无图标、
-// 无深浅色适配）。这版按规范重做：
-//   · 居中悬浮卡片，宽 360pt、圆角 24pt，UIVisualEffectView 毛玻璃（浅色
-//     SystemMaterial / 深色 SystemDarkMaterial），带微弱外阴影；
-//   · 标题「添加到文件夹」+ 副标题「选择一个目标文件夹」；
-//   · 表格默认最多露出 6 行；超过 6 个文件夹时露出第 7 行一小截（28pt）提示可滚动，
-//     不足 6 个时高度自适应、不留大片空白；
-//   · Cell 模板：左侧文件夹图标 + 中间名称 + 右侧 ›；圆角矩形，选中用系统蓝高亮；
-//   · 底部两个胶囊按钮：主按钮「新建文件夹」、次要按钮「取消」；
-//   · 弹簧缩放弹出，点遮罩 / 取消关闭，点 Cell 执行移动后关闭。
-//
-// 硬性约束（都已满足）：不使用 UIAlertController；文件夹名与图标**全部运行时读取**，
-// 没有一处写死；监听 traitCollection 变化，深浅色实时切换，无需重开面板。
-
-static CGFloat const kERQACardWidth = 360.0;
-static CGFloat const kERQACardCornerRadius = 24.0;
-static CGFloat const kERQARowHeight = 56.0;
-static NSInteger const kERQAVisibleRows = 6;
-static CGFloat const kERQAPeek = 28.0;          // 第 7 条露出的一小截，暗示可上滑
-static CGFloat const kERQAHorizontalPadding = 16.0;
-static CGFloat const kERQAWindowLevel = 100.0;  // 高于 dock（实测 25），低于系统 UI
-
-static UIWindow *gERQuickAddSheetWindow = nil;
-
-// ---------------------------------------------------------------------------
 // 1.0.8-6 ·「添加到文件夹」面板 —— 视觉层重做（功能一行未改）
 //
 // 参照目标截图实现的分层（自下而上）：
@@ -22159,7 +22132,7 @@ static CGFloat const kERQAButtonHeight = 46.0;
     CGFloat textW = width - textX - 44.0;
     _qaName.frame = CGRectMake(textX, 0.0, textW, height);
     _qaSeparator.frame = CGRectMake(textX, height - 0.5, width - textX - 18.0, 0.5);
-    UILabel *chevron = (UILabel *)[self.accessoryView isKindOfClass:[UILabel class]] ? (UILabel *)self.accessoryView : nil;
+    UILabel *chevron = [self.accessoryView isKindOfClass:[UILabel class]] ? (UILabel *)self.accessoryView : nil;
     if (chevron) [chevron sizeToFit];
 }
 
@@ -22249,9 +22222,9 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     _qaHighlight.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _qaHighlight.userInteractionEnabled = NO;
     _qaHighlightGradient = [CAGradientLayer layer];
-    _qaHighlightGradient.colors = @[(id)[[UIColor whiteColor] colorWithAlphaComponent:0.14].CGColor,
-                                    (id)[[UIColor whiteColor] colorWithAlphaComponent:0.03].CGColor,
-                                    (id)[UIColor.clearColor].CGColor];
+    _qaHighlightGradient.colors = @[(__bridge id)[[UIColor whiteColor] colorWithAlphaComponent:0.14].CGColor,
+                                    (__bridge id)[[UIColor whiteColor] colorWithAlphaComponent:0.03].CGColor,
+                                    (__bridge id)[UIColor.clearColor].CGColor];
     _qaHighlightGradient.locations = @[@0.0, @0.35, @1.0];
     [_qaHighlight.layer addSublayer:_qaHighlightGradient];
     [_qaGlass.contentView addSubview:_qaHighlight];
