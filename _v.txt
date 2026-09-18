@@ -1,13 +1,10 @@
 project: C:\Users\Administrator\WorkBuddy\ios插件开发\EchoReborn
-control                      updated
-prefs/Resources/Info.plist   updated
-assets/depiction.json        updated
-Tweak.xm ver=                79 occurrence(s) bumped
-Tweak.xm ver= markers        updated
-Tweak.xm ver=                1 occurrence(s) bumped
-modules/weather/ERWeatherModule.m ver= markers updated
-Tweak.xm ver=                2 occurrence(s) bumped
-modules/weather/ERWeatherBridge.m ver= markers updated
-DualCam/Tweak.xm kDualCamVersion updated
+control                      already 1.0.8-7
+prefs/Resources/Info.plist   already 1.0.8-7
+assets/depiction.json        already 1.0.8-7
+Tweak.xm ver= markers        already 1.0.8-7
+modules/weather/ERWeatherModule.m ver= markers already 1.0.8-7
+modules/weather/ERWeatherBridge.m ver= markers already 1.0.8-7
+DualCam/Tweak.xm kDualCamVersion already 1.0.8-7
 
 version is 1.0.8-7 in every place that ships it.

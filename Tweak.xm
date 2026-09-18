@@ -21960,123 +21960,145 @@ static NSString *ERQuickAddActionName(void) {
 //   · 面板底边 = 安全区底 + kERQuickAddSheetLift —— 正好落在 dock 图标行之上
 //   · 行高 48、文件夹多时面板内部滚动；点「取消」或遮罩关闭
 // ---------------------------------------------------------------------------
-// 1.0.7-31：面板不再抬高 —— 改为在更高层级的窗口里整体盖住 dock。
-
-// 1.0.8-5 · 文件夹图标 —— **运行时**从 SBIcon / 系统图标缓存取，绝不本地写死。
+// 1.0.8-7 ·「添加到文件夹」面板 —— 视觉层再调（业务逻辑与交互一行未改）
 //
-// 只调用零参数取图接口：带 info 结构体的接口（iconImageWithInfo: 之类）需要在栈上
-// 构造 SBIconImageInfo，构造错了就是未定义行为，宁可跳过 —— 取不到时由面板用系统
-// `folder` 图形兜底，视觉上仍然是一个文件夹图标。
-static UIImage *ERQuickAddFolderIconImage(id folderIcon) {
-    if (!folderIcon) return nil;
-    @try {
-        Class cacheClass = NSClassFromString(@"SBIconImageCache");
-        if (cacheClass && [cacheClass respondsToSelector:@selector(sharedInstance)]) {
-            id cache = ((id (*)(id, SEL))objc_msgSend)(cacheClass, @selector(sharedInstance));
-            for (NSString *name in @[@"imageForIcon:", @"cachedImageForIcon:", @"iconImageForIcon:"]) {
-                SEL sel = NSSelectorFromString(name);
-                if (![cache respondsToSelector:sel]) continue;
-                @try {
-                    id value = ((id (*)(id, SEL, id))objc_msgSend)(cache, sel, folderIcon);
-                    if ([value isKindOfClass:[UIImage class]]) return (UIImage *)value;
-                } @catch (__unused NSException *e) {}
-            }
-        }
-        for (NSString *name in @[@"previewIconImage", @"iconImage", @"compactIconImage",
-                                 @"genericIconImage", @"unmaskedIconImage", @"folderIconImage"]) {
-            SEL sel = NSSelectorFromString(name);
-            if (![folderIcon respondsToSelector:sel]) continue;
-            @try {
-                id value = ((id (*)(id, SEL))objc_msgSend)(folderIcon, sel);
-                if ([value isKindOfClass:[UIImage class]]) return (UIImage *)value;
-            } @catch (__unused NSException *e) {}
-        }
-    } @catch (__unused NSException *e) {}
-    return nil;
-}
-
-// 1.0.8-5 · 新建文件夹 —— 运行时发现接口；找不到就记一行日志，绝不崩、绝不静默无果。
-static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon) {
-    if (!icon) return;
-    @try {
-        NSMutableArray<id> *targets = [NSMutableArray array];
-        for (NSString *className in @[@"SBIconController", @"SBIconManager"]) {
-            Class cls = NSClassFromString(className);
-            if (!cls || ![cls respondsToSelector:@selector(sharedInstance)]) continue;
-            @try { [targets addObject:((id (*)(id, SEL))objc_msgSend)(cls, @selector(sharedInstance))]; }
-            @catch (__unused NSException *e) {}
-        }
-        NSArray *icons = @[icon];
-        for (id target in targets) {
-            unsigned int count = 0;
-            Method *methods = class_copyMethodList([target class], &count);
-            NSMutableArray<NSString *> *hits = [NSMutableArray array];
-            for (unsigned int index = 0; index < count; index++) {
-                NSString *name = NSStringFromSelector(method_getName(methods[index]));
-                if ([name containsString:@"Folder"] &&
-                    ([name containsString:@"reate"] || [name containsString:@"ew Fol"])) {
-                    if (![hits containsObject:name]) [hits addObject:name];
-                }
-            }
-            free(methods);
-            ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder api-dump cls=%@ hits=%@",
-                      NSStringFromClass([target class]), hits);
-            for (NSString *name in hits) {
-                SEL sel = NSSelectorFromString(name);
-                if (![target respondsToSelector:sel]) continue;
-                @try {
-                    NSMethodSignature *sig = [target methodSignatureForSelector:sel];
-                    if (!sig || sig.numberOfArguments < 3) continue;   // 至少要能吃一个参数
-                    NSInvocation *inv = [NSInvocation invocationWithMethodSignature:sig];
-                    inv.selector = sel;
-                    [inv setArgument:&icons atIndex:2];
-                    [inv invokeWithTarget:target];
-                    ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder via %@ %@",
-                              NSStringFromClass([target class]), name);
-                    return;
-                } @catch (NSException *e) {
-                    ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder EXC %@ -- %@", e.name, e.reason);
-                }
-            }
-        }
-        ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder: no usable api on %lu target(s)",
-                  (unsigned long)targets.count);
-    } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.0.8-7 new-folder EXC %@ -- %@", e.name, e.reason);
-    }
-}
-
-// 1.0.8-6 ·「添加到文件夹」面板 —— 视觉层重做（功能一行未改）
-//
-// 参照目标截图实现的分层（自下而上）：
-//   ① 全屏模糊背景（模糊主屏幕，不是纯黑）
-//   ② 半透明遮罩
-//   ③ 悬浮玻璃卡片（深色半透明底 + 毛玻璃 + 浅色高光 + 极轻亮边 + 柔和外阴影）
-//   ④ 标题 / 副标题（在卡片**上方**，留白充足）
-//   ⑤ 列表（固定 6 行整，绝不露第 7 条；单元格 64pt；无系统分割线）
-//   ⑥ 选中高亮胶囊（圆角 + 渐变 + 柔和发光，浮在 cell 之上、内容之下）
-//   ⑦ 底部两个胶囊按钮（蓝色主按钮带渐变高光 / 半透明次要按钮）
-//
-// 功能保持不变：点 cell 选文件夹、点取消关闭、点遮罩关闭、文件夹列表运行时读取。
+// 对标参考效果图的分层与材质：
+//   ① 全屏毛玻璃背景（模糊主屏幕）
+//   ② 极轻遮罩（**不用**重黑色全屏遮罩，避免把后方画面压死）
+//   ③ 居中悬浮毛玻璃卡片：圆角 26、柔和阴影透明度 0.3、**无实色背景、无边框**，
+//      透出模糊的后方屏幕画面
+//   ④ 卡片外标题 + 副标题，顶部留白
+//   ⑤ 列表：固定 6 行整；每条 cell 圆角 16、半透明材质底，**条目之间用间距区分**，
+//      不画分割线
+//   ⑥ 图标：**CoreGraphics 代码绘制** —— 白色线性文件夹（造型固定）+ 彩色圆角底
+//      （15 套色值按 row 循环，底色 70% 透明度，白色线条 100% 不透明），
+//      **彻底没有问号占位图，也不加载任何外部图片**
+//   ⑦ 选中：整条 cell 的蓝色胶囊高亮 + 微弱外发光
+//   ⑧ 底部两个胶囊按钮（圆角 18）：蓝色主按钮「新建文件夹」/ 半透明「取消」
 // ---------------------------------------------------------------------------
 
 static CGFloat const kERQACardWidth = 360.0;
-static CGFloat const kERQACardCornerRadius = 24.0;
-static CGFloat const kERQARowHeight = 64.0;
-static NSInteger const kERQAVisibleRows = 6;    // 固定 6 行整，绝不露出第 7 条
-static CGFloat const kERQAHorizontalPadding = 16.0;
-static CGFloat const kERQATitleHeight = 28.0;
+static CGFloat const kERQACardCornerRadius = 26.0;
+static CGFloat const kERQARowHeight = 68.0;      // 含上下 4pt 间距，条目本体 60pt
+static NSInteger const kERQAVisibleRows = 6;     // 固定 6 行整，绝不露出第 7 条
+static CGFloat const kERQACardInnerPadding = 14.0;
+static CGFloat const kERQATitleHeight = 30.0;
 static CGFloat const kERQASubtitleHeight = 18.0;
 static CGFloat const kERQAButtonHeight = 46.0;
+static CGFloat const kERQAButtonCornerRadius = 18.0;
+
+#pragma mark - CoreGraphics 图标（白线性文件夹 + 彩色圆角底）
+
+// 15 套底色，按 NSIndexPath.row 循环取用。
+static NSArray<UIColor *> *ERQuickAddIconPalette(void) {
+    static NSArray<UIColor *> *palette = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSArray<NSString *> *hex = @[@"FF5F57", @"FF9F43", @"F5C518", @"34C759", @"30D5C8",
+                                     @"0A84FF", @"5E5CE6", @"AF52DE", @"FF375F", @"FF69B4",
+                                     @"FF7F50", @"98FB98", @"87CEEB", @"D8CFF0", @"8A9BBF"];
+        NSMutableArray<UIColor *> *colors = [NSMutableArray array];
+        for (NSString *hexValue in hex) {
+            unsigned value = 0;
+            sscanf(hexValue.UTF8String, "%06x", &value);
+            [colors addObject:[UIColor colorWithRed:((value >> 16) & 0xFF) / 255.0
+                                              green:((value >> 8) & 0xFF) / 255.0
+                                               blue:(value & 0xFF) / 255.0
+                                              alpha:1.0]];
+        }
+        palette = colors;
+    });
+    return palette;
+}
+
+// 34×34 图标：彩色圆角底（70% 透明度）+ 白色线性文件夹（100% 不透明）。
+// 全部用 CoreGraphics 画，不加载任何外部图片，因此**不可能出现问号占位图**。
+static UIImage *ERQuickAddFolderIconImage(NSInteger row) {
+    static UIImage *cached = nil;
+    static NSInteger cachedRow = NSNotFound;
+    static dispatch_once_t cacheOnce;
+    dispatch_once(&cacheOnce, ^{ cached = nil; });
+    if (cachedRow == row && cached) return cached;
+
+    UIColor *accent = ERQuickAddIconPalette()[row % ERQuickAddIconPalette().count];
+
+    UIGraphicsImageRendererFormat *format = [[UIGraphicsImageRendererFormat alloc] init];
+    format.opaque = NO;
+    format.scale = [UIScreen mainScreen].scale;
+    UIGraphicsImageRenderer *renderer =
+        [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(34.0, 34.0) format:format];
+
+    UIImage *image = [renderer imageWithActions:^(__unused UIGraphicsImageRendererContext *context) {
+        // ① 彩色圆角底：70% 透明度
+        UIBezierPath *container =
+            [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0.0, 0.0, 34.0, 34.0) cornerRadius:9.5];
+        [[accent colorWithAlphaComponent:0.70] setFill];
+        [container fill];
+
+        // ② 白色线性文件夹：顶盖 + 本体连成一条路径，100% 不透明
+        UIBezierPath *outline = [UIBezierPath bezierPath];
+        [outline moveToPoint:CGPointMake(8.0, 26.5)];
+        [outline addLineToPoint:CGPointMake(8.0, 12.6)];
+        [outline addQuadCurveToPoint:CGPointMake(10.0, 10.6) controlPoint:CGPointMake(8.0, 10.6)];
+        [outline addLineToPoint:CGPointMake(14.6, 10.6)];
+        [outline addQuadCurveToPoint:CGPointMake(16.6, 12.6) controlPoint:CGPointMake(16.6, 10.6)];
+        [outline addLineToPoint:CGPointMake(16.6, 14.0)];
+        [outline addLineToPoint:CGPointMake(23.6, 14.0)];
+        [outline addQuadCurveToPoint:CGPointMake(25.6, 16.0) controlPoint:CGPointMake(25.6, 14.0)];
+        [outline addLineToPoint:CGPointMake(25.6, 24.5)];
+        [outline addQuadCurveToPoint:CGPointMake(23.6, 26.5) controlPoint:CGPointMake(25.6, 26.5)];
+        [outline closePath];
+        outline.lineWidth = 1.9;
+        outline.lineJoinStyle = kCGLineJoinRound;
+        outline.lineCapStyle = kCGLineCapRound;
+        [[UIColor whiteColor] setStroke];
+        [outline stroke];
+
+        // ③ 本体内衬的一条高光线，让图标有一点立体感而不是死板的描边
+        UIBezierPath *inner = [UIBezierPath bezierPath];
+        [inner moveToPoint:CGPointMake(9.6, 16.4)];
+        [inner addLineToPoint:CGPointMake(24.4, 16.4)];
+        inner.lineWidth = 1.0;
+        inner.lineCapStyle = kCGLineCapRound;
+        [[[UIColor whiteColor] colorWithAlphaComponent:0.55] setStroke];
+        [inner stroke];
+    }];
+    cached = image;
+    cachedRow = row;
+    return image;
+}
+
+// cell 副标题：优先给「该文件夹里有几项」，运行时读取；取不到就退回固定文案。
+static NSString *ERQuickAddFolderSubtitle(id folderIcon) {
+    @try {
+        id folder = [folderIcon respondsToSelector:@selector(folder)]
+                        ? ((id (*)(id, SEL))objc_msgSend)(folderIcon, @selector(folder)) : nil;
+        if (!folder) return @"文件夹";
+        for (NSString *name in @[@"iconLists", @"iconListArray"]) {
+            SEL sel = NSSelectorFromString(name);
+            if (![folder respondsToSelector:sel]) continue;
+            id lists = ((id (*)(id, SEL))objc_msgSend)(folder, sel);
+            if (![lists isKindOfClass:[NSArray class]]) continue;
+            NSUInteger count = 0;
+            for (id list in lists) {
+                if ([list respondsToSelector:@selector(count)]) count += [list count];
+            }
+            return [NSString stringWithFormat:@"%lu 个项目", (unsigned long)count];
+        }
+    } @catch (__unused NSException *e) {}
+    return @"文件夹";
+}
 
 #pragma mark - 文件夹单元格
 
 @interface ERQuickAddFolderCell : UITableViewCell
-@property (nonatomic, strong) UIView *qaIconHost;
+@property (nonatomic, strong) UIView *qaCard;        // 圆角 16 的半透明材质底
+@property (nonatomic, strong) UIView *qaHighlight;   // 选中：蓝色胶囊高亮 + 外发光
+@property (nonatomic, strong) CAGradientLayer *qaHighlightGradient;
 @property (nonatomic, strong) UIImageView *qaIcon;
-@property (nonatomic, strong) UILabel *qaGlyph;      // 取不到真实图标时的彩色兜底字形
 @property (nonatomic, strong) UILabel *qaName;
-@property (nonatomic, strong) UIView *qaSeparator;
+@property (nonatomic, strong) UILabel *qaSubtitle;
+@property (nonatomic, strong) UILabel *qaChevron;
 @end
 
 @implementation ERQuickAddFolderCell
@@ -22086,54 +22108,73 @@ static CGFloat const kERQAButtonHeight = 46.0;
     if (!self) return nil;
     self.backgroundColor = UIColor.clearColor;
     self.contentView.backgroundColor = UIColor.clearColor;
-    self.selectionStyle = UITableViewCellSelectionStyleDefault;
+    self.selectionStyle = UITableViewCellSelectionStyleNone;   // 高亮自己画
 
-    _qaIconHost = [[UIView alloc] initWithFrame:CGRectZero];
-    _qaIconHost.layer.cornerRadius = 9.0;
-    _qaIconHost.layer.cornerCurve = kCACornerCurveContinuous;
-    _qaIconHost.clipsToBounds = YES;
-    [self.contentView addSubview:_qaIconHost];
+    // 条目本体：圆角 16、半透明材质，条目之间靠上下 4pt 间距区分（不画分割线）
+    _qaCard = [[UIView alloc] initWithFrame:CGRectZero];
+    _qaCard.layer.cornerRadius = 16.0;
+    _qaCard.layer.cornerCurve = kCACornerCurveContinuous;
+    [self.contentView addSubview:_qaCard];
+
+    // 选中高亮：蓝色胶囊（渐变 + 外发光），**插在卡片之上、内容之下**
+    _qaHighlight = [[UIView alloc] initWithFrame:CGRectZero];
+    _qaHighlight.layer.cornerRadius = 16.0;
+    _qaHighlight.layer.cornerCurve = kCACornerCurveContinuous;
+    _qaHighlight.hidden = YES;
+    _qaHighlight.userInteractionEnabled = NO;
+    _qaHighlightGradient = [CAGradientLayer layer];
+    _qaHighlightGradient.colors = @[(id)[[UIColor colorWithRed:0.32 green:0.58 blue:1.00 alpha:1.0] CGColor],
+                                    (id)[[UIColor colorWithRed:0.11 green:0.38 blue:0.93 alpha:1.0] CGColor]];
+    _qaHighlightGradient.startPoint = CGPointMake(0.5, 0.0);
+    _qaHighlightGradient.endPoint = CGPointMake(0.5, 1.0);
+    [_qaHighlight.layer insertSublayer:_qaHighlightGradient atIndex:0];
+    [self.contentView addSubview:_qaHighlight];
+    [self.contentView sendSubviewToBack:_qaHighlight];
 
     _qaIcon = [[UIImageView alloc] initWithFrame:CGRectZero];
-    _qaIcon.contentMode = UIViewContentModeScaleAspectFill;
-    [_qaIconHost addSubview:_qaIcon];
-
-    _qaGlyph = [[UILabel alloc] initWithFrame:CGRectZero];
-    _qaGlyph.textAlignment = NSTextAlignmentCenter;
-    [_qaIconHost addSubview:_qaGlyph];
+    _qaIcon.contentMode = UIViewContentModeScaleAspectFit;
+    [self.contentView addSubview:_qaIcon];
 
     _qaName = [[UILabel alloc] initWithFrame:CGRectZero];
     _qaName.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
     [self.contentView addSubview:_qaName];
 
-    // 不用系统分割线：自绘一条极淡的细线（末行由控制器隐藏）
-    _qaSeparator = [[UIView alloc] initWithFrame:CGRectZero];
-    [self.contentView addSubview:_qaSeparator];
+    _qaSubtitle = [[UILabel alloc] initWithFrame:CGRectZero];
+    _qaSubtitle.font = [UIFont systemFontOfSize:12.0];
+    [self.contentView addSubview:_qaSubtitle];
 
-    // 右侧 › 指示器
-    UILabel *chevron = [[UILabel alloc] initWithFrame:CGRectZero];
-    chevron.text = @"›";
-    chevron.font = [UIFont systemFontOfSize:22.0 weight:UIFontWeightRegular];
-    chevron.tag = 9911;
-    [chevron sizeToFit];
-    self.accessoryView = chevron;
+    _qaChevron = [[UILabel alloc] initWithFrame:CGRectZero];
+    _qaChevron.text = @"›";
+    _qaChevron.font = [UIFont systemFontOfSize:22.0 weight:UIFontWeightRegular];
+    _qaChevron.textAlignment = NSTextAlignmentRight;
+    [self.contentView addSubview:_qaChevron];
     return self;
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    CGFloat height = CGRectGetHeight(self.contentView.bounds);
     CGFloat width = CGRectGetWidth(self.contentView.bounds);
-    CGFloat side = 34.0;
-    _qaIconHost.frame = CGRectMake(18.0, (height - side) * 0.5, side, side);
-    _qaIcon.frame = _qaIconHost.bounds;
-    _qaGlyph.frame = _qaIconHost.bounds;
-    CGFloat textX = CGRectGetMaxX(_qaIconHost.frame) + 14.0;
-    CGFloat textW = width - textX - 44.0;
-    _qaName.frame = CGRectMake(textX, 0.0, textW, height);
-    _qaSeparator.frame = CGRectMake(textX, height - 0.5, width - textX - 18.0, 0.5);
-    UILabel *chevron = [self.accessoryView isKindOfClass:[UILabel class]] ? (UILabel *)self.accessoryView : nil;
-    if (chevron) [chevron sizeToFit];
+    CGFloat height = CGRectGetHeight(self.contentView.bounds);
+    CGFloat insetX = 10.0, insetY = 4.0;
+    CGFloat cardWidth = width - insetX * 2.0;
+    CGFloat cardHeight = height - insetY * 2.0;
+
+    _qaCard.frame = CGRectMake(insetX, insetY, cardWidth, cardHeight);
+    _qaHighlight.frame = _qaCard.frame;
+    _qaHighlightGradient.frame = _qaHighlight.bounds;
+
+    CGFloat iconSide = 34.0;
+    _qaIcon.frame = CGRectMake(14.0, (cardHeight - iconSide) * 0.5, iconSide, iconSide);
+    CGFloat textX = CGRectGetMaxX(_qaIcon.frame) + 13.0;
+    CGFloat textW = cardWidth - (textX - insetX) - 42.0;
+    _qaName.frame = CGRectMake(textX, insetY + 8.0, textW, 22.0);
+    _qaSubtitle.frame = CGRectMake(textX, CGRectGetMaxY(_qaName.frame) + 2.0, textW, 15.0);
+    _qaChevron.frame = CGRectMake(width - insetX - 34.0, 0.0, 26.0, height);
+}
+
+- (void)qaSetSelected:(BOOL)selected {
+    _qaHighlight.hidden = !selected;
+    _qaCard.hidden = selected;   // 选中时整条换成蓝色胶囊，避免两层底色叠灰
 }
 
 @end
@@ -22141,23 +22182,21 @@ static CGFloat const kERQAButtonHeight = 46.0;
 static UIWindow *gERQuickAddSheetWindow = nil;
 
 @interface ERQuickAddSheetController : UIViewController <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, copy) NSArray<NSString *> *titles;        // 运行时读取的文件夹名
-@property (nonatomic, copy) NSArray<UIImage *> *folderImages;   // 运行时读取的文件夹图标
+@property (nonatomic, copy) NSArray<NSString *> *titles;      // 运行时读取的文件夹名
+@property (nonatomic, copy) NSArray<NSString *> *subtitles;   // 运行时读取的副标题（项目数）
 @property (nonatomic, copy) void (^onPick)(NSInteger index);
 @property (nonatomic, copy) void (^onCreateFolder)(void);
 @end
 
 @implementation ERQuickAddSheetController {
-    UIVisualEffectView *_qaBackdrop;   // ① 全屏模糊背景
-    UIView *_qaDim;                    // ② 半透明遮罩
-    UILabel *_qaTitle;                 // ④ 标题
+    UIVisualEffectView *_qaBackdrop;   // ① 全屏毛玻璃背景
+    UIView *_qaDim;                    // ② 极轻遮罩（只做点击关闭的命中区）
+    UILabel *_qaTitle;
     UILabel *_qaSubtitle;
-    UIView *_qaCardHost;               // ③ 卡片（承载阴影 / 亮边）
-    UIVisualEffectView *_qaGlass;      //   卡片毛玻璃
-    UIView *_qaHighlight;              //   浅色高光层
-    CAGradientLayer *_qaHighlightGradient;
+    UIView *_qaCardHost;               // ③ 卡片（阴影）
+    UIVisualEffectView *_qaGlass;      //   毛玻璃（无实色背景）
     UITableView *_qaTable;             // ⑤ 列表
-    UIButton *_qaPrimary;              // ⑦ 按钮
+    UIButton *_qaPrimary;              // ⑧ 按钮
     UIButton *_qaCancel;
     CAGradientLayer *_qaPrimaryGradient;
     BOOL _qaDismissing;
@@ -22167,19 +22206,20 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.clearColor;
 
-    // ① 全屏模糊：模糊的是它下面的主屏幕（窗口本身是透明的），不是纯黑纯色。
+    // ① 全屏毛玻璃：模糊的是它下面的主屏幕（窗口本身透明）
     _qaBackdrop = [[UIVisualEffectView alloc] initWithEffect:[self qaBackdropEffect]];
     _qaBackdrop.frame = self.view.bounds;
     _qaBackdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [self.view addSubview:_qaBackdrop];
 
-    // ② 遮罩：从透明淡入到半透明
+    // ② 极轻遮罩：只承担「点外面关闭」的命中职责，**不压黑背景**
     _qaDim = [[UIView alloc] initWithFrame:self.view.bounds];
     _qaDim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    _qaDim.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.08];
     [_qaDim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(qaDismissAnimated)]];
     [self.view addSubview:_qaDim];
 
-    // ④ 标题在卡片**上方**，不挤在卡片里
+    // ④ 标题 / 副标题在卡片上方，顶部留白
     _qaTitle = [[UILabel alloc] initWithFrame:CGRectZero];
     _qaTitle.text = @"添加到文件夹";
     _qaTitle.font = [UIFont systemFontOfSize:26.0 weight:UIFontWeightBold];
@@ -22192,54 +22232,26 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     _qaSubtitle.textAlignment = NSTextAlignmentCenter;
     [self.view addSubview:_qaSubtitle];
 
-    // ③ 卡片：宿主（阴影 + 亮边） / 毛玻璃 / 高光 三层
+    // ③ 悬浮毛玻璃卡片：圆角 26、柔和大半径阴影（透明度 0.3）、**无实色背景、无边框**
     _qaCardHost = [[UIView alloc] initWithFrame:CGRectZero];
     _qaCardHost.layer.cornerRadius = kERQACardCornerRadius;
     _qaCardHost.layer.cornerCurve = kCACornerCurveContinuous;
-    _qaCardHost.layer.masksToBounds = NO;            // 阴影要露在圆角外
     [self.view addSubview:_qaCardHost];
-
-    UIView *cardClip = [[UIView alloc] initWithFrame:CGRectZero];
-    cardClip.layer.cornerRadius = kERQACardCornerRadius;
-    cardClip.layer.cornerCurve = kCACornerCurveContinuous;
-    cardClip.clipsToBounds = YES;
-    cardClip.tag = 9922;
-    [_qaCardHost addSubview:cardClip];
 
     _qaGlass = [[UIVisualEffectView alloc] initWithEffect:[self qaCardEffect]];
     _qaGlass.frame = _qaCardHost.bounds;
     _qaGlass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [cardClip addSubview:_qaGlass];
+    _qaGlass.layer.cornerRadius = kERQACardCornerRadius;
+    _qaGlass.layer.cornerCurve = kCACornerCurveContinuous;
+    _qaGlass.clipsToBounds = YES;
+    [_qaCardHost addSubview:_qaGlass];
 
-    // 深色半透明底（让卡片在没有壁纸对比时也够「实」）
-    UIView *cardTint = [[UIView alloc] initWithFrame:_qaCardHost.bounds];
-    cardTint.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    cardTint.tag = 9933;
-    [_qaGlass.contentView addSubview:cardTint];
-
-    // 浅色高光层（顶部亮、中部透明）
-    _qaHighlight = [[UIView alloc] initWithFrame:_qaCardHost.bounds];
-    _qaHighlight.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _qaHighlight.userInteractionEnabled = NO;
-    _qaHighlightGradient = [CAGradientLayer layer];
-    // 颜色先取到局部变量再取 CGColor：在数组字面量里对「类属性 + 属性访问」的复合表达式
-    // 做强转会解析失败（clang: expected identifier），这样写最稳。
-    UIColor *qaHighlightTop = [[UIColor whiteColor] colorWithAlphaComponent:0.14];
-    UIColor *qaHighlightMid = [[UIColor whiteColor] colorWithAlphaComponent:0.03];
-    UIColor *qaHighlightEnd = [UIColor clearColor];
-    _qaHighlightGradient.colors = @[(__bridge id)qaHighlightTop.CGColor,
-                                    (__bridge id)qaHighlightMid.CGColor,
-                                    (__bridge id)qaHighlightEnd.CGColor];
-    _qaHighlightGradient.locations = @[@0.0, @0.35, @1.0];
-    [_qaHighlight.layer addSublayer:_qaHighlightGradient];
-    [_qaGlass.contentView addSubview:_qaHighlight];
-
-    // ⑤ 列表
+    // ⑤ 列表：固定 6 行整，无分割线，条目之间用间距区分
     _qaTable = [[UITableView alloc] initWithFrame:CGRectZero style:UITableViewStylePlain];
     _qaTable.dataSource = self;
     _qaTable.delegate = self;
     _qaTable.rowHeight = kERQARowHeight;
-    _qaTable.separatorStyle = UITableViewCellSeparatorStyleNone;   // 自绘极淡细线
+    _qaTable.separatorStyle = UITableViewCellSeparatorStyleNone;
     _qaTable.showsVerticalScrollIndicator = NO;
     _qaTable.alwaysBounceVertical = NO;
     _qaTable.backgroundColor = UIColor.clearColor;
@@ -22248,13 +22260,19 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     [_qaTable registerClass:[ERQuickAddFolderCell class] forCellReuseIdentifier:@"QACell"];
     [_qaGlass.contentView addSubview:_qaTable];
 
-    // ⑦ 按钮
+    // ⑧ 底部两个胶囊按钮（圆角 18）
     _qaPrimary = [UIButton buttonWithType:UIButtonTypeCustom];
     [_qaPrimary setTitle:@"新建文件夹" forState:UIControlStateNormal];
     _qaPrimary.titleLabel.font = [UIFont systemFontOfSize:16.5 weight:UIFontWeightSemibold];
     [_qaPrimary addTarget:self action:@selector(qaCreateFolderTapped) forControlEvents:UIControlEventTouchUpInside];
     _qaPrimaryGradient = [CAGradientLayer layer];
+    _qaPrimaryGradient.colors = @[(id)[[UIColor colorWithRed:0.29 green:0.55 blue:1.00 alpha:1.0] CGColor],
+                                  (id)[[UIColor colorWithRed:0.13 green:0.40 blue:0.94 alpha:1.0] CGColor]];
+    _qaPrimaryGradient.startPoint = CGPointMake(0.5, 0.0);
+    _qaPrimaryGradient.endPoint = CGPointMake(0.5, 1.0);
     [_qaPrimary.layer insertSublayer:_qaPrimaryGradient atIndex:0];
+    _qaPrimary.layer.cornerRadius = kERQAButtonCornerRadius;
+    _qaPrimary.layer.cornerCurve = kCACornerCurveContinuous;
     _qaPrimary.clipsToBounds = YES;
     [_qaGlass.contentView addSubview:_qaPrimary];
 
@@ -22262,6 +22280,8 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     [_qaCancel setTitle:@"取消" forState:UIControlStateNormal];
     _qaCancel.titleLabel.font = [UIFont systemFontOfSize:16.5 weight:UIFontWeightMedium];
     [_qaCancel addTarget:self action:@selector(qaDismissAnimated) forControlEvents:UIControlEventTouchUpInside];
+    _qaCancel.layer.cornerRadius = kERQAButtonCornerRadius;
+    _qaCancel.layer.cornerCurve = kCACornerCurveContinuous;
     _qaCancel.clipsToBounds = YES;
     [_qaGlass.contentView addSubview:_qaCancel];
 
@@ -22271,11 +22291,9 @@ static UIWindow *gERQuickAddSheetWindow = nil;
 - (UIBlurEffect *)qaBackdropEffect {
     BOOL dark = NO;
     if (@available(iOS 13.0, *)) dark = (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
-    // 1.0.8-7：**两种外观都用深色材质**。浅色模式纯净白亮 → 壁纸太抢眼；
-    // 这里统一压成「深色 + 大半径模糊」：亮度被压低，但壁纸的纹理与色块仍隐约可见，
-    // 正是用户要的「压低背景但隐隐约约看见壁纸」。
-    if (dark) return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
-    return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
+    // 厚材质：让主屏幕被明显模糊，而不是被压黑
+    return dark ? [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterialDark]
+                : [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemThickMaterial];
 }
 
 - (UIBlurEffect *)qaCardEffect {
@@ -22288,7 +22306,6 @@ static UIWindow *gERQuickAddSheetWindow = nil;
 - (CGFloat)qaTableHeight {
     NSUInteger count = self.titles.count;
     if (count == 0) return kERQARowHeight;
-    // 固定 6 行整；不足 6 个时按实际行数收高，不留大片空白。**绝不露出第 7 条**。
     if (count <= (NSUInteger)kERQAVisibleRows) return (CGFloat)count * kERQARowHeight;
     return (CGFloat)kERQAVisibleRows * kERQARowHeight;
 }
@@ -22297,53 +22314,20 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     BOOL dark = NO;
     if (@available(iOS 13.0, *)) dark = (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
 
-    // 1.0.8-7（用户口径）：**压低背景色，但不要全部压制** —— 隐隐约约看见壁纸。
-    // 所以遮罩用中等偏高的黑（0.34/0.40）压亮度，同时下方还有一层模糊把壁纸纹理留下来。
-    _qaDim.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:dark ? 0.40 : 0.34];
     _qaTitle.textColor = dark ? UIColor.whiteColor : UIColor.labelColor;
-    _qaTitle.layer.shadowColor = [UIColor blackColor].CGColor;
-    _qaTitle.layer.shadowOpacity = dark ? 0.45 : 0.0;
-    _qaTitle.layer.shadowRadius = 10.0;
-    _qaTitle.layer.shadowOffset = CGSizeMake(0.0, 2.0);
     _qaSubtitle.textColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.62] : [UIColor secondaryLabelColor];
 
-    // 1.0.8-7：卡片**不再垫实色底**（原来那层 white 0.34 / white 0.10@0.42 把后方
-    // 画面完全盖住了）。现在只有毛玻璃 + 遮罩，壁纸能透出来。
-    UIView *tint = [_qaGlass.contentView viewWithTag:9933];
-    tint.backgroundColor = UIColor.clearColor;
-    _qaCardHost.layer.borderWidth = 0.6;
-    _qaCardHost.layer.borderColor = (dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.16]
-                                          : [[UIColor whiteColor] colorWithAlphaComponent:0.60]).CGColor;
-    _qaCardHost.layer.shadowColor = [UIColor blackColor].CGColor;
-    _qaCardHost.layer.shadowOpacity = dark ? 0.38 : 0.20;
-    _qaCardHost.layer.shadowRadius = 30.0;
-    _qaCardHost.layer.shadowOffset = CGSizeMake(0.0, 14.0);
-
-    _qaPrimaryGradient.colors = @[(id)[[UIColor colorWithRed:0.29 green:0.55 blue:1.00 alpha:1.0] CGColor],
-                                  (id)[[UIColor colorWithRed:0.13 green:0.40 blue:0.94 alpha:1.0] CGColor]];
-    _qaPrimaryGradient.startPoint = CGPointMake(0.5, 0.0);
-    _qaPrimaryGradient.endPoint = CGPointMake(0.5, 1.0);
+    // ⑦ 按钮配色
     [_qaPrimary setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    _qaPrimary.layer.cornerRadius = kERQAButtonHeight * 0.5;
-    _qaPrimary.layer.cornerCurve = kCACornerCurveContinuous;
-    _qaPrimary.layer.shadowColor = [UIColor colorWithRed:0.13 green:0.40 blue:0.94 alpha:1.0].CGColor;
-    _qaPrimary.layer.shadowOpacity = 0.35;
-    _qaPrimary.layer.shadowRadius = 10.0;
-    _qaPrimary.layer.shadowOffset = CGSizeMake(0.0, 4.0);
-    _qaPrimary.layer.masksToBounds = NO;
-
+    [_qaCancel setTitleColor:dark ? UIColor.whiteColor : UIColor.labelColor forState:UIControlStateNormal];
     _qaCancel.backgroundColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.14]
                                      : [[UIColor blackColor] colorWithAlphaComponent:0.07];
-    [_qaCancel setTitleColor:dark ? UIColor.whiteColor : UIColor.labelColor forState:UIControlStateNormal];
-    _qaCancel.layer.cornerRadius = kERQAButtonHeight * 0.5;
-    _qaCancel.layer.cornerCurve = kCACornerCurveContinuous;
 
     [_qaTable reloadData];
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
     [super traitCollectionDidChange:previousTraitCollection];
-    // 系统外观切换 → 立刻换两层毛玻璃与全部配色，不需要重开面板。
     _qaBackdrop.effect = [self qaBackdropEffect];
     _qaGlass.effect = [self qaCardEffect];
     [self qaApplyAppearance];
@@ -22355,10 +22339,10 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     CGFloat height = CGRectGetHeight(self.view.bounds);
     CGFloat cardWidth = MIN(kERQACardWidth, width - 48.0);
     CGFloat tableHeight = [self qaTableHeight];
-    CGFloat cardHeight = tableHeight + 14.0 + kERQAButtonHeight + 18.0;
-    CGFloat gapTitleCard = 22.0;     // 标题区与卡片之间的呼吸感
+    CGFloat cardHeight = tableHeight + kERQACardInnerPadding + kERQAButtonHeight + 16.0;
+    CGFloat gapTitleCard = 20.0;
     CGFloat totalHeight = kERQATitleHeight + 6.0 + kERQASubtitleHeight + gapTitleCard + cardHeight;
-    CGFloat top = (height - totalHeight) * 0.5;
+    CGFloat top = MAX(12.0, (height - totalHeight) * 0.5);
     CGFloat cardX = (width - cardWidth) * 0.5;
 
     _qaTitle.frame = CGRectMake(24.0, top, width - 48.0, kERQATitleHeight);
@@ -22366,21 +22350,18 @@ static UIWindow *gERQuickAddSheetWindow = nil;
 
     CGFloat cardY = CGRectGetMaxY(_qaSubtitle.frame) + gapTitleCard;
     _qaCardHost.frame = CGRectMake(cardX, cardY, cardWidth, cardHeight);
-    UIView *cardClip = [_qaCardHost viewWithTag:9922];
-    cardClip.frame = _qaCardHost.bounds;
     _qaGlass.frame = _qaCardHost.bounds;
-    _qaHighlight.frame = _qaCardHost.bounds;
-    _qaHighlightGradient.frame = _qaHighlight.bounds;
-    _qaCardHost.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:_qaCardHost.bounds
-                                                              cornerRadius:kERQACardCornerRadius].CGPath;
+    _qaCardHost.layer.shadowPath =
+        [UIBezierPath bezierPathWithRoundedRect:_qaCardHost.bounds cornerRadius:kERQACardCornerRadius].CGPath;
 
-    _qaTable.frame = CGRectMake(0.0, 0.0, cardWidth, tableHeight);
+    CGFloat innerX = kERQACardInnerPadding * 0.5;
+    _qaTable.frame = CGRectMake(innerX, innerX, cardWidth - innerX * 2.0, tableHeight);
 
-    CGFloat sideMargin = kERQAHorizontalPadding;
     CGFloat gap = 12.0;
-    CGFloat buttonWidth = (cardWidth - sideMargin * 2.0 - gap) * 0.5;
-    _qaPrimary.frame = CGRectMake(sideMargin, CGRectGetMaxY(_qaTable.frame) + 14.0, buttonWidth, kERQAButtonHeight);
-    _qaCancel.frame = CGRectMake(CGRectGetMaxX(_qaPrimary.frame) + gap, _qaPrimary.frame.origin.y, buttonWidth, kERQAButtonHeight);
+    CGFloat buttonWidth = (cardWidth - innerX * 2.0 - gap) * 0.5;
+    CGFloat buttonY = CGRectGetMaxY(_qaTable.frame) + 10.0;
+    _qaPrimary.frame = CGRectMake(innerX, buttonY, buttonWidth, kERQAButtonHeight);
+    _qaCancel.frame = CGRectMake(CGRectGetMaxX(_qaPrimary.frame) + gap, buttonY, buttonWidth, kERQAButtonHeight);
     _qaPrimaryGradient.frame = _qaPrimary.bounds;
 }
 
@@ -22401,86 +22382,24 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     if (@available(iOS 13.0, *)) dark = (self.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
 
     cell.qaName.text = (row < self.titles.count) ? self.titles[row] : @"";
+    cell.qaSubtitle.text = (row < self.subtitles.count) ? self.subtitles[row] : @"";
     cell.qaName.textColor = dark ? UIColor.whiteColor : UIColor.labelColor;
+    cell.qaSubtitle.textColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.55] : [UIColor secondaryLabelColor];
+    cell.qaChevron.textColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.34]
+                                    : [[UIColor blackColor] colorWithAlphaComponent:0.26];
 
-    // 文件夹图标：运行时读取；取不到则用**按序号着色**的圆角方块 + 白色 folder 字形兜底，
-    // 保证「每个文件夹图标颜色不同、有质感」，而不是一片系统灰。
-    UIImage *icon = nil;
-    if (row < self.folderImages.count) {
-        id candidate = self.folderImages[row];
-        if ([candidate isKindOfClass:[UIImage class]]) icon = (UIImage *)candidate;
-    }
-    static NSArray<UIColor *> *fallbackColors = nil;
-    static dispatch_once_t colorsOnce;
-    dispatch_once(&colorsOnce, ^{
-        fallbackColors = @[[UIColor systemRedColor], [UIColor systemOrangeColor], [UIColor systemBlueColor],
-                           [UIColor systemGreenColor], [UIColor systemPurpleColor], [UIColor systemTealColor]];
-    });
-    UIColor *accent = fallbackColors[row % fallbackColors.count];
-    if (icon) {
-        cell.qaIcon.image = icon;
-        cell.qaIcon.hidden = NO;
-        cell.qaGlyph.hidden = YES;
-        cell.qaIconHost.backgroundColor = UIColor.clearColor;
-    } else {
-        cell.qaIcon.image = nil;
-        cell.qaIcon.hidden = YES;
-        cell.qaGlyph.hidden = NO;
-        cell.qaIconHost.backgroundColor = accent;
-        cell.qaGlyph.attributedText = [[NSAttributedString alloc] initWithString:@"\uf07b"
-            attributes:@{ NSFontAttributeName: [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold],
-                          NSForegroundColorAttributeName: UIColor.whiteColor }];
-    }
+    // ⑥ 图标：CoreGraphics 代码绘制（彩色圆角底 + 白色线性文件夹），**没有问号占位图**
+    cell.qaIcon.image = ERQuickAddFolderIconImage((NSInteger)row);
 
-    cell.qaSeparator.backgroundColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.07]
-                                           : [[UIColor blackColor] colorWithAlphaComponent:0.06];
-    cell.qaSeparator.hidden = (row + 1 == self.titles.count);
-
-    UILabel *chevron = (UILabel *)cell.accessoryView;
-    if ([chevron isKindOfClass:[UILabel class]]) {
-        chevron.textColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.34]
-                                 : [[UIColor blackColor] colorWithAlphaComponent:0.26];
-    }
-    cell.accessoryView = chevron;
-
-    // 选中：不是系统蓝色铺满，而是一条**圆角胶囊高亮条**（渐变 + 柔和发光），
-    // 放在 contentView 之下，所以图标与文字始终清晰、不会被蓝色盖住。
-    UIView *capsule = [[UIView alloc] initWithFrame:CGRectZero];
-    capsule.backgroundColor = UIColor.clearColor;
-    capsule.layer.cornerRadius = (kERQARowHeight - 14.0) * 0.5;
-    capsule.layer.cornerCurve = kCACornerCurveContinuous;
-    capsule.layer.shadowColor = [UIColor colorWithRed:0.13 green:0.40 blue:0.94 alpha:1.0].CGColor;
-    capsule.layer.shadowOpacity = 0.45;
-    capsule.layer.shadowRadius = 12.0;
-    capsule.layer.shadowOffset = CGSizeMake(0.0, 4.0);
-    CAGradientLayer *gradient = [CAGradientLayer layer];
-    gradient.colors = @[(id)[[UIColor colorWithRed:0.32 green:0.58 blue:1.00 alpha:1.0] CGColor],
-                        (id)[[UIColor colorWithRed:0.11 green:0.38 blue:0.93 alpha:1.0] CGColor]];
-    gradient.startPoint = CGPointMake(0.5, 0.0);
-    gradient.endPoint = CGPointMake(0.5, 1.0);
-    gradient.frame = CGRectMake(0.0, 0.0, 1000.0, kERQARowHeight - 14.0);
-    gradient.cornerRadius = (kERQARowHeight - 14.0) * 0.5;
-    gradient.cornerCurve = kCACornerCurveContinuous;
-    gradient.masksToBounds = YES;
-    [capsule.layer addSublayer:gradient];
-    cell.selectedBackgroundView = capsule;
+    // cell 半透明材质底（不要纯白/纯黑实色）
+    cell.qaCard.backgroundColor = dark ? [[UIColor whiteColor] colorWithAlphaComponent:0.09]
+                                      : [[UIColor blackColor] colorWithAlphaComponent:0.045];
+    [cell qaSetSelected:NO];
     return cell;
 }
 
-// 高亮胶囊按 cell 宽度重排（selectedBackgroundView 由系统摆满，这里把渐变宽度对齐）
 - (void)tableView:(UITableView *)tableView willDisplayCell:(UITableViewCell *)cell forRowAtIndexPath:(NSIndexPath *)indexPath {
-    UIView *capsule = cell.selectedBackgroundView;
-    if (!capsule) return;
-    CGFloat inset = 8.0;
-    CGRect frame = CGRectInset(cell.bounds, inset, 7.0);
-    capsule.frame = frame;
-    for (CALayer *layer in capsule.layer.sublayers) {
-        if ([layer isKindOfClass:[CAGradientLayer class]]) {
-            layer.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(frame), CGRectGetHeight(frame));
-            layer.cornerRadius = CGRectGetHeight(frame) * 0.5;
-        }
-    }
-    capsule.layer.cornerRadius = CGRectGetHeight(frame) * 0.5;
+    [(ERQuickAddFolderCell *)cell qaSetSelected:NO];
 }
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -22532,7 +22451,7 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     host.frame = [UIScreen mainScreen].bounds;
     host.backgroundColor = UIColor.clearColor;
     host.opaque = NO;
-    host.windowLevel = 100.0;          // 与 1.0.8-2 完全一致（高于 dock 的 25，低于系统 UI）
+    host.windowLevel = 100.0;   // 与 1.0.8-2 一致
     host.rootViewController = self;
     gERQuickAddSheetWindow = host;
     [host makeKeyAndVisible];
@@ -22550,7 +22469,6 @@ static UIWindow *gERQuickAddSheetWindow = nil;
 
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
-    // 出现：遮罩透明 → 半透明；卡片 0.9 → 1.02 → 1.0（轻微放大后回弹）
     _qaCardHost.transform = CGAffineTransformMakeScale(0.90, 0.90);
     _qaCardHost.alpha = 0.0;
     _qaDim.alpha = 0.0;
@@ -22571,7 +22489,6 @@ static UIWindow *gERQuickAddSheetWindow = nil;
 }
 
 @end
-
 
 static void ERQuickAddShowPickerForIconView(id iconView) {
     @try {
@@ -22694,12 +22611,11 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         sheet.titles = rowTitles;
         // 1.0.8-5：文件夹图标同样**运行时**取（取不到由面板用系统 folder 图形兜底），
         // 这里绝不写死任何文件夹名/图标。
-        NSMutableArray *images = [NSMutableArray array];
+        NSMutableArray<NSString *> *subtitles = [NSMutableArray array];
         for (id folderIcon in folderIcons) {
-            UIImage *image = ERQuickAddFolderIconImage(folderIcon);
-            [images addObject:(image ?: (id)[NSNull null])];   // 取不到时占位，Cell 会兜底
+            [subtitles addObject:ERQuickAddFolderSubtitle(folderIcon)];   // 运行时读取项目数
         }
-        sheet.folderImages = images;
+        sheet.subtitles = subtitles;
         sheet.onCreateFolder = ^{
             ERQuickAddCreateFolderAndMoveIcon(icon);
         };
