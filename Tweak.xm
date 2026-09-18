@@ -404,7 +404,6 @@ static NSInteger const kERConnectivityTileGlassTag = 181055;
 // 1.0.6-4 及以前这块磁贴用的是自己拥有的 UIVisualEffectView 毛玻璃（1.0.6-1 日志里
 // bg=1 就是它），永远可见、永不透明。这里把它作为保底层恢复：垫在材质与玻璃之下，
 // 只在「没有任何玻璃在场」时显示，因此玻璃正常时观感一字不变，玻璃失效时磁贴仍有底。
-static NSInteger const kERShortcutTileFallbackTag = 181064;
 static NSInteger const kERConnectivityExpandedCardBaseTag = 181040;
 static NSInteger const kERConnectivityExpandedVPNTag = 181048;
 static CGFloat const kERRemoveHitSize = 44.0;
@@ -1202,7 +1201,7 @@ static void ERStoreOriginForIdentifier(NSString *identifier, NSUInteger column, 
     BOOL landscape = ERLandscapeLayoutActive();
     if (landscape) gERLandscapeOrigins[identifier] = value;
     else gERCustomOrigins[identifier] = value;
-    ERLogInfo(@"LANDSCAPE ver=1.0.7-33 store id=%@ cell={%lu,%lu} ledger=%@",
+    ERLogInfo(@"LANDSCAPE ver=1.0.7-34 store id=%@ cell={%lu,%lu} ledger=%@",
               identifier, (unsigned long)column, (unsigned long)absoluteRow,
               landscape ? @"landscape" : @"portrait");
 }
@@ -2307,7 +2306,7 @@ static void ERLoadPrefs(void) {
     CFPropertyListRef reloadedLandscape = CFPreferencesCopyAppValue(CFSTR("COSMICLandscapeOrigins"), kERPrefsDomain);
     gERLandscapeOrigins = [(__bridge NSDictionary *)reloadedLandscape mutableCopy] ?: [NSMutableDictionary dictionary];
     if (reloadedLandscape) CFRelease(reloadedLandscape);
-    ERLogInfo(@"LANDSCAPE ver=1.0.7-33 ledger=%lu enabled=%d",
+    ERLogInfo(@"LANDSCAPE ver=1.0.7-34 ledger=%lu enabled=%d",
               (unsigned long)gERLandscapeOrigins.count, gERLandscapeLayoutEnabled ? 1 : 0);
     ERLogPrefs();
 }
@@ -2588,80 +2587,32 @@ static NSString *ERShortcutUUIDFromIdentifier(NSString *identifier) {
 }
 
 // ---------------------------------------------------------------------------
-// 1.0.6-4：快捷指令改成**进程内运行**（不再唤起快捷指令 App）
-// ---------------------------------------------------------------------------
-// 需求：「点击运行，先退出控制中心，再运行快捷指令」且「运行不要打开快捷指令 App」。
+// 0.5.4: running a shortcut without bringing the Shortcuts app to the front.
 //
-// 原来的做法是 openURL 一个 shortcuts://run-shortcut?name=… —— 这个 URL 的语义就是
-// 前台化快捷指令 App，所以「不要打开 App」靠改参数是做不到的。而用户反馈的「要卡好几秒
-// 才运行」，那几秒也正是 App 冷启动。换成进程内运行，两个问题一起消失。
+// `shortcuts://run-shortcut?name=` is a *foreground* URL: opening it activates
+// the Shortcuts app, which is why tapping a tile used to leave the user staring
+// at Shortcuts instead of just seeing the shortcut's own banners.
 //
-// 三级路径，任何一级不可用都往下退，最后一定还有一条能走通的路：
-//   1. WFSpringBoardWorkflowRunnerClient —— SpringBoard 内部的工作流运行器，直接按
-//      工作流 UUID 运行，不前台化任何 App（EvoCenter16 的磁贴「点了就直接跑」就是它）；
-//   2. WFWorkflowRunnerClient + WFWorkflowRunRequest —— 需要 VoiceShortcutClient /
-//      WorkflowKit 在场，并先用 Swift 描述符查一次工作流。这里**必须**显式
-//      setOutputBehavior: 一个非零值：不设的话私有运行请求会「无声成功」，而快捷指令
-//      其实一次都没跑（老开发线 fix/0.5.4.1 上踩过这个坑，注释里写明了）；
-//   3. 都不行 —— 退回原来的 shortcuts:// URL，保证不会出现「点了完全没反应」。
+// The system route for "run it in the background" is the private runner client
+// in VoiceShortcutClient — the same one Control Center's own Shortcuts module,
+// Back Tap and the Lock Screen widgets use. Hand it a workflow descriptor plus a
+// run request whose presentation mode is the banner mode, then start it over
+// XPC. Nothing comes to the foreground.
 //
-// 命名说明：Swift 语境里这套 API 是 WF*，对应 ObjC 运行期类名则是 WF*/VC*，两套名字
-// 在不同 iOS 版本上出现过互为主从的情况，所以每一步都按名解析、判空、包 @try。
-static BOOL ERRunShortcutViaSpringBoardRunner(NSString *uuid) {
-    if (!uuid.length) return NO;
-    Class clientClass = NSClassFromString(@"WFSpringBoardWorkflowRunnerClient");
-    if (!clientClass) {
-        ERLogInfo(@"SHORTCUTRUN springboard-runner absent");
-        return NO;
-    }
-    SEL initSelector = NSSelectorFromString(@"initWithWorkflowIdentifier:");
-    if (![clientClass instancesRespondToSelector:initSelector]) {
-        ERLogInfo(@"SHORTCUTRUN springboard-runner init missing");
-        return NO;
-    }
-    id client = nil;
-    @try {
-        client = ((id (*)(id, SEL, id))objc_msgSend)(
-            ((id (*)(id, SEL))objc_msgSend)(clientClass, @selector(alloc)), initSelector, uuid);
-    } @catch (NSException *exception) {
-        ERLogInfo(@"SHORTCUTRUN springboard-runner init threw: %@", exception.reason);
-        client = nil;
-    }
-    if (!client) return NO;
-    // 运行器自己驱动 XPC 会话，飞行途中被释放会话就断了。留一个小环保活。
-    static NSMutableArray *liveRunners = nil;
-    static dispatch_once_t runnersOnce;
-    dispatch_once(&runnersOnce, ^{ liveRunners = [NSMutableArray array]; });
-    @synchronized (liveRunners) {
-        [liveRunners addObject:client];
-        while (liveRunners.count > 8) [liveRunners removeObjectAtIndex:0];
-    }
-    @try {
-        if ([client respondsToSelector:@selector(executeWithInput:)]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(client, @selector(executeWithInput:), nil);
-            return YES;
-        }
-        if ([client respondsToSelector:@selector(start)]) {
-            ((void (*)(id, SEL))objc_msgSend)(client, @selector(start));
-            return YES;
-        }
-    } @catch (NSException *exception) {
-        ERLogInfo(@"SHORTCUTRUN springboard-runner start threw: %@", exception.reason);
-    }
-    ERLogInfo(@"SHORTCUTRUN springboard-runner has neither executeWithInput: nor start");
-    return NO;
-}
-
-static BOOL ERRunShortcutViaWorkflowRunner(NSString *uuid, NSString *name) {
-    static BOOL sFrameworksReady = NO;
+// Every step is private API, so each one is probed at runtime and the whole
+// attempt is wrapped in @try/@catch. If anything is missing this returns NO and
+// the caller falls back to the URL scheme, which still works — it just opens
+// the app.
+static BOOL ERRunShortcutInBackground(NSString *name, NSString *uuid) {
+    static BOOL sVoiceShortcutClientAvailable = NO;
     static dispatch_once_t frameworksOnce;
     dispatch_once(&frameworksOnce, ^{
-        BOOL voice = dlopen("/System/Library/PrivateFrameworks/VoiceShortcutClient.framework/VoiceShortcutClient", RTLD_NOW) != NULL;
-        BOOL kit = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_NOW) != NULL;
-        sFrameworksReady = voice;
-        ERLogInfo(@"SHORTCUTRUN frameworks VoiceShortcutClient=%d WorkflowKit=%d", voice, kit);
+        BOOL voiceShortcutClient = dlopen("/System/Library/PrivateFrameworks/VoiceShortcutClient.framework/VoiceShortcutClient", RTLD_NOW) != NULL;
+        BOOL workflowKit = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_NOW) != NULL;
+        sVoiceShortcutClientAvailable = voiceShortcutClient;
+        ERLogInfo(@"shortcut-run: VoiceShortcutClient=%d WorkflowKit=%d", voiceShortcutClient, workflowKit);
     });
-    if (!sFrameworksReady) return NO;
+    if (!sVoiceShortcutClientAvailable) return NO;
 
     Class clientClass = NSClassFromString(@"WFWorkflowRunnerClient");
     Class requestClass = NSClassFromString(@"WFWorkflowRunRequest");
@@ -2670,14 +2621,12 @@ static BOOL ERRunShortcutViaWorkflowRunner(NSString *uuid, NSString *name) {
     if (!clientClass || !requestClass ||
         ![requestClass instancesRespondToSelector:requestInit] ||
         ![clientClass instancesRespondToSelector:clientInit]) {
-        ERLogInfo(@"SHORTCUTRUN workflow-runner API incomplete client=%d request=%d init=%d",
-                  clientClass != nil, requestClass != nil,
-                  [clientClass instancesRespondToSelector:clientInit]);
+        ERLogInfo(@"shortcut-run: runner API incomplete client=%d request=%d init=%d",
+                   clientClass != nil, requestClass != nil,
+                   [clientClass instancesRespondToSelector:clientInit]);
         return NO;
     }
 
-    // 用 Swift 描述符（WFWorkflowDescriptor）查一次工作流。查表 API 在 iOS 版本之间
-    // 改过名字，按 UUID 优先、名字兜底，逐个试。
     id descriptor = nil;
     @try {
         Class databaseClass = NSClassFromString(@"WFDatabase");
@@ -2686,38 +2635,40 @@ static BOOL ERRunShortcutViaWorkflowRunner(NSString *uuid, NSString *name) {
         if ([databaseClass respondsToSelector:@selector(defaultDatabase)]) {
             database = ((id (*)(id, SEL))objc_msgSend)(databaseClass, @selector(defaultDatabase));
         }
-        NSArray<NSString *> *lookups = @[@"uniqueVisibleReferenceForWorkflowUUIDString:",
-                                         @"referenceForWorkflowUUIDString:",
-                                         @"uniqueVisibleReferenceForWorkflowName:",
-                                         @"referenceForWorkflowName:"];
+        NSArray<NSString *> *lookups = @[@"uniqueVisibleReferenceForWorkflowName:",
+                                         @"referenceForWorkflowName:",
+                                         @"uniqueVisibleReferenceForWorkflowUUIDString:",
+                                         @"referenceForWorkflowUUIDString:"];
         for (NSString *lookupName in lookups) {
             SEL lookup = NSSelectorFromString(lookupName);
             if (![database respondsToSelector:lookup]) continue;
             NSString *argument = [lookupName containsString:@"UUID"] ? uuid : name;
             if (!argument.length) continue;
             descriptor = ((id (*)(id, SEL, id))objc_msgSend)(database, lookup, argument);
-            ERLogInfo(@"SHORTCUTRUN descriptor %@ %@", lookupName, descriptor ? @"hit" : @"miss");
+            ERLogInfo(@"shortcut-run: %@ %@", lookupName, descriptor ? @"hit" : @"miss");
             if (descriptor) break;
         }
     } @catch (NSException *exception) {
-        ERLogInfo(@"SHORTCUTRUN descriptor lookup threw: %@", exception.reason);
+        ERLogInfo(@"shortcut-run: descriptor lookup threw %@", exception.reason);
         descriptor = nil;
     }
-    if (!descriptor) return NO;
+    if (!descriptor) {
+        ERLogInfo(@"shortcut-run: no descriptor for name=%@ uuid=%@", name, uuid ?: @"(none)");
+        return NO;
+    }
 
     id request = nil;
     @try {
         request = ((id (*)(id, SEL, id, unsigned long long))objc_msgSend)(
             ((id (*)(id, SEL))objc_msgSend)(requestClass, @selector(alloc)), requestInit, nil, 0ULL);
-        // 输出行为必须显式给一个非零值：iOS 16 上不设的话 run request 会「无声成功」，
-        // 但工作流一次都不执行。1 = 横幅（banner）呈现。
+        // Banner presentation. An explicit, non-zero output behaviour is
+        // mandatory: without it the private run request finishes without error
+        // and the shortcut never actually runs.
         if ([request respondsToSelector:@selector(setOutputBehavior:)]) {
             ((void (*)(id, SEL, unsigned long long))objc_msgSend)(request, @selector(setOutputBehavior:), 1ULL);
-        } else {
-            ERLogInfo(@"SHORTCUTRUN run request has no setOutputBehavior:");
         }
     } @catch (NSException *exception) {
-        ERLogInfo(@"SHORTCUTRUN run request threw: %@", exception.reason);
+        ERLogInfo(@"shortcut-run: run request threw %@", exception.reason);
         return NO;
     }
     if (!request) return NO;
@@ -2727,47 +2678,35 @@ static BOOL ERRunShortcutViaWorkflowRunner(NSString *uuid, NSString *name) {
         client = ((id (*)(id, SEL, id, id))objc_msgSend)(
             ((id (*)(id, SEL))objc_msgSend)(clientClass, @selector(alloc)), clientInit, descriptor, request);
     } @catch (NSException *exception) {
-        ERLogInfo(@"SHORTCUTRUN workflow-runner client threw: %@", exception.reason);
+        ERLogInfo(@"shortcut-run: runner client threw %@", exception.reason);
         return NO;
     }
     if (!client) return NO;
-    static NSMutableArray *liveClients = nil;
-    static dispatch_once_t clientsOnce;
-    dispatch_once(&clientsOnce, ^{ liveClients = [NSMutableArray array]; });
-    @synchronized (liveClients) {
-        [liveClients addObject:client];
-        while (liveClients.count > 8) [liveClients removeObjectAtIndex:0];
+
+    // The client drives the XPC conversation itself while the request is in
+    // flight. Nothing else owns it, so without a strong reference it deallocates
+    // the moment this function returns and the run is torn down before it has
+    // started. Keep a short ring of the most recent runners alive.
+    static NSMutableArray *sLiveRunners = nil;
+    static dispatch_once_t runnersOnce;
+    dispatch_once(&runnersOnce, ^{ sLiveRunners = [NSMutableArray array]; });
+    @synchronized (sLiveRunners) {
+        [sLiveRunners addObject:client];
+        while (sLiveRunners.count > 8) [sLiveRunners removeObjectAtIndex:0];
     }
+
+    BOOL started = NO;
     @try {
         if ([client respondsToSelector:@selector(start)]) {
             ((void (*)(id, SEL))objc_msgSend)(client, @selector(start));
-            return YES;
+            started = YES;
         }
     } @catch (NSException *exception) {
-        ERLogInfo(@"SHORTCUTRUN workflow-runner start threw: %@", exception.reason);
+        ERLogInfo(@"shortcut-run: start threw %@", exception.reason);
+        started = NO;
     }
-    return NO;
-}
-
-static BOOL ERRunShortcutInProcess(NSString *uuid, NSString *name) {
-    if (ERRunShortcutViaSpringBoardRunner(uuid)) return YES;
-    if (ERRunShortcutViaWorkflowRunner(uuid, name)) return YES;
-    return NO;
-}
-
-// 兜底：还是原来的 shortcuts:// —— 会前台化快捷指令 App，但「点了完全没反应」更糟。
-static void ERFallbackRunShortcutViaURL(NSString *name) {
-    NSString *encoded = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"shortcuts://run-shortcut?name=%@", encoded ?: @""]];
-    if (!url) return;
-    Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
-    if (workspaceClass) {
-        id workspace = ((id (*)(id, SEL))objc_msgSend)(workspaceClass, @selector(defaultWorkspace));
-        if (workspace && [workspace respondsToSelector:@selector(openURL:)]) {
-            if (((BOOL (*)(id, SEL, id))objc_msgSend)(workspace, @selector(openURL:), url)) return;
-        }
-    }
-    [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    ERLogInfo(@"shortcut-run: %@ for \"%@\"", started ? @"started in background" : @"failed", name);
+    return started;
 }
 
 // ---------------------------------------------------------------------------
@@ -2851,55 +2790,6 @@ static BOOL ERDuplicateLedgerHasLiveEntry(NSString *identifier) {
     if (!identifier.length) return NO;
     id value = gERDuplicateFamilies[identifier];
     return [value isKindOfClass:[NSString class]] && ((NSString *)value).length > 0;
-}
-
-// ---------------------------------------------------------------------------
-// 1.0.6：快捷指令磁贴「位置对、日志说正常，屏幕上却什么都没有」的最后一道保险
-// ---------------------------------------------------------------------------
-// 把整条渲染链路走完之后，「应该可见却看不见」还剩的唯一路径是：
-// updatePagedModuleVisibilityForOverlay: 用 layer.opacity 做分页裁剪，而当时的
-// SHORTCUTTILE 诊断只读 view.hidden 与 view.alpha —— 盲区正好落在唯一还留着的那条
-// 路径上，于是日志一直报「一切正常」，排查被反复带回错误的方向。
-//
-// 这里在几何确定之后断言一次**正向**不变量：磁贴所在页 == 当前页 ⇒ 它必须真的可见
-// （hidden=NO、alpha=1、layer.opacity=1）。只把不可见的修成可见，绝不反向隐藏 ——
-// 页外磁贴的裁剪仍然完全交给 updatePagedModuleVisibilityForOverlay:，那里才是分页
-// 语义的唯一权威。同时把 page / cur / opacity / 磁贴在屏幕上的实际中心记进日志，
-// 任何一次「应该可见却不可见」都能一眼定位。
-static void ERVerifyShortcutTileVisibility(UIViewController *duplicate, NSUInteger page) {
-    UIView *view = duplicate.view;
-    if (!view) return;
-    BOOL onCurrentPage = (page == gERCurrentPage);
-    // 正在被拖动的那块磁贴由拖拽动画接管可见性，不要插手。
-    BOOL isActiveDragSource = ERIsActiveDragModuleIdentifier(ERModuleIdentifier(duplicate));
-    if (onCurrentPage && !isActiveDragSource && (view.hidden || view.alpha < 0.99 || view.layer.opacity < 0.99)) {
-        [UIView performWithoutAnimation:^{
-            view.hidden = NO;
-            view.alpha = 1.0;
-            view.layer.opacity = 1.0;
-        }];
-        UIView *parent = view.superview;
-        if (parent) { parent.hidden = NO; parent.alpha = 1.0; }
-    }
-    UIView *container = view;
-    for (NSInteger level = 0; level < 2; level++) {
-        UIView *next = container.superview;
-        if (!next) break;
-        container = next;
-    }
-    CGPoint center = container.center;
-    NSString *identifier = ERModuleIdentifier(duplicate) ?: @"(nil)";
-    NSString *state = [NSString stringWithFormat:@"page=%lu cur=%lu onPage=%d opacity=%.2f hidden=%d alpha=%.2f center={%.0f,%.0f}",
-                       (unsigned long)page, (unsigned long)gERCurrentPage, onCurrentPage ? 1 : 0,
-                       view.layer.opacity, view.hidden ? 1 : 0, view.alpha, center.x, center.y];
-    static NSMutableSet<NSString *> *erShortcutTileVisibilityLoggedStates;
-    if (!erShortcutTileVisibilityLoggedStates) erShortcutTileVisibilityLoggedStates = [NSMutableSet set];
-    NSString *stateKey = [identifier stringByAppendingFormat:@"|%@", state];
-    if (![erShortcutTileVisibilityLoggedStates containsObject:stateKey] &&
-        ERDiagShouldLog(@"SHORTCUTVIS", 1.0)) {
-        [erShortcutTileVisibilityLoggedStates addObject:stateKey];
-        ERLogInfo(@"SHORTCUTVIS ver=1.0.7-33 id=%@ %@", identifier, state);
-    }
 }
 
 static NSString *ERShortcutSymbolNameForGlyph(unsigned short glyph) {
@@ -3205,12 +3095,12 @@ static NSArray<NSDictionary *> *ERShortcutRecords(void) {
         loadFailed = NO;
     }
     if (records && now - cachedAt < 15.0) return records;
-    // 0.4.7: the Shortcuts store is now read by the Settings pane (inside
-    // Preferences.app, which has the sandbox access SpringBoard lacks) and
-    // published to the shared prefs domain as "ShortcutCatalog". SpringBoard
-    // only consumes it here — reading the store from SpringBoard was the
-    // original sandbox failure EvoCenter16 avoids by reading in the Settings
     // process. See ERShortcutScanner in the prefs subproject.
+    // 0.5.1: the catalog is written by the Settings pane, which runs in a
+    // different process. CFPreferences answers from a per-process cache, so
+    // without an explicit synchronize SpringBoard keeps returning the values it
+    // first read and shortcuts added afterwards never show up.
+    CFPreferencesAppSynchronize(kERPrefsDomain);
     NSArray *catalog = ERPreferenceArray(@"ShortcutCatalog");
     if ([catalog isKindOfClass:[NSArray class]] && catalog.count) {
         records = [catalog copy];
@@ -3253,20 +3143,8 @@ static void ERShortcutRefreshNow(void) {
 static NSDictionary *ERShortcutForIdentifier(NSString *identifier) {
     NSString *uuid = ERShortcutUUIDFromIdentifier(identifier);
     if (!uuid) return nil;
-    NSArray<NSDictionary *> *records = ERShortcutRecords();
-    // 1.0.3：先精确匹配，再做一次**大小写不敏感**匹配。
-    // Shortcuts 库里 ZUUID 在部分系统版本上是小写，而标识符落盘时拿的是大写那一份
-    // （设置页扫出来的原样）。只做 isEqualToString: 时这里查不到记录 ——
-    // 图标随即被置空，磁贴在深色控制中心里就成了一条「看不见的空位」。
-    for (NSDictionary *record in records) {
-        NSString *candidate = record[@"uuid"];
-        if (![candidate isKindOfClass:[NSString class]]) continue;
-        if ([candidate isEqualToString:uuid]) return record;
-    }
-    for (NSDictionary *record in records) {
-        NSString *candidate = record[@"uuid"];
-        if (![candidate isKindOfClass:[NSString class]]) continue;
-        if ([candidate caseInsensitiveCompare:uuid] == NSOrderedSame) return record;
+    for (NSDictionary *record in ERShortcutRecords()) {
+        if ([record[@"uuid"] isKindOfClass:[NSString class]] && [record[@"uuid"] isEqualToString:uuid]) return record;
     }
     return nil;
 }
@@ -3274,24 +3152,14 @@ static NSDictionary *ERShortcutForIdentifier(NSString *identifier) {
 // Renders the shortcut's native look: its own background colour rounded
 // square plus its glyph (SF Symbol via WorkflowKit's own mapping, or the
 // custom image when the shortcut uses one).
-//
-// 1.0.6-5：`drawBackground` 把画法分成两种。
-//
-// 控制中心磁贴要的是**只画白色图形**的那种：图标里那层彩色圆角方块就是用户要
-// 去掉的「方框背景」。磁贴自己的背景已经由底板承担（1.0.6-5 起换成系统同款材质，
-// 见快捷指令磁贴分支），两层方块叠着看就是「图标外面套了个方框」。
-//
-// 设置页的列表行没有磁贴底板可依靠，必须保留彩色底，所以两条路径分开，
-// 而不是把彩色底就地删掉 —— 那会把设置页的图标一起改掉。
-static UIImage *ERShortcutIconImageStyled(NSDictionary *shortcut, BOOL drawBackground) {
+static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     static NSMutableDictionary<NSString *, UIImage *> *cache;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
-    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu|%d",
+    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu",
                           shortcut[@"uuid"] ?: @"", (long long)[shortcut[@"color"] longLongValue],
-                          (unsigned long)[shortcut[@"glyph"] unsignedIntegerValue],
-                          drawBackground ? 1 : 0];
+                          (unsigned long)[shortcut[@"glyph"] unsignedIntegerValue]];
     UIImage *cached = cache[cacheKey];
     if (cached) return cached;
     NSData *imageData = [shortcut[@"imageData"] isKindOfClass:[NSData class]] ? shortcut[@"imageData"] : nil;
@@ -3316,12 +3184,10 @@ static UIImage *ERShortcutIconImageStyled(NSDictionary *shortcut, BOOL drawBackg
     __block UIImage *result = nil;
     result = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull context) {
         CGRect rect = CGRectMake(0.0, 0.0, size.width, size.height);
-        if (drawBackground) {
-            UIBezierPath *backgroundPath = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(rect, 3.0, 3.0) cornerRadius:28.0];
-            UIColor *fill = background ?: [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0];
-            [fill setFill];
-            [backgroundPath fill];
-        }
+        UIBezierPath *backgroundPath = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(rect, 3.0, 3.0) cornerRadius:28.0];
+        UIColor *fill = background ?: [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0];
+        [fill setFill];
+        [backgroundPath fill];
         if (glyphImage) {
             UIImage *drawable = glyphImage;
             if (!fullBleedImage) {
@@ -3336,48 +3202,6 @@ static UIImage *ERShortcutIconImageStyled(NSDictionary *shortcut, BOOL drawBackg
     }];
     if (result) cache[cacheKey] = result;
     return result;
-}
-
-// 设置页 / 目录列表用的画法：保留快捷指令自带的彩色圆角底。
-static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
-    return ERShortcutIconImageStyled(shortcut, YES);
-}
-
-// 控制中心磁贴专用的画法：只画白色图形，不画那层彩色圆角方块。
-static UIImage *ERShortcutGlyphOnlyImage(NSDictionary *shortcut) {
-    return ERShortcutIconImageStyled(shortcut, NO);
-}
-
-// 1.0.3：目录里查不到这条快捷指令时（UUID 失配 / 记录已被删除 / 设置页还没发布
-// 目录）用的通用图标。ERShortcutIconImageStyled 只认真正的记录字典，所以这里喂
-// 一个最小记录 —— 它会画成 sparkles，正好与 ERShortcutIconImageStyled 自身对
-// 「缺 symbol」的回落完全一致，外观统一。
-//
-// 存在的意义：此前查不到记录时磁贴的 glyph 会被直接置空，而磁贴底衬只有一层
-// SystemUltraThinMaterialDark —— 在深色控制中心里几乎等于透明，用户看到的就是
-// 「这个模块根本不显示」。有了它，磁贴在**任何情况下**都是可见的。
-//
-// 1.0.6-5：这里同时备好「带彩色底」与「只有白色图形」两份，磁贴取后者，
-// 否则查不到记录时磁贴会退回带彩色底的图标 —— 就是用户要去掉的那个方框。
-static UIImage *ERShortcutPlaceholderIconForStyle(BOOL drawBackground) {
-    static UIImage *withBackground;
-    static UIImage *glyphOnly;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSDictionary *record = @{
-            @"uuid": @"er.shortcut.placeholder",
-            @"name": @"快捷指令",
-            @"color": @(0x0B99F7FFLL),
-            @"glyph": @(0),
-        };
-        withBackground = ERShortcutIconImageStyled(record, YES);
-        glyphOnly = ERShortcutIconImageStyled(record, NO);
-    });
-    return drawBackground ? withBackground : glyphOnly;
-}
-
-static UIImage *ERShortcutPlaceholderIcon(void) {
-    return ERShortcutPlaceholderIconForStyle(YES);
 }
 
 static NSString *ERFriendlyNameForIdentifier(NSString *identifier) {
@@ -6027,7 +5851,7 @@ static CGFloat ERGlassRadiusForModuleMaterial(UIView *mat) {
                                  module.layer.cornerRadius, sERSmallModuleRadius, ERGlassPillRadius(mat)];
             if (![objc_getAssociatedObject(module, kERBigCardGlassLogKey) isEqual:npState]) {
                 objc_setAssociatedObject(module, kERBigCardGlassLogKey, npState, OBJC_ASSOCIATION_COPY_NONATOMIC);
-                ERLogInfo(@"BIGGLASS ver=1.0.7-33 module=%@ mat=%.0fx%.0f pill=%.1f", npState, w, h, ERGlassPillRadius(mat));
+                ERLogInfo(@"BIGGLASS ver=1.0.7-34 module=%@ mat=%.0fx%.0f pill=%.1f", npState, w, h, ERGlassPillRadius(mat));
             }
             return npRadius;
         }
@@ -6316,14 +6140,14 @@ static void ERHealConnectivityTileGlass(UIView *material, LGLiveBackdropView *gl
         if (since < 0.35 * (double)(tried + 1)) return;
         objc_setAssociatedObject(material, kERGlassHealTriesKey, @(tried + 1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [glass applyFilters];
-        ERLogInfo(@"GLASSHEAL ver=1.0.7-33 id=%@ mode=refilter try=%lu attached=%d",
+        ERLogInfo(@"GLASSHEAL ver=1.0.7-34 id=%@ mode=refilter try=%lu attached=%d",
                   identifier, (unsigned long)(tried + 1), glass.lgFilterAttached ? 1 : 0);
         return;
     }
     if (since <= 2.5) return;
     objc_setAssociatedObject(material, kERGlassGiveUpKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     LGRemoveGlassFromMaterial(material, kGlassKey);
-    ERLogInfo(@"GLASSHEAL ver=1.0.7-33 id=%@ mode=remove-glass tries=%lu（玻璃不渲染，交还原生材质）",
+    ERLogInfo(@"GLASSHEAL ver=1.0.7-34 id=%@ mode=remove-glass tries=%lu（玻璃不渲染，交还原生材质）",
               identifier, (unsigned long)tried);
 }
 
@@ -6385,7 +6209,7 @@ static void ERSyncConnectivityTileGlass(UIView *moduleView, UIView *material, BO
     if (!glass) return;
     if (glass.tag != kERConnectivityTileGlassTag) {
         glass.tag = kERConnectivityTileGlassTag;
-        ERLogInfo(@"OFFGLASS ver=1.0.7-33 id=%@ mode=install r=%.1f",
+        ERLogInfo(@"OFFGLASS ver=1.0.7-34 id=%@ mode=install r=%.1f",
                    ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)", radius);
     }
     glass.userInteractionEnabled = NO;
@@ -6425,46 +6249,6 @@ static BOOL ERTileGlassPresent(UIView *material) {
     return ERTileGlassForMaterial(material) != nil;
 }
 
-// 1.0.6-10（第 3 条）：快捷指令磁贴的**保底背景**。
-//
-// 为什么必须有一个：这条磁贴从 1.0.6-5 起走「玻璃独占背景」——注册表里唯一还可见的
-// 东西就是那块私有 API 的 CABackdropLayer 玻璃，一旦它不渲染，磁贴就完全透明。
-// 见 kERShortcutTileFallbackTag 处的实机日志证据。
-//
-// 为什么不是「等玻璃挂上再隐藏材质」那种顺序修正：-lgFilterAttached 只表示滤镜对象
-// 已经进了 layer.filters，**不能**代表渲染出了像素（正好是 1.0.6-6 日志里
-// glass=1 fa=1 却是透明洞的那种状态）。进程内没有任何 API 能读到「这块 backdrop 真的
-// 出像素了吗」，所以唯一的可靠保证是：**垫一层完全由 EchoReborn 自己拥有的背景**，
-// 它的可见与否不依赖任何私有 API。
-//
-// 观感不变：这一层在最底下，玻璃渲染正常时被玻璃完全盖住；只有没有任何玻璃在场时
-// 才显示，那时它正好顶替本应由玻璃承担的「一块深色毛玻璃底」。
-static UIView *EREnsureShortcutTileFallbackBackdrop(UIView *moduleView) {
-    if (!moduleView) return nil;
-    UIView *backdrop = [moduleView viewWithTag:kERShortcutTileFallbackTag];
-    if (!backdrop) {
-        // 与 1.0.6-4 及以前这块磁贴用的材质完全相同（SystemUltraThinMaterialDark），
-        // 因此恢复后的观感就是用户当时认可的那一版。
-        UIVisualEffectView *blur =
-            [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
-        blur.contentView.backgroundColor = [UIColor.whiteColor colorWithAlphaComponent:0.055];
-        blur.tag = kERShortcutTileFallbackTag;
-        blur.userInteractionEnabled = NO;
-        blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        blur.layer.cornerCurve = kCACornerCurveContinuous;
-        blur.clipsToBounds = YES;
-        // 插到最底层：克隆来的系统材质（index 0）与玻璃都在它之上，材质或玻璃可见时
-        // 它自然被遮住，不会改变任何既能正常渲染的情形的观感。
-        [moduleView insertSubview:blur atIndex:0];
-        backdrop = blur;
-        ERLogInfo(@"SHORTCUTBGSRC ver=1.0.7-33 id=%@ 保底背景已建立（SystemUltraThinMaterialDark）",
-                  ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)");
-    }
-    backdrop.frame = moduleView.bounds;
-    backdrop.layer.cornerRadius = moduleView.layer.cornerRadius;
-    backdrop.layer.cornerCurve = kCACornerCurveContinuous;
-    return backdrop;
-}
 
 // 1.0.6-5：`tag` 决定这块材质归谁 —— 连通性磁贴用 kERConnectivityTileMaterialTag，
 // 快捷指令磁贴用 kERShortcutTileBackgroundTag。两条路径共用同一套实现
@@ -6504,7 +6288,7 @@ static UIView *EREnsureTileMaterial(UIView *moduleView, NSInteger tag) {
         platter = material;
         // 留一条可验证的记录：src=system 表示用的是系统同款材质，src=blur 表示退回了
         // 合成模糊。两种来源并存时看这一行就能判断命中的是哪条分支。
-        ERLogInfo(@"OFFBGSRC ver=1.0.7-33 id=%@ src=%@",
+        ERLogInfo(@"OFFBGSRC ver=1.0.7-34 id=%@ src=%@",
                    ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)", source);
     }
     platter.frame = moduleView.bounds;
@@ -6523,46 +6307,6 @@ static UIView *EREnsureConnectivityTileMaterial(UIView *moduleView) {
     return EREnsureTileMaterial(moduleView, kERConnectivityTileMaterialTag);
 }
 
-// 1.0.7-32：快捷指令磁贴**背景回退**（对照 0.5.6.24 已知好行为）。
-//
-// 0.5.6.24 的快捷指令磁贴是真实的系统控制中心模块，背景由系统画。现版把它改成了
-// 自绘 proxy tile，并在底板之上叠了 GlassKit 玻璃 + 保底 UIVisualEffectView 两层。
-// 玻璃的 CABackdropLayer 一旦不渲染像素（进程内无 API 可读），磁贴就整块透明 —— 这正是
-// 用户报的「快捷指令模块显示不正确」。
-//
-// 本函数复用 EREnsureTileMaterial 的「建底板」核心（优先克隆系统 platter 同源材质，
-// 拿不到才退回合成模糊），但**刻意不装 GlassKit 玻璃、不隐藏材质、不建保底层**：
-// 磁贴唯一的背景就是这块系统同源材质本身，与 0.5.6.24 的观感对齐，且不再依赖任何
-// 私有玻璃 API 的渲染成功。连通性磁贴（7 个）仍走带玻璃的 EREnsureTileMaterial，不受影响。
-static UIView *EREnsureShortcutTileMaterial(UIView *moduleView) {
-    if (!moduleView) return nil;
-    // 对齐 0.5.6.24：快捷指令磁贴没有原生模块视图，给它一块和系统其余磁贴同源的毛玻璃底板。
-    // 纯 UIVisualEffectView，不尝试克隆系统 platter（克隆出的 MTMaterialView 配方未配置时会渲染
-    // 成透明）、不装 GlassKit 玻璃、不隐藏、不建保底层——底板永远是一块可见的系统毛玻璃，
-    // 彻底消除「玻璃不渲染 / platter 配方空 → 整块透明」。
-    UIView *tileBackground = [moduleView viewWithTag:kERShortcutTileBackgroundTag];
-    if (!tileBackground) {
-        UIVisualEffectView *material =
-            [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
-        material.tag = kERShortcutTileBackgroundTag;
-        material.userInteractionEnabled = NO;
-        material.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        material.layer.cornerCurve = kCACornerCurveContinuous;
-        material.clipsToBounds = YES;
-        material.hidden = NO;
-        material.alpha = 1.0;
-        material.backgroundColor = UIColor.clearColor;
-        [moduleView insertSubview:material atIndex:0];
-        tileBackground = material;
-        ERLogInfo(@"SHORTCUTBG ver=align-0.5.6.24 id=%@ src=system-blur (no-glass, no-clone)",
-                  ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)");
-    }
-    tileBackground.frame = moduleView.bounds;
-    tileBackground.layer.cornerRadius = moduleView.layer.cornerRadius;
-    tileBackground.hidden = NO;
-    tileBackground.alpha = 1.0;
-    return tileBackground;
-}
 
 // 把「创建时没借到系统材质、退回成合成模糊」的兜底就地升级成系统同款材质。
 //
@@ -6591,7 +6335,7 @@ static UIView *ERUpgradeTileMaterialIfNeeded(UIView *moduleView, UIView *current
     [current removeFromSuperview];
     if (index == NSNotFound || index > moduleView.subviews.count) index = 0;
     [moduleView insertSubview:material atIndex:index];
-    ERLogInfo(@"OFFBGUPGRADE ver=1.0.7-33 id=%@",
+    ERLogInfo(@"OFFBGUPGRADE ver=1.0.7-34 id=%@",
                ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)");
     return material;
 }
@@ -7011,7 +6755,7 @@ static void ERSyncConnectivityTileChrome(UIView *moduleView) {
         // 一次会话 212 行、单秒峰值 28 行，占全会话日志量的 30%。除第 1 条已把跳变
         // 本身消掉之外，这里再按 1 行/秒封顶。
         if (ERDiagShouldLog(@"OFFBGFIX", 1.0)) {
-            ERLogInfo(@"OFFBGFIX ver=1.0.7-33 id=%@ %@", identifier, state);
+            ERLogInfo(@"OFFBGFIX ver=1.0.7-34 id=%@ %@", identifier, state);
         }
     }
 }
@@ -7809,141 +7553,6 @@ static NSUInteger ERPageForModuleIdentifier(NSString *identifier) {
     return (NSUInteger)(rect.origin.y / kERMinimumGridRows);
 }
 
-// 1.0.6-5：快捷指令磁贴的网格对位诊断。
-//
-// 用户报告「第三页共 32 个格子，磁贴布局与网格对不上、位置偏移或错半格」。要修就
-// 得先有数：这里把磁贴与**同页任意一个真实系统模块**的 frame 都换算到 overlay 的
-// 同一个坐标系里，连同磁贴自己记的格子坐标一起打出来。误差是几格、几个点，
-// 一看就有，不必再靠截图目测估。
-// 每个 identifier 只在结论变化时打一行，不刷屏。
-static void ERLogShortcutGridOnce(UIViewController *module, NSString *identifier, NSUInteger tilePage) {
-    if (!module || !identifier.length) return;
-    // 1.0.6-10（第 1 条）：本函数是翻页热路径上最贵的一条诊断 —— 整行有十几个浮点格式化，
-    // 实测（日志 235006）55 秒内落了 618 行，且集中在手势进行中的帧里。闸门前移到函数入口，
-    // 目的是连字符串构造一起省掉，而不只是少写一行盘。每秒一条足够判断收敛。
-    if (!ERDiagShouldLog(@"SHORTCUTGRID", 1.0)) return;
-    UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
-    UIView *overlayView = overlay.view;
-    UIView *selfView = module.view;
-    if (!overlayView || !selfView || !selfView.window) return;
-    CGRect selfFrame = [selfView convertRect:selfView.bounds toView:overlayView];
-
-    // 参照物必须是与磁贴**同尺寸**的同页模块：它的位置就是原生网格摆出来的，天然是基准。
-    //
-    // 1.0.6-7（第 3 条）：上一版只按 gERCustomSizes 比尺寸，而真实系统模块（原生布局的
-    // 那些）根本不在 gERCustomSizes 里 —— 于是「尺寸不同就跳过」这一条对它们完全不生效，
-    // 参照物会随手取到同页任意模块。实测日志里就出现过
-    //     self = 75x75（1x1 磁贴）  vs  refFrame = 163x75（2x1 的 LowPower）
-    // 这种不同尺寸的配对，行号差 dRows 还能用，但 d.y 里混进了两种尺寸的基准差，
-    // 「偏移到底是网格基准问题还是步距问题」就分不出来。
-    //
-    // 现在改成**按实测几何**挑参照，两轮：第一轮要求尺寸与磁贴一致（±1pt），
-    // 拿不到才退回「同页任意模块」。这样 d.y 与 dRows 才是同一套映射下的可比量。
-    CGRect refFrame = CGRectZero;
-    NSString *refIdentifier = nil;
-    NSArray<NSNumber *> *refOrigin = nil;
-    for (NSInteger pass = 0; pass < 2 && !refIdentifier; pass++) {
-        for (UIViewController *candidate in ERCollectModuleControllers(overlay)) {
-            NSString *candidateIdentifier = ERModuleIdentifier(candidate);
-            if (!candidateIdentifier.length) continue;
-            if (ERShortcutIdentifierIsShortcut(candidateIdentifier)) continue;
-            if (ERPageForModuleIdentifier(candidateIdentifier) != tilePage) continue;
-            UIView *view = candidate.view;
-            if (!view || !view.window) continue;
-            CGRect candidateFrame = [view convertRect:view.bounds toView:overlayView];
-            if (pass == 0 &&
-                (fabs(candidateFrame.size.width - selfFrame.size.width) > 1.0 ||
-                 fabs(candidateFrame.size.height - selfFrame.size.height) > 1.0)) continue;
-            refFrame = candidateFrame;
-            refIdentifier = candidateIdentifier;
-            refOrigin = ERStoredOriginForIdentifier(candidateIdentifier);
-            break;
-        }
-    }
-
-    NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
-    NSMutableString *state = [NSMutableString string];
-    if (origin.count >= 2) {
-        [state appendFormat:@"cell={%lu,%lu} ",
-         (unsigned long)origin[0].unsignedIntegerValue, (unsigned long)origin[1].unsignedIntegerValue];
-    } else {
-        [state appendString:@"cell=(none) "];
-    }
-    if (tilePage == NSNotFound) {
-        [state appendString:@"page=(none) "];
-    } else {
-        [state appendFormat:@"page=%lu ", (unsigned long)tilePage];
-    }
-    // 1.0.6-7：把 cur / span / trans 一并打出来，配合同一时刻的 BASEGEO（base）就能
-    // 直接算出磁贴的**预期**位置并与实测 self 对照，不必再靠跨行推断：
-    //     predicted = base.y + (cell.y % 8) * step + (page − cur) * span + trans
-    // 若 predicted 与 self 逐点相等、而与 ref 差一个常数，那就是**网格基准**问题；
-    // 若两者斜率不同，才是**步距**问题。
-    [state appendFormat:@"self={%.1f,%.1f,%.0fx%.0f} step=%.0f cur=%lu span=%.0f trans=%.1f",
-     selfFrame.origin.x, selfFrame.origin.y,
-     selfFrame.size.width, selfFrame.size.height, kERGridStep,
-     (unsigned long)gERCurrentPage, ERVisualPageSpan(),
-     (double)gERPagerInteractiveTranslation];
-    // 1.0.6-6（第 3 条）：**参照的格子坐标**是上一版诊断唯一缺的一项，也正是「38pt 的
-    // d 值无法定性」的原因。有了 selfCell / refCell 与两者页内行号差 dRows，就能把
-    // 「磁贴的 cell→frame」和「原生模块的 cell→frame」两条映射并列起来：
-    //   · 偏移 = d.y − dRows × step 为常数 ⇒ 是**网格基准**不同（修基准即可）；
-    //   · 两条映射的斜率（每格点数）不同 ⇒ 是**步距**不同（要改步距）。
-    // 两者修法完全不同，必须靠数据区分，不能靠猜。
-    NSInteger selfLocalRow = -1;
-    if (origin.count >= 2) selfLocalRow = (NSInteger)(origin[1].unsignedIntegerValue % kERMinimumGridRows);
-    NSInteger refLocalRow = -1;
-    if (refOrigin.count >= 2) {
-        refLocalRow = (NSInteger)(refOrigin[1].unsignedIntegerValue % kERMinimumGridRows);
-    } else if (refIdentifier) {
-        NSValue *value = gERNativeLayoutRects[refIdentifier];
-        if (value) { CCUILayoutRect r = {}; [value getValue:&r];
-            refLocalRow = (NSInteger)(r.origin.y % kERMinimumGridRows); }
-    }
-    if (refIdentifier) {
-        NSString *refCell = @"(none)";
-        if (refOrigin.count >= 2) {
-            refCell = [NSString stringWithFormat:@"{%lu,%lu}",
-                       (unsigned long)refOrigin[0].unsignedIntegerValue,
-                       (unsigned long)refOrigin[1].unsignedIntegerValue];
-        } else {
-            NSValue *value = gERNativeLayoutRects[refIdentifier];
-            if (value) { CCUILayoutRect r = {}; [value getValue:&r];
-                refCell = [NSString stringWithFormat:@"n{%lu,%lu}",
-                           (unsigned long)r.origin.x, (unsigned long)r.origin.y]; }
-        }
-        // 1.0.6-8（第 3 条）：把「锚定定位」的预测量并列打出来，让这一行自证结论。
-        // 磁贴的 Y 现在必须等于 refFrame.y + (selfRow − refRow) × step（横屏先折成物理行），
-        // 所以修好后 dPred ≈ 0，且 dCells.y 是整数。反过来：
-        //   · dPred ≈ 0 而 dCells.y 仍是小数 ⇒ 问题在参照物本身（另一块同页模块不在网格上）；
-        //   · dPred 明显 ≠ 0 ⇒ 锚定没生效（那一页没有可用的原生模块，走了 base 回退）。
-        NSInteger selfPhysRow = selfLocalRow;
-        NSInteger refPhysRow = refLocalRow;
-        if (ERLandscapePresentationActive()) {
-            if (selfPhysRow >= (NSInteger)kERLandscapeBlockRows) selfPhysRow -= (NSInteger)kERLandscapeBlockRows;
-            if (refPhysRow >= (NSInteger)kERLandscapeBlockRows) refPhysRow -= (NSInteger)kERLandscapeBlockRows;
-        }
-        CGFloat predictedY = refFrame.origin.y + (CGFloat)(selfPhysRow - refPhysRow) * kERGridStep;
-        CGFloat dPredicted = selfFrame.origin.y - predictedY;
-        NSUInteger refPage = ERPageForModuleIdentifier(refIdentifier);
-        [state appendFormat:@" ref=%@ refCell=%@ refPage=%lu refRow=%ld selfRow=%ld dRows=%ld refFrame={%.1f,%.1f,%.0fx%.0f} d={%.1f,%.1f} dCells={%.2f,%.2f} predY=%.1f dPred=%.1f",
-         refIdentifier, refCell, (unsigned long)refPage, (long)refLocalRow, (long)selfLocalRow, (long)(selfLocalRow - refLocalRow),
-         refFrame.origin.x, refFrame.origin.y, refFrame.size.width, refFrame.size.height,
-         selfFrame.origin.x - refFrame.origin.x, selfFrame.origin.y - refFrame.origin.y,
-         (selfFrame.origin.x - refFrame.origin.x) / kERGridStep,
-         (selfFrame.origin.y - refFrame.origin.y) / kERGridStep,
-         predictedY, dPredicted];
-    } else {
-        [state appendString:@" ref=(none)"];
-    }
-
-    static NSMutableSet<NSString *> *loggedStates;
-    if (!loggedStates) loggedStates = [NSMutableSet set];
-    NSString *stateKey = [identifier stringByAppendingFormat:@"|%@", state];
-    if ([loggedStates containsObject:stateKey]) return;
-    [loggedStates addObject:stateKey];
-    ERLogInfo(@"SHORTCUTGRID ver=1.0.7-33 id=%@ %@", identifier, state);
-}
 
 static NSUInteger const kERLayoutReentryLimit = 2;
 static NSInteger gERConfigLayoutDepth = 0;
@@ -7954,7 +7563,7 @@ static void ERConfigureOddResizedModuleLayout(UIViewController *module) {
         static BOOL warned = NO;
         if (!warned) {
             warned = YES;
-            ERLogInfo(@"LAYOUTGUARD ver=1.0.7-33 reentry=%ld id=%@ (bailing out)",
+            ERLogInfo(@"LAYOUTGUARD ver=1.0.7-34 reentry=%ld id=%@ (bailing out)",
                        (long)gERConfigLayoutDepth, ERModuleIdentifier(module) ?: @"(nil)");
         }
         return;
@@ -8095,60 +7704,17 @@ static void ERConfigureOddResizedModuleLayoutInner(UIViewController *module) {
             oddPresentation.alpha = 0.0;
             return;
         }
-        // 1.0.6-4：这个磁贴上曾经有**两块**看起来都像「底板」的东西，一块要摘、一块要留。
-        //
-        // ①　kERShrunkModuleMaterialTag（181053）—— **要摘掉的那块**。
-        //
-        //    由 ERApplyShrunkModulePresentation 插进 module.view 的圆角方框（圆角 =
-        //    短边 ×0.34），本意是给「被用户缩小到比自然尺寸还小的原生模块」垫一层材质。
-        //    但清理它的调用只有三处，全在音乐模块与通用 else 分支里，**快捷指令磁贴这条
-        //    分支从来没摘过它**。磁贴是「先克隆一个原生模块、再改成快捷指令标识符」生成
-        //    的，在改标识符之前它走过通用分支，那块材质就留在视图上了 —— 这就是 1.0.6-4
-        //    修掉的「图标下面那个方框一样的背景」，它**不是**系统模块的底板。
-        //
-        //    刻意不调 ERRemoveShrunkModulePresentation()：那个函数会顺带
-        //    ERSetModuleNativeContentHidden(moduleView, NO) 把原生内容放出来，磁贴就会
-        //    多出一个原生图标（即 0.5.6.3 修过的「双图标」）。这里只摘材质，不碰显隐。
-        //
-        // ②　kERShortcutTileBackgroundTag（181038）—— **磁贴的底板，保留，但换材质**。
-        //
-        //    1.0.6-3 我按「分支 0.5.6.0 去掉自绘底板」的思路把它删了，那是判断错误：那条
-        //    分支的磁贴是真实的系统槽位模块、本来就有系统底板，而本线的磁贴是自绘的。
-        //    1.0.6-4 按原实现加回来，但用的仍是自造 SystemUltraThinMaterialDark —— 与
-        //    系统模块真实使用的 MTMaterialView 不同源，并排看差一档。
-        //
-        //    1.0.6-5：改为走 EREnsureTileMaterial，也就是七个连通性磁贴那条路
-        //    （克隆系统 platter → GlassKit 玻璃 → 拿不到才退回合成模糊），因此这块底板
-        //    与页面上其余模块的系统材质同源。这就是用户第 3 条要的「参照 7 个独立模块的
-        //    背景样式」。
-        UIView *staleShrunkMaterial = [module.view viewWithTag:kERShrunkModuleMaterialTag];
-        if (staleShrunkMaterial) [staleShrunkMaterial removeFromSuperview];
-        // 1.0.7-32：背景回退 —— 用「不装玻璃」的底板函数。底板由系统同源材质（或退回
-        // 合成模糊）单独承担，磁贴永远有一层可见背景，不再依赖 GlassKit 玻璃的渲染成功，
-        // 彻底消除「玻璃不渲染 → 整块透明」这一结构性失效。
-        UIView *tileBackground = EREnsureShortcutTileMaterial(module.view);
-        if (tileBackground) {
-            tileBackground.frame = module.view.bounds;
-            tileBackground.layer.cornerRadius = module.view.layer.cornerRadius;
-            // 1.0.7-32：不再调用 ERRestoreConvertedTileMaterial（不再隐藏材质让玻璃独占），
-            // 也不再建 / 调 EREnsureShortcutTileFallbackBackdrop（保底层已废弃）。
-            // 底板保持 hidden=NO / alpha=1，是磁贴唯一的背景层。
-            tileBackground.hidden = NO;
-            tileBackground.alpha = 1.0;
-            // 诊断：只记录底板来源与圆角，去掉玻璃 / 保底相关字段。
-            {
-                NSString *bgState = [NSString stringWithFormat:@"%@ hid=%d tileR=%.1f",
-                                     [NSStringFromClass(tileBackground.class) isEqualToString:@"MTMaterialView"] ? @"system" : @"blur",
-                                     tileBackground.hidden ? 1 : 0,
-                                     module.view.layer.cornerRadius];
-                BOOL changed = ![objc_getAssociatedObject(module.view, kERTileChromeLogStateKey) isEqual:bgState];
-                if (changed || ERDiagShouldLog(@"SHORTCUTBG", 2.0)) {
-                    if (changed) {
-                        objc_setAssociatedObject(module.view, kERTileChromeLogStateKey, bgState, OBJC_ASSOCIATION_COPY_NONATOMIC);
-                    }
-                    ERLogInfo(@"SHORTCUTBG ver=1.0.7-33 id=%@ %@", identifier, bgState);
-                }
-            }
+        // Shortcut tiles have no native module view; give them the same
+        // module-material platter the rest of Control Center uses.
+        UIView *tileBackground = [module.view viewWithTag:kERShortcutTileBackgroundTag];
+        if (!tileBackground) {
+            UIVisualEffectView *material = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+            material.tag = kERShortcutTileBackgroundTag;
+            material.userInteractionEnabled = NO;
+            material.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            material.frame = module.view.bounds;
+            [module.view insertSubview:material atIndex:0];
+            tileBackground = material;
         }
         oddPresentation = EREnsureOwnedCompactPresentation(module.view);
         CCUILayoutSize size = EREffectiveCustomSizeForModule(module, identifier);
@@ -8158,15 +7724,7 @@ static void ERConfigureOddResizedModuleLayoutInner(UIViewController *module) {
         // Replace the placeholder SF Symbol with the shortcut's native icon
         // after the presentation layout pass (which resets the glyph image).
         UIImageView *ownedGlyph = (UIImageView *)[oddPresentation viewWithTag:kERResizePresentationGlyphTag];
-        // 1.0.3：查不到图标时回落成通用快捷指令图标，绝不再把 glyph 置空 ——
-        // 空 glyph 叠一层超薄深色材质，在深色控制中心里就是「看不见」，这正是
-        // 「快捷指令模块无法正常显示」最直接的成因。原因说明见 ERShortcutPlaceholderIcon。
-        //
-        // 1.0.6-5（第 5 条）：磁贴取**只画白色图形**的那一份 —— 图标自带的那层彩色圆角
-        // 方块就是用户要去掉的「方框背景」。底板已经由上面的系统同款材质承担，所以这里
-        // 只需要白色图形本身。回落图标也必须取同一种画法，否则查不到记录时方框会回来。
-        UIImage *icon = ERShortcutGlyphOnlyImage(shortcut);
-        if (!icon) icon = ERShortcutPlaceholderIconForStyle(NO);
+        UIImage *icon = ERShortcutIconImage(shortcut);
         if (ownedGlyph) {
             if (icon) {
                 ownedGlyph.image = icon;
@@ -8208,59 +7766,6 @@ static void ERConfigureOddResizedModuleLayoutInner(UIViewController *module) {
         module.view.accessibilityLabel = title;
         module.view.accessibilityHint = @"运行快捷指令";
         [module.view bringSubviewToFront:shortcutProxy];
-
-        // 1.0.2：磁贴「加得进去、控制中心里却看不到」的真正根因。
-        // 1.0.1 埋的诊断日志把链路走完了，结论很明确：
-        //     SHORTCUTTILE … 75x75 pres={{0,0},{75,75}} proxy=0 viewAlpha=1.00   ← 刚加进来，一切正常
-        //     SHORTCUTTILE … 75x75 pres={{0,0},{75,75}} proxy=1 viewAlpha=0.00   ← 退出编辑模式之后
-        // 磁贴本身已经被摆到 75x75，却在一个后续的可见性收敛回合里被压成 alpha 0，
-        // 于是它变成一块全透明的空位 —— 位置在、磁贴看不见。
-        //
-        // 快捷指令磁贴没有原生模块视图，任何按「选中态 / 原生模块状态」收敛的可见性
-        // 规则都不该落在它身上 —— 这一点不变。
-        //
-        // 1.0.6-5（第 2 条）：但这个「钉成可见」原来是无条件的，**页外磁贴也一起被点亮**，
-        // 随后按页裁剪的回合再把它压回 opacity 0，两次回合之间就露一帧。实机表现就是
-        // 用户报的「先显示该页面全部快捷指令模块，随后消失」，日志里能直接看到这三步：
-        //     opacity=1.00 → opacity=0.00 → opacity=1.00
-        //
-        // 现在只在磁贴**确实属于当前页**时才钉。页外磁贴的可见性完全交给
-        // updatePagedModuleVisibilityForOverlay: —— 那里才是分页语义的唯一权威，
-        // 这与 ERVerifyShortcutTileVisibility 的口径一致（它也是先判 onCurrentPage）。
-        NSUInteger tilePage = ERPageForModuleIdentifier(identifier);
-        if (tilePage == NSNotFound || tilePage == gERCurrentPage) {
-            [UIView performWithoutAnimation:^{
-                module.view.hidden = NO;
-                module.view.alpha = 1.0;
-                module.view.layer.opacity = 1.0;
-                oddPresentation.hidden = NO;
-                oddPresentation.alpha = 1.0;
-            }];
-        }
-        ERLogShortcutGridOnce(module, identifier, tilePage);
-
-        // 1.0.1 诊断：快捷指令磁贴以前「加得进去、控制中心里却看不到」。
-        // 这里把磁贴的真实几何、呈现层、背景材质与交互代理一起记下来；
-        // 每个 identifier 只在状态串变化时记一行，不跟着布局刷屏。
-        {
-            static NSMutableSet<NSString *> *erShortcutTileLoggedStates;
-            if (!erShortcutTileLoggedStates) erShortcutTileLoggedStates = [NSMutableSet set];
-            NSString *presence = oddPresentation ? NSStringFromCGRect(oddPresentation.frame) : @"(none)";
-            NSString *state = [NSString stringWithFormat:@"%.0fx%.0f pres=%@ presHidden=%d bg=%d proxy=%d rec=%d icon=%d",
-                               CGRectGetWidth(module.view.bounds), CGRectGetHeight(module.view.bounds),
-                               presence,
-                               oddPresentation ? (oddPresentation.hidden ? 1 : 0) : -1,
-                               [module.view viewWithTag:kERShortcutTileBackgroundTag] ? 1 : 0,
-                               shortcutProxy.enabled ? 1 : 0,
-                               shortcut ? 1 : 0,
-                               icon ? 1 : 0];
-            NSString *stateKey = [identifier stringByAppendingFormat:@"|%@", state];
-            if (![erShortcutTileLoggedStates containsObject:stateKey]) {
-                [erShortcutTileLoggedStates addObject:stateKey];
-                ERLogInfo(@"SHORTCUTTILE ver=1.0.7-33 id=%@ %@ viewHidden=%d viewAlpha=%.2f",
-                          identifier, state, module.view.hidden ? 1 : 0, module.view.alpha);
-            }
-        }
     } else if (isTextSize) {
         if (expandedNow) {
             oddPresentation.hidden = YES;
@@ -8326,7 +7831,7 @@ static void ERConfigureOddResizedModuleLayoutInner(UIViewController *module) {
                                 npView ? (objc_getAssociatedObject(npView, kERNowPlayingLayoutModeKey) ?: @"(nil)") : @"(none)"];
         if (![objc_getAssociatedObject(module.view, kERMediaFixLogKey) isEqual:mediaState]) {
             objc_setAssociatedObject(module.view, kERMediaFixLogKey, mediaState, OBJC_ASSOCIATION_COPY_NONATOMIC);
-            ERLogInfo(@"MEDIAFIX ver=1.0.7-33 id=%@ %@", identifier, mediaState);
+            ERLogInfo(@"MEDIAFIX ver=1.0.7-34 id=%@ %@", identifier, mediaState);
         }
     } else {
         // Every other module EchoReborn has no bespoke presentation for. Left
@@ -9085,7 +8590,7 @@ static void EREditBadgeApplyGlass(UIButton *badge) {
                        CGRectGetWidth(bubble.frame), CGRectGetHeight(bubble.frame), radius];
     if (![objc_getAssociatedObject(badge, kEREditBadgeGlassStateKey) isEqual:state]) {
         objc_setAssociatedObject(badge, kEREditBadgeGlassStateKey, state, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        ERLogInfo(@"EDITGLASS ver=1.0.7-33 %@", state);
+        ERLogInfo(@"EDITGLASS ver=1.0.7-34 %@", state);
     }
 }
 
@@ -9179,13 +8684,13 @@ static CALayer *gERPageSettleProbeLayer = nil;
     CALayer *presentation = (CALayer *)layer.presentationLayer;
     NSTimeInterval elapsed = CACurrentMediaTime() - gERPageSettleProbeStart;
     if (gERPageSettleProbeFrames <= 42) {
-        ERLogInfo(@"SETTLEPROBE ver=1.0.7-33 f=%ld t=%.3f pres=%.1f model=%.1f",
+        ERLogInfo(@"SETTLEPROBE ver=1.0.7-34 f=%ld t=%.3f pres=%.1f model=%.1f",
                   (long)gERPageSettleProbeFrames, elapsed,
                   presentation ? presentation.sublayerTransform.m42 : 0.0,
                   layer.sublayerTransform.m42);
     }
     if (gERPageSettleProbeFrames >= 42) {
-        ERLogInfo(@"SETTLEPROBE ver=1.0.7-33 done frames=%ld", (long)gERPageSettleProbeFrames);
+        ERLogInfo(@"SETTLEPROBE ver=1.0.7-34 done frames=%ld", (long)gERPageSettleProbeFrames);
         [link invalidate];
         gERPageSettleProbeLink = nil;
         gERPageSettleProbeLayer = nil;
@@ -9723,14 +9228,14 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     if (best.valid && bestIdentifier.length) {
         gERGridAnchorIdentifierByPage[@(tilePage)] = bestIdentifier;
         if (anchorDiag) {
-            ERLogInfo(@"SHORTCUTANCHOR ver=1.0.7-33 tilePage=%lu anchor=%@ anchorPage=%ld anchorRow=%ld dist=%lu frame={%.1f,%.1f,%.0fx%.0f}",
+            ERLogInfo(@"SHORTCUTANCHOR ver=1.0.7-34 tilePage=%lu anchor=%@ anchorPage=%ld anchorRow=%ld dist=%lu frame={%.1f,%.1f,%.0fx%.0f}",
                       (unsigned long)tilePage, bestIdentifier, (long)best.page, (long)best.physicalRow,
                       (unsigned long)bestDistance, best.frame.origin.x, best.frame.origin.y,
                       best.frame.size.width, best.frame.size.height);
         }
     } else if (anchorDiag) {
         // 整页（以及所有页）都没有可用的原生模块 —— 只能走 base 回退。这一行就是回退的证据。
-        ERLogInfo(@"SHORTCUTANCHOR ver=1.0.7-33 tilePage=%lu anchor=(none) candidates=%lu",
+        ERLogInfo(@"SHORTCUTANCHOR ver=1.0.7-34 tilePage=%lu anchor=(none) candidates=%lu",
                   (unsigned long)tilePage, (unsigned long)modules.count);
     }
     return best;
@@ -9776,7 +9281,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
                                (double)gERPagerInteractiveTranslation];
             if (![erBaseGeoLoggedStates containsObject:state]) {
                 [erBaseGeoLoggedStates addObject:state];
-                ERLogInfo(@"BASEGEO ver=1.0.7-33 %@", state);
+                ERLogInfo(@"BASEGEO ver=1.0.7-34 %@", state);
             }
         }
     }
@@ -9856,15 +9361,9 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         child.view.layer.masksToBounds = YES;
         // 1.0.1：快捷指令磁贴的呈现层只在 -applyRefinedLookToModule: 里绘了一次，
         // 而那一刻磁贴的 bounds 还是 0（几何要到本方法才定），于是图标/文字的尺寸
-        // 是按 0 算的。这里在几何确定之后补一次布局，让呈现层按真实边长重画 ——
-        // 这是「加了快捷指令但控制中心里看不到磁贴」的一环。
-        //
-        // 1.0.6：重画之前先断言可见性。几何、呈现层、图标都对，磁贴却仍然看不见时，
-        // 唯一还留着的原因就是分页裁剪写下的 layer.opacity —— 见
-        // ERVerifyShortcutTileVisibility 的说明。
+        // 是按 0 算的。这里在几何确定之后补一次布局，让呈现层按真实边长重画。
         if (ERShortcutIdentifierIsShortcut(identifier)) {
             erPerfTileCount++;
-            ERVerifyShortcutTileVisibility(child, page);
             ERConfigureOddResizedModuleLayout(child);
         }
         if (gEditModeActive) {
@@ -9956,7 +9455,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
             CFTimeInterval now = CACurrentMediaTime();
             if (now - erPerfLastLog > 1.0) {
                 erPerfLastLog = now;
-                ERLogInfo(@"ERPERF ver=1.0.7-33 layout=%.2fms slow=%lu tiles=%lu modules=%lu edit=%d scrub=%d link=%d",
+                ERLogInfo(@"ERPERF ver=1.0.7-34 layout=%.2fms slow=%lu tiles=%lu modules=%lu edit=%d scrub=%d link=%d",
                           elapsed * 1000.0, (unsigned long)erPerfSlowCount, (unsigned long)erPerfTileCount,
                           (unsigned long)anchorModules.count, gEditModeActive ? 1 : 0,
                           gERPagerScrubbingActive ? 1 : 0, gEROwnedDuplicateHostDisplayLink ? 1 : 0);
@@ -10477,7 +9976,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     if (presented) {
         if (gERDismissSuppressDuplicates || gERControlCenterPresentationState == 3 ||
             gERControlCenterPresentationState == 0) {
-            ERLogInfo(@"SHORTCUTEXIT ver=1.0.7-33 reject-presented state=%lu suppress=%d",
+            ERLogInfo(@"SHORTCUTEXIT ver=1.0.7-34 reject-presented state=%lu suppress=%d",
                       (unsigned long)gERControlCenterPresentationState,
                       gERDismissSuppressDuplicates ? 1 : 0);
             return;
@@ -10604,7 +10103,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         }
     }
     [CATransaction commit];
-    ERLogInfo(@"SHORTCUTEXIT ver=1.0.7-33 force-hide state=%lu presented=%d",
+    ERLogInfo(@"SHORTCUTEXIT ver=1.0.7-34 force-hide state=%lu presented=%d",
               (unsigned long)gERControlCenterPresentationState, gERControlCenterPresented ? 1 : 0);
 }
 
@@ -10808,7 +10307,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                        visible.bounds.origin.y];
     if (lastState && [state isEqualToString:lastState]) return;
     lastState = [state copy];
-    ERLogInfo(@"PAGEGEO ver=1.0.7-33 %@", state);
+    ERLogInfo(@"PAGEGEO ver=1.0.7-34 %@", state);
 }
 
 - (void)applyPageTransformToOverlay:(UIViewController *)overlay animated:(BOOL)animated {
@@ -11029,7 +10528,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     slide.duration = duration;
     slide.timingFunction = curve;
     [collectionLayer addAnimation:slide forKey:@"EchoRebornPageSettleSublayerTransform"];
-    ERLogInfo(@"PAGESETTLE ver=1.0.7-33 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration);
+    ERLogInfo(@"PAGESETTLE ver=1.0.7-34 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration);
     ERStartPageSettleProbe(collectionLayer);
 
     // 1.0.7-17（方案 A，实装）：快捷指令磁贴的宿主层参与同一条落位补间。
@@ -12181,7 +11680,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     CGFloat width = ERQuickAccessHostWidth(controller);
     if (widthConstraint && fabs(widthConstraint.constant - width) > 0.5) {
         widthConstraint.constant = width;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 host-width=%.1f", width);
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 host-width=%.1f", width);
     }
     CGFloat centerY = ERQuickAccessCenterYOffset(controller);
     // 1.0.1：横向缩进 / 按钮大小 / 字形尺寸也在这里原地刷新。
@@ -12232,7 +11731,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         }
     }
     if (anySizeChanged) {
-        ERLogInfo(@"QUICKACCESSGEOM ver=1.0.7-33 inset=%.1f size=%.1f glyph=%.1f", inset, side, glyphSide);
+        ERLogInfo(@"QUICKACCESSGEOM ver=1.0.7-34 inset=%.1f size=%.1f glyph=%.1f", inset, side, glyphSide);
     }
 }
 
@@ -12273,14 +11772,14 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                 if (statusBar.count) break;
             }
         }
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 fallback hits=%lu", (unsigned long)statusBar.count);
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 fallback hits=%lu", (unsigned long)statusBar.count);
     }
     // 1.0.7-25：进入日志（每秒最多一条）—— 用它判断这条链到底有没有被走到。
     static CFTimeInterval chromeEnterLoggedAt = 0.0;
     CFTimeInterval chromeNow = CACurrentMediaTime();
     if (chromeNow - chromeEnterLoggedAt > 1.0) {
         chromeEnterLoggedAt = chromeNow;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 enter landscape=%d active=%d presented=%d state=%lu hits=%lu fallback=%d",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 enter landscape=%d active=%d presented=%d state=%lu hits=%lu fallback=%d",
                    (int)landscape, (int)active, (int)gERControlCenterPresented,
                    (unsigned long)gERControlCenterPresentationState, (unsigned long)statusBar.count,
                    (int)usedFallback);
@@ -12295,7 +11794,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     static BOOL statusRiseLogged = NO;
     if (active && !statusRiseLogged) {
         statusRiseLogged = YES;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 statusbar-rise targetTop=%.1f targetCenterY=%.1f hits=%lu",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 statusbar-rise targetTop=%.1f targetCenterY=%.1f hits=%lu",
                    kERLandscapeStatusBarTargetTop, kERLandscapeStatusBarTargetCenterY,
                    (unsigned long)statusBar.count);
     } else if (!active) {
@@ -12492,7 +11991,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             if (![systemLogged containsObject:key]) {
                 [systemLogged addObject:key];
                 CGRect r = [view convertRect:view.bounds toView:window];
-                ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 system-statusbar cls=%@ rise=%.1f y=%.1f h=%.1f w=%.1f",
+                ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 system-statusbar cls=%@ rise=%.1f y=%.1f h=%.1f w=%.1f",
                            key, kERLandscapeStatusBarFixedRise,
                            CGRectGetMinY(r), CGRectGetHeight(r), CGRectGetWidth(r));
             }
@@ -12536,7 +12035,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                      CGRectGetMinY(baseRect), rise];
     if (![landscapeChromeRiseLogged containsObject:key]) {
         [landscapeChromeRiseLogged addObject:key];
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 rise-plan cls=%@ baseTop=%.1f targetTop=%.1f rise=%.1f h=%.1f",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 rise-plan cls=%@ baseTop=%.1f targetTop=%.1f rise=%.1f h=%.1f",
                    NSStringFromClass(container.class), CGRectGetMinY(baseRect),
                    kERLandscapeStatusBarTargetTop, rise, CGRectGetHeight(baseRect));
     }
@@ -12559,7 +12058,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     UIWindow *window = overlay.view.window;
     CGRect winRect = window ? window.bounds : CGRectZero;
     CGSize screenSize = UIScreen.mainScreen.bounds.size;
-    ERLogInfo(@"CHROMADUMP ver=1.0.7-33 gate=%d win=%.1fx%.1f view=%.1fx%.1f screen=%.1fx%.1f inset(t=%.1f b=%.1f) overlays=%lu matched=%lu",
+    ERLogInfo(@"CHROMADUMP ver=1.0.7-34 gate=%d win=%.1fx%.1f view=%.1fx%.1f screen=%.1fx%.1f inset(t=%.1f b=%.1f) overlays=%lu matched=%lu",
                (int)ERLandscapePresentationActive(),
                CGRectGetWidth(winRect), CGRectGetHeight(winRect),
                CGRectGetWidth(overlay.view.bounds), CGRectGetHeight(overlay.view.bounds),
@@ -12569,14 +12068,14 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     // 0.5.19：把窗口清单和被命中的状态栏视图各打一遍。前一次日志证明「状态栏
     // 到底挂在哪个窗口 / 哪个类」是靠类名猜不出来的，这里直接读数。
     for (UIWindow *w in ERAllApplicationWindows()) {
-        ERLogInfo(@"CHROMADUMP ver=1.0.7-33 win cls=%@ y=%.1f h=%.1f w=%.1f lvl=%.1f hid=%d key=%d",
+        ERLogInfo(@"CHROMADUMP ver=1.0.7-34 win cls=%@ y=%.1f h=%.1f w=%.1f lvl=%.1f hid=%d key=%d",
                    NSStringFromClass(w.class), CGRectGetMinY(w.frame), CGRectGetHeight(w.frame),
                    CGRectGetWidth(w.frame), w.windowLevel, (int)w.hidden, (int)w.isKeyWindow);
     }
     for (UIView *v in matched) {
         UIWindow *hostWindow = v.window;
         CGRect r = hostWindow ? [v convertRect:v.bounds toView:hostWindow] : v.frame;
-        ERLogInfo(@"CHROMADUMP ver=1.0.7-33 hit cls=%@ y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d win=%@",
+        ERLogInfo(@"CHROMADUMP ver=1.0.7-34 hit cls=%@ y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d win=%@",
                    NSStringFromClass(v.class), CGRectGetMinY(r), CGRectGetHeight(r),
                    CGRectGetMinX(r), CGRectGetWidth(r), v.alpha, (int)v.hidden,
                    hostWindow ? NSStringFromClass(hostWindow.class) : @"(nil)");
@@ -12608,7 +12107,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     for (UIView *v in top) {
         if (n++ >= 48) break;
         CGRect r = window ? [v convertRect:v.bounds toView:window] : v.frame;
-        ERLogInfo(@"CHROMADUMP ver=1.0.7-33 top y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d matched=%d cls=%@",
+        ERLogInfo(@"CHROMADUMP ver=1.0.7-34 top y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d matched=%d cls=%@",
                    CGRectGetMinY(r), CGRectGetHeight(r), CGRectGetMinX(r), CGRectGetWidth(r),
                    v.alpha, (int)v.hidden, (int)[matched containsObject:v], NSStringFromClass(v.class));
     }
@@ -12638,7 +12137,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     NSNumber *lastLogged = landscapeChromeLogged[key];
     if (!lastLogged || chromeNow - lastLogged.doubleValue > 2.0) {
         landscapeChromeLogged[key] = @(chromeNow);
-        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
                    NSStringFromClass(view.class), rise, CGRectGetMinY(view.frame), CGRectGetHeight(view.frame),
                    view.transform.ty,
                    view.window ? CGRectGetMinY([view convertRect:view.bounds toView:view.window]) : -1.0);
@@ -12646,7 +12145,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UIView *alive = weakChrome;
             if (!alive) return;
-            ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-33 verify class=%@ ty=%.1f winY=%.1f",
+            ERLogInfo(@"LANDSCAPECHROME ver=1.0.7-34 verify class=%@ ty=%.1f winY=%.1f",
                        NSStringFromClass(alive.class), alive.transform.ty,
                        alive.window ? CGRectGetMinY([alive convertRect:alive.bounds toView:alive.window]) : -1.0);
         });
@@ -13248,7 +12747,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         panel.transform = CGAffineTransformIdentity;
     } completion:nil];
 
-    ERLogInfo(@"POWERMENU ver=1.0.7-33 presented panel=%.0fx%.0f items=%lu",
+    ERLogInfo(@"POWERMENU ver=1.0.7-34 presented panel=%.0fx%.0f items=%lu",
               panelWidth, panelHeight, (unsigned long)itemViews.count);
 }
 
@@ -13714,7 +13213,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         // 下面那条「第三方插件」重标。
         BOOL isOwnedModule = ERIdentifierIsEchoRebornOwned(identifier);
         if ([lowerIdentifier containsString:@"echoreborn.weather"]) {
-            ERLogInfo(@"WEATHERCAT ver=1.0.7-33 id=%@ category=%@ isTweak=%d owned=%d bundle=%@",
+            ERLogInfo(@"WEATHERCAT ver=1.0.7-34 id=%@ category=%@ isTweak=%d owned=%d bundle=%@",
                       identifier, category, isTweak, isOwnedModule, bundlePath);
         }
         BOOL allowsMultiple = ERModuleIdentifierSupportsOwnedDuplicates(identifier);
@@ -13981,19 +13480,10 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         UIView *presentation = EREnsureOwnedCompactPresentation(container);
         ERLayoutOwnedCompactPresentation(presentation, @"sparkles", title, nil, layoutSize, NO);
         UIImageView *ownedGlyph = (UIImageView *)[presentation viewWithTag:kERResizePresentationGlyphTag];
-        // 1.0.6-13（第 5 条）：「添加控制项」里的预览改用**无背景**的字形图。
-        //
-        // 磁贴本体早就用 ERShortcutGlyphOnlyImage（-erShortcutTileImage，见 8016 行
-        // 附近），落在控制中心里是纯字形、没有彩色圆角方块。只有这个 gallery 预览
-        // 还在用 ERShortcutIconImage —— 那张图自带一层彩色圆角方块底，于是「已经在
-        // 控制中心里的磁贴没背景、添加面板里的同一个快捷指令却有背景」，同一份数据
-        // 两副样子。两处统一取 glyph-only，预览与真机所见一致。
-        UIImage *icon = ERShortcutGlyphOnlyImage(shortcut);
+        UIImage *icon = ERShortcutIconImage(shortcut);
         if (ownedGlyph && icon) {
             ownedGlyph.image = icon;
             ownedGlyph.contentMode = UIViewContentModeScaleAspectFit;
-            // 字形图本身是透明的，这一段圆角会把边缘切掉一圈，一并去掉。
-            ownedGlyph.backgroundColor = UIColor.clearColor;
             // Same geometry rule as the live tile: a 1x1 preview shows the icon
             // centred and alone, a two-cell preview puts it left of the title.
             CGFloat previewWidth = pointSize.width;
@@ -14003,10 +13493,9 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             CGFloat originX = layoutSize.width > 1 ? 21.0 : (previewWidth - side) * 0.5;
             CGFloat originY = (previewHeight - side) * 0.5;
             ownedGlyph.frame = CGRectMake(round(originX), round(originY), side, side);
-            // 1.0.6-13（第 5 条）：圆角与裁剪原本是给「彩色圆角方块底」做的（底去掉了，
-            // 这段圆角只会把纯字形图的边缘切掉一圈）。
-            ownedGlyph.layer.cornerRadius = 0.0;
-            ownedGlyph.layer.masksToBounds = NO;
+            ownedGlyph.layer.cornerRadius = side * 0.24;
+            ownedGlyph.layer.cornerCurve = kCACornerCurveContinuous;
+            ownedGlyph.layer.masksToBounds = YES;
         }
         [container bringSubviewToFront:presentation];
         return container;
@@ -14247,70 +13736,38 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     if (gEditModeActive || gERExpandedModuleOpen) return;
     NSString *identifier = objc_getAssociatedObject(sender, kERConnectivityIdentifierKey);
     NSDictionary *shortcut = ERShortcutForIdentifier(identifier);
-    NSString *name = shortcut[@"name"];
-    if (![name isKindOfClass:[NSString class]] || !name.length) return;
+    NSString *name = [shortcut[@"name"] isKindOfClass:[NSString class]] ? shortcut[@"name"] : nil;
+    if (!name.length) return;
+    NSString *uuid = [shortcut[@"uuid"] isKindOfClass:[NSString class]] ? shortcut[@"uuid"] : nil;
     ERHaptic();
-
-    // 1.0.6-4：运行路径整体重写。
-    //
-    // 旧做法是 openURL 一个 shortcuts://run-shortcut?name=…，而这条 URL 的语义**就是**
-    // 前台化快捷指令 App。所以「不要打开 App」改参数是改不掉的；App 冷启动那几秒又正好
-    // 是用户感觉到的「卡好几秒」。换成进程内运行，两个问题一起消失（见上面
-    // ERRunShortcutInProcess 的三级路径）。t0/t1/t2 把「收起耗时」和「运行耗时」分开，
-    // 免得下次再靠体感猜是哪一段慢。
-    NSString *uuid = ERShortcutUUIDFromIdentifier(identifier);
-    CFAbsoluteTime t0 = CFAbsoluteTimeGetCurrent();
-
-    // 1.0.6-5（第 4 条）：收起改走 SpringBoard 的权威入口
-    // -[SBControlCenterController dismissAnimated:]，不再依赖
-    // -dismissViewControllerAnimated:completion:。
-    //
-    // 依据是实机日志：1.0.6-4 那版点按后只出现
-    //     TAPHAPTIC / TAPHAPTIC-OK
-    // 两行，**没有 SHORTCUTRUN** —— 说明那个 completion 一次都没被回调，于是既没
-    // 收起控制中心、快捷指令也没跑。UIKit 的语义是「目标控制器没有东西可收起时，
-    // completion 不会被调用」；而控制中心的呈现由 SBControlCenterController 驱动，
-    // 并不是普通 present，所以必须调它（本文件已在 %hook SBControlCenterController
-    // 里挂过 -dismissAnimated:，那条路径会把 chrome 与自有克隆体的宿主动画一并收尾）。
-    BOOL dismissed = NO;
-    id controlCenterController = gERSBControlCenterController;
-    if (controlCenterController && [controlCenterController respondsToSelector:@selector(dismissAnimated:)]) {
-        @try {
-            ((void (*)(id, SEL, BOOL))objc_msgSend)(controlCenterController, @selector(dismissAnimated:), NO);
-            dismissed = YES;
-        } @catch (__unused NSException *exception) {
-            dismissed = NO;
-        }
-    }
-    if (!dismissed) {
-        // 拿不到控制器时（hook 未生效 / 非 SpringBoard 侧）的兜底，仍然只做收起。
+    // 0.5.4: run it in the background through the private runner client, so the
+    // Shortcuts app is never brought up. Only when that is unavailable do we
+    // fall back to the foreground URL — the behaviour the user sees as "it opens
+    // the Shortcuts app".
+    NSString *encoded = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
+    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"shortcuts://run-shortcut?name=%@", encoded ?: @""]];
+    void (^openShortcut)(void) = ^{
+        if (ERRunShortcutInBackground(name, uuid)) return;
+        if (!url) return;
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+    };
+    // 0.5.1: Control Center is owned by SBControlCenterController, not by the
+    // overlay view controller. Dismissing the overlay did nothing visible, so
+    // the panel stayed up while the shortcut opened underneath it. Ask the real
+    // controller to dismiss, then launch; neither step waits on the other.
+    id controller = gERSBControlCenterController;
+    SEL dismissSelector = @selector(dismissAnimated:);
+    if (controller && [controller respondsToSelector:dismissSelector]) {
+        // Single call: -dismissAnimated: returns void, so its result must not
+        // be inspected (and the selector must not be sent twice).
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(controller, dismissSelector, NO);
+    } else {
         UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
         if (overlay) [overlay dismissViewControllerAnimated:NO completion:nil];
     }
-    CFAbsoluteTime tDismissed = CFAbsoluteTimeGetCurrent();
-
-    // 运行请求**不再挂在收起回调上** —— 那个回调可能永远不来（见上），一旦不来就是
-    // 「点了完全没反应」。把运行放到收起起步之后发出：既满足「先退出控制中心，再运行
-    // 快捷指令」的顺序，又不和收起动画抢主线程。进程内运行本身不依赖窗口状态，所以
-    // 这个延时只为保证视觉顺序，不是等待条件。
-    //
-    // 1.0.6-6（第 1 条）：0.3 → 0.2 秒。收起转场本身约 0.3 秒，但运行请求与转场并不
-    // 互斥（进程内运行不看窗口），0.2 秒已经足够让「控制中心先动起来」，观感上更跟手。
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        CFAbsoluteTime t1 = CFAbsoluteTimeGetCurrent();
-        BOOL ran = ERRunShortcutInProcess(uuid, name);
-        CFAbsoluteTime t2 = CFAbsoluteTimeGetCurrent();
-        if (!ran) {
-            // 三级路径全部不可用才走这里：会前台化 App，但总好过「点了完全没反应」。
-            ERLogInfo(@"SHORTCUTRUN ver=1.0.7-33 id=%@ inprocess=0 -> fallback shortcuts://", identifier ?: @"(nil)");
-            ERFallbackRunShortcutViaURL(name);
-        }
-        ERLogInfo(@"SHORTCUTRUN ver=1.0.7-33 id=%@ inprocess=%d dismissed=%d uuid=%@ t_dismiss=%.0fms t_wait=%.0fms t_run=%.0fms t_total=%.0fms",
-                  identifier ?: @"(nil)", ran, dismissed, uuid ?: @"(none)",
-                  (tDismissed - t0) * 1000.0, (t1 - tDismissed) * 1000.0,
-                  (t2 - t1) * 1000.0, (t2 - t0) * 1000.0);
-    });
+    // Long enough that the panel is on its way out, short enough that the run
+    // does not feel delayed.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), openShortcut);
 }
 
 - (BOOL)addOwnedDuplicateForIdentifier:(NSString *)identifier {
@@ -14426,7 +13883,7 @@ static void ERLogCaughtException(NSString *where, NSException *exception) {
     NSArray<NSString *> *symbols = exception.callStackSymbols ?: @[];
     NSUInteger count = MIN(symbols.count, (NSUInteger)10);
     NSString *stack = count ? [[symbols subarrayWithRange:NSMakeRange(0, count)] componentsJoinedByString:@" | "] : @"(no symbols)";
-    ERLogInfo(@"ERGUARD ver=1.0.7-33 at=%@ name=%@ reason=%@ stack=%@", where, name, reason, stack);
+    ERLogInfo(@"ERGUARD ver=1.0.7-34 at=%@ name=%@ reason=%@ stack=%@", where, name, reason, stack);
 }
 
 // 真正的实现搬到这里，外层只留 @try/@catch。
@@ -15156,7 +14613,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         }
     }
     NSString *identifier = module ? ERModuleIdentifier(module) : nil;
-    ERLogInfo(@"TAPHAPTIC ver=1.0.7-33 id=%@", identifier ?: @"(nil)");
+    ERLogInfo(@"TAPHAPTIC ver=1.0.7-34 id=%@", identifier ?: @"(nil)");
     if (!gHapticsEnabled || !identifier.length) return;
     // 编辑态 / 已有模块展开 / 拖拽与改尺寸进行中，都不算「点一个普通模块」。
     if (gEditModeActive || gERExpandedModuleOpen || gERDragInProgress || gERResizeInProgress) return;
@@ -15177,7 +14634,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (!supported) return;
     NSInteger strength = ERHapticCurrentStrength();
     ERHapticWithStrength(strength);
-    ERLogInfo(@"TAPHAPTIC-OK ver=1.0.7-33 id=%@ strength=%ld", identifier, (long)strength);
+    ERLogInfo(@"TAPHAPTIC-OK ver=1.0.7-34 id=%@ strength=%ld", identifier, (long)strength);
 }
 
 // 观察型 tap 的目标与 delegate 仍挂在这个选择器上（见 ERInstallModuleTapFeedback），
@@ -17049,7 +16506,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                            gERDragInProgress ? 1 : 0, gERActiveDragModuleIdentifier ?: @"-"];
         if (![objc_getAssociatedObject(overlay, kEREditGridProbeStateKey) isEqual:state]) {
             objc_setAssociatedObject(overlay, kEREditGridProbeStateKey, state, OBJC_ASSOCIATION_COPY_NONATOMIC);
-            ERLogInfo(@"EREDITGRID ver=1.0.7-33 %@", state);
+            ERLogInfo(@"EREDITGRID ver=1.0.7-34 %@", state);
         }
     }
 }
@@ -17971,7 +17428,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             NSString *stateKey = [NSString stringWithFormat:@"state/%.0f", ERGridVisibleWidth()];
             if (![landscapeLogged containsObject:stateKey]) {
                 [landscapeLogged addObject:stateKey];
-                ERLogInfo(@"LANDSCAPE ver=1.0.7-33 cw=%.1f visibleW=%.1f cols=%lu stride=%lu blockRows=%lu blockCols=%lu",
+                ERLogInfo(@"LANDSCAPE ver=1.0.7-34 cw=%.1f visibleW=%.1f cols=%lu stride=%lu blockRows=%lu blockCols=%lu",
                            containerWidth, ERGridVisibleWidth(),
                            (unsigned long)(kERLandscapeBlockColumns * 2),
                            (unsigned long)ERLayoutPageStrideRows(),
@@ -17981,7 +17438,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                                    containerHeight, windowInsets.top, windowInsets.bottom];
             if (![landscapeLogged containsObject:stateVKey]) {
                 [landscapeLogged addObject:stateVKey];
-                ERLogInfo(@"LANDSCAPEV ver=1.0.7-33 h=%.1f top=%.1f bot=%.1f extent=%.1f shift=%.1f",
+                ERLogInfo(@"LANDSCAPEV ver=1.0.7-34 h=%.1f top=%.1f bot=%.1f extent=%.1f shift=%.1f",
                            containerHeight, windowInsets.top, windowInsets.bottom,
                            (CGFloat)kERLandscapeBlockRows * kERGridStep - kERGridGap, verticalShift);
             }
@@ -21856,7 +21313,7 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     // 材质 + 圆角 + 白底，是整条路径上唯一的重活，且跑在主线程、正好压在折叠动画
     // 收尾的那一帧上（ERPERF 里紧随其后出现过 layout=16.30ms，刚好一帧）。
     // 先量出来再决定是减负还是挪到下一帧，不盲改。
-    ERLogInfo(@"COLLAPSECHROME ver=1.0.7-33 modules=%lu cost=%.2fms",
+    ERLogInfo(@"COLLAPSECHROME ver=1.0.7-34 modules=%lu cost=%.2fms",
               (unsigned long)ERCollectModuleControllers(overlay).count,
               (CACurrentMediaTime() - erCollapseChromeStart) * 1000.0);
     [coordinator updatePageIndicatorsForOverlay:overlay];
@@ -21955,31 +21412,6 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
 
 %end
 
-// 1.0.6-10（第 3 条）：重新断言快捷指令磁贴的背景不变量。
-//
-// 为什么要单独有这一支：ERPrefsChanged 原先只对七个连通性磁贴做重断言（见下面的
-// 循环），快捷指令磁贴不在其内。而切换液态玻璃时 GlassKit 会主动把玻璃层从材质上
-// 摘掉，材质当初又是被 ERRestoreConvertedTileMaterial 按「玻璃在场」隐藏的 ——
-// 「玻璃已摘」与「材质重见」之间存在一个窗口，磁贴整块透明，直到下一次重建才恢复。
-//
-// 本函数不发明新逻辑，只是把「重建磁贴」那条既有路径（applyRefinedLookToModule: →
-// ERConfigureOddResizedModuleLayout）立刻跑一遍。调用方在偏好变更后再排两次延迟调用，
-// 用于覆盖 GlassKit 异步摘玻璃的时序。
-static void ERReassertShortcutTileBackdrops(void) {
-    EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
-    NSUInteger reasserted = 0;
-    for (UIViewController *overlay in gOverlayControllers.allObjects) {
-        for (UIViewController *module in ERCollectModuleControllers(overlay)) {
-            NSString *identifier = ERModuleIdentifier(module);
-            if (!ERShortcutIdentifierIsShortcut(identifier)) continue;
-            [coordinator applyRefinedLookToModule:module];
-            reasserted++;
-        }
-    }
-    ERLogInfo(@"SHORTCUTFB ver=1.0.7-33 mode=reassert tiles=%lu overlays=%lu",
-              (unsigned long)reasserted, (unsigned long)gOverlayControllers.count);
-}
-
 // 1.0.7-11：相机双摄信号。Darwin 通知不携带数据，但**通知名本身**区分状态：
 //   …/dualcam.heartbeat        = 相机进程里 DualCam 的 %ctor 跑过了（dylib 已加载）
 //   …/dualcam.state.off        = 双摄开关被读成「关」
@@ -21987,7 +21419,7 @@ static void ERReassertShortcutTileBackdrops(void) {
 //   …/dualcam.state.installed  = 按钮已装上
 // 之前连续五个版本都在盲猜，就是因为相机沙盒写不进日志、没有这条分界线。
 static void ERDualCamHeartbeat(__unused CFNotificationCenterRef center, __unused void *observer, CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
-    ERLogInfo(@"DUALCAM-SIGNAL ver=1.0.7-33 name=%@", (__bridge NSString *)name);
+    ERLogInfo(@"DUALCAM-SIGNAL ver=1.0.7-34 name=%@", (__bridge NSString *)name);
 }
 
 static void ERPrefsChanged(__unused CFNotificationCenterRef center, __unused void *observer, __unused CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
@@ -22035,26 +21467,14 @@ static void ERPrefsChanged(__unused CFNotificationCenterRef center, __unused voi
                     ERSyncConnectivityTileChrome(module.view);
             }
         }
-        // 1.0.6-10（第 3 条）：同一时刻把**快捷指令磁贴**的背景不变量也重新断言一遍 ——
-        // 此前只有上面那七个连通性磁贴有这份待遇，这正是「偏偏快捷指令模块透明」的
-        // 不对称之处。立刻做一次，再在 0.4s / 1.5s 后各做一次，用于覆盖 GlassKit
-        // 异步摘玻璃的时序窗口（详见 ERReassertShortcutTileBackdrops 的说明）。
-        ERReassertShortcutTileBackdrops();
-        for (NSNumber *delay in @[ @0.4, @1.5 ]) {
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                ERReassertShortcutTileBackdrops();
-            });
-        }
     });
 }
 
 static void ERShortcutRescanRequested(__unused CFNotificationCenterRef center, __unused void *observer, __unused CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
-    // The notification arrives on an arbitrary thread. The scan is ordinary
-    // file I/O on the store copy, and every other caller of
-    // -ERShortcutRecords already runs it on the main queue, so it is hopped
-    // there for consistency rather than to protect any shared state.
     dispatch_async(dispatch_get_main_queue(), ^{
+        // 0.5.1: pull the pane's freshly written catalog into this process
+        // before refreshing, otherwise the rescan re-reads the cached copy.
+        CFPreferencesAppSynchronize(kERPrefsDomain);
         ERShortcutRefreshNow();
     });
 }
@@ -22393,7 +21813,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
     @try {
         SBIcon *icon = [iconView respondsToSelector:@selector(icon)] ? ((SBIcon *(*)(id, SEL))objc_msgSend)(iconView, @selector(icon)) : nil;
         if (!icon) {
-            ERLogInfo(@"QUICKADD ver=1.0.7-33 picker: icon view has no icon");
+            ERLogInfo(@"QUICKADD ver=1.0.7-34 picker: icon view has no icon");
             return;
         }
         id controller = ((id (*)(id, SEL))objc_msgSend)(%c(SBIconController), @selector(sharedInstance));
@@ -22404,7 +21824,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         }
         if (!model) model = [controller valueForKey:@"iconModel"];
         if (!model) {
-            ERLogInfo(@"QUICKADD ver=1.0.7-33 picker: no icon model");
+            ERLogInfo(@"QUICKADD ver=1.0.7-34 picker: no icon model");
             return;
         }
         id root = [model respondsToSelector:@selector(rootFolder)] ? ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder)) : nil;
@@ -22479,7 +21899,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                 [folderIcons addObject:item];
             }
         }
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 picker: %lu folder(s) via %@",
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 picker: %lu folder(s) via %@",
                   (unsigned long)folderIcons.count, via);
         if (!folderIcons.count) {
             UIAlertController *empty = [UIAlertController alertControllerWithTitle:@"添加到文件夹"
@@ -22542,7 +21962,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                                 if ([name containsString:@"Folder"] || [name containsString:@"addIcon"]) [hits addObject:name];
                             }
                             free(methods);
-                            ERLogInfo(@"QUICKADD ver=1.0.7-33 api-dump cls=%@ count=%u hits=%@",
+                            ERLogInfo(@"QUICKADD ver=1.0.7-34 api-dump cls=%@ count=%u hits=%@",
                                        NSStringFromClass([candidate class]), methodCount, hits);
                         }
                     }
@@ -22570,21 +21990,21 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                                 if (sig.numberOfArguments > 4) { BOOL open = NO; [inv setArgument:&open atIndex:4]; }
                                 if (sig.numberOfArguments > 5) { id completion = nil; [inv setArgument:&completion atIndex:5]; }
                                 [inv invokeWithTarget:candidate];
-                                ERLogInfo(@"QUICKADD ver=1.0.7-33 moved via %@ %@ into %@",
+                                ERLogInfo(@"QUICKADD ver=1.0.7-34 moved via %@ %@ into %@",
                                            NSStringFromClass([candidate class]), name, rowTitle);
                                 invoked = YES;
                                 break;
                             } @catch (NSException *e) {
-                                ERLogInfo(@"QUICKADD ver=1.0.7-33 move EXC %@ via %@ %@",
+                                ERLogInfo(@"QUICKADD ver=1.0.7-34 move EXC %@ via %@ %@",
                                            e.reason, NSStringFromClass([candidate class]), name);
                             }
                         }
                         if (invoked) break;
                     }
-                    if (!invoked) ERLogInfo(@"QUICKADD ver=1.0.7-33 move: no target/selector on %lu candidate(s)",
+                    if (!invoked) ERLogInfo(@"QUICKADD ver=1.0.7-34 move: no target/selector on %lu candidate(s)",
                                             (unsigned long)targets.count);
             } @catch (NSException *exception) {
-                ERLogInfo(@"QUICKADD ver=1.0.7-33 move EXC %@ -- %@", exception.name, exception.reason);
+                ERLogInfo(@"QUICKADD ver=1.0.7-34 move EXC %@ -- %@", exception.name, exception.reason);
             }
         };
         UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
@@ -22597,13 +22017,13 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
             }
         }
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 picker host=%@ folders=%lu",
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 picker host=%@ folders=%lu",
                   presenter ? NSStringFromClass(presenter.class) : @"(nil)",
                   (unsigned long)folderList.count);
         // 1.0.7-31：放进更高层级的窗口 —— 面板盖在 dock 上面（而不是绕开它）。
         [sheet presentOverDock];
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 picker EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 picker EXC %@ -- %@", exception.name, exception.reason);
     }
 }
 
@@ -23023,11 +22443,11 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         if (!loggedLookup) {
             loggedLookup = YES;
             if (quickActions) {
-                ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 quickactions=%@ super=%@",
+                ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 quickactions=%@ super=%@",
                            NSStringFromClass(quickActions.class),
                            NSStringFromClass(quickActions.superview.class));
             } else {
-                ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 quickactions NOT found in %@",
+                ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 quickactions NOT found in %@",
                            NSStringFromClass(view.class));
             }
         }
@@ -23080,7 +22500,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     if (!loggedPlacement) {
         loggedPlacement = YES;
         CGRect qaRect = quickActions ? [quickActions convertRect:quickActions.bounds toView:host] : CGRectZero;
-        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 place host=%@ screen=%.0fx%.0f y=%.1f viaQA=%d qa={%.0f,%.0f,%.0fx%.0f} safe=%.0f",
+        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 place host=%@ screen=%.0fx%.0f y=%.1f viaQA=%d qa={%.0f,%.0f,%.0fx%.0f} safe=%.0f",
                    NSStringFromClass(host.class), screenW, screenH, centerY, (int)usedQuickActions,
                    qaRect.origin.x, qaRect.origin.y, qaRect.size.width, qaRect.size.height, safeBottom);
     }
@@ -23158,7 +22578,7 @@ static BOOL ERMusicClassLooksLikeSystemNowPlaying(NSString *name) {
             if (controller.presentedViewController) [queue addObject:controller.presentedViewController];
         }
     }
-    ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 nowplaying-dump vcs=%@", controllerNames);
+    ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 nowplaying-dump vcs=%@", controllerNames);
 
     if (!root) return;
     NSMutableArray<NSString *> *viewNames = [NSMutableArray array];
@@ -23174,7 +22594,7 @@ static BOOL ERMusicClassLooksLikeSystemNowPlaying(NSString *name) {
         }
         if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
     }
-    ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 nowplaying-dump views=%@", viewNames);
+    ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 nowplaying-dump views=%@", viewNames);
 }
 
 - (void)applySystemNowPlayingHiddenInRoot:(UIView *)root {
@@ -23187,7 +22607,7 @@ static BOOL ERMusicClassLooksLikeSystemNowPlaying(NSString *name) {
             loggedSystemTargets = YES;
             NSMutableArray<NSString *> *names = [NSMutableArray array];
             for (UIView *view in targets) [names addObject:NSStringFromClass(view.class)];
-            ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 system-nowplaying targets=%@", names);
+            ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 system-nowplaying targets=%@", names);
         }
         if (!targets.count) {
             [self dumpSystemNowPlayingDiagnosticsInRoot:root];
@@ -23198,7 +22618,7 @@ static BOOL ERMusicClassLooksLikeSystemNowPlaying(NSString *name) {
     for (UIView *view in targets) {
         if (view.hidden == shouldHide) continue;
         view.hidden = shouldHide;
-        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-33 system-nowplaying %@ (cls=%@)",
+        ERLogInfo(@"MUSICCAPSULE ver=1.0.7-34 system-nowplaying %@ (cls=%@)",
                    shouldHide ? @"hidden" : @"restored", NSStringFromClass(view.class));
     }
 }
@@ -23348,10 +22768,10 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         item.localizedTitle = name;
         NSMutableArray *list = [items mutableCopy] ?: [NSMutableArray array];
         [list insertObject:item atIndex:0];
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 injected(app) name=%@ total=%lu", name, (unsigned long)list.count);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 injected(app) name=%@ total=%lu", name, (unsigned long)list.count);
         return list;
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 inject(app) EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 inject(app) EXC %@ -- %@", exception.name, exception.reason);
         return items;
     }
 }
@@ -23377,10 +22797,10 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         item.localizedTitle = name;
         NSMutableArray *list = [items mutableCopy] ?: [NSMutableArray array];
         [list insertObject:item atIndex:0];
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 injected(view) name=%@", name);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 injected(view) name=%@", name);
         return list;
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 inject(view) EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 inject(view) EXC %@ -- %@", exception.name, exception.reason);
         return items;
     }
 }
@@ -23419,7 +22839,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         CFTimeInterval quickAddNow = CACurrentMediaTime();
         if (quickAddNow - quickAddMenuLoggedAt > 1.0) {
             quickAddMenuLoggedAt = quickAddNow;
-            ERLogInfo(@"QUICKADD ver=1.0.7-33 menu-hook orig=%d enabled=%d name=%@",
+            ERLogInfo(@"QUICKADD ver=1.0.7-34 menu-hook orig=%d enabled=%d name=%@",
                        original ? 1 : 0,
                        ERPreferenceBool(@"QuickAdd.Enabled", NO) ? 1 : 0,
                        ERQuickAddActionName());
@@ -23445,7 +22865,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         // **硬闸门**：identifier 必须原样带回。取不到就什么都不做 —— 宁可这次
         // 菜单少一行，也绝不再把 SpringBoard 送进安全模式（代价完全不对称）。
         if (!identifier || ![(id)original.class respondsToSelector:make]) {
-            ERLogInfo(@"QUICKADD ver=1.0.7-33 menu skipped (identifier=%@ factory=%d)",
+            ERLogInfo(@"QUICKADD ver=1.0.7-34 menu skipped (identifier=%@ factory=%d)",
                       identifier ? @"ok" : @"nil",
                       [(id)original.class respondsToSelector:make] ? 1 : 0);
             return original;
@@ -23489,14 +22909,14 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
                                                                  identifier, preview, wrapped);
         // 最后一道保险：回来的必须是真配置，否则退回原样。
         if (![rebuilt isKindOfClass:[UIContextMenuConfiguration class]]) {
-            ERLogInfo(@"QUICKADD ver=1.0.7-33 menu rejected: rebuilt=%@",
+            ERLogInfo(@"QUICKADD ver=1.0.7-34 menu rejected: rebuilt=%@",
                       rebuilt ? NSStringFromClass([rebuilt class]) : @"nil");
             return original;
         }
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 menu injected name=%@", name);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 menu injected name=%@", name);
         return rebuilt;
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 menu EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 menu EXC %@ -- %@", exception.name, exception.reason);
         return original;
     }
 }
@@ -23511,12 +22931,12 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     @try {
         if ([shortcut isKindOfClass:%c(SBSApplicationShortcutItem)] &&
             [shortcut.type isEqualToString:kERQuickAddItemType]) {
-            ERLogInfo(@"QUICKADD ver=1.0.7-33 activated");
+            ERLogInfo(@"QUICKADD ver=1.0.7-34 activated");
             ERQuickAddShowPickerForIconView(iconView);
             return;   // 自己的动作不交给系统
         }
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.0.7-33 activate EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.0.7-34 activate EXC %@ -- %@", exception.name, exception.reason);
     }
     %orig;
 }
