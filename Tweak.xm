@@ -22151,7 +22151,7 @@ static NSString *ERQuickAddFolderSubtitle(id folderIcon) {
             }
         }
         ERLogInfo(@"QUICKADD ver=1.0.8-12 subtitle: no count readable (folder=%@)",
-                  folder ? NSStringFromClass(folder.class) : @"nil");
+                  folder ? NSStringFromClass([folder class]) : @"nil");
     } @catch (NSException *e) {
         ERLogInfo(@"QUICKADD ver=1.0.8-12 subtitle EXC %@ -- %@", e.name, e.reason);
     }
