@@ -22222,9 +22222,14 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     _qaHighlight.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _qaHighlight.userInteractionEnabled = NO;
     _qaHighlightGradient = [CAGradientLayer layer];
-    _qaHighlightGradient.colors = @[(__bridge id)[[UIColor whiteColor] colorWithAlphaComponent:0.14].CGColor,
-                                    (__bridge id)[[UIColor whiteColor] colorWithAlphaComponent:0.03].CGColor,
-                                    (__bridge id)[UIColor.clearColor].CGColor];
+    // 颜色先取到局部变量再取 CGColor：在数组字面量里对「类属性 + 属性访问」的复合表达式
+    // 做强转会解析失败（clang: expected identifier），这样写最稳。
+    UIColor *qaHighlightTop = [[UIColor whiteColor] colorWithAlphaComponent:0.14];
+    UIColor *qaHighlightMid = [[UIColor whiteColor] colorWithAlphaComponent:0.03];
+    UIColor *qaHighlightEnd = [UIColor clearColor];
+    _qaHighlightGradient.colors = @[(__bridge id)qaHighlightTop.CGColor,
+                                    (__bridge id)qaHighlightMid.CGColor,
+                                    (__bridge id)qaHighlightEnd.CGColor];
     _qaHighlightGradient.locations = @[@0.0, @0.35, @1.0];
     [_qaHighlight.layer addSublayer:_qaHighlightGradient];
     [_qaGlass.contentView addSubview:_qaHighlight];
