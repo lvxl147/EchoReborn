@@ -10,4 +10,4 @@ Tweak.xm ver=                2 occurrence(s) bumped
 modules/weather/ERWeatherBridge.m ver= markers updated
 DualCam/Tweak.xm kDualCamVersion updated
 
-version is 1.0.8-6 in every place that ships it.
+version is 1.0.8-7 in every place that ships it.
