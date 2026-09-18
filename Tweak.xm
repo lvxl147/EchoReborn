@@ -22073,6 +22073,8 @@ static CGFloat const kERQAPeek = 28.0;          // 第 7 条露出的一小截�
 static CGFloat const kERQAHorizontalPadding = 16.0;
 static CGFloat const kERQAWindowLevel = 100.0;  // 高于 dock（实测 25），低于系统 UI
 
+static UIWindow *gERQuickAddSheetWindow = nil;
+
 @interface ERQuickAddSheetController : UIViewController <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, copy) NSArray<NSString *> *titles;        // 运行时读取的文件夹名
 @property (nonatomic, copy) NSArray<UIImage *> *folderImages;   // 运行时读取的文件夹图标
@@ -22215,7 +22217,7 @@ static CGFloat const kERQAWindowLevel = 100.0;  // 高于 dock（实测 25），
     UIUserInterfaceStyle style = self.traitCollection.userInterfaceStyle;
     if (@available(iOS 13.0, *)) {
         if (style == UIUserInterfaceStyleDark) {
-            return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemDarkMaterial];
+            return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterialDark];
         }
     }
     return [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial];
