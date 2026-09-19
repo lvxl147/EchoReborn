@@ -453,7 +453,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-32 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-33 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -563,8 +563,44 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         }
         ERWeatherLog(@"model rejected (no readable forecast fields): %@", NSStringFromClass([self.todayModel class]));
     }
+    if (!self.snapshot.hasLiveData) {
+        // 1.0.8-33：全部候选都是空的时候，原来「保留最后一个候选」——而最后一个是
+        // WAForecastModel，它**没有任何拉数据的入口**（日志里那句
+        // `no update selector on WAForecastModel` 就是这么来的），于是永远读缓存、
+        // 温度永远是 --°。参考实现用的是 WATodayModel 系
+        // （WATodayAutoupdatingLocationModel / WATodayModel），它才有
+        // autoUpdate / 定位 / executeModelUpdateWithCompletion: 这些入口。
+        // 这里改成按「能不能拉数据」挑，不再停在最后一个。
+        NSUInteger best = [self bestDryCandidateIndex];
+        if (best != self.candidateIndex) {
+            self.candidateIndex = best;
+            self.todayModel = self.candidates[best];
+            ERWeatherLog(@"dry run: switch to fetchable candidate #%lu %@",
+                         (unsigned long)best, NSStringFromClass([self.todayModel class]));
+        }
+    }
     [self kickstartWeatherModel];
     [self requestModelUpdate];
+}
+
+/// 在「全部候选都没数据」时挑一个最可能拉得到数据的：① 有更新入口 ② 名字带 Today ③ 第一个
+- (NSUInteger)bestDryCandidateIndex {
+    static NSArray<NSString *> *updateSelectors = nil;
+    if (!updateSelectors) {
+        updateSelectors = @[@"executeModelUpdateWithCompletion:", @"updateModelWithCompletion:",
+                            @"refreshModelWithCompletion:", @"fetchWeatherDataWithCompletion:",
+                            @"reloadModelWithCompletion:", @"updateForecast"];
+    }
+    for (NSUInteger index = 0; index < self.candidates.count; index++) {
+        id model = self.candidates[index];
+        for (NSString *name in updateSelectors) {
+            if ([model respondsToSelector:NSSelectorFromString(name)]) return index;
+        }
+    }
+    for (NSUInteger index = 0; index < self.candidates.count; index++) {
+        if ([NSStringFromClass([self.candidates[index] class]) containsString:@"Today"]) return index;
+    }
+    return 0;
 }
 
 /// 换下一个候选。返回 NO 表示已经试完，不再重试。
@@ -672,6 +708,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 // ---------------------------------------------------------------------------
 - (void)kickstartWeatherModel {
     if (!self.todayModel) return;
+    ERWeatherLog(@"kickstart: begin on %@", NSStringFromClass([self.todayModel class]));
 
     // ① 打开自动更新 / 定位跟踪
     NSArray<NSString *> *flagSelectors = @[
@@ -679,17 +716,20 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         @"setIsLocationTrackingEnabled:", @"setLocationTrackingEnabled:",
         @"setLocationServicesActive:", @"setLocationServicesEnabled:",
     ];
+    NSMutableArray<NSString *> *flagHits = [NSMutableArray array];
     for (NSString *name in flagSelectors) {
         SEL selector = NSSelectorFromString(name);
-        if ([self.todayModel respondsToSelector:selector]) {
-            @try {
-                ((void (*)(id, SEL, BOOL))objc_msgSend)(self.todayModel, selector, YES);
-                ERWeatherLog(@"kickstart: -[%@ %@ YES]", NSStringFromClass([self.todayModel class]), name);
-            } @catch (__unused NSException *exception) {
-                ERWeatherLog(@"kickstart: %@ raised", name);
-            }
+        if (![self.todayModel respondsToSelector:selector]) continue;
+        @try {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(self.todayModel, selector, YES);
+            [flagHits addObject:name];
+        } @catch (__unused NSException *exception) {
+            ERWeatherLog(@"kickstart: %@ raised", name);
         }
     }
+    // 命中的名字写进日志 —— 这是下一次修正候选表唯一可靠的依据（不命中也要记，
+    // 否则无法区分「类上没有这个方法」和「代码没跑到」）。
+    ERWeatherLog(@"kickstart: flag hits=%@", flagHits.count ? flagHits : @"(none)");
 
     // ② 注册成 delegate（WATodayModel 的回调是 informally declared 的三个方法，见文件尾部）
     if ([self.todayModel respondsToSelector:@selector(setDelegate:)]) {
@@ -872,7 +912,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-32 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-33 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
