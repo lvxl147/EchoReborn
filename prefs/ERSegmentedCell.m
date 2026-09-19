@@ -152,7 +152,7 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
 @end
 
 @implementation ERColorPickerController {
-    CGFloat _rgb[3];
+    CGFloat _rgbValue[3];   // 命名避开 property `rgb` 自动合成的 _rgb
     UIView *_preview;
     UISlider *_sliders[3];
     UILabel *_values[3];
@@ -161,7 +161,7 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    ERParseRGBString(self.rgb, _rgb);
+    ERParseRGBString(self.rgb, _rgbValue);
 
     self.view.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
     [self.view addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
@@ -210,7 +210,7 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
         UISlider *slider = [[UISlider alloc] initWithFrame:CGRectZero];
         slider.minimumValue = 0.0;
         slider.maximumValue = 255.0;
-        slider.value = _rgb[i];
+        slider.value = _rgbValue[i];
         slider.continuous = YES;
         slider.tag = 300 + i;
         [slider addTarget:self action:@selector(_erSliderChanged:) forControlEvents:UIControlEventValueChanged];
@@ -292,8 +292,8 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
 - (void)_erRefreshPreview {
     CGFloat alpha = 0.88;
     if (self.alphaText.length) alpha = MIN(MAX([self.alphaText doubleValue] / 100.0, 0.0), 1.0);
-    UIColor *color = [UIColor colorWithRed:_rgb[0] / 255.0 green:_rgb[1] / 255.0
-                                     blue:_rgb[2] / 255.0 alpha:1.0];
+    UIColor *color = [UIColor colorWithRed:_rgbValue[0] / 255.0 green:_rgbValue[1] / 255.0
+                                     blue:_rgbValue[2] / 255.0 alpha:1.0];
     _preview.backgroundColor = [UIColor colorWithWhite:0.16 alpha:1.0];
     // 把 color@alpha 叠在深灰上 —— 就是卡内玻璃底的近似值
     UIView *film = [_preview viewWithTag:900];
@@ -306,14 +306,14 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
     film.backgroundColor = [color colorWithAlphaComponent:alpha];
 
     for (NSInteger i = 0; i < 3; i++) {
-        _values[i].text = [NSString stringWithFormat:@"%d", (int)lround(_rgb[i])];
+        _values[i].text = [NSString stringWithFormat:@"%d", (int)lround(_rgbValue[i])];
     }
 }
 
 - (void)_erSliderChanged:(UISlider *)sender {
     NSInteger i = sender.tag - 300;
     if (i < 0 || i > 2) return;
-    _rgb[i] = sender.value;
+    _rgbValue[i] = sender.value;
     [self _erRefreshPreview];
 }
 
@@ -330,7 +330,7 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
 }
 
 - (void)_erConfirm {
-    if (self.onCommit) self.onCommit(ERRGBString(_rgb));
+    if (self.onCommit) self.onCommit(ERRGBString(_rgbValue));
     [self dismissViewControllerAnimated:YES completion:nil];
 }
 
@@ -536,13 +536,9 @@ static CGFloat ERBackgroundAlphaValue(void) {
     if (!specifier) return;
 
     UIViewController *host = ERHostViewController(self);
-    if (!host) {
-        UIWindow *key = nil;
-        for (UIWindow *window in [UIApplication sharedApplication].windows) {
-            if (window.isKeyWindow) { key = window; break; }
-        }
-        host = key.rootViewController;
-    }
+    // 兜底不用 [UIApplication sharedApplication].windows —— 它自 iOS 15 起是 deprecated，
+    // 本工程开了 -Werror，会直接编译失败。改从 cell 自己的 window 上去拿根控制器。
+    if (!host) host = self.window.rootViewController;
     if (!host || host.presentedViewController) return;
 
     ERColorPickerController *picker = [[ERColorPickerController alloc] init];
