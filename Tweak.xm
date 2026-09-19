@@ -23399,8 +23399,8 @@ static UIWindow *gERQuickAddRenameWindow = nil;
     // 这是 iOS 上"模态浮层里的输入框不弹键盘"的标准解法，不动任何业务逻辑。
     [_rnField becomeFirstResponder];
     __weak typeof(self) weakSelf = self;
-    for (NSTimeInterval delay in @[@0.1, @0.3]) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+    for (NSNumber *delay in @[@0.1, @0.3]) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             __strong typeof(self) strongSelf = weakSelf;
             if (!strongSelf) return;
