@@ -160,7 +160,7 @@
 			<key>key</key>
 			<string>QuickAdd.InsideDarkness</string>
 			<key>default</key>
-			<real>45</real>
+			<real>0</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>
@@ -190,7 +190,7 @@
 			<key>key</key>
 			<string>QuickAdd.InsideBlur</string>
 			<key>default</key>
-			<real>30</real>
+			<real>4</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>
@@ -214,7 +214,7 @@
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
 			<key>label</key>
-			<string>背景色值</string>
+			<string>背景色值（框内 + 框外）</string>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
@@ -242,7 +242,7 @@
 			<key>cell</key>
 			<string>PSRadioCell</string>
 			<key>label</key>
-			<string>背景色</string>
+			<string>背景色（框内 + 框外）</string>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
