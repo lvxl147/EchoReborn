@@ -240,13 +240,17 @@
 		</dict>
 		<dict>
 			<key>cell</key>
-			<string>PSTitleValueCell</string>
+			<string>PSTableCell</string>
 			<key>cellClass</key>
 			<string>ERSegmentedCell</string>
 			<!-- 1.0.8-30：**必须给一个 label**（哪怕是空串）。
 			     1.0.8-29 把 label 整个省掉，结果 PSTableCell refreshCellContentsWithSpecifier:
 			     在 setTitle: 上拿到非字符串，Preferences 直接 SIGABRT —— 用户点「系统增强」秒退。
-			     空串既满足"左边不显示文字"，又保证 title 拿到的是合法 NSString。 -->
+			     空串既满足"左边不显示文字"，又保证 title 拿到的是合法 NSString。
+			     1.0.8-31：**cell 从 PSTitleValueCell 改为 PSTableCell** ——
+			     PSTitleValueCell 自带一个「数值标签」，会把 specifier 的当前值画在行里；
+			     实机上那串 RGB（38,45,58）正好压在分段控件的前两段上，看起来就是
+			     「灰红/灰橙上面多了 38、5,5 这样的数字」。PSTableCell 没有数值标签，干净。 -->
 			<key>label</key>
 			<string></string>
 			<key>defaults</key>

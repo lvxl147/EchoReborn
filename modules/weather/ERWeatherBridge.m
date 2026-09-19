@@ -191,6 +191,7 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic) BOOL started;
 @property (nonatomic) BOOL refreshInFlight;
 @property (nonatomic) NSTimeInterval lastRefresh;
+@property (nonatomic, assign) BOOL modelObserved;
 @property (nonatomic, strong) NSMutableArray<NSString *> *resolvedNames;
 @end
 
@@ -452,7 +453,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-30 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-31 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -562,6 +563,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         }
         ERWeatherLog(@"model rejected (no readable forecast fields): %@", NSStringFromClass([self.todayModel class]));
     }
+    [self kickstartWeatherModel];
     [self requestModelUpdate];
 }
 
@@ -650,6 +652,106 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         self.refreshInFlight = NO;
         ERWeatherLog(@"executeModelUpdateWithCompletion: raised — falling back to cached model");
     }
+}
+
+#pragma mark - 模型自动更新（1.0.8-31）
+
+// ---------------------------------------------------------------------------
+// 1.0.8-31 · 让 Weather 框架自己把数据拉回来 —— 而不是只读缓存。
+//
+// 对照参考实现（com.simon.ccweathermodule 1.0.4，逆向可得）它的做法是三件事：
+//   ① 给模型打开三个开关：autoUpdate / isLocationTrackingEnabled / locationServicesActive
+//      —— Weather 框架只有看到这几个位才会自己发起网络请求与定位；
+//   ② 把自己注册成模型的 delegate / 观察者 —— 数据是**异步**回来的，
+//      只在 viewDidAppear 读一次必然读到空壳（temp=--°、hours=0）；
+//   ③ 主动调 executeModelUpdateWithCompletion: 兜底。
+// 我们原本只做了 ③，而且选中的 WAForecastModel 上根本没有那个方法 → 永远读缓存。
+//
+// 全部用 respondsToSelector 探测 + @try 兜底：私有类的这些开关在 iOS 版本之间
+// 名字会变，缺哪个都不该让磁贴挂掉。
+// ---------------------------------------------------------------------------
+- (void)kickstartWeatherModel {
+    if (!self.todayModel) return;
+
+    // ① 打开自动更新 / 定位跟踪
+    NSArray<NSString *> *flagSelectors = @[
+        @"setAutoUpdate:", @"setAutoUpdateEnabled:",
+        @"setIsLocationTrackingEnabled:", @"setLocationTrackingEnabled:",
+        @"setLocationServicesActive:", @"setLocationServicesEnabled:",
+    ];
+    for (NSString *name in flagSelectors) {
+        SEL selector = NSSelectorFromString(name);
+        if ([self.todayModel respondsToSelector:selector]) {
+            @try {
+                ((void (*)(id, SEL, BOOL))objc_msgSend)(self.todayModel, selector, YES);
+                ERWeatherLog(@"kickstart: -[%@ %@ YES]", NSStringFromClass([self.todayModel class]), name);
+            } @catch (__unused NSException *exception) {
+                ERWeatherLog(@"kickstart: %@ raised", name);
+            }
+        }
+    }
+
+    // ② 注册成 delegate（WATodayModel 的回调是 informally declared 的三个方法，见文件尾部）
+    if ([self.todayModel respondsToSelector:@selector(setDelegate:)]) {
+        id current = ERWValueQuietly(self.todayModel, @"delegate");
+        if (current != self) {
+            @try {
+                ((void (*)(id, SEL, id))objc_msgSend)(self.todayModel, @selector(setDelegate:), self);
+                ERWeatherLog(@"kickstart: registered as model delegate");
+            } @catch (__unused NSException *exception) {
+                ERWeatherLog(@"kickstart: setDelegate: raised");
+            }
+        }
+    }
+
+    // ③ KVO 兜底：不走 delegate 的模型（比如 WAForecastModel 直接持有数据），
+    //    数据回来时会改这些属性，一改我们就重画。
+    if (!self.modelObserved) {
+        self.modelObserved = YES;
+        for (NSString *key in @[@"hourlyForecasts", @"dailyForecasts", @"currentConditions",
+                                @"todayForecast", @"forecast", @"weatherData"]) {
+            @try {
+                [self.todayModel addObserver:self forKeyPath:key
+                                     options:NSKeyValueObservingOptionNew context:nil];
+            } @catch (__unused NSException *exception) {
+                // 私有类上没有这个键 → 不观察它，继续试下一个
+            }
+        }
+    }
+}
+
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                        change:(NSDictionary<NSKeyValueChangeKey, id> *)change
+                       context:(void *)context {
+    if (object != self.todayModel) return;
+    ERWeatherLog(@"model changed keyPath=%@ — rebuilding", keyPath);
+    [self rebuildSnapshot];
+    if (!self.snapshot.hasLiveData) return;
+    if (self.onUpdate) {
+        dispatch_async(dispatch_get_main_queue(), ^{ if (self.onUpdate) self.onUpdate(); });
+    }
+}
+
+// Weather 框架的 WATodayModelDelegate 回调（informal protocol，按名字命中就生效）
+- (void)todayModel:(id)model forecastWasUpdated:(id)forecast {
+    ERWeatherLog(@"delegate: forecastWasUpdated — rebuilding");
+    [self rebuildSnapshot];
+    if (self.snapshot.hasLiveData && self.onUpdate) {
+        dispatch_async(dispatch_get_main_queue(), ^{ if (self.onUpdate) self.onUpdate(); });
+    }
+}
+
+- (void)todayModelUpdated:(id)model {
+    ERWeatherLog(@"delegate: todayModelUpdated — rebuilding");
+    [self rebuildSnapshot];
+    if (self.snapshot.hasLiveData && self.onUpdate) {
+        dispatch_async(dispatch_get_main_queue(), ^{ if (self.onUpdate) self.onUpdate(); });
+    }
+}
+
+- (void)todayModelWantsUpdate:(id)model {
+    ERWeatherLog(@"delegate: todayModelWantsUpdate — requesting update");
+    [self requestModelUpdate];
 }
 
 #pragma mark - 快照
@@ -770,7 +872,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-30 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-31 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
