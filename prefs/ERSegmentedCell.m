@@ -344,21 +344,21 @@ static NSString *ERRGBString(CGFloat rgb[3]) {
 }
 
 // 1.0.8-29：色值模式的两个可选声明。没声明 → 完全走原路（小窗位置 / 轻中重）。
-static NSArray<NSString *> *ERSegmentValueList(PSSpecifier *specifier) {
-    id value = [specifier propertyForKey:@"erSegmentValues"];
+static NSArray<NSString *> *ERPresetRGBList(PSSpecifier *specifier) {
+    id value = [specifier propertyForKey:@"erPresetRGB"];
     if ([value isKindOfClass:[NSArray class]] && [(NSArray *)value count]) {
         return (NSArray<NSString *> *)value;
     }
     return nil;
 }
 
-static NSInteger ERSegmentCustomIndex(PSSpecifier *specifier) {
-    id value = [specifier propertyForKey:@"erCustomSegmentIndex"];
+static NSInteger ERPresetCustomIndex(PSSpecifier *specifier) {
+    id value = [specifier propertyForKey:@"erPresetCustomIndex"];
     return [value isKindOfClass:[NSNumber class]] ? [value integerValue] : NSNotFound;
 }
 
 static BOOL ERSegmentCompact(PSSpecifier *specifier) {
-    id value = [specifier propertyForKey:@"erSegmentCompactFont"];
+    id value = [specifier propertyForKey:@"erPresetCompact"];
     return [value respondsToSelector:@selector(boolValue)] ? [value boolValue] : NO;
 }
 
@@ -439,6 +439,10 @@ static CGFloat ERBackgroundAlphaValue(void) {
             [_segment setTitleTextAttributes:@{ NSFontAttributeName: [UIFont systemFontOfSize:12.0] }
                                     forState:UIControlStateNormal];
             frame.size.height = 32.0;
+            // 1.0.8-30：**按内容分配段宽**。8 段等宽时每段只有 41pt，而「自定义」是
+            // 三个汉字（12pt 约 36pt）加系统内边距 ≈ 46pt → 会被截成"自定…"。
+            // 打开这个开关后各段按标题 intrinsic 宽度等比分配，三字段的到约 53pt，不再截断。
+            _segment.apportionsSegmentWidthsByContent = YES;
         }
         _segment.frame = frame;
         // 构建标记：既是无障碍标识，也是产物校验脚本用来确认「这一版确实带
@@ -469,13 +473,21 @@ static CGFloat ERBackgroundAlphaValue(void) {
 }
 
 - (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
-    [super refreshCellContentsWithSpecifier:specifier];
+    // 1.0.8-30：POSTMORTEM —— 1.0.8-29 上 PSTableCell 的 refresh 抛了 NSException
+    // （setTitle: 收到非字符串 → Preferences SIGABRT → 点「系统增强」直接闪退）。
+    // 本 cell 的内容全部自己画，不依赖基类做了什么，所以这里兜住异常、只记一行日志，
+    // 保证设置页无论如何都能打开。真要复现，设备日志里会有 [EchoReborn] ERSEG refresh。
+    @try {
+        [super refreshCellContentsWithSpecifier:specifier];
+    } @catch (NSException *exception) {
+        NSLog(@"[EchoReborn] ERSEG refresh threw: %@ -- %@", exception.name, exception.reason);
+    }
     if (specifier) _erSpecifier = specifier;
 
     PSSpecifier *current = specifier ?: _erSpecifier;
     if (!current) return;
 
-    NSArray<NSString *> *values = ERSegmentValueList(current);
+    NSArray<NSString *> *values = ERPresetRGBList(current);
     _erValueMode = (values != nil);
 
     NSInteger index = 0;
@@ -484,7 +496,7 @@ static CGFloat ERBackgroundAlphaValue(void) {
         NSString *stored = ERSegmentReadString(current);
         NSInteger found = [values indexOfObject:stored ?: @""];
         if (found == NSNotFound) {
-            NSInteger custom = ERSegmentCustomIndex(current);
+            NSInteger custom = ERPresetCustomIndex(current);
             found = (custom != NSNotFound) ? custom : 0;
         }
         index = found;
@@ -511,9 +523,9 @@ static CGFloat ERBackgroundAlphaValue(void) {
         return;
     }
 
-    NSArray<NSString *> *values = ERSegmentValueList(specifier);
+    NSArray<NSString *> *values = ERPresetRGBList(specifier);
     NSInteger index = sender.selectedSegmentIndex;
-    NSInteger custom = ERSegmentCustomIndex(specifier);
+    NSInteger custom = ERPresetCustomIndex(specifier);
 
     if (custom != NSNotFound && index == custom) {
         // 1.0.8-29：第 8 段「自定义」不写值 —— 先把选中态滚回上一段，
