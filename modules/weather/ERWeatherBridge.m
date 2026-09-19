@@ -194,6 +194,7 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic, assign) BOOL modelObserved;
 @property (nonatomic, assign) BOOL updating;        // 1.0.8-35：requestModelUpdate 重入保护
 @property (nonatomic, assign) BOOL rebuildScheduled; // 1.0.8-35：重建合并（同一轮只跑一次）
+@property (nonatomic, weak) id kickstartedModel;     // 1.0.8-36：同一个模型只 kickstart 一次
 @property (nonatomic, strong) NSMutableArray<NSString *> *resolvedNames;
 @end
 
@@ -455,7 +456,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-35 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-36 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -749,6 +750,14 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 // ---------------------------------------------------------------------------
 - (void)kickstartWeatherModel {
     if (!self.todayModel) return;
+    // 1.0.8-36 · **同一个模型实例只 kickstart 一次**。
+    //
+    // 这个方法现在挂在刷新入口上（每次刷新都会走到）。反复 setAutoUpdate: / setDelegate: /
+    // addObserver: 会让 Weather 框架一次次回调，虽然 1.0.8-35 已经断了递归环，
+    // 但"每 15 秒重设一次开关"本身没有任何收益，只会增加与私有框架交互的面。
+    // 记一次实例就够了 —— 换模型（候选切换）时会自动重新 kickstart。
+    if (self.kickstartedModel == self.todayModel) return;
+    self.kickstartedModel = self.todayModel;
     ERWeatherLog(@"kickstart: begin on %@", NSStringFromClass([self.todayModel class]));
 
     // ① 打开自动更新 / 定位跟踪
@@ -969,7 +978,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-35 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-36 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
