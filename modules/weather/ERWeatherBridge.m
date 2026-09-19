@@ -192,6 +192,8 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic) BOOL refreshInFlight;
 @property (nonatomic) NSTimeInterval lastRefresh;
 @property (nonatomic, assign) BOOL modelObserved;
+@property (nonatomic, assign) BOOL updating;        // 1.0.8-35：requestModelUpdate 重入保护
+@property (nonatomic, assign) BOOL rebuildScheduled; // 1.0.8-35：重建合并（同一轮只跑一次）
 @property (nonatomic, strong) NSMutableArray<NSString *> *resolvedNames;
 @end
 
@@ -453,7 +455,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-34 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-35 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -623,6 +625,23 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 }
 
 - (void)requestModelUpdate {
+    // 1.0.8-35 · **重入保护** —— 20260920-0343 两次 SpringBoard 崩溃的根因就是这里。
+    //
+    // 崩溃栈：
+    //   [主线程] ERWeatherModule → -[NSObject valueForKey:] → valueForUndefinedKey:
+    //            → NSException → 展开时踩到线程栈保护页 → EXC_BAD_ACCESS(SIGSEGV)
+    //   Kernel Triage 同时报 “mach_vm_allocate_kernel failed” 与 STACK GUARD —— 栈溢出。
+    //
+    // 成因是一条**无界递归**：
+    //   requestModelUpdate → kickstartWeatherModel → setAutoUpdate:/setLocationServicesActive:
+    //   → Weather 框架同步回调 todayModelWantsUpdate: → requestModelUpdate → …
+    // 1.0.8-33 把 kickstart 挂在 resolveTodayModelCandidates（很少走）里，所以这条环没被触发；
+    // 1.0.8-34 我把它挪进刷新入口后，每次刷新都会踩进去 —— 于是开机几秒就崩，看起来像"卡在注销界面"。
+    if (self.updating) {
+        ERWeatherLog(@"requestModelUpdate: re-entered — bail out (recursion guard)");
+        return;
+    }
+    self.updating = YES;
     self.refreshInFlight = YES;
     self.lastRefresh = NSDate.date.timeIntervalSince1970;
 
@@ -668,6 +687,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         ERWeatherLog(@"no update selector on %@ — reading cached model only",
                      NSStringFromClass([self.todayModel class]));
         self.refreshInFlight = NO;
+        self.updating = NO;
         return;
     }
     ERWeatherLog(@"refresh via -[%@ %@]", NSStringFromClass([self.todayModel class]), selectorName);
@@ -677,6 +697,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         __strong typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.refreshInFlight = NO;
+        strongSelf.updating = NO;
         ERWeatherLog(@"model update completed (args: %@ / %@)",
                      first ? NSStringFromClass([first class]) : @"nil",
                      second ? NSStringFromClass([second class]) : @"nil");
@@ -705,6 +726,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         ERWeatherLog(@"requested model update");
     } @catch (__unused NSException *exception) {
         self.refreshInFlight = NO;
+        self.updating = NO;
         ERWeatherLog(@"executeModelUpdateWithCompletion: raised — falling back to cached model");
     }
 }
@@ -782,35 +804,51 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
                         change:(NSDictionary<NSKeyValueChangeKey, id> *)change
                        context:(void *)context {
-    if (object != self.todayModel) return;
-    ERWeatherLog(@"model changed keyPath=%@ — rebuilding", keyPath);
-    [self rebuildSnapshot];
-    if (!self.snapshot.hasLiveData) return;
-    if (self.onUpdate) {
-        dispatch_async(dispatch_get_main_queue(), ^{ if (self.onUpdate) self.onUpdate(); });
+    if (object != self.todayModel) {
+        // 不是我们观察的对象 —— 必须交回给上层，否则会吞掉别人的 KVO
+        [super observeValueForKeyPath:keyPath ofObject:object change:change context:context];
+        return;
     }
+    ERWeatherLog(@"model changed keyPath=%@", keyPath);
+    [self scheduleRebuild];
+}
+
+// 1.0.8-35 · 所有「数据回来了」的回调统一走这里：**异步 + 合并**。
+//
+// 原来 observeValueForKeyPath / todayModel:forecastWasUpdated: / todayModelUpdated: 都
+// 直接同步调 -rebuildSnapshot，而 rebuildSnapshot 会通过 valueForKey: 去读被观察的键 ——
+// 一旦读的动作本身又触发一次通知，就变成同步递归（配合 kickstart 打开的 autoUpdate，
+// 就是 20260920-0343 那次栈溢出崩溃）。
+// 现在：同一轮内的多次通知只排一次任务，且永远在下一个 runloop 上执行。
+- (void)scheduleRebuild {
+    if (self.rebuildScheduled) return;
+    self.rebuildScheduled = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        __strong typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.rebuildScheduled = NO;
+        [strongSelf rebuildSnapshot];
+        if (strongSelf.snapshot.hasLiveData && strongSelf.onUpdate) strongSelf.onUpdate();
+    });
 }
 
 // Weather 框架的 WATodayModelDelegate 回调（informal protocol，按名字命中就生效）
 - (void)todayModel:(id)model forecastWasUpdated:(id)forecast {
-    ERWeatherLog(@"delegate: forecastWasUpdated — rebuilding");
-    [self rebuildSnapshot];
-    if (self.snapshot.hasLiveData && self.onUpdate) {
-        dispatch_async(dispatch_get_main_queue(), ^{ if (self.onUpdate) self.onUpdate(); });
-    }
+    ERWeatherLog(@"delegate: forecastWasUpdated");
+    [self scheduleRebuild];   // 1.0.8-35：改走异步合并，杜绝同步递归
 }
 
 - (void)todayModelUpdated:(id)model {
-    ERWeatherLog(@"delegate: todayModelUpdated — rebuilding");
-    [self rebuildSnapshot];
-    if (self.snapshot.hasLiveData && self.onUpdate) {
-        dispatch_async(dispatch_get_main_queue(), ^{ if (self.onUpdate) self.onUpdate(); });
-    }
+    ERWeatherLog(@"delegate: todayModelUpdated");
+    [self scheduleRebuild];   // 同上
 }
 
 - (void)todayModelWantsUpdate:(id)model {
-    ERWeatherLog(@"delegate: todayModelWantsUpdate — requesting update");
-    [self requestModelUpdate];
+    // 1.0.8-35：**绝不在委托回调里同步再调 requestModelUpdate**。
+    // 那会和 kickstart 里打开的 autoUpdate 组成无界递归（见 requestModelUpdate 顶部说明，
+    // 那正是栈溢出崩溃的成因）。这里只记一条日志，真正的刷新交给 15 秒节流的 refreshIfNeeded。
+    ERWeatherLog(@"delegate: todayModelWantsUpdate (ignored — throttled refresh owns the cycle)");
 }
 
 #pragma mark - 快照
@@ -931,7 +969,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-34 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-35 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
