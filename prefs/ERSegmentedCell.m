@@ -1,6 +1,7 @@
 #import <Preferences/PSTableCell.h>
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
+#import <math.h>
 
 // 三段式（轻 / 中 / 重）控件，绑定到 TapHapticStrength（0/1/2）。
 //
@@ -104,9 +105,312 @@ static void ERSegmentWriteValue(PSSpecifier *specifier, NSInteger value) {
 @interface ERSegmentedCell : PSTableCell
 @end
 
+// ---------------------------------------------------------------------------
+// 1.0.8-29 · 自定义背景色小窗
+//
+// 需求：「背景色」那一行的第 8 段「自定义」点开后，用一个小窗调 R/G/B；
+//       透明度不在小窗里，统一由上方「背景色值」滑块控制。
+// 样式照 Tweak 侧的改名对话框：圆角 24 · 描边白 0.22 · 阴影黑 0.30/28 · 深色玻璃底。
+//
+// 用 presentViewController 而不是自建 UIWindow —— Preferences 进程里自己造窗口
+// 还要处理 windowScene，容易和这个项目以前踩过的"窗口不显示"坑同源。
+// 通过响应链拿到宿主控制器（就是那个 PSListController）present，最稳。
+// ---------------------------------------------------------------------------
+
+static UIViewController *ERHostViewController(UIView *view) {
+    UIResponder *responder = view;
+    while (responder) {
+        if ([responder isKindOfClass:[UIViewController class]]) {
+            return (UIViewController *)responder;
+        }
+        responder = [responder nextResponder];
+    }
+    return nil;
+}
+
+// 把 "38,45,58" 解析成三个 0–255 的整数；解析不出就用兜底值。
+static void ERParseRGBString(NSString *text, CGFloat out[3]) {
+    out[0] = 38.0; out[1] = 45.0; out[2] = 58.0;
+    if (![text isKindOfClass:[NSString class]]) return;
+    NSArray<NSString *> *parts = [text componentsSeparatedByString:@","];
+    if (parts.count < 3) return;
+    for (NSInteger i = 0; i < 3; i++) {
+        CGFloat v = [parts[i] doubleValue];
+        out[i] = MIN(MAX(v, 0.0), 255.0);
+    }
+}
+
+static NSString *ERRGBString(CGFloat rgb[3]) {
+    return [NSString stringWithFormat:@"%d,%d,%d",
+            (int)lround(rgb[0]), (int)lround(rgb[1]), (int)lround(rgb[2])];
+}
+
+@interface ERColorPickerController : UIViewController
+@property (nonatomic, copy) NSString *rgb;
+@property (nonatomic, copy) NSString *alphaText;   // 只用于预览说明，例如 "88"
+@property (nonatomic, copy) void (^onCommit)(NSString *rgb);
+@end
+
+@implementation ERColorPickerController {
+    CGFloat _rgb[3];
+    UIView *_preview;
+    UISlider *_sliders[3];
+    UILabel *_values[3];
+    UIView *_card;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    ERParseRGBString(self.rgb, _rgb);
+
+    self.view.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.45];
+    [self.view addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self
+                                                                           action:@selector(_erBackdropTapped:)]];
+
+    _card = [[UIView alloc] initWithFrame:CGRectZero];
+    _card.backgroundColor = [UIColor colorWithRed:38.0 / 255.0 green:41.0 / 255.0
+                                             blue:50.0 / 255.0 alpha:0.97];
+    _card.layer.cornerRadius = 24.0;
+    _card.layer.cornerCurve = kCACornerCurveContinuous;
+    _card.layer.borderWidth = 0.6;
+    _card.layer.borderColor = [[UIColor whiteColor] colorWithAlphaComponent:0.22].CGColor;
+    _card.layer.shadowColor = UIColor.blackColor.CGColor;
+    _card.layer.shadowOpacity = 0.30;
+    _card.layer.shadowRadius = 28.0;
+    _card.layer.shadowOffset = CGSizeMake(0.0, 10.0);
+    [self.view addSubview:_card];
+
+    UILabel *title = [[UILabel alloc] initWithFrame:CGRectZero];
+    title.text = @"自定义背景色";
+    title.font = [UIFont systemFontOfSize:17.0 weight:UIFontWeightSemibold];
+    title.textColor = UIColor.whiteColor;
+    title.textAlignment = NSTextAlignmentCenter;
+    title.tag = 100;
+    [_card addSubview:title];
+
+    // 预览：把当前色按「背景色值」的透明度糊在一块深灰上，近似卡内玻璃底的样子
+    _preview = [[UIView alloc] initWithFrame:CGRectZero];
+    _preview.layer.cornerRadius = 12.0;
+    _preview.layer.cornerCurve = kCACornerCurveContinuous;
+    _preview.layer.borderWidth = 0.6;
+    _preview.layer.borderColor = [[UIColor whiteColor] colorWithAlphaComponent:0.16].CGColor;
+    _preview.tag = 101;
+    [_card addSubview:_preview];
+
+    NSArray<NSString *> *names = @[@"R", @"G", @"B"];
+    for (NSInteger i = 0; i < 3; i++) {
+        UILabel *name = [[UILabel alloc] initWithFrame:CGRectZero];
+        name.text = names[i];
+        name.font = [UIFont systemFontOfSize:13.0 weight:UIFontWeightSemibold];
+        name.textColor = UIColor.whiteColor;
+        name.textAlignment = NSTextAlignmentCenter;
+        name.tag = 200 + i;
+        [_card addSubview:name];
+
+        UISlider *slider = [[UISlider alloc] initWithFrame:CGRectZero];
+        slider.minimumValue = 0.0;
+        slider.maximumValue = 255.0;
+        slider.value = _rgb[i];
+        slider.continuous = YES;
+        slider.tag = 300 + i;
+        [slider addTarget:self action:@selector(_erSliderChanged:) forControlEvents:UIControlEventValueChanged];
+        [_card addSubview:slider];
+        _sliders[i] = slider;
+
+        UILabel *value = [[UILabel alloc] initWithFrame:CGRectZero];
+        value.font = [UIFont monospacedDigitSystemFontOfSize:13.0 weight:UIFontWeightRegular];
+        value.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.85];
+        value.textAlignment = NSTextAlignmentRight;
+        value.tag = 400 + i;
+        [_card addSubview:value];
+        _values[i] = value;
+    }
+
+    UILabel *hint = [[UILabel alloc] initWithFrame:CGRectZero];
+    hint.text = [NSString stringWithFormat:@"透明度不在这里调 —— 由上方「背景色值」统一控制（当前 %@）",
+                 self.alphaText.length ? self.alphaText : @"88"];
+    hint.font = [UIFont systemFontOfSize:10.5];
+    hint.textColor = [[UIColor whiteColor] colorWithAlphaComponent:0.62];
+    hint.numberOfLines = 2;
+    hint.tag = 500;
+    [_card addSubview:hint];
+
+    UIButton *cancel = [UIButton buttonWithType:UIButtonTypeCustom];
+    [cancel setTitle:@"取消" forState:UIControlStateNormal];
+    cancel.titleLabel.font = [UIFont systemFontOfSize:16.0];
+    [cancel setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    cancel.backgroundColor = [[UIColor whiteColor] colorWithAlphaComponent:0.14];
+    cancel.layer.cornerRadius = 22.0;
+    cancel.layer.cornerCurve = kCACornerCurveContinuous;
+    cancel.tag = 600;
+    [cancel addTarget:self action:@selector(_erCancel) forControlEvents:UIControlEventTouchUpInside];
+    [_card addSubview:cancel];
+
+    UIButton *confirm = [UIButton buttonWithType:UIButtonTypeCustom];
+    [confirm setTitle:@"确定" forState:UIControlStateNormal];
+    confirm.titleLabel.font = [UIFont systemFontOfSize:16.0 weight:UIFontWeightMedium];
+    [confirm setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
+    confirm.backgroundColor = [UIColor colorWithRed:46.0 / 255.0 green:107.0 / 255.0 blue:1.0 alpha:1.0];
+    confirm.layer.cornerRadius = 22.0;
+    confirm.layer.cornerCurve = kCACornerCurveContinuous;
+    confirm.tag = 601;
+    [confirm addTarget:self action:@selector(_erConfirm) forControlEvents:UIControlEventTouchUpInside];
+    [_card addSubview:confirm];
+
+    [self _erRefreshPreview];
+}
+
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGSize screen = self.view.bounds.size;
+    CGFloat w = MIN(300.0, screen.width - 48.0);
+    CGFloat h = 360.0;   // 18 + 标题 22 + 14 + 预览 78 + 16 + 3×40 + 提示 30 + 按钮 44 + 下留白 18
+    _card.frame = CGRectMake(round((screen.width - w) * 0.5), round((screen.height - h) * 0.5), w, h);
+
+    CGFloat pad = 16.0;
+    CGFloat inner = w - pad * 2.0;
+    CGFloat y = 18.0;
+    [(UILabel *)[_card viewWithTag:100] setFrame:CGRectMake(pad, y, inner, 22.0)];
+    y += 22.0 + 14.0;
+    _preview.frame = CGRectMake(round((w - 120.0) * 0.5), y, 120.0, 78.0);
+    y += 78.0 + 16.0;
+
+    for (NSInteger i = 0; i < 3; i++) {
+        [(UILabel *)[_card viewWithTag:200 + i] setFrame:CGRectMake(pad, y, 16.0, 40.0)];
+        _sliders[i].frame = CGRectMake(pad + 24.0, y, inner - 24.0 - 44.0, 40.0);
+        _values[i].frame = CGRectMake(CGRectGetMaxX(_sliders[i].frame) + 4.0, y, 40.0, 40.0);
+        y += 40.0;
+    }
+    [(UILabel *)[_card viewWithTag:500] setFrame:CGRectMake(pad, y, inner, 30.0)];
+    y += 30.0;
+
+    CGFloat bw = (inner - 10.0) * 0.5;
+    [(UIButton *)[_card viewWithTag:600] setFrame:CGRectMake(pad, y, bw, 44.0)];
+    [(UIButton *)[_card viewWithTag:601] setFrame:CGRectMake(pad + bw + 10.0, y, bw, 44.0)];
+}
+
+- (void)_erRefreshPreview {
+    CGFloat alpha = 0.88;
+    if (self.alphaText.length) alpha = MIN(MAX([self.alphaText doubleValue] / 100.0, 0.0), 1.0);
+    UIColor *color = [UIColor colorWithRed:_rgb[0] / 255.0 green:_rgb[1] / 255.0
+                                     blue:_rgb[2] / 255.0 alpha:1.0];
+    _preview.backgroundColor = [UIColor colorWithWhite:0.16 alpha:1.0];
+    // 把 color@alpha 叠在深灰上 —— 就是卡内玻璃底的近似值
+    UIView *film = [_preview viewWithTag:900];
+    if (!film) {
+        film = [[UIView alloc] initWithFrame:_preview.bounds];
+        film.tag = 900;
+        film.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+        [_preview addSubview:film];
+    }
+    film.backgroundColor = [color colorWithAlphaComponent:alpha];
+
+    for (NSInteger i = 0; i < 3; i++) {
+        _values[i].text = [NSString stringWithFormat:@"%d", (int)lround(_rgb[i])];
+    }
+}
+
+- (void)_erSliderChanged:(UISlider *)sender {
+    NSInteger i = sender.tag - 300;
+    if (i < 0 || i > 2) return;
+    _rgb[i] = sender.value;
+    [self _erRefreshPreview];
+}
+
+- (void)_erBackdropTapped:(UITapGestureRecognizer *)gesture {
+    // 只有点在卡片**外面**才算"点背景取消" —— 否则这个手势会把卡片上的
+    // 按钮/滑块的点击一并吃掉（父视图的手势优先于子视图的 UIControl）。
+    CGPoint point = [gesture locationInView:self.view];
+    if (_card && CGRectContainsPoint(_card.frame, point)) return;
+    [self _erCancel];
+}
+
+- (void)_erCancel {
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+- (void)_erConfirm {
+    if (self.onCommit) self.onCommit(ERRGBString(_rgb));
+    [self dismissViewControllerAnimated:YES completion:nil];
+}
+
+@end
+
 @implementation ERSegmentedCell {
     UISegmentedControl *_segment;
     __weak PSSpecifier *_erSpecifier;
+    BOOL _erValueMode;      // 1.0.8-29：声明了 erSegmentValues → 段值是字符串（色值），不是下标
+    NSInteger _erLastIndex; // 上一次确认过的段（点「自定义」取消时要回滚到这里）
+}
+
+// 1.0.8-29：色值模式的两个可选声明。没声明 → 完全走原路（小窗位置 / 轻中重）。
+static NSArray<NSString *> *ERSegmentValueList(PSSpecifier *specifier) {
+    id value = [specifier propertyForKey:@"erSegmentValues"];
+    if ([value isKindOfClass:[NSArray class]] && [(NSArray *)value count]) {
+        return (NSArray<NSString *> *)value;
+    }
+    return nil;
+}
+
+static NSInteger ERSegmentCustomIndex(PSSpecifier *specifier) {
+    id value = [specifier propertyForKey:@"erCustomSegmentIndex"];
+    return [value isKindOfClass:[NSNumber class]] ? [value integerValue] : NSNotFound;
+}
+
+static BOOL ERSegmentCompact(PSSpecifier *specifier) {
+    id value = [specifier propertyForKey:@"erSegmentCompactFont"];
+    return [value respondsToSelector:@selector(boolValue)] ? [value boolValue] : NO;
+}
+
+// 读：色值模式下直接把存着的那串 RGB 取出来（查表反推下标是调用方的事）。
+static NSString *ERSegmentReadString(PSSpecifier *specifier) {
+    NSString *key = ERSpecifierString(specifier, @"key");
+    NSString *domain = ERSegmentDomain(specifier);
+    NSString *value = nil;
+    if ([key length]) {
+        CFPropertyListRef raw = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                         (__bridge CFStringRef)domain);
+        if (raw) {
+            if (CFGetTypeID(raw) == CFStringGetTypeID()) {
+                value = [(__bridge NSString *)raw copy];
+            }
+            CFRelease(raw);
+        }
+    }
+    if (![value length]) {
+        id fallback = [specifier propertyForKey:@"default"];
+        if ([fallback isKindOfClass:[NSString class]]) value = fallback;
+    }
+    return value;
+}
+
+// 写：仍是同一个 key、同一串格式 —— Tweak 侧读法完全不变。
+static void ERSegmentWriteString(PSSpecifier *specifier, NSString *value) {
+    NSString *key = ERSpecifierString(specifier, @"key");
+    if (![key length] || ![value isKindOfClass:[NSString class]]) return;
+    NSString *domain = ERSegmentDomain(specifier);
+
+    CFPreferencesSetAppValue((__bridge CFStringRef)key,
+                             (__bridge CFPropertyListRef)value,
+                             (__bridge CFStringRef)domain);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
+
+    NSString *notification = ERSpecifierString(specifier, @"PostNotification");
+    if (![notification length]) notification = kERSegmentFallbackNotification;
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         (__bridge CFStringRef)notification, NULL, NULL, true);
+}
+
+// 预览要用的「背景色值」，和 Tweak 侧同一个域同一个默认值。
+static CGFloat ERBackgroundAlphaValue(void) {
+    CGFloat value = 88.0;
+    CFPropertyListRef raw = CFPreferencesCopyAppValue(CFSTR("QuickAdd.BackgroundAlpha"),
+                                                     (__bridge CFStringRef)kERSegmentFallbackDomain);
+    if (raw) {
+        if (CFGetTypeID(raw) == CFNumberGetTypeID()) value = [(__bridge NSNumber *)raw doubleValue];
+        CFRelease(raw);
+    }
+    return MIN(MAX(value, 0.0), 100.0);
 }
 
 - (instancetype)initWithStyle:(UITableViewCellStyle)style
@@ -129,14 +433,39 @@ static void ERSegmentWriteValue(PSSpecifier *specifier, NSInteger value) {
         CGFloat minWidth = titles.count >= 4 ? 188.0 : 156.0;
         frame.size.width = MAX(frame.size.width, minWidth);
         frame.size.height = 28.0;
+        // 1.0.8-29：色板那行是 8 段、且要铺满整行 —— 段名都是 2~3 个汉字，
+        // 13pt 会把「自定义」挤出格子，所以这一档改用 12pt，高度也放宽到 32。
+        if (ERSegmentCompact(specifier)) {
+            [_segment setTitleTextAttributes:@{ NSFontAttributeName: [UIFont systemFontOfSize:12.0] }
+                                    forState:UIControlStateNormal];
+            frame.size.height = 32.0;
+        }
         _segment.frame = frame;
         // 构建标记：既是无障碍标识，也是产物校验脚本用来确认「这一版确实带
         // 直读偏好域实现」的存活字符串（0.5.22）。语义上无副作用。
         _segment.accessibilityIdentifier = @"ER-seg-0522-directprefs";
-        self.accessoryView = _segment;
+        if (ERSegmentCompact(specifier)) {
+            // 铺满整行：不进 accessoryView（那会把控件按自身宽度靠右摆），
+            // 直接挂到 contentView 上、由 layoutSubviews 定位。
+            self.accessoryView = nil;
+            [self.contentView addSubview:_segment];
+        } else {
+            self.accessoryView = _segment;
+        }
         self.selectionStyle = UITableViewCellSelectionStyleNone;
     }
     return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    if (!_segment || _segment.superview != self.contentView) return;
+    CGFloat width = CGRectGetWidth(self.contentView.bounds);
+    CGRect frame = _segment.frame;
+    frame.origin.x = 16.0;
+    frame.size.width = MAX(width - 32.0, 120.0);
+    frame.origin.y = round((CGRectGetHeight(self.contentView.bounds) - CGRectGetHeight(frame)) * 0.5);
+    _segment.frame = frame;
 }
 
 - (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
@@ -145,13 +474,92 @@ static void ERSegmentWriteValue(PSSpecifier *specifier, NSInteger value) {
 
     PSSpecifier *current = specifier ?: _erSpecifier;
     if (!current) return;
-    _segment.selectedSegmentIndex = ERSegmentReadValue(current);
+
+    NSArray<NSString *> *values = ERSegmentValueList(current);
+    _erValueMode = (values != nil);
+
+    NSInteger index = 0;
+    if (_erValueMode) {
+        // 色值模式：拿存着的那串 RGB 在表里反查下标；查不到（用户选过自定义）→ 落到「自定义」段。
+        NSString *stored = ERSegmentReadString(current);
+        NSInteger found = [values indexOfObject:stored ?: @""];
+        if (found == NSNotFound) {
+            NSInteger custom = ERSegmentCustomIndex(current);
+            found = (custom != NSNotFound) ? custom : 0;
+        }
+        index = found;
+    } else {
+        index = ERSegmentReadValue(current);
+    }
+
+    NSInteger segments = (NSInteger)_segment.numberOfSegments;
+    if (segments > 0) {
+        if (index < 0) index = 0;
+        if (index > segments - 1) index = segments - 1;
+    }
+    _segment.selectedSegmentIndex = index;
+    _erLastIndex = index;
 }
 
 - (void)_erSegmentChanged:(UISegmentedControl *)sender {
     PSSpecifier *specifier = _erSpecifier;
     if (!specifier) return;
-    ERSegmentWriteValue(specifier, sender.selectedSegmentIndex);
+
+    if (!_erValueMode) {
+        ERSegmentWriteValue(specifier, sender.selectedSegmentIndex);
+        _erLastIndex = sender.selectedSegmentIndex;
+        return;
+    }
+
+    NSArray<NSString *> *values = ERSegmentValueList(specifier);
+    NSInteger index = sender.selectedSegmentIndex;
+    NSInteger custom = ERSegmentCustomIndex(specifier);
+
+    if (custom != NSNotFound && index == custom) {
+        // 1.0.8-29：第 8 段「自定义」不写值 —— 先把选中态滚回上一段，
+        // 再弹 RGB 小窗；用户确定后才把新色写进同一个 key（于是下次进来会停在第 8 段）。
+        sender.selectedSegmentIndex = _erLastIndex;
+        [self _erPresentColorPicker];
+        return;
+    }
+
+    if (index >= 0 && index < (NSInteger)values.count) {
+        ERSegmentWriteString(specifier, values[index]);
+        _erLastIndex = index;
+        // 让设置页里其它依赖同一 key 的地方（如上面的「背景色值」行）也能立刻刷新
+        [self setNeedsLayout];
+    }
+}
+
+- (void)_erPresentColorPicker {
+    PSSpecifier *specifier = _erSpecifier;
+    if (!specifier) return;
+
+    UIViewController *host = ERHostViewController(self);
+    if (!host) {
+        UIWindow *key = nil;
+        for (UIWindow *window in [UIApplication sharedApplication].windows) {
+            if (window.isKeyWindow) { key = window; break; }
+        }
+        host = key.rootViewController;
+    }
+    if (!host || host.presentedViewController) return;
+
+    ERColorPickerController *picker = [[ERColorPickerController alloc] init];
+    picker.rgb = ERSegmentReadString(specifier) ?: @"38,45,58";
+    picker.alphaText = [NSString stringWithFormat:@"%d", (int)lround(ERBackgroundAlphaValue())];
+    __weak typeof(self) weakSelf = self;
+    __weak PSSpecifier *weakSpecifier = specifier;
+    picker.onCommit = ^(NSString *rgb) {
+        PSSpecifier *strongSpecifier = weakSpecifier;
+        if (!strongSpecifier) return;
+        ERSegmentWriteString(strongSpecifier, rgb);
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (strongSelf) [strongSelf refreshCellContentsWithSpecifier:strongSpecifier];
+    };
+    picker.modalPresentationStyle = UIModalPresentationOverFullScreen;
+    picker.modalTransitionStyle = UIModalTransitionStyleCrossDissolve;
+    [host presentViewController:picker animated:YES completion:nil];
 }
 
 @end

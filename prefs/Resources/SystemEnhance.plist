@@ -214,7 +214,7 @@
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
 			<key>label</key>
-			<string>背景色值（框内 + 框外）</string>
+			<string>背景色值</string>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
@@ -239,17 +239,34 @@
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>
 		<dict>
+			<!-- 1.0.8-29：由 PSRadioCell（点进去竖排单选）改为 ERSegmentedCell —— 就是「小窗位置」
+			     用的那个分段控件，样式一致。刻意**不写 label**：8 段要铺满整行，左边放不下
+			     「背景色」三个字（这也是「不要左边的文字」的落地方式）。
+			     erSegmentValues 是新增的"色值模式"：声明了就把这一串 RGB 当段落值读写，
+			     没声明（小窗位置 / 轻中重）就完全走原来的下标老路，互不影响。
+			     erCustomSegmentIndex = 7 → 点第 8 段「自定义」不写值，改弹 RGB 小窗。 -->
 			<key>cell</key>
-			<string>PSRadioCell</string>
-			<key>label</key>
-			<string>背景色（框内 + 框外）</string>
+			<string>PSTitleValueCell</string>
+			<key>cellClass</key>
+			<string>ERSegmentedCell</string>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
 			<string>QuickAdd.BackgroundColor</string>
 			<key>default</key>
 			<string>38,45,58</string>
-			<key>validValues</key>
+			<key>erSegmentTitles</key>
+			<array>
+				<string>灰红</string>
+				<string>灰橙</string>
+				<string>灰黄</string>
+				<string>灰绿</string>
+				<string>灰青</string>
+				<string>灰蓝</string>
+				<string>灰紫</string>
+				<string>自定义</string>
+			</array>
+			<key>erSegmentValues</key>
 			<array>
 				<string>58,34,38</string>
 				<string>58,44,32</string>
@@ -259,38 +276,10 @@
 				<string>38,45,58</string>
 				<string>44,36,62</string>
 			</array>
-			<key>validTitles</key>
-			<array>
-				<string>灰红</string>
-				<string>灰橙</string>
-				<string>灰黄</string>
-				<string>灰绿</string>
-				<string>灰青</string>
-				<string>灰蓝</string>
-				<string>灰紫</string>
-			</array>
-			<key>erIcon</key>
-			<string>paintpalette</string>
-			<key>erIconColor</key>
-			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>自定义背景色 (R,G,B)</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.BackgroundColor</string>
-			<key>default</key>
-			<string>38,45,58</string>
-			<key>erIcon</key>
-			<string>slider.horizontal.3</string>
-			<key>erIconColor</key>
-			<string>teal</string>
+			<key>erCustomSegmentIndex</key>
+			<integer>7</integer>
+			<key>erSegmentCompactFont</key>
+			<true/>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>
