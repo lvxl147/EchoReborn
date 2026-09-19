@@ -456,7 +456,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-36 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-37 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -698,7 +698,6 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         __strong typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.refreshInFlight = NO;
-        strongSelf.updating = NO;
         ERWeatherLog(@"model update completed (args: %@ / %@)",
                      first ? NSStringFromClass([first class]) : @"nil",
                      second ? NSStringFromClass([second class]) : @"nil");
@@ -713,10 +712,39 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
                          error.domain, (long)error.code, error.localizedDescription);
         }
         [strongSelf rebuildSnapshot];
-        // 当前候选刷新完仍然没有数据：换下一个再试一次。全部试完就停在最后一个，
-        // 由 refreshIfNeeded 的 15 秒节流兜底，不会形成死循环。
-        if (!strongSelf.snapshot.hasLiveData && [strongSelf advanceToNextCandidate]) {
-            [strongSelf requestModelUpdate];
+
+        // ------------------------------------------------------------------
+        // 1.0.8-37 · 这里就是 1.0.8-34/35/36 崩溃的**确切位置**。
+        //
+        // 崩溃栈（20260920-2004，逐帧）：
+        //   Weather  -[WATodayModel executeModelUpdateWithCompletion:]
+        //   ERWeatherModule  +52672 / +53356        ← 就是本 block
+        //   Weather  -[WATodayModel _locationUpdateCompleted:error:completion:]
+        //   Weather  __49-[WATodayModel executeModelUpdateWithCompletion:]_block_invoke
+        //   Weather  -[WATodayAutoupdatingLocationModel _executeLocationUpdateWithCompletion:]
+        //   Weather  -[WATodayModel executeModelUpdateWithCompletion:]   ← 回到起点
+        // 这个 7 层结构在栈里**重复了上百次**，最后溢到线程栈保护页 → SIGSEGV。
+        //
+        // 两个致命的细节：
+        //   ① 这个 completion 是**被 Weather 在自己的调用栈里同步调用**的；
+        //   ② 我 1.0.8-35 把 `updating = NO` 放在了本 block 的**最前面**，
+        //      于是轮到下面那句 [strongSelf requestModelUpdate] 时守卫已经放开，
+        //      重入保护形同虚设 —— 这就是为什么 1.0.8-35 修完依然崩。
+        //
+        // 修法（两条必须同时满足）：
+        //   A. `updating` 只在**真正结束**时才放行（放到 retry 判断之后）；
+        //   B. 换候选重试改成**异步**，绝不在 Weather 的调用栈里同步递归。
+        //     异步之后即使重试链很长，也只是 runloop 上的一次次独立任务，栈不再增长；
+        //     而 advanceToNextCandidate 在候选耗尽时返回 NO，链自然终止。
+        // ------------------------------------------------------------------
+        BOOL retry = (!strongSelf.snapshot.hasLiveData && [strongSelf advanceToNextCandidate]);
+        strongSelf.updating = NO;   // ← 到这里才放行（A）
+        if (retry) {
+            __weak typeof(strongSelf) weakRetry = strongSelf;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                __strong typeof(weakRetry) inner = weakRetry;
+                if (inner) [inner requestModelUpdate];
+            });
             return;
         }
         if (strongSelf.onUpdate) strongSelf.onUpdate();
@@ -978,7 +1006,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-36 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-37 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
