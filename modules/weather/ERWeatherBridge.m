@@ -484,7 +484,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-39 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-40 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -813,38 +813,12 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 // 全部用 respondsToSelector 探测 + @try 兜底：私有类的这些开关在 iOS 版本之间
 // 名字会变，缺哪个都不该让磁贴挂掉。
 // ---------------------------------------------------------------------------
-- (void)kickstartWeatherModel {
-    if (!self.todayModel) return;
-    // 1.0.8-36 · **同一个模型实例只 kickstart 一次**。
-    //
-    // 这个方法现在挂在刷新入口上（每次刷新都会走到）。反复 setAutoUpdate: / setDelegate: /
-    // addObserver: 会让 Weather 框架一次次回调，虽然 1.0.8-35 已经断了递归环，
-    // 但"每 15 秒重设一次开关"本身没有任何收益，只会增加与私有框架交互的面。
-    // 记一次实例就够了 —— 换模型（候选切换）时会自动重新 kickstart。
-    if (self.kickstartedModel == self.todayModel) return;
-    self.kickstartedModel = self.todayModel;
-    ERWeatherLog(@"kickstart: begin on %@", NSStringFromClass([self.todayModel class]));
-
-    // ① 打开自动更新 / 定位跟踪
-    NSArray<NSString *> *flagSelectors = @[
-        @"setAutoUpdate:", @"setAutoUpdateEnabled:",
-        @"setIsLocationTrackingEnabled:", @"setLocationTrackingEnabled:",
-        @"setLocationServicesActive:", @"setLocationServicesEnabled:",
-    ];
-    NSMutableArray<NSString *> *flagHits = [NSMutableArray array];
-    for (NSString *name in flagSelectors) {
-        SEL selector = NSSelectorFromString(name);
-        if (![self.todayModel respondsToSelector:selector]) continue;
-        @try {
-            ((void (*)(id, SEL, BOOL))objc_msgSend)(self.todayModel, selector, YES);
-            [flagHits addObject:name];
-        } @catch (__unused NSException *exception) {
-            ERWeatherLog(@"kickstart: %@ raised", name);
-        }
-    }
-    // 命中的名字写进日志 —— 这是下一次修正候选表唯一可靠的依据（不命中也要记，
-    // 否则无法区分「类上没有这个方法」和「代码没跑到」）。
-    ERWeatherLog(@"kickstart: flag hits=%@", flagHits.count ? flagHits : @"(none)");
+// 1.0.8-40 · 模型能力表（可重复调用，最多 4 次）。
+// 1.0.8-39 把它内联在 kickstart 里、且在"只 kickstart 一次"的守卫之后，等于从没执行过。
+- (void)dumpModelCapabilitiesIfNeeded {
+    static NSUInteger dumpCount = 0;
+    if (dumpCount >= 4) return;
+    dumpCount++;
 
     // ------------------------------------------------------------------
     // 1.0.8-39 · 诊断：把这个模型的「能力表」打全。
@@ -875,6 +849,50 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
                  locationValue ? [NSString stringWithFormat:@"%@<%@>", NSStringFromClass([locationValue class]), locationValue] : @"(nil)",
                  cityValue ? [NSString stringWithFormat:@"%@<%@>", NSStringFromClass([cityValue class]), cityValue] : @"(nil)",
                  locModelValue ? NSStringFromClass([locModelValue class]) : @"(nil)");
+}
+
+- (void)kickstartWeatherModel {
+    if (!self.todayModel) return;
+    // 1.0.8-36 · **同一个模型实例只 kickstart 一次**。
+    //
+    // 这个方法现在挂在刷新入口上（每次刷新都会走到）。反复 setAutoUpdate: / setDelegate: /
+    // addObserver: 会让 Weather 框架一次次回调，虽然 1.0.8-35 已经断了递归环，
+    // 但"每 15 秒重设一次开关"本身没有任何收益，只会增加与私有框架交互的面。
+    // 记一次实例就够了 —— 换模型（候选切换）时会自动重新 kickstart。
+    if (self.kickstartedModel == self.todayModel) {
+        // 1.0.8-40 · **跳过 kickstart 时也要打一次能力表**。
+        // 1.0.8-39 把能力表放在了这条守卫**后面**，结果：模型在用户清空日志之前就
+        // 已经 kickstart 过，之后每次刷新都被守卫跳过 —— 那份日志里 `kickstart`
+        // 与 `caps` 一行都没有，诊断白做。现在改成"跳过也打"。
+        [self dumpModelCapabilitiesIfNeeded];
+        return;
+    }
+    self.kickstartedModel = self.todayModel;
+    ERWeatherLog(@"kickstart: begin on %@", NSStringFromClass([self.todayModel class]));
+
+    // ① 打开自动更新 / 定位跟踪
+    NSArray<NSString *> *flagSelectors = @[
+        @"setAutoUpdate:", @"setAutoUpdateEnabled:",
+        @"setIsLocationTrackingEnabled:", @"setLocationTrackingEnabled:",
+        @"setLocationServicesActive:", @"setLocationServicesEnabled:",
+    ];
+    NSMutableArray<NSString *> *flagHits = [NSMutableArray array];
+    for (NSString *name in flagSelectors) {
+        SEL selector = NSSelectorFromString(name);
+        if (![self.todayModel respondsToSelector:selector]) continue;
+        @try {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(self.todayModel, selector, YES);
+            [flagHits addObject:name];
+        } @catch (__unused NSException *exception) {
+            ERWeatherLog(@"kickstart: %@ raised", name);
+        }
+    }
+    // 命中的名字写进日志 —— 这是下一次修正候选表唯一可靠的依据（不命中也要记，
+    // 否则无法区分「类上没有这个方法」和「代码没跑到」）。
+    ERWeatherLog(@"kickstart: flag hits=%@", flagHits.count ? flagHits : @"(none)");
+
+    [self dumpModelCapabilitiesIfNeeded];
+
 
     // ② 注册成 delegate（WATodayModel 的回调是 informally declared 的三个方法，见文件尾部）
     if ([self.todayModel respondsToSelector:@selector(setDelegate:)]) {
@@ -1073,7 +1091,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-39 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-40 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
