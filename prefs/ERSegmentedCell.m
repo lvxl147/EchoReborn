@@ -463,6 +463,9 @@ static CGFloat ERBackgroundAlphaValue(void) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    // 1.0.8-32：两个系统标签再兜一次（PSTableCell 有可能在布局阶段重新赋值）
+    if (!self.textLabel.isHidden) { self.textLabel.hidden = YES; self.textLabel.text = @""; }
+    if (!self.detailTextLabel.isHidden) { self.detailTextLabel.hidden = YES; self.detailTextLabel.text = @""; }
     if (!_segment || _segment.superview != self.contentView) return;
     CGFloat width = CGRectGetWidth(self.contentView.bounds);
     CGRect frame = _segment.frame;
@@ -483,6 +486,16 @@ static CGFloat ERBackgroundAlphaValue(void) {
         NSLog(@"[EchoReborn] ERSEG refresh threw: %@ -- %@", exception.name, exception.reason);
     }
     if (specifier) _erSpecifier = specifier;
+
+    // 1.0.8-32：这一行**只有分段控件**一个内容。
+    // 1.0.8-31 把 cell 换成 PSTableCell 后，灰红/灰橙上的数字从左边挪到了右边 ——
+    // 因为 PSTableCell 的 refresh 一样会把 specifier 的当前值（那串 RGB）画进
+    // detailTextLabel（右侧读数位），压住最后一段「自定义」。
+    // 这里把两个系统标签都清空并隐藏，layoutSubviews 里再兜一次。
+    self.textLabel.text = @"";
+    self.detailTextLabel.text = @"";
+    self.textLabel.hidden = YES;
+    self.detailTextLabel.hidden = YES;
 
     PSSpecifier *current = specifier ?: _erSpecifier;
     if (!current) return;
