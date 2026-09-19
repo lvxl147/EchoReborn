@@ -66,6 +66,42 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>锁屏音乐</string>
+			<key>footerText</key>
+			<string>隐藏系统自带的那块锁屏音乐组件（iOS 17 上属于 MediaRemoteUI / MRU 系，封面 + 歌名 + 播放键那一块）。开启后锁屏不会再出现系统音乐条，避免和本插件自己的音乐胶囊重复显示。这一项与「底部组件 → 音乐胶囊」的总开关互不影响：只想藏系统的、不放自己的胶囊也可以。</string>
+		</dict>
+		<!-- 1.0.8-34：由「底部组件 → 音乐胶囊」搬到这里，单独一张卡（相机增强的下一张）。
+		     原来它挂在音乐胶囊那个分组里，而「音乐胶囊」总开关默认关 —— 于是整个锁屏处理
+		     路径在 enabled 判断处提前 return，隐藏逻辑一次都执行不到。搬到系统增强后它与
+		     胶囊模块完全解耦，只认自己这一个 key（key 没变，老用户的设置平滑继承）。 -->
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>隐藏系统锁屏音乐</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>MusicCapsule.HideSystemNowPlaying</string>
+			<key>default</key>
+			<true/>
+			<key>erIcon</key>
+			<string>music.note.list</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>music.note.list</string>
+				<string>music.note</string>
+				<string>music.note.tv</string>
+			</array>
+			<key>erIconColor</key>
+			<string>purple</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>长按桌面快速添加</string>
 			<key>footerText</key>
 			<string>开启后，长按主屏幕上的任意图标，快捷菜单顶部会出现一行「添加到文件夹」：点选手机上已有的文件夹即可把该图标移入。下面的名称设置决定这一行显示的文字。下方三个滑块分别调整卡片外的压暗、卡片内的压暗与卡片内的模糊程度，全部可调，默认值即推荐效果。「背景色值」滑块与「背景色」色板控制卡片玻璃底的染色（透明度与色相，默认灰蓝），自定义可直接填 R,G,B。</string>

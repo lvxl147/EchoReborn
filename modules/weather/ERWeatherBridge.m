@@ -453,7 +453,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-33 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-34 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -625,6 +625,25 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 - (void)requestModelUpdate {
     self.refreshInFlight = YES;
     self.lastRefresh = NSDate.date.timeIntervalSince1970;
+
+    // 1.0.8-34 · 把「挑一个能拉数据的模型」与「打开模型开关」挪到**刷新入口**里。
+    //
+    // 这两步原本挂在 -resolveTodayModelCandidates 末尾，而那条路径只在首次 start 时
+    // 走一次 —— 磁贴被删除后重新添加、或视图重建时根本不经过。实机日志
+    // （20260920-031717）里**一条 `kickstart:` 都没有**，就是这么来的：
+    //   ① 没有 kickstart → autoUpdate/定位 三个位从没打开过；
+    //   ② 也没机会从 WAForecastModel 换到 WATodayModel 系。
+    // 刷新入口是每次都会走的，放这里必然执行。
+    if (!self.snapshot.hasLiveData) {
+        NSUInteger best = [self bestDryCandidateIndex];
+        if (best < self.candidates.count && (best != self.candidateIndex || !self.todayModel)) {
+            self.candidateIndex = best;
+            self.todayModel = self.candidates[best];
+            ERWeatherLog(@"dry run: switch to fetchable candidate #%lu %@",
+                         (unsigned long)best, NSStringFromClass([self.todayModel class]));
+        }
+    }
+    [self kickstartWeatherModel];
 
     // 1.0.6-16（第 2 条）：刷新入口不止一个名字。
     //
@@ -912,7 +931,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-33 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-34 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
