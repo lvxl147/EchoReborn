@@ -484,7 +484,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-38 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-39 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -846,6 +846,36 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     // 否则无法区分「类上没有这个方法」和「代码没跑到」）。
     ERWeatherLog(@"kickstart: flag hits=%@", flagHits.count ? flagHits : @"(none)");
 
+    // ------------------------------------------------------------------
+    // 1.0.8-39 · 诊断：把这个模型的「能力表」打全。
+    //
+    // 现在已知：`executeModelUpdateWithCompletion:` 每次都失败在
+    //   com.apple.weather.errorDomain code=4，且 userInfo 是**空的**；
+    // 同时 probe 显示城市缓存里有「北京」，但没有任何读数（temp=--°）。
+    // 参考实现（com.simon.ccweathermodule）额外链接了 CoreLocation、并且有
+    // -_kickstartLocationManager / reverseGeocodeLocation: 这套动作 ——
+    // 说明它需要**自己把定位踢起来**。
+    // 这一行把「模型有没有 setLocation:/setCity:、当前 location/city 是什么」
+    // 全部记下来，下一版就能直接补上缺的那一步，而不是继续猜。
+    // ------------------------------------------------------------------
+    id model = self.todayModel;
+    NSMutableArray<NSString *> *caps = [NSMutableArray array];
+    NSArray<NSString *> *probes = @[@"setLocation:", @"setCity:", @"setWeatherLocation:",
+                                    @"setIsLocationTrackingEnabled:", @"setLocationServicesActive:",
+                                    @"setAutoUpdate:", @"executeModelUpdateWithCompletion:",
+                                    @"updateLocation:", @"setDelegate:"];
+    for (NSString *name in probes) {
+        if ([model respondsToSelector:NSSelectorFromString(name)]) [caps addObject:name];
+    }
+    id locationValue = ERWValueQuietly(model, @"location");
+    id cityValue = ERWValueQuietly(model, @"city");
+    id locModelValue = ERWValueQuietly(model, @"locationModel");
+    ERWeatherLog(@"model caps: %@ | supports=%@ | location=%@ | city=%@ | locationModel=%@",
+                 NSStringFromClass([model class]), caps,
+                 locationValue ? [NSString stringWithFormat:@"%@<%@>", NSStringFromClass([locationValue class]), locationValue] : @"(nil)",
+                 cityValue ? [NSString stringWithFormat:@"%@<%@>", NSStringFromClass([cityValue class]), cityValue] : @"(nil)",
+                 locModelValue ? NSStringFromClass([locModelValue class]) : @"(nil)");
+
     // ② 注册成 delegate（WATodayModel 的回调是 informally declared 的三个方法，见文件尾部）
     if ([self.todayModel respondsToSelector:@selector(setDelegate:)]) {
         id current = ERWValueQuietly(self.todayModel, @"delegate");
@@ -1043,7 +1073,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-38 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-39 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
