@@ -98,6 +98,70 @@ static void ERSystemLog(NSString *format, ...) {
             [corner setProperty:@[@"左上", @"右上", @"左下", @"右下"] forKey:@"erSegmentTitles"];
             [corner setProperty:@"com.strive.echoreborn/ReloadPrefs" forKey:@"PostNotification"];
             [specs addObject:corner];
+
+            // 1.0.8-25：plist 装载失败时的代码兜底也要与 plist 逐项对齐，
+            // 否则新加的「长按桌面快速添加」分组（3 个外观滑块）会只在 plist 正常时才出现。
+            PSSpecifier *qaGroup = [PSSpecifier groupSpecifierWithName:@"长按桌面快速添加"];
+            [qaGroup setProperty:@"开启后，长按主屏幕上的任意图标，快捷菜单顶部会出现一行「添加到文件夹」：点选手机上已有的文件夹即可把该图标移入。下面的名称设置决定这一行显示的文字。下方三个滑块分别调整卡片外的压暗、卡片内的压暗与卡片内的模糊程度，全部可调，默认值即推荐效果。"
+                        forKey:@"footerText"];
+            [specs addObject:qaGroup];
+
+            PSSpecifier *qaSw = [PSSpecifier preferenceSpecifierNamed:@"快速添加"
+                                                             target:self
+                                                                set:@selector(setPreferenceValue:specifier:)
+                                                                get:@selector(readPreferenceValue:)
+                                                             detail:Nil
+                                                               cell:PSSwitchCell
+                                                              edit:Nil];
+            [qaSw setProperty:@"QuickAdd.Enabled" forKey:@"key"];
+            [qaSw setProperty:kERSystemSuite forKey:@"defaults"];
+            [qaSw setProperty:@NO forKey:@"default"];
+            [qaSw setProperty:@"com.strive.echoreborn/ReloadPrefs" forKey:@"PostNotification"];
+            [qaSw setProperty:ERImageIconWithFallbacks(@[@"folder.badge.plus",
+                                                        @"folder.fill.badge.plus",
+                                                        @"folder",
+                                                        @"plus.circle.fill"],
+                                                      nil, @"加", @"teal") forKey:@"iconImage"];
+            [specs addObject:qaSw];
+
+            PSSpecifier *qaName = [PSSpecifier preferenceSpecifierNamed:@"名称设置"
+                                                               target:self
+                                                                  set:@selector(setPreferenceValue:specifier:)
+                                                                  get:@selector(readPreferenceValue:)
+                                                               detail:Nil
+                                                                 cell:PSEditTextCell
+                                                                  edit:Nil];
+            [qaName setProperty:@"QuickAdd.ActionName" forKey:@"key"];
+            [qaName setProperty:kERSystemSuite forKey:@"defaults"];
+            [qaName setProperty:@"添加到文件夹" forKey:@"default"];
+            [qaName setProperty:@"com.strive.echoreborn/ReloadPrefs" forKey:@"PostNotification"];
+            [qaName setProperty:ERImageIconWithFallbacks(@[@"pencil",
+                                                          @"square.and.pencil"],
+                                                        nil, @"名", @"teal") forKey:@"iconImage"];
+            [specs addObject:qaName];
+
+            [specs addObject:[self erSliderNamed:@"框外压暗"
+                                            key:@"QuickAdd.OutsideDarkness"
+                                       iconSymbols:@[@"moon.fill"]
+                                           fallback:@"暗"
+                                       defaultValue:30.0
+                                                min:0.0
+                                                max:100.0]];
+            [specs addObject:[self erSliderNamed:@"框内压暗"
+                                            key:@"QuickAdd.InsideDarkness"
+                                       iconSymbols:@[@"circle.righthalf.filled"]
+                                           fallback:@"暗"
+                                       defaultValue:30.0
+                                                min:0.0
+                                                max:100.0]];
+            [specs addObject:[self erSliderNamed:@"框内模糊"
+                                            key:@"QuickAdd.InsideBlur"
+                                       iconSymbols:@[@"mosaic"]
+                                           fallback:@"糊"
+                                       defaultValue:6.0
+                                                min:0.0
+                                                max:30.0]];
+
             _specifiers = specs;
             ERSystemLog(@"system-enhance: plist EMPTY -> built %lu specifier(s) in code",
                        (unsigned long)specs.count);
@@ -153,6 +217,38 @@ static void ERSystemLog(NSString *format, ...) {
     NSString *note = [specifier propertyForKey:@"PostNotification"];
     if ([note length]) notify_post(note.UTF8String);
     ERSystemLog(@"system-enhance: set %@ = %@ (domain %@)", key, value, [self erDomainForSpecifier:specifier]);
+}
+
+#pragma mark - 1.0.8-25：plist 装载失败时的代码兜底用的滑块构造
+
+// 与 plist 里 操作按钮 / 快速添加 的 ERSliderTrackCell 逐项对齐：
+// cell=PSSliderCell + cellClass=ERSliderTrackCell，图标走 teal。
+- (PSSpecifier *)erSliderNamed:(NSString *)name
+                           key:(NSString *)key
+                  iconSymbols:(NSArray<NSString *> *)symbols
+                      fallback:(NSString *)fallback
+                  defaultValue:(double)value
+                           min:(double)min
+                           max:(double)max {
+    PSSpecifier *s = [PSSpecifier preferenceSpecifierNamed:name
+                                                    target:self
+                                                       set:@selector(setPreferenceValue:specifier:)
+                                                       get:@selector(readPreferenceValue:)
+                                                    detail:Nil
+                                                      cell:PSSliderCell
+                                                     edit:Nil];
+    [s setProperty:@"ERSliderTrackCell" forKey:@"cellClass"];
+    [s setProperty:key forKey:@"key"];
+    [s setProperty:kERSystemSuite forKey:@"defaults"];
+    [s setProperty:@(value) forKey:@"default"];
+    [s setProperty:@(min) forKey:@"min"];
+    [s setProperty:@(max) forKey:@"max"];
+    [s setProperty:@54.0 forKey:@"height"];
+    [s setProperty:@YES forKey:@"showValue"];
+    [s setProperty:@NO forKey:@"isContinuous"];
+    [s setProperty:@"com.strive.echoreborn/ReloadPrefs" forKey:@"PostNotification"];
+    [s setProperty:ERImageIconWithFallbacks(symbols, nil, fallback, @"teal") forKey:@"iconImage"];
+    return s;
 }
 
 @end

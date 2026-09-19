@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Echo Reborn 设置页重构 · v12（系统增强 · 快速添加卡加标题 + 3 个滑块）</title>
+<style>
+  :root{
+    --bg:#f2f2f7;--card:#fff;--txt:#1c1c1e;--muted:#6b6b70;--faint:#8e8e93;--line:#e5e5ea;
+    --chip:#f2f2f7;--accent:#185FA5;--accentbg:#E6F1FB;--okbg:#EAF3DE;--oktxt:#3B6D11;
+    --warn:#BA7517;--warnbg:#FAEEDA;--badbg:#FCEBEB;--badtxt:#A32A2A;--mono:#f2f2f7;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{--bg:#000;--card:#1c1c1e;--txt:#f2f2f7;--muted:#a1a1a6;--faint:#8e8e93;--line:#38383a;
+      --chip:#2c2c2e;--accent:#85B7EB;--accentbg:#042C53;--okbg:#27500A;--oktxt:#C0DD97;
+      --warn:#EF9F27;--warnbg:#412402;--badbg:#501313;--badtxt:#F7C1C1;--mono:#2c2c2e;}
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",Roboto,sans-serif;
+    line-height:1.6;padding:32px 20px 72px;}
+  .wrap{max-width:760px;margin:0 auto;}
+  h1{font-size:20px;font-weight:500;margin:0 0 4px;}
+  .sub{font-size:13px;color:var(--muted);margin:0 0 8px;}
+  h2{font-size:14px;font-weight:500;margin:34px 0 12px;}
+  .badges{display:flex;gap:6px;flex-wrap:wrap;margin:2px 0 0;}
+  .badge{display:inline-block;font-size:12px;padding:2px 10px;border-radius:20px;background:var(--warnbg);color:var(--warn);}
+  .badge.ok{background:var(--okbg);color:var(--oktxt);}
+  .note{font-size:12.5px;color:var(--muted);background:var(--card);border:0.5px solid var(--line);
+    border-radius:12px;padding:14px 16px;margin-top:12px;}
+  .note b{color:var(--txt);font-weight:500;}
+  .note.warn{border-color:var(--warn);}
+  .note.fix{border-color:var(--accent);}
+  .k{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;background:var(--chip);padding:1px 5px;border-radius:4px;}
+  .card{background:var(--card);border:0.5px solid var(--line);border-radius:12px;
+    padding:11px 15px;margin-bottom:9px;display:flex;align-items:center;gap:12px;}
+  .card.stack{align-items:flex-start;}
+  .card.hl{border-color:var(--accent);}
+  .body{flex:1;min-width:0;}
+  .t{font-size:14px;}
+  .n{font-size:12px;color:var(--faint);margin-top:2px;}
+  .pill{font-size:12px;padding:2px 10px;border-radius:20px;flex:none;background:var(--chip);color:var(--muted);}
+  .pill.on{background:var(--okbg);color:var(--oktxt);}
+  .chev{color:var(--faint);font-size:16px;flex:none;}
+  .subrow{display:flex;align-items:center;gap:12px;margin-top:9px;padding-top:9px;border-top:0.5px solid var(--line);}
+  .subrow .t{font-size:13px;flex:1;}
+  .ic{width:29px;height:29px;border-radius:7px;flex:none;display:flex;align-items:center;
+      justify-content:center;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.08);}
+  .ic svg{width:17px;height:17px;display:block;}
+  .c-teal{background:#1D9E76;color:#fff;}
+  /* 滑块行 mock（复刻 ERSliderTrackCell 版式，图标与上方行同为 29pt 且左对齐） */
+  .srow{display:flex;align-items:center;gap:12px;margin-top:9px;padding-top:9px;border-top:0.5px solid var(--line);}
+  .srow .name{font-size:13px;width:74px;flex:none;}
+  .step{width:24px;height:24px;border-radius:12px;background:var(--chip);color:var(--muted);
+        display:flex;align-items:center;justify-content:center;font-size:15px;flex:none;}
+  .track{flex:1;height:4px;border-radius:2px;background:var(--line);position:relative;margin:0 2px;}
+  .track i{position:absolute;top:-4px;width:12px;height:12px;border-radius:50%;background:var(--accent);}
+  .val{width:34px;text-align:center;font-size:13px;color:var(--muted);flex:none;}
+  .legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:12px;color:var(--muted);}
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);
+    border:0.5px solid var(--line);border-radius:12px;overflow:hidden;}
+  th,td{text-align:left;padding:9px 12px;border-bottom:0.5px solid var(--line);vertical-align:top;}
+  th{font-weight:500;color:var(--muted);font-size:12px;background:var(--chip);}
+  tr:last-child td{border-bottom:none;}
+  td.mono{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;}
+  td.b{font-weight:500;}
+  .ok{color:var(--oktxt);font-weight:500;}
+</style>
+</head>
+<body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-folderplus" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.2l2 2.5h7.8A2.5 2.5 0 0 1 21 10v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17z"/><path d="M12 10.5v5M9.5 13h5" stroke-linecap="round"/></g></symbol>
+  <symbol id="i-pencil" viewBox="0 0 24 24"><g fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20h16M14.5 4.5l3 3L8 17l-4 1 1-4z"/></g></symbol>
+  <symbol id="i-moon" viewBox="0 0 24 24"><g fill="#fff"><path d="M20 14.5A8 8 0 0 1 9.5 4 6.5 6.5 0 1 0 20 14.5z"/></g></symbol>
+  <symbol id="i-half" viewBox="0 0 24 24"><g fill="#fff"><path d="M12 3a9 9 0 0 0 0 18z"/><path fill="none" stroke="#1D9E76" stroke-width="1.6" d="M12 3a9 9 0 0 1 0 18z"/></g></symbol>
+  <symbol id="i-mosaic" viewBox="0 0 24 24"><g fill="#fff"><circle cx="6" cy="6" r="2.2"/><circle cx="12" cy="6" r="2.2"/><circle cx="18" cy="6" r="2.2"/><circle cx="6" cy="12" r="2.2"/><circle cx="12" cy="12" r="2.2"/><circle cx="18" cy="12" r="2.2"/><circle cx="6" cy="18" r="2.2"/><circle cx="12" cy="18" r="2.2"/><circle cx="18" cy="18" r="2.2"/></g></symbol>
+</svg>
+
+<div class="wrap">
+  <h1>Echo Reborn 设置页重构 · v12</h1>
+  <p class="sub">在 v11 基础上<b>只改「系统增强 → 快速添加」这一张卡</b>：① 卡加标题「长按桌面快速添加」；② 在「名称设置」下方新增 3 个滑块，<b>样式与「界面优化 → 操作按钮」完全一致</b>（复用 <span class="k">ERSliderTrackCell</span>）。原状（开关+名称）与新加（3 滑块）<b>同属这一张卡，不拆分</b>。</p>
+  <div class="badges">
+    <span class="badge ok">v11 其它内容一字不动</span>
+    <span class="badge">只动 SystemEnhance.plist + 兜底代码</span>
+    <span class="badge">不新增 dylib / 不改 CI</span>
+  </div>
+
+  <h2>零、v12 净变更（先看这一屏）</h2>
+  <div class="note fix">
+    <b>「系统增强」子页 · 快速添加卡，两处改动（全部在一张卡内）：</b><br><br>
+    ① <b>加卡片标题</b>：原本是「无 label 的 PSGroupCell」，现加 <span class="k">label = 长按桌面快速添加</span>（分组标题，与「相机增强」卡同款样式）。<b>原状的「快速添加」开关与「名称设置」文本，和下面新加的 3 个滑块，全部在这同一个分组（一张卡）里。</b><br>
+    ② <b>加 3 个滑块</b>，全部插在「名称设置」行<b>下方、同一张卡内</b>，<b>逐字复用「操作按钮」的滑块单元格</b>（<span class="k">cell=PSSliderCell</span> + <span class="k">cellClass=ERSliderTrackCell</span>）：<br>
+    &nbsp;&nbsp;· <b>框外压暗</b>（已去掉"背景"二字）—— 0–100，默认 <b>30</b>（0 = 不压暗）<br>
+    &nbsp;&nbsp;· <b>框内压暗</b>（已去掉"背景"二字）—— 0–100，默认 <b>30</b>（0 = 不压暗）<br>
+    &nbsp;&nbsp;· <b>框内模糊</b> —— 0–30，默认 <b>6</b>（0 = 不模糊）<br>
+    ③ 三行图标色走本卡既有的 <span class="k">teal</span>（与「快速添加 / 名称设置」一致），图标 29pt、左边缘与上方开关行对齐；默认值即 v21 定稿的实机效果（30 / 30 / 6）。<br>
+    ④ 域 <span class="k">com.strive.echoreborn.preferences</span>、通知 <span class="k">com.strive.echoreborn/ReloadPrefs</span> 与现有逐项相同。
+  </div>
+
+  <div class="note warn">
+    <b>关于第 2 条原文：</b>你写的「2，框外背景……框内的背景压暗」—— 项号 2 前面写成了"框外背景"，但描述是"框内的背景压暗"。
+    我按<b>描述</b>理解为「框<b>内</b>压暗」（与第 1 条"框外"成对），并已去掉两行的"背景"二字 → <b>框外压暗 / 框内压暗</b>。若你本意是两项都是"框外"，说一声我改。
+  </div>
+
+  <h2>零之一、快速添加卡 · before → after（同一张卡）</h2>
+  <div class="cmp">
+    <div class="cell" style="min-width:300px">
+      <b style="text-align:center;display:block;margin-bottom:8px">现状（v11）：无标题卡</b>
+      <div class="card stack" style="opacity:.85;text-align:left">
+        <div class="body">
+          <div class="n" style="color:var(--muted)">（无标题分组）</div>
+          <div class="subrow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-folderplus"/></svg></span>
+            <span class="t">快速添加</span><span class="pill" style="margin-left:auto;">关</span></div>
+          <div class="subrow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-pencil"/></svg></span>
+            <span class="t">名称设置</span>
+            <span style="margin-left:auto;background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:2px 10px;color:var(--accent)">添加到文件夹</span></div>
+        </div></div>
+      <span style="display:inline-block;font-size:11px;padding:1px 7px;border-radius:20px;background:var(--warnbg);color:var(--warn);margin-top:6px">卡没有标题；外观不可调，只能来回改代码</span>
+    </div>
+
+    <div class="cell" style="min-width:320px">
+      <b style="text-align:center;display:block;margin-bottom:8px">v12：加标题 + 3 滑块，仍是一张卡</b>
+      <div class="card stack hl" style="text-align:left">
+        <div class="body">
+          <div class="t" style="color:var(--accent)">长按桌面快速添加</div>
+          <div class="n" style="color:var(--muted)">分组标题（PSGroupCell 带 label · 原状与新加同属此卡）</div>
+          <!-- 原状两行 -->
+          <div class="subrow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-folderplus"/></svg></span>
+            <span class="t">快速添加</span><span class="pill" style="margin-left:auto;">关</span></div>
+          <div class="subrow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-pencil"/></svg></span>
+            <span class="t">名称设置</span>
+            <span style="margin-left:auto;background:var(--chip);border:1px solid var(--line);border-radius:6px;padding:2px 10px;color:var(--accent)">添加到文件夹</span></div>
+          <!-- 新加三行滑块（图标 29pt，与上方行同宽、左对齐） -->
+          <div class="srow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-moon"/></svg></span>
+            <span class="name">框外压暗</span>
+            <span class="step">−</span><span class="track"><i style="left:30%"></i></span><span class="step">+</span>
+            <span class="val">30</span></div>
+          <div class="srow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-half"/></svg></span>
+            <span class="name">框内压暗</span>
+            <span class="step">−</span><span class="track"><i style="left:30%"></i></span><span class="step">+</span>
+            <span class="val">30</span></div>
+          <div class="srow"><span class="ic c-teal"><svg viewBox="0 0 24 24"><use href="#i-mosaic"/></svg></span>
+            <span class="name">框内模糊</span>
+            <span class="step">−</span><span class="track"><i style="left:20%"></i></span><span class="step">+</span>
+            <span class="val">6</span></div>
+        </div></div>
+    </div>
+  </div>
+  <div class="note">所有行的图标均为 <b>29pt</b>、左边缘对齐（真实 <span class="k">ERSliderTrackCell</span> 按 <span class="k">kERIconLeading=20</span> 与开关行逐像素对齐，不会错位）。</div>
+
+  <h2>零之二、滑块样式 = 「操作按钮」同款（已验证可用）</h2>
+  <div class="note">
+    三个滑块<b>不新造单元格</b>，直接复用 <span class="k">ERSliderTrackCell</span>（定义在 <span class="k">prefs/ERSliderCell.m</span>，
+    「界面优化 → 操作按钮」的「垂直偏移 / 横向缩进 / 按钮大小」已用同款，实机验证通过）。每行版式：
+    <div style="margin-top:10px;padding:10px 12px;background:var(--chip);border-radius:10px;font-size:12.5px;color:var(--txt)">
+      [图标 29] &nbsp;[标题 88]&nbsp; (−) &nbsp;[——滑轨——]&nbsp; (+) &nbsp;[读数 52]
+    </div>
+    <ul style="margin:10px 0 0;padding-left:22px;font-size:12.5px;color:var(--muted)">
+      <li>左 − / 右 + 步进按钮：点一下按步长增减（整数范围步长 1，故 0–100 / 0–30 都是 ±1）。</li>
+      <li>读数实时显示，<b>双击读数可原地输入精确数值</b>（超范围自动钳制）。</li>
+      <li>0–100 与 0–30 都是整数跨度 ≥10，读数按<b>整数</b>显示（与 操作按钮 一致）。</li>
+    </ul>
+  </div>
+
+  <h2>零之三、三个滑块的键 / 范围 / 默认值</h2>
+  <table>
+    <thead><tr><th style="width:30%">行（label）</th><th style="width:26%">plist key</th><th style="width:14%">范围</th><th style="width:14%">默认</th><th style="width:16%">图标（暂定）</th></tr></thead>
+    <tbody>
+      <tr><td class="b">框外压暗</td><td class="mono">QuickAdd.OutsideDarkness</td><td class="mono">0–100</td><td class="b">30</td><td class="mono">moon.fill · teal</td></tr>
+      <tr><td class="b">框内压暗</td><td class="mono">QuickAdd.InsideDarkness</td><td class="mono">0–100</td><td class="b">30</td><td class="mono">circle.righthalf.filled · teal</td></tr>
+      <tr><td class="b">框内模糊</td><td class="mono">QuickAdd.InsideBlur</td><td class="mono">0–30</td><td class="b">6</td><td class="mono">mosaic · teal</td></tr>
+      <tr><td class="a">域 defaults</td><td class="mono" colspan="4">com.strive.echoreborn.preferences</td></tr>
+      <tr><td class="a">通知 PostNotification</td><td class="mono" colspan="4">com.strive.echoreborn/ReloadPrefs</td></tr>
+      <tr><td class="a">单元格</td><td class="mono" colspan="4">cell=PSSliderCell · cellClass=ERSliderTrackCell · height=54 · showValue=true · isContinuous=false</td></tr>
+    </tbody>
+  </table>
+  <div class="note warn">
+    <b>图标为暂定占位</b>：moon.fill（框外压暗）/ circle.righthalf.filled（框内压暗）/ mosaic（框内模糊）。
+    若你有更贴切的 SF Symbol，或想三行都用同一图标，告诉我即可替换——这只是思路图，不影响结构。
+  </div>
+
+  <h2>零之四、要动的文件（v12）</h2>
+  <div class="note">
+    · <span class="k">prefs/Resources/SystemEnhance.plist</span> ——<br>
+    &nbsp;&nbsp;① 给「快速添加」所在的无 label 分组加 <span class="k">&lt;key&gt;label&lt;/key&gt;&lt;string&gt;长按桌面快速添加&lt;/string&gt;</span>（原状两行与新加三行都在此分组内）；<br>
+    &nbsp;&nbsp;② 在「名称设置」字典<b>之后</b>追加 3 个 <span class="k">PSSliderCell</span>（cellClass=ERSliderTrackCell）字典，key / min / max / default / erIcon / erIconColor 如上表；<br>
+    &nbsp;&nbsp;③ footerText 补一句："下面的三个滑块分别调整卡片外的压暗、卡片内的压暗与卡片内的模糊程度。"<br>
+    · <span class="k">prefs/ERSystemEnhanceController.m</span> —— 仅当要补全"plist 装载失败时的代码兜底"也加上这 3 行（可选，主路径靠 plist 直出，不改也不影响正常表现）；<b>ERSliderTrackCell 已在 prefs 工程编译，无需改 Makefile</b>。<br>
+    <b>不新增 dylib、不改 CI、不动 Tweak.xm（偏好读取仍走现有 ReloadPrefs 通道，由主 dylib 消费新 key）。</b>
+  </div>
+
+  <h2>零之五、Tweak 侧（主 dylib）的待办（确认后下一轮做）</h2>
+  <div class="note">
+    设置页只是"把值存进偏好域"。真正让滑块生效，<b>主 dylib（Tweak.xm）要消费这三个新 key</b>：
+    <ul style="margin:8px 0 0;padding-left:22px;font-size:12.5px;color:var(--muted)">
+      <li>读 <span class="mono">QuickAdd.OutsideDarkness</span> → 卡片外压暗百分比（0 = 不压暗，默认 30）。</li>
+      <li>读 <span class="mono">QuickAdd.InsideDarkness</span> → 卡片内压暗百分比（0 = 不压暗，默认 30）。</li>
+      <li>读 <span class="mono">QuickAdd.InsideBlur</span> → 卡片内模糊半径（0 = 不模糊，默认 6）。</li>
+      <li>在 ReloadPrefs 回调里实时重算卡片外观，无需注销。</li>
+    </ul>
+    这一轮<b>先只出设置页 + 思路图确认</b>，主 dylib 消费逻辑留到你说"开"之后再落地，避免在设置里调了却看不到效果。
+  </div>
+
+  <hr>
+
+  <h2>一、请你确认（4 点）</h2>
+  <ol style="font-size:13px">
+    <li><b>一张卡</b>：原状（快速添加开关 + 名称设置）与新增 3 滑块，确认都在「长按桌面快速添加」这一张卡内，不拆开？</li>
+    <li><b>两行去掉"背景"</b>：框外压暗 / 框内压暗 —— 确认？</li>
+    <li><b>三个默认值</b>：框外压暗 30 / 框内压暗 30 / 框内模糊 6 —— 与 v21 实机一致，确认？</li>
+    <li><b>图标</b>：暂定 moon.fill / circle.righthalf.filled / mosaic（teal），接受还是换？</li>
+  </ol>
+  <div class="note">以上确认后我再改 <span class="k">SystemEnhance.plist</span> 与兜底代码；主 dylib 消费逻辑等你另行说"开"再做。</div>
+</div>
+</body>
+</html>

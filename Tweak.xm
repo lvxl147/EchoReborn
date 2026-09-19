@@ -21950,6 +21950,21 @@ static NSString *ERQuickAddActionName(void) {
     return trimmed.length ? trimmed : @"添加到文件夹";
 }
 
+// 1.0.8-25：快速添加卡片外观交给用户自调（设置页「系统增强 → 长按桌面快速添加」）。
+// 三项默认值即 v21 定稿的实机效果；0 表示不生效（不压暗 / 不模糊）。范围与设置页滑块一致。
+static CGFloat ERQuickAddOutsideDarkness(void) {
+    CGFloat v = ERPreferenceDouble(@"QuickAdd.OutsideDarkness", 30.0);
+    return MIN(MAX(v, 0.0), 100.0);
+}
+static CGFloat ERQuickAddInsideDarkness(void) {
+    CGFloat v = ERPreferenceDouble(@"QuickAdd.InsideDarkness", 30.0);
+    return MIN(MAX(v, 0.0), 100.0);
+}
+static CGFloat ERQuickAddInsideBlur(void) {
+    CGFloat v = ERPreferenceDouble(@"QuickAdd.InsideBlur", 6.0);
+    return MIN(MAX(v, 0.0), 30.0);
+}
+
 // 文件夹选择面板 + 移动。所有系统调用前都做 respondsToSelector 探测。
 // ---------------------------------------------------------------------------
 // 1.0.7-28 · QuickAdd 底部选择面板 —— 底部出现，但整体停在 dock 上方。
@@ -22102,7 +22117,7 @@ static CGFloat const kERQAButtonGap = 12.0;
 static CGFloat const kERQAButtonInset = 22.0;
 
 // 面板内可见的版本水印（排查「设备到底跑的哪个版本」用；**每次发版与 control 同步**）
-static NSString * const kERQuickAddPanelVersion = @"1.0.8-24";
+static NSString * const kERQuickAddPanelVersion = @"1.0.8-25";
 
 // 1.0.8-19：自绘改名框的展示入口（定义在 sheet 控制器之后）
 static void ERQuickAddPresentRenameDialog(void (^onConfirm)(NSString *name));
@@ -22708,10 +22723,16 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     // 卡片玻璃仍需「桌面模糊副本」（系统模糊在本场景恒失败），此快照**仅用于玻璃糊化**
     UIImage *desktopSnapshot = ERQuickAddCaptureDesktopImage();
 
-    // ② 压暗层 + 命中区：v14 压暗调到 **黑 30%**（用户指定）；点背景空白处关闭
+    // ② 压暗层 + 命中区：v14 压暗调到 **黑 30%**（用户指定）；点背景空白处关闭。
+    //    1.0.8-25：改为读取设置页「框外压暗」滑块（0–100，默认 30；0 = 不压暗）。
     _qaDim = [[UIView alloc] initWithFrame:self.view.bounds];
     _qaDim.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    _qaDim.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.30];
+    {
+        CGFloat outsideDark = ERQuickAddOutsideDarkness();
+        _qaDim.backgroundColor = (outsideDark > 0.0)
+            ? [[UIColor blackColor] colorWithAlphaComponent:outsideDark / 100.0]
+            : UIColor.clearColor;
+    }
     [_qaDim addGestureRecognizer:[[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(qaDismissAnimated)]];
     [self.view addSubview:_qaDim];
 
@@ -22756,16 +22777,22 @@ static UIWindow *gERQuickAddSheetWindow = nil;
 
     // v24 自绘玻璃：模糊后的桌面快照按「卡片在屏幕中的位置」对齐取景（模糊 8→6）
     _qaGlassImage = [[UIImageView alloc] initWithFrame:CGRectZero];
-    _qaGlassImage.image = desktopSnapshot ? ERQuickAddBlurredImage(desktopSnapshot, 6.0) : nil;
+    _qaGlassImage.image = desktopSnapshot ? ERQuickAddBlurredImage(desktopSnapshot, ERQuickAddInsideBlur()) : nil;
     _qaGlassImage.contentMode = UIViewContentModeScaleToFill;
     _qaGlassImage.userInteractionEnabled = NO;
     [_qaGlass addSubview:_qaGlassImage];
 
-    // v24 卡内压暗 32%（原白膜 5% 移除）—— 亮度衔接、从物理上防"发白"
+    // v24 卡内压暗 32%（原白膜 5% 移除）—— 亮度衔接、从物理上防"发白"。
+    //    1.0.8-25：改为读取设置页「框内压暗」滑块（0–100，默认 30；0 = 不压暗）。
     _qaGlassDark = [[UIView alloc] initWithFrame:_qaGlass.bounds];
     _qaGlassDark.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     _qaGlassDark.userInteractionEnabled = NO;
-    _qaGlassDark.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.32];
+    {
+        CGFloat insideDark = ERQuickAddInsideDarkness();
+        _qaGlassDark.backgroundColor = (insideDark > 0.0)
+            ? [[UIColor blackColor] colorWithAlphaComponent:insideDark / 100.0]
+            : UIColor.clearColor;
+    }
     [_qaGlass addSubview:_qaGlassDark];
 
     // v24 镜面高光描边（liquidass `_specularLayer` 原样：1pt 六段渐变 · -45° · α 基数 0.35）
@@ -23096,17 +23123,23 @@ static UIWindow *gERQuickAddRenameWindow = nil;
     glass.clipsToBounds = YES;
     glass.backgroundColor = UIColor.clearColor;
     [_rnCard addSubview:glass];
-    // 模糊快照取景（布局时按卡片位置对齐；v24：模糊 6 · 卡内压暗 32% 替换白膜）
+    // 模糊快照取景（布局时按卡片位置对齐；v24：模糊 6 · 卡内压暗 32% 替换白膜）。
+    //    1.0.8-25：模糊半径读取设置页「框内模糊」滑块（0–30，默认 6）。
     _rnGlassImage = [[UIImageView alloc] initWithFrame:CGRectZero];
     UIImage *rnSnapshot = ERQuickAddCaptureDesktopImage();
-    _rnGlassImage.image = rnSnapshot ? ERQuickAddBlurredImage(rnSnapshot, 6.0) : nil;
+    _rnGlassImage.image = rnSnapshot ? ERQuickAddBlurredImage(rnSnapshot, ERQuickAddInsideBlur()) : nil;
     _rnGlassImage.contentMode = UIViewContentModeScaleToFill;
     _rnGlassImage.userInteractionEnabled = NO;
     [glass addSubview:_rnGlassImage];
     UIView *glassDark = [[UIView alloc] initWithFrame:glass.bounds];
     glassDark.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     glassDark.userInteractionEnabled = NO;
-    glassDark.backgroundColor = [[UIColor blackColor] colorWithAlphaComponent:0.32];
+    {
+        CGFloat insideDark = ERQuickAddInsideDarkness();
+        glassDark.backgroundColor = (insideDark > 0.0)
+            ? [[UIColor blackColor] colorWithAlphaComponent:insideDark / 100.0]
+            : UIColor.clearColor;
+    }
     [glass addSubview:glassDark];
 
     _rnTitle = [[UILabel alloc] initWithFrame:CGRectZero];
