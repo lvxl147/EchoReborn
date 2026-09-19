@@ -160,7 +160,7 @@
 			<key>key</key>
 			<string>QuickAdd.InsideDarkness</string>
 			<key>default</key>
-			<real>30</real>
+			<real>45</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>
@@ -190,7 +190,7 @@
 			<key>key</key>
 			<string>QuickAdd.InsideBlur</string>
 			<key>default</key>
-			<real>6</real>
+			<real>30</real>
 			<key>min</key>
 			<real>0</real>
 			<key>max</key>
@@ -248,7 +248,7 @@
 			<key>key</key>
 			<string>QuickAdd.BackgroundColor</string>
 			<key>default</key>
-			<string>38,45,48</string>
+			<string>38,45,58</string>
 			<key>validValues</key>
 			<array>
 				<string>58,34,38</string>
@@ -256,7 +256,7 @@
 				<string>56,52,32</string>
 				<string>31,53,40</string>
 				<string>28,51,54</string>
-				<string>38,45,48</string>
+				<string>38,45,58</string>
 				<string>44,36,62</string>
 			</array>
 			<key>validTitles</key>
@@ -286,7 +286,7 @@
 			<key>key</key>
 			<string>QuickAdd.BackgroundColor</string>
 			<key>default</key>
-			<string>38,45,48</string>
+			<string>38,45,58</string>
 			<key>erIcon</key>
 			<string>slider.horizontal.3</string>
 			<key>erIconColor</key>
