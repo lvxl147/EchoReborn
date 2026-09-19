@@ -12,6 +12,33 @@
 static NSString *const kERWeatherLogPath = @"/var/mobile/Library/Logs/EchoReborn/echoreborn.log";
 
 void ERWeatherLog(NSString *format, ...) {
+    // ------------------------------------------------------------------
+    // 1.0.8-38 · **日志限流**：每秒最多 200 行，超出丢弃并累计。
+    //
+    // 20260920-0427 的日志里，天气模块 12 秒写了 **93,887 行 / 10MB**（≈870 行/秒）。
+    // 后果有两个：① 导出困难；② 同一份日志里别的模块（锁屏音乐、横屏）的行
+    // **被完全挤掉** —— 那一次 93,896 行里只有 8 行是别的模块的，等于没法排查。
+    // 这个限流是纯粹的安全网：正常路径每秒最多几行，永远碰不到它。
+    // 每个新窗口的第一条会把上一秒丢弃的数量补报一行，信息面不丢。
+    // ------------------------------------------------------------------
+    static CFTimeInterval windowStart = 0.0;
+    static NSUInteger windowCount = 0;
+    static NSUInteger windowDropped = 0;
+    CFTimeInterval now = [NSDate date].timeIntervalSince1970;
+    if (now - windowStart >= 1.0) {
+        windowStart = now;
+        windowCount = 0;
+        if (windowDropped) {
+            NSUInteger dropped = windowDropped;
+            windowDropped = 0;
+            ERWeatherLog(@"[rate-limit] previous second dropped %lu line(s)", (unsigned long)dropped);
+        }
+    }
+    if (++windowCount > 200) {
+        windowDropped++;
+        return;
+    }
+
     va_list args;
     va_start(args, format);
     NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
@@ -195,6 +222,7 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic, assign) BOOL updating;        // 1.0.8-35：requestModelUpdate 重入保护
 @property (nonatomic, assign) BOOL rebuildScheduled; // 1.0.8-35：重建合并（同一轮只跑一次）
 @property (nonatomic, weak) id kickstartedModel;     // 1.0.8-36：同一个模型只 kickstart 一次
+@property (nonatomic, assign) NSInteger retryBudget;   // 1.0.8-38：一次刷新周期内最多换几次候选
 @property (nonatomic, strong) NSMutableArray<NSString *> *resolvedNames;
 @end
 
@@ -456,7 +484,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-37 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-38 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -619,6 +647,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 - (void)refreshIfNeeded {
     [self start];
     if (!self.todayModel) return;
+    self.retryBudget = 2;   // 1.0.8-38：每个刷新周期最多换 2 次候选，杜绝任何形式的长时间空转
     // 15 秒内不重复拉取：磁贴会在每次展开/翻页时重建，不设节流就会刷日志。
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     if (self.refreshInFlight || (now - self.lastRefresh) < 15.0) return;
@@ -646,23 +675,18 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     self.refreshInFlight = YES;
     self.lastRefresh = NSDate.date.timeIntervalSince1970;
 
-    // 1.0.8-34 · 把「挑一个能拉数据的模型」与「打开模型开关」挪到**刷新入口**里。
+    // 1.0.8-38 · **这里不再挑候选** —— 那正是 870 次/秒空转的源头。
     //
-    // 这两步原本挂在 -resolveTodayModelCandidates 末尾，而那条路径只在首次 start 时
-    // 走一次 —— 磁贴被删除后重新添加、或视图重建时根本不经过。实机日志
-    // （20260920-031717）里**一条 `kickstart:` 都没有**，就是这么来的：
-    //   ① 没有 kickstart → autoUpdate/定位 三个位从没打开过；
-    //   ② 也没机会从 WAForecastModel 换到 WATodayModel 系。
-    // 刷新入口是每次都会走的，放这里必然执行。
-    if (!self.snapshot.hasLiveData) {
-        NSUInteger best = [self bestDryCandidateIndex];
-        if (best < self.candidates.count && (best != self.candidateIndex || !self.todayModel)) {
-            self.candidateIndex = best;
-            self.todayModel = self.candidates[best];
-            ERWeatherLog(@"dry run: switch to fetchable candidate #%lu %@",
-                         (unsigned long)best, NSStringFromClass([self.todayModel class]));
-        }
-    }
+    // 实机日志（20260920-0427）：12 秒里刷了 93,887 行，其中
+    //   `advance to candidate #2` 与 `dry run: switch to fetchable candidate #1` 各 10,432 次 ——
+    // 一进一出正好配对，形成乒乓：
+    //   requestModelUpdate →（本处）把候选打回 #1 → 请求 → 失败 → completion 推进到 #2
+    //   → 异步重试 requestModelUpdate →（本处）又打回 #1 → …
+    // 因为 bestDryCandidateIndex 永远返回「第一个有更新入口的候选」= #1，
+    // 而 completion 的 advanceToNextCandidate 往 #2 走，两者方向相反，永远到不了头。
+    //
+    // 「挑一个能拉数据的候选」只在 resolveTodayModelCandidates 里做**一次**（初始定锚），
+    // 这里只负责 kickstart + 用当前候选发请求。
     [self kickstartWeatherModel];
 
     // 1.0.6-16（第 2 条）：刷新入口不止一个名字。
@@ -708,8 +732,12 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         // 分清是「没有定位」「没有网络」还是「私有类的入口签名变了」。
         if ([second isKindOfClass:[NSError class]]) {
             NSError *error = (NSError *)second;
-            ERWeatherLog(@"model update ERROR domain=%@ code=%ld desc=%@",
-                         error.domain, (long)error.code, error.localizedDescription);
+            // 1.0.8-38：把 userInfo 也打出来。
+            // 日志里每次都是 `com.apple.weather.errorDomain code=4`，
+            // 但 localizedDescription 只有一句「未能完成操作」—— 看不出到底是
+            // 没有定位、没有网络、还是权限被拒。userInfo 里有真正的原因。
+            ERWeatherLog(@"model update ERROR domain=%@ code=%ld desc=%@ userInfo=%@",
+                         error.domain, (long)error.code, error.localizedDescription, error.userInfo);
         }
         [strongSelf rebuildSnapshot];
 
@@ -737,7 +765,16 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         //     异步之后即使重试链很长，也只是 runloop 上的一次次独立任务，栈不再增长；
         //     而 advanceToNextCandidate 在候选耗尽时返回 NO，链自然终止。
         // ------------------------------------------------------------------
-        BOOL retry = (!strongSelf.snapshot.hasLiveData && [strongSelf advanceToNextCandidate]);
+        // 1.0.8-38：**带 NSError 的失败不再走候选 walk**。
+        // 日志里每次失败都是 `com.apple.weather.errorDomain code=4`（定位类错误）——
+        // 换候选模型解决不了"拿不到定位"，只会把同一个错误重试上千次。
+        // 真正的重试交给 refreshIfNeeded 的 15 秒节流。
+        BOOL hardFailure = [second isKindOfClass:[NSError class]];
+        BOOL retry = NO;
+        if (!hardFailure && !strongSelf.snapshot.hasLiveData && strongSelf.retryBudget > 0) {
+            retry = [strongSelf advanceToNextCandidate];
+            if (retry) strongSelf.retryBudget -= 1;
+        }
         strongSelf.updating = NO;   // ← 到这里才放行（A）
         if (retry) {
             __weak typeof(strongSelf) weakRetry = strongSelf;
@@ -1006,7 +1043,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-37 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-38 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
