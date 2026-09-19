@@ -239,16 +239,16 @@
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>
 		<dict>
-			<!-- 1.0.8-29：由 PSRadioCell（点进去竖排单选）改为 ERSegmentedCell —— 就是「小窗位置」
-			     用的那个分段控件，样式一致。刻意**不写 label**：8 段要铺满整行，左边放不下
-			     「背景色」三个字（这也是「不要左边的文字」的落地方式）。
-			     erSegmentValues 是新增的"色值模式"：声明了就把这一串 RGB 当段落值读写，
-			     没声明（小窗位置 / 轻中重）就完全走原来的下标老路，互不影响。
-			     erCustomSegmentIndex = 7 → 点第 8 段「自定义」不写值，改弹 RGB 小窗。 -->
 			<key>cell</key>
 			<string>PSTitleValueCell</string>
 			<key>cellClass</key>
 			<string>ERSegmentedCell</string>
+			<!-- 1.0.8-30：**必须给一个 label**（哪怕是空串）。
+			     1.0.8-29 把 label 整个省掉，结果 PSTableCell refreshCellContentsWithSpecifier:
+			     在 setTitle: 上拿到非字符串，Preferences 直接 SIGABRT —— 用户点「系统增强」秒退。
+			     空串既满足"左边不显示文字"，又保证 title 拿到的是合法 NSString。 -->
+			<key>label</key>
+			<string></string>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
@@ -266,7 +266,10 @@
 				<string>灰紫</string>
 				<string>自定义</string>
 			</array>
-			<key>erSegmentValues</key>
+			<!-- 1.0.8-30：键名由 erSegmentValues 改为 erPresetRGB —— 1.0.8-29 用的
+			     "…Values" 撞上 Preferences 对 validValues/values 的惯例解析，是那次
+			     setTitle: 收到 NSArray 的可疑来源之一。改名彻底躲开。 -->
+			<key>erPresetRGB</key>
 			<array>
 				<string>58,34,38</string>
 				<string>58,44,32</string>
@@ -276,9 +279,9 @@
 				<string>38,45,58</string>
 				<string>44,36,62</string>
 			</array>
-			<key>erCustomSegmentIndex</key>
+			<key>erPresetCustomIndex</key>
 			<integer>7</integer>
-			<key>erSegmentCompactFont</key>
+			<key>erPresetCompact</key>
 			<true/>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
