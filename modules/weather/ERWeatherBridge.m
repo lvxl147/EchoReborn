@@ -2,6 +2,7 @@
 #import <dlfcn.h>
 #import <math.h>
 #import <objc/message.h>
+#import <CoreLocation/CoreLocation.h>
 
 // ---------------------------------------------------------------------------
 // 诊断日志
@@ -223,6 +224,16 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic, assign) BOOL rebuildScheduled; // 1.0.8-35：重建合并（同一轮只跑一次）
 @property (nonatomic, weak) id kickstartedModel;     // 1.0.8-36：同一个模型只 kickstart 一次
 @property (nonatomic, assign) NSInteger retryBudget;   // 1.0.8-38：一次刷新周期内最多换几次候选
+// 1.0.8-41 · 公共 API 兜底（Weather 框架在本进程发不出请求时的备用数据源）
+@property (nonatomic, assign) BOOL apiHasData;
+@property (nonatomic, assign) CGFloat apiTemperature;
+@property (nonatomic, copy)   NSString *apiConditionText;
+@property (nonatomic, assign) NSInteger apiConditionCode;
+@property (nonatomic, copy)   NSString *apiHighLowText;
+@property (nonatomic, assign) NSArray<NSNumber *> *apiHourly;
+@property (nonatomic, copy)   NSArray<NSString *> *apiHourlyLabels;
+@property (nonatomic, assign) NSTimeInterval apiLastFetch;
+@property (nonatomic, assign) BOOL apiInFlight;
 @property (nonatomic, strong) NSMutableArray<NSString *> *resolvedNames;
 @end
 
@@ -484,7 +495,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-40 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-41 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -732,7 +743,8 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
         // 分清是「没有定位」「没有网络」还是「私有类的入口签名变了」。
         if ([second isKindOfClass:[NSError class]]) {
             NSError *error = (NSError *)second;
-            // 1.0.8-38：把 userInfo 也打出来。
+            // 1.0.8-41 · 框架请求失败 → 走公共 API 兜底（异步、自带 10 分钟节流）
+            dispatch_async(dispatch_get_main_queue(), ^{ [strongSelf fetchWeatherFromPublicAPI]; });
             // 日志里每次都是 `com.apple.weather.errorDomain code=4`，
             // 但 localizedDescription 只有一句「未能完成操作」—— 看不出到底是
             // 没有定位、没有网络、还是权限被拒。userInfo 里有真正的原因。
@@ -973,11 +985,181 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     ERWeatherLog(@"delegate: todayModelWantsUpdate (ignored — throttled refresh owns the cycle)");
 }
 
+#pragma mark - 公共 API 兜底（1.0.8-41）
+
+// ---------------------------------------------------------------------------
+// 1.0.8-41 · 为什么需要这个兜底。
+//
+// 诊断（20260920-1315 的 model caps）证明模型**什么都不缺**：
+//   · supports=( setIsLocationTrackingEnabled:, setLocationServicesActive:,
+//                executeModelUpdateWithCompletion: )
+//   · location=WFLocation< geoLocation:<+39.92,+116.42> >   ← 定位是有的（北京）
+// 但 executeModelUpdateWithCompletion: 每次都失败在
+//   com.apple.weather.errorDomain code=4，且 userInfo 为空。
+// 结论：不是我们缺哪一步，而是 Weather 框架的网络请求**按 App 颁发凭据**，
+// SpringBoard 进程没有天气的 entitlement，请求在框架内部就被拒了。
+//
+// 所以这里换一条完全独立的路：用模型里已有的经纬度直接问公共天气 API
+// （Open-Meteo，无需任何密钥/entitlement），拿到温度与天气码后填进快照。
+// 触发时机：Weather 框架那次请求**失败之后**才走，成功时仍优先用框架数据。
+// ---------------------------------------------------------------------------
+
+/// Open-Meteo 的 WMO 天气码 → 中文描述 + 我们图标用的 conditionCode
+static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *iconCodeOut) {
+    // 图标用的 conditionCode 空间沿用 Weather 框架的（3200=多云、32=晴、11=雨…）
+    if (code == 0)      { *textOut = @"晴";   *iconCodeOut = 32; }
+    else if (code <= 2) { *textOut = @"多云"; *iconCodeOut = 3200; }
+    else if (code == 3) { *textOut = @"阴";   *iconCodeOut = 3200; }
+    else if (code <= 48){ *textOut = @"雾";   *iconCodeOut = 3200; }
+    else if (code <= 57){ *textOut = @"毛毛雨"; *iconCodeOut = 11; }
+    else if (code <= 67){ *textOut = @"雨";   *iconCodeOut = 11; }
+    else if (code <= 77){ *textOut = @"雪";   *iconCodeOut = 13; }
+    else if (code <= 82){ *textOut = @"阵雨"; *iconCodeOut = 11; }
+    else if (code <= 86){ *textOut = @"阵雪"; *iconCodeOut = 13; }
+    else                { *textOut = @"雷阵雨"; *iconCodeOut = 4; }
+}
+
+- (void)fetchWeatherFromPublicAPI {
+    if (self.apiInFlight) return;
+    NSTimeInterval now = NSDate.date.timeIntervalSince1970;
+    if (now - self.apiLastFetch < 600.0) return;   // 10 分钟一次足够
+
+    // 坐标：模型 location(WFLocation) 里的 geoLocation(CLLocation)
+    id wfLocation = ERWValueQuietly(self.todayModel, @"location");
+    id clLocation = ERWValueQuietly(wfLocation, @"geoLocation");
+    if (![clLocation isKindOfClass:[CLLocation class]]) {
+        ERWeatherLog(@"public api: no location on model — skip");
+        return;
+    }
+    CLLocationCoordinate2D coordinate = [(CLLocation *)clLocation coordinate];
+    if (coordinate.latitude == 0.0 && coordinate.longitude == 0.0) {
+        ERWeatherLog(@"public api: zero coordinate — skip");
+        return;
+    }
+
+    self.apiInFlight = YES;
+    self.apiLastFetch = now;
+    NSString *urlText = [NSString stringWithFormat:
+        @"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
+        @"&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min"
+        @"&hourly=temperature_2m&forecast_days=1&timezone=auto",
+        coordinate.latitude, coordinate.longitude];
+    ERWeatherLog(@"public api: fetching %@", urlText);
+
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlText]
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            __strong typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf.apiInFlight = NO;
+            if (error || !data) {
+                ERWeatherLog(@"public api: failed %@", error.localizedDescription ?: @"(no data)");
+                return;
+            }
+            id json = nil;
+            @try { json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil]; }
+            @catch (__unused NSException *exception) { json = nil; }
+            if (![json isKindOfClass:[NSDictionary class]]) {
+                ERWeatherLog(@"public api: unexpected payload");
+                return;
+            }
+            NSDictionary *root = (NSDictionary *)json;
+            NSDictionary *current = ERWValueQuietly(root, @"current");
+            NSNumber *temperature = ERWValueQuietly(current, @"temperature_2m");
+            NSNumber *weatherCode = ERWValueQuietly(current, @"weather_code");
+            if (![temperature isKindOfClass:[NSNumber class]] || ![weatherCode isKindOfClass:[NSNumber class]]) {
+                ERWeatherLog(@"public api: missing current fields");
+                return;
+            }
+
+            NSString *conditionText = nil;
+            NSInteger iconCode = 32;
+            ERWeatherMapWMOCode([weatherCode integerValue], &conditionText, &iconCode);
+
+            strongSelf.apiTemperature = [temperature floatValue];
+            strongSelf.apiConditionText = conditionText;
+            strongSelf.apiConditionCode = iconCode;
+
+            NSDictionary *daily = ERWValueQuietly(root, @"daily");
+            NSArray *highs = ERWValueQuietly(daily, @"temperature_2m_max");
+            NSArray *lows  = ERWValueQuietly(daily, @"temperature_2m_min");
+            if ([highs isKindOfClass:[NSArray class]] && highs.count &&
+                [lows isKindOfClass:[NSArray class]] && lows.count) {
+                strongSelf.apiHighLowText = [NSString stringWithFormat:@"%ld° / %ld°",
+                                             (long)lround([highs.firstObject doubleValue]),
+                                             (long)lround([lows.firstObject doubleValue])];
+            }
+
+            NSDictionary *hourly = ERWValueQuietly(root, @"hourly");
+            NSArray *hourlyTemps = ERWValueQuietly(hourly, @"temperature_2m");
+            NSArray *hourlyTimes = ERWValueQuietly(hourly, @"time");
+            if ([hourlyTemps isKindOfClass:[NSArray class]]) {
+                NSMutableArray<NSNumber *> *values = [NSMutableArray array];
+                for (NSUInteger i = 0; i < hourlyTemps.count && i < 24; i++) {
+                    id v = hourlyTemps[i];
+                    if ([v isKindOfClass:[NSNumber class]]) [values addObject:v];
+                }
+                strongSelf.apiHourly = values;
+                // 时间标签："13时"。hourly.time[i] 形如 "2026-09-20T13:00"，取 T 后面的小时。
+                NSMutableArray<NSString *> *labels = [NSMutableArray array];
+                if ([hourlyTimes isKindOfClass:[NSArray class]]) {
+                    for (NSUInteger i = 0; i < hourlyTimes.count && i < 24; i++) {
+                        NSString *stamp = [NSString stringWithFormat:@"%@", hourlyTimes[i] ?: @""];
+                        NSArray *parts = [stamp componentsSeparatedByString:@"T"];
+                        NSString *hm = parts.count > 1 ? parts[1] : stamp;
+                        NSArray *hmParts = [hm componentsSeparatedByString:@":"];
+                        [labels addObject:hmParts.count ? [NSString stringWithFormat:@"%@时", hmParts[0]] : @""];
+                    }
+                }
+                strongSelf.apiHourlyLabels = labels;
+            }
+
+            strongSelf.apiHasData = YES;
+            ERWeatherLog(@"public api: ok temp=%.1f code=%ld cond=%@ hours=%lu",
+                         strongSelf.apiTemperature, (long)strongSelf.apiConditionCode,
+                         strongSelf.apiConditionText, (unsigned long)strongSelf.apiHourly.count);
+            [strongSelf scheduleRebuild];
+        }];
+    [task resume];
+}
+
 #pragma mark - 快照
 
 - (void)rebuildSnapshot {
     ERWeatherSnapshot *snapshot = [[ERWeatherSnapshot alloc] init];
     NSMutableArray<NSString *> *hits = [NSMutableArray array];
+
+    // 1.0.8-41 · **公共 API 兜底优先级**：框架那路发不出请求（code=4），所以只要
+    // API 已经有数据，就直接用它拼快照 —— 磁贴一定能画出真实的温度与天气。
+    if (self.apiHasData) {
+        snapshot.temperatureText = [NSString stringWithFormat:@"%ld°",
+                                    (long)lround(self.apiTemperature)];
+        snapshot.conditionText = self.apiConditionText;
+        snapshot.conditionCode = self.apiConditionCode;
+        snapshot.highLowText = self.apiHighLowText;
+        snapshot.precipText = @"";
+        // 城市沿用上一次快照里的（Weather 框架缓存的「北京」），避免把城市清成占位
+        if (self.snapshot.cityText.length) snapshot.cityText = self.snapshot.cityText;
+        // 小时条：每 2 小时取一个点，最多 6 个，与原实现的密度接近
+        if (self.apiHourly.count) {
+            NSMutableArray<ERWeatherHour *> *hours = [NSMutableArray array];
+            for (NSUInteger i = 0; i + 1 < self.apiHourly.count; i += 2) {
+                ERWeatherHour *hour = [[ERWeatherHour alloc] init];
+                hour.temperatureText = [NSString stringWithFormat:@"%ld°",
+                                        (long)lround(self.apiHourly[i].doubleValue)];
+                if (i < self.apiHourlyLabels.count) hour.timeText = self.apiHourlyLabels[i];
+                [hours addObject:hour];
+            }
+            snapshot.hours = hours;
+        }
+        snapshot.hasLiveData = YES;
+        self.snapshot = snapshot;
+        ERWeatherLog(@"snapshot (public api) temp=%@ cond=%@ hours=%lu",
+                     snapshot.temperatureText, snapshot.conditionText,
+                     (unsigned long)snapshot.hours.count);
+        return;
+    }
+
 
     id forecast = ERWPerformQuietly(self.todayModel, @"forecastModel");
     if (!forecast) forecast = ERWFirstValue(self.todayModel, @[@"forecastModel", @"forecast", @"model"], @"forecast", hits);
@@ -1091,7 +1273,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-40 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-41 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);

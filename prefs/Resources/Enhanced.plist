@@ -264,6 +264,44 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>横屏状态栏</string>
+			<key>footerText</key>
+			<string>iOS 17.2 横屏控制中心里可见的状态栏是 STUIStatusBar（y=0，高 44pt）。这个偏移直接作用在它上面：正值往下、负值往上，拖动即时生效、无需注销。0 = 系统原位。若不确定想要多少，先往两边各拖一次看画面变化，落在最舒服的值即可。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>状态栏偏移</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>Landscape.StatusBarOffset</string>
+			<key>default</key>
+			<real>0</real>
+			<key>min</key>
+			<real>-120</real>
+			<key>max</key>
+			<real>120</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>erIcon</key>
+			<string>arrow.up.arrow.down</string>
+			<key>erIconColor</key>
+			<string>blue</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>保存横屏布局</string>
 			<key>footerText</key>
 			<string>开启后，横屏下的布局可单独摆放并保存，与竖屏互不干扰；关闭时横屏按竖屏布局一分为二展示（左 1–4 行 / 右 5–8 行）。摆放方式：控制中心编辑态里直接拖动，落点吸附到页内 32 个圆位（8 列 × 4 行），松手即保存（横屏专用）。横屏顶部为状态栏与定位 / 相机 / 麦克风指示保留，圆位整体在其下方。想还原时点下面的「恢复横屏布局」（有二次确认）。</string>
