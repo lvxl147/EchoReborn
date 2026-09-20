@@ -196,7 +196,7 @@
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
 			<key>label</key>
-			<string>玻璃折射强度</string>
+			<string>玻璃折射</string>
 			<key>defaults</key>
 			<string>com.yourcompany.liquidsiri.prefs</string>
 			<key>key</key>

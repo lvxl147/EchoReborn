@@ -2,31 +2,29 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>title</key>
-	<string>系统增强</string>
 	<key>items</key>
 	<array>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>相机增强</string>
 			<key>footerText</key>
 			<string>开启后，相机 App 顶部「实况」图标左侧会出现一个双摄按钮，点击即可同时调用前后摄像头拍摄：前置画面以小窗合入后置画面，只保存一张照片。下面的「小窗位置」决定这个小窗落在四个角中的哪一个 —— 双摄画面、照片与录像三处同源。关闭双摄时不建按钮，相机进程也不会加载双摄组件。</string>
+			<key>label</key>
+			<string>相机增强</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
-			<key>label</key>
-			<string>相机双摄</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>DualCamEnabled</string>
 			<key>default</key>
 			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
 			<key>erIcon</key>
 			<string>camera.on.rectangle</string>
+			<key>erIconColor</key>
+			<string>green</string>
 			<key>erIconSymbols</key>
 			<array>
 				<string>camera.on.rectangle</string>
@@ -34,24 +32,22 @@
 				<string>square.on.square</string>
 				<string>camera.fill</string>
 			</array>
-			<key>erIconColor</key>
-			<string>green</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>DualCamEnabled</string>
+			<key>label</key>
+			<string>相机双摄</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSTitleValueCell</string>
 			<key>cellClass</key>
 			<string>ERSegmentedCell</string>
-			<key>label</key>
-			<string>小窗位置</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>DualCam.Corner</string>
 			<key>default</key>
 			<integer>1</integer>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
 			<key>erSegmentTitles</key>
 			<array>
 				<string>左上</string>
@@ -59,90 +55,102 @@
 				<string>左下</string>
 				<string>右下</string>
 			</array>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>DualCam.Corner</string>
+			<key>label</key>
+			<string>小窗位置</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>天气</string>
-			<key>footerText</key>
-			<string>天气磁贴的数据源：默认用天气框架缓存的定位城市。若它不是你所在的位置（比如显示成「北京」），在下面填你的城市名（支持中文，如「深圳」「杭州」），留空则保持默认。改完点其它任意设置项触发刷新即可，无需注销。</string>
+			<string>天气模块城市选择</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>天气城市</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>Weather.CityOverride</string>
 			<key>default</key>
 			<string></string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>erIcon</key>
+			<string>location.fill</string>
+			<key>erIconColor</key>
+			<string>red</string>
+			<key>key</key>
+			<string>Weather.CityPending</string>
+			<key>label</key>
+			<string>天气城市</string>
 			<key>placeholder</key>
 			<string>留空 = 跟随天气框架的定位城市</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSTableCell</string>
+			<key>cellClass</key>
+			<string>ERWeatherConfirmCell</string>
+			<key>erIcon</key>
+			<string>checkmark.circle.fill</string>
+			<key>erIconColor</key>
+			<string>green</string>
+			<key>label</key>
+			<string>确认生效</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>锁屏音乐</string>
 			<key>footerText</key>
 			<string>隐藏系统自带的那块锁屏音乐组件（iOS 17 上属于 MediaRemoteUI / MRU 系，封面 + 歌名 + 播放键那一块）。开启后锁屏不会再出现系统音乐条，避免和本插件自己的音乐胶囊重复显示。这一项与「底部组件 → 音乐胶囊」的总开关互不影响：只想藏系统的、不放自己的胶囊也可以。</string>
+			<key>label</key>
+			<string>锁屏音乐</string>
 		</dict>
-		<!-- 1.0.8-34：由「底部组件 → 音乐胶囊」搬到这里，单独一张卡（相机增强的下一张）。
-		     原来它挂在音乐胶囊那个分组里，而「音乐胶囊」总开关默认关 —— 于是整个锁屏处理
-		     路径在 enabled 判断处提前 return，隐藏逻辑一次都执行不到。搬到系统增强后它与
-		     胶囊模块完全解耦，只认自己这一个 key（key 没变，老用户的设置平滑继承）。 -->
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
-			<key>label</key>
-			<string>隐藏系统锁屏音乐</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>MusicCapsule.HideSystemNowPlaying</string>
 			<key>default</key>
 			<true/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
 			<key>erIcon</key>
 			<string>music.note.list</string>
+			<key>erIconColor</key>
+			<string>purple</string>
 			<key>erIconSymbols</key>
 			<array>
 				<string>music.note.list</string>
 				<string>music.note</string>
 				<string>music.note.tv</string>
 			</array>
-			<key>erIconColor</key>
-			<string>purple</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>MusicCapsule.HideSystemNowPlaying</string>
+			<key>label</key>
+			<string>隐藏系统锁屏音乐</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>label</key>
-			<string>长按桌面快速添加</string>
 			<key>footerText</key>
 			<string>开启后，长按主屏幕上的任意图标，快捷菜单顶部会出现一行「添加到文件夹」：点选手机上已有的文件夹即可把该图标移入。下面的名称设置决定这一行显示的文字。下方三个滑块分别调整卡片外的压暗、卡片内的压暗与卡片内的模糊程度，全部可调，默认值即推荐效果。「背景色值」滑块与「背景色」色板控制卡片玻璃底的染色（透明度与色相，默认灰蓝），自定义可直接填 R,G,B。</string>
+			<key>label</key>
+			<string>长按桌面快速添加</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
-			<key>label</key>
-			<string>快速添加</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.Enabled</string>
 			<key>default</key>
 			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
 			<key>erIcon</key>
 			<string>folder.badge.plus</string>
+			<key>erIconColor</key>
+			<string>teal</string>
 			<key>erIconSymbols</key>
 			<array>
 				<string>folder.badge.plus</string>
@@ -150,175 +158,179 @@
 				<string>folder</string>
 				<string>plus.circle.fill</string>
 			</array>
-			<key>erIconColor</key>
-			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>QuickAdd.Enabled</string>
+			<key>label</key>
+			<string>快速添加</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSEditTextCell</string>
-			<key>label</key>
-			<string>名称设置</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.ActionName</string>
 			<key>default</key>
 			<string>添加到文件夹</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
 			<key>erIcon</key>
 			<string>pencil</string>
+			<key>erIconColor</key>
+			<string>teal</string>
 			<key>erIconSymbols</key>
 			<array>
 				<string>pencil</string>
 				<string>square.and.pencil</string>
 			</array>
-			<key>erIconColor</key>
-			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>QuickAdd.ActionName</string>
+			<key>label</key>
+			<string>名称设置</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
-			<key>label</key>
-			<string>框外压暗</string>
+			<key>default</key>
+			<real>30.0</real>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.OutsideDarkness</string>
-			<key>default</key>
-			<real>30</real>
-			<key>min</key>
-			<real>0</real>
-			<key>max</key>
-			<real>100</real>
-			<key>height</key>
-			<real>54</real>
-			<key>showValue</key>
-			<true/>
-			<key>isContinuous</key>
-			<false/>
 			<key>erIcon</key>
 			<string>moon.fill</string>
 			<key>erIconColor</key>
 			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>height</key>
+			<real>54.0</real>
+			<key>isContinuous</key>
+			<false/>
+			<key>key</key>
+			<string>QuickAdd.OutsideDarkness</string>
+			<key>label</key>
+			<string>框外压暗</string>
+			<key>max</key>
+			<real>100.0</real>
+			<key>min</key>
+			<real>0.0</real>
+			<key>showValue</key>
+			<true/>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
-			<key>label</key>
-			<string>框内压暗</string>
+			<key>default</key>
+			<real>0.0</real>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.InsideDarkness</string>
-			<key>default</key>
-			<real>0</real>
-			<key>min</key>
-			<real>0</real>
-			<key>max</key>
-			<real>100</real>
-			<key>height</key>
-			<real>54</real>
-			<key>showValue</key>
-			<true/>
-			<key>isContinuous</key>
-			<false/>
 			<key>erIcon</key>
 			<string>circle.righthalf.filled</string>
 			<key>erIconColor</key>
 			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>height</key>
+			<real>54.0</real>
+			<key>isContinuous</key>
+			<false/>
+			<key>key</key>
+			<string>QuickAdd.InsideDarkness</string>
+			<key>label</key>
+			<string>框内压暗</string>
+			<key>max</key>
+			<real>100.0</real>
+			<key>min</key>
+			<real>0.0</real>
+			<key>showValue</key>
+			<true/>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
-			<key>label</key>
-			<string>框内模糊</string>
+			<key>default</key>
+			<real>4.0</real>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.InsideBlur</string>
-			<key>default</key>
-			<real>4</real>
-			<key>min</key>
-			<real>0</real>
-			<key>max</key>
-			<real>30</real>
-			<key>height</key>
-			<real>54</real>
-			<key>showValue</key>
-			<true/>
-			<key>isContinuous</key>
-			<false/>
 			<key>erIcon</key>
 			<string>mosaic</string>
 			<key>erIconColor</key>
 			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>height</key>
+			<real>54.0</real>
+			<key>isContinuous</key>
+			<false/>
+			<key>key</key>
+			<string>QuickAdd.InsideBlur</string>
+			<key>label</key>
+			<string>框内模糊</string>
+			<key>max</key>
+			<real>30.0</real>
+			<key>min</key>
+			<real>0.0</real>
+			<key>showValue</key>
+			<true/>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>cellClass</key>
 			<string>ERSliderTrackCell</string>
-			<key>label</key>
-			<string>背景色值</string>
+			<key>default</key>
+			<real>88.0</real>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.BackgroundAlpha</string>
-			<key>default</key>
-			<real>88</real>
-			<key>min</key>
-			<real>0</real>
-			<key>max</key>
-			<real>100</real>
-			<key>height</key>
-			<real>54</real>
-			<key>showValue</key>
-			<true/>
-			<key>isContinuous</key>
-			<false/>
 			<key>erIcon</key>
 			<string>drop.fill</string>
 			<key>erIconColor</key>
 			<string>teal</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>height</key>
+			<real>54.0</real>
+			<key>isContinuous</key>
+			<false/>
+			<key>key</key>
+			<string>QuickAdd.BackgroundAlpha</string>
+			<key>label</key>
+			<string>背景色值</string>
+			<key>max</key>
+			<real>100.0</real>
+			<key>min</key>
+			<real>0.0</real>
+			<key>showValue</key>
+			<true/>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSTableCell</string>
 			<key>cellClass</key>
 			<string>ERSegmentedCell</string>
-			<!-- 1.0.8-30：**必须给一个 label**（哪怕是空串）。
-			     1.0.8-29 把 label 整个省掉，结果 PSTableCell refreshCellContentsWithSpecifier:
-			     在 setTitle: 上拿到非字符串，Preferences 直接 SIGABRT —— 用户点「系统增强」秒退。
-			     空串既满足"左边不显示文字"，又保证 title 拿到的是合法 NSString。
-			     1.0.8-31：**cell 从 PSTitleValueCell 改为 PSTableCell** ——
-			     PSTitleValueCell 自带一个「数值标签」，会把 specifier 的当前值画在行里；
-			     实机上那串 RGB（38,45,58）正好压在分段控件的前两段上，看起来就是
-			     「灰红/灰橙上面多了 38、5,5 这样的数字」。PSTableCell 没有数值标签，干净。 -->
-			<key>label</key>
-			<string></string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>QuickAdd.BackgroundColor</string>
 			<key>default</key>
 			<string>38,45,58</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>erPresetCompact</key>
+			<true/>
+			<key>erPresetCustomIndex</key>
+			<integer>7</integer>
+			<key>erPresetRGB</key>
+			<array>
+				<string>58,34,38</string>
+				<string>58,44,32</string>
+				<string>56,52,32</string>
+				<string>31,53,40</string>
+				<string>28,51,54</string>
+				<string>38,45,58</string>
+				<string>44,36,62</string>
+			</array>
 			<key>erSegmentTitles</key>
 			<array>
 				<string>灰红</string>
@@ -330,26 +342,13 @@
 				<string>灰紫</string>
 				<string>自定义</string>
 			</array>
-			<!-- 1.0.8-30：键名由 erSegmentValues 改为 erPresetRGB —— 1.0.8-29 用的
-			     "…Values" 撞上 Preferences 对 validValues/values 的惯例解析，是那次
-			     setTitle: 收到 NSArray 的可疑来源之一。改名彻底躲开。 -->
-			<key>erPresetRGB</key>
-			<array>
-				<string>58,34,38</string>
-				<string>58,44,32</string>
-				<string>56,52,32</string>
-				<string>31,53,40</string>
-				<string>28,51,54</string>
-				<string>38,45,58</string>
-				<string>44,36,62</string>
-			</array>
-			<key>erPresetCustomIndex</key>
-			<integer>7</integer>
-			<key>erPresetCompact</key>
-			<true/>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>QuickAdd.BackgroundColor</string>
+			<key>label</key>
+			<string></string>
 		</dict>
 	</array>
+	<key>title</key>
+	<string>系统增强</string>
 </dict>
 </plist>
