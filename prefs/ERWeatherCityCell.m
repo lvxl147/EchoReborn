@@ -39,7 +39,6 @@
         if ([UIColor respondsToSelector:@selector(systemGreenColor)]) {
             [_confirm setTitleColor:[UIColor systemGreenColor] forState:UIControlStateNormal];
         }
-        _confirm.contentEdgeInsets = UIEdgeInsetsMake(0, 8, 0, 8);
         _confirm.layer.cornerRadius = 6.0;
         _confirm.layer.borderWidth = 1.0;
         _confirm.layer.borderColor = [UIColor systemGreenColor].CGColor;
