@@ -463,16 +463,30 @@ static CGFloat ERBackgroundAlphaValue(void) {
 
 - (void)layoutSubviews {
     [super layoutSubviews];
-    // 1.0.8-32：两个系统标签再兜一次（PSTableCell 有可能在布局阶段重新赋值）
-    if (!self.textLabel.isHidden) { self.textLabel.hidden = YES; self.textLabel.text = @""; }
-    if (!self.detailTextLabel.isHidden) { self.detailTextLabel.hidden = YES; self.detailTextLabel.text = @""; }
+    // 1.0.8-60 · 分段模式（震动强度/小窗位置等）**显示左侧标签**，分段控件靠右；
+    // 数值模式（RGB 颜色行）维持原样：隐藏标签、分段占满整行。
     if (!_segment || _segment.superview != self.contentView) return;
     CGFloat width = CGRectGetWidth(self.contentView.bounds);
-    CGRect frame = _segment.frame;
-    frame.origin.x = 16.0;
-    frame.size.width = MAX(width - 32.0, 120.0);
-    frame.origin.y = round((CGRectGetHeight(self.contentView.bounds) - CGRectGetHeight(frame)) * 0.5);
-    _segment.frame = frame;
+    if (_erValueMode) {
+        if (!self.textLabel.isHidden) { self.textLabel.hidden = YES; self.textLabel.text = @""; }
+        if (!self.detailTextLabel.isHidden) { self.detailTextLabel.hidden = YES; self.detailTextLabel.text = @""; }
+        CGRect frame = _segment.frame;
+        frame.origin.x = 16.0;
+        frame.size.width = MAX(width - 32.0, 120.0);
+        frame.origin.y = round((CGRectGetHeight(self.contentView.bounds) - CGRectGetHeight(frame)) * 0.5);
+        _segment.frame = frame;
+    } else {
+        NSString *title = [_erSpecifier propertyForKey:@"label"];
+        self.textLabel.hidden = NO;
+        self.textLabel.text = title.length ? title : @"";
+        self.textLabel.font = [UIFont systemFontOfSize:16.0];
+        self.detailTextLabel.hidden = YES;
+        CGRect frame = _segment.frame;
+        frame.origin.x = round(width * 0.46);
+        frame.size.width = MAX(width - frame.origin.x - 12.0, 100.0);
+        frame.origin.y = round((CGRectGetHeight(self.contentView.bounds) - CGRectGetHeight(frame)) * 0.5);
+        _segment.frame = frame;
+    }
 }
 
 - (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
@@ -492,13 +506,17 @@ static CGFloat ERBackgroundAlphaValue(void) {
     // 因为 PSTableCell 的 refresh 一样会把 specifier 的当前值（那串 RGB）画进
     // detailTextLabel（右侧读数位），压住最后一段「自定义」。
     // 这里把两个系统标签都清空并隐藏，layoutSubviews 里再兜一次。
-    self.textLabel.text = @"";
-    self.detailTextLabel.text = @"";
-    self.textLabel.hidden = YES;
-    self.detailTextLabel.hidden = YES;
-
     PSSpecifier *current = specifier ?: _erSpecifier;
     if (!current) return;
+
+    NSArray<NSString *> *valuesEarly = ERPresetRGBList(current);
+    BOOL valueModeEarly = (valuesEarly != nil);
+    if (valueModeEarly) {
+        self.textLabel.text = @"";
+        self.detailTextLabel.text = @"";
+        self.textLabel.hidden = YES;
+        self.detailTextLabel.hidden = YES;
+    }
 
     NSArray<NSString *> *values = ERPresetRGBList(current);
     _erValueMode = (values != nil);
