@@ -589,6 +589,9 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 
 #pragma mark - 刷新
 
+static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *observer,
+                                          CFStringRef name, const void *object, CFDictionaryRef userInfo);
+
 - (void)start {
     if (self.started) return;
     self.started = YES;
@@ -896,9 +899,6 @@ static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *
         ERWeatherLog(@"prefs changed — refresh now (throttle cleared)");
     });
 }
-
-
-                                          CFStringRef name, const void *object, CFDictionaryRef userInfo);
 
 - (void)kickstartWeatherModel {
     if (!self.todayModel) return;
