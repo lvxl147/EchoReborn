@@ -8464,7 +8464,6 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
 
 // 1.0.8-48 前置声明（定义在文件后部）
 - (void)erSTUIDisplayLinkTick;
-- (void)erSTUIDisplayLinkTick { ERStatusBarRowTick(); }
 
 - (void)dumpLandscapeTopViewsForDiagnosis;   // 1.0.8-39 诊断
 - (void)applyLandscapeRise:(CGFloat)rise toView:(UIView *)view;
@@ -12495,6 +12494,8 @@ static void ERStatusBarRowStartLink(void) {
     [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     gERStatusBarRowLink = link;
 }
+
+- (void)erSTUIDisplayLinkTick { ERStatusBarRowTick(); }
 
 - (void)dumpLandscapeTopViewsForDiagnosis {
     static CFTimeInterval lastDump = 0.0;
