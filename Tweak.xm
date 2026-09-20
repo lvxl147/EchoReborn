@@ -8461,7 +8461,6 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
 - (void)applyLandscapeChromeRiseForOverlay:(UIViewController *)overlay;
 - (void)scheduleLandscapeChromeRetryForOverlay:(UIViewController *)overlay;
 - (CGFloat)landscapeChromeRiseForContainer:(UIView *)container landscape:(BOOL)landscape;
-- (void)erSTUIDisplayLinkTick;
 
 // 1.0.8-48 前置声明（定义在文件后部）
 - (void)dumpLandscapeTopViewsForDiagnosis;   // 1.0.8-39 诊断
