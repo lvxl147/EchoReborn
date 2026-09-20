@@ -67,36 +67,16 @@
 			<string>天气模块城市选择</string>
 		</dict>
 		<dict>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
-			<string>PSEditTextCell</string>
-			<key>default</key>
-			<string></string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
+			<string>PSTableCell</string>
+			<key>cellClass</key>
+			<string>ERWeatherCityCell</string>
 			<key>erIcon</key>
 			<string>location.fill</string>
 			<key>erIconColor</key>
 			<string>red</string>
-			<key>key</key>
-			<string>Weather.CityPending</string>
 			<key>label</key>
 			<string>天气城市</string>
-			<key>placeholder</key>
-			<string>留空 = 跟随天气框架的定位城市</string>
-		</dict>
-		<dict>
-			<key>cell</key>
-			<string>PSTableCell</string>
-			<key>cellClass</key>
-			<string>ERWeatherConfirmCell</string>
-			<key>erIcon</key>
-			<string>checkmark.circle.fill</string>
-			<key>erIconColor</key>
-			<string>green</string>
-			<key>label</key>
-			<string>确认生效</string>
 		</dict>
 		<dict>
 			<key>cell</key>

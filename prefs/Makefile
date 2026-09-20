@@ -4,7 +4,7 @@ include $(THEOS)/makefiles/common.mk
 
 BUNDLE_NAME = EchoRebornPrefs
 
-EchoRebornPrefs_FILES = ERRootListController.m ERCategoryOrderController.m ERShortcutController.m ERGlassListController.m ERShortcutScanner.m ERModuleSettingsController.m ERUIHelpers.m ERSegmentedCell.m ERAuthorCell.m EREntryCell.m ERUtilitySwitchCell.m ERSliderCell.m EREnhancedSettingsController.m ERSokoController.m ERSiriController.m ERSystemEnhanceController.m ERLandscapeResetCell.m ERBottomComponentsController.m ERWeatherConfirmCell.m
+EchoRebornPrefs_FILES = ERRootListController.m ERCategoryOrderController.m ERShortcutController.m ERGlassListController.m ERShortcutScanner.m ERModuleSettingsController.m ERUIHelpers.m ERSegmentedCell.m ERAuthorCell.m EREntryCell.m ERUtilitySwitchCell.m ERSliderCell.m EREnhancedSettingsController.m ERSokoController.m ERSiriController.m ERSystemEnhanceController.m ERLandscapeResetCell.m ERBottomComponentsController.m ERWeatherCityCell.m
 EchoRebornPrefs_FRAMEWORKS = UIKit
 EchoRebornPrefs_PRIVATE_FRAMEWORKS = Preferences
 # Shortcuts store is read by ERShortcutScanner via dlopen, but link libsqlite3 so

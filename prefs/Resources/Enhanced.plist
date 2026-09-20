@@ -215,8 +215,6 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>开启后，点击控制中心空白区域会有触感反馈；「震动强度」分轻 / 中 / 重三档，可按习惯选择。</string>
 			<key>label</key>
 			<string>震动反馈</string>
 		</dict>
