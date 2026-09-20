@@ -1122,7 +1122,7 @@ static NSString *ERWeatherCityOverride(void) {
 - (void)fetchForecastAtLatitude:(CGFloat)latitude longitude:(CGFloat)longitude city:(NSString *)city {
 
     self.apiInFlight = YES;
-    self.apiLastFetch = now;
+    self.apiLastFetch = NSDate.date.timeIntervalSince1970;
     NSString *urlText = [NSString stringWithFormat:
         @"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
         @"&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min"
