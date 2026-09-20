@@ -506,7 +506,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-43 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-44 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -593,6 +593,15 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
     if (self.started) return;
     self.started = YES;
     [self openWeatherFrameworkIfNeeded];
+    // 1.0.8-44 · 设置改完**立即生效**。
+    // 用户反馈「天气好像要注销才有反应」—— 原因是城市改动要等 10 分钟的取数节流窗口。
+    // 这里监听本插件统一的 ReloadPrefs：设置页一改，就清掉节流并立刻重取。
+    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+                                    (__bridge const void *)self,
+                                    ERWeatherPrefsChangedCallback,
+                                    CFSTR("com.strive.echoreborn/ReloadPrefs"),
+                                    NULL,
+                                    CFNotificationSuspensionBehaviorDeliverImmediately);
     NSArray *candidates = [self resolveTodayModelCandidates];
     self.candidates = candidates;
     ERWeatherLog(@"candidate count=%lu", (unsigned long)candidates.count);
@@ -873,6 +882,23 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
                  cityValue ? [NSString stringWithFormat:@"%@<%@>", NSStringFromClass([cityValue class]), cityValue] : @"(nil)",
                  locModelValue ? NSStringFromClass([locModelValue class]) : @"(nil)");
 }
+
+static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *observer,
+                                                                 CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ERWeatherBridge *bridge = (__bridge ERWeatherBridge *)observer;
+        if (!bridge) return;
+        bridge.apiLastFetch = 0.0;     // 清掉公共 API 的 10 分钟节流
+        bridge.lastRefresh = 0.0;      // 清掉 refreshIfNeeded 的 15 秒节流（不清会挡住立即刷新）
+        bridge.refreshInFlight = NO;
+        bridge.retryBudget = 2;
+        [bridge refreshIfNeeded];
+        ERWeatherLog(@"prefs changed — refresh now (throttle cleared)");
+    });
+}
+
+
+                                          CFStringRef name, const void *object, CFDictionaryRef userInfo);
 
 - (void)kickstartWeatherModel {
     if (!self.todayModel) return;
@@ -1358,7 +1384,7 @@ static NSString *ERWeatherCityOverride(void) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-43 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-44 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
