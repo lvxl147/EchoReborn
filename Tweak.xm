@@ -25397,7 +25397,7 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
         static NSMutableDictionary *gERSTUIBaseY = nil;
         static dispatch_once_t onceA;
         dispatch_once(&onceA, ^{ gERSTUIBaseY = [NSMutableDictionary new]; });
-        [gERSTUIBaseY removeObjectForKey:view];
+        [gERSTUIBaseY removeObjectForKey:self];
         %orig(frame);
         return;
     }
@@ -25405,11 +25405,11 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
         static NSMutableDictionary *gERSTUIBaseY = nil;
         static dispatch_once_t onceB;
         dispatch_once(&onceB, ^{ gERSTUIBaseY = [NSMutableDictionary new]; });
-        NSNumber *stored = gERSTUIBaseY[view];
+        NSNumber *stored = gERSTUIBaseY[self];
         CGFloat baseY = stored.doubleValue;
         if (!stored || frame.origin.y < baseY) {
             baseY = frame.origin.y;
-            gERSTUIBaseY[view] = @(baseY);
+            gERSTUIBaseY[self] = @(baseY);
         }
         frame.origin.y = baseY + ERLandscapeStatusBarOffset();
     }
