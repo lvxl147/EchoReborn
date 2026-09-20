@@ -25305,6 +25305,24 @@ static void ERStartLandscapeChromeReassertIfNeeded(void) {
 @interface CCUISensorAttributionPrivacyHeaderView : UIView
 @end
 
+static CFTimeInterval gERSTUIProbeLast = 0.0;
+static void ERSTUIProbeLog(UIView *view, const char *hook) {
+    if (!gEnabled || !gERControlCenterPresented) return;
+    if (!ERLandscapePresentationActive()) return;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - gERSTUIProbeLast < 3.0) return;      // 3 秒一条，避免刷屏
+    gERSTUIProbeLast = now;
+    UIWindow *hostWindow = view.window;
+    CGRect windowRect = hostWindow ? [view convertRect:view.bounds toView:hostWindow] : CGRectZero;
+    ERLogInfo(@"STUI-PROBE %@ cls=%@ win=%@ frame=(%.1f,%.1f %.0fx%.0f) transform=(a=%.2f,b=%.2f,tx=%.2f,ty=%.2f)\n  调用栈:\n%@",
+              [NSString stringWithUTF8String:hook], NSStringFromClass(view.class),
+              hostWindow ? NSStringFromClass(hostWindow.class) : @"(无窗口)",
+              CGRectGetMinY(windowRect), CGRectGetMinX(windowRect),
+              CGRectGetWidth(windowRect), CGRectGetHeight(windowRect),
+              view.transform.a, view.transform.b, view.transform.tx, view.transform.ty,
+              [NSThread callStackSymbols]);
+}
+
 %hook CCUISensorAttributionCompactControl
 - (void)setFrame:(CGRect)frame {
     %orig;
@@ -25330,23 +25348,6 @@ static void ERStartLandscapeChromeReassertIfNeeded(void) {
 // 调用栈会逐帧列出「谁调用了它」，栈上靠近系统层的那个类+方法，就是我们要 hook
 // 的布局来源。只记录、不修改，绝无副作用；3 秒限一条，不刷日志。
 // ---------------------------------------------------------------------------
-static CFTimeInterval gERSTUIProbeLast = 0.0;
-static void ERSTUIProbeLog(UIView *view, const char *hook) {
-    if (!gEnabled || !gERControlCenterPresented) return;
-    if (!ERLandscapePresentationActive()) return;
-    CFTimeInterval now = CACurrentMediaTime();
-    if (now - gERSTUIProbeLast < 3.0) return;      // 3 秒一条，避免刷屏
-    gERSTUIProbeLast = now;
-    UIWindow *hostWindow = view.window;
-    CGRect windowRect = hostWindow ? [view convertRect:view.bounds toView:hostWindow] : CGRectZero;
-    ERLogInfo(@"STUI-PROBE %@ cls=%@ win=%@ frame=(%.1f,%.1f %.0fx%.0f) transform=(a=%.2f,b=%.2f,tx=%.2f,ty=%.2f)\n  调用栈:\n%@",
-              [NSString stringWithUTF8String:hook], NSStringFromClass(view.class),
-              hostWindow ? NSStringFromClass(hostWindow.class) : @"(无窗口)",
-              CGRectGetMinY(windowRect), CGRectGetMinX(windowRect),
-              CGRectGetWidth(windowRect), CGRectGetHeight(windowRect),
-              view.transform.a, view.transform.b, view.transform.tx, view.transform.ty,
-              [NSThread callStackSymbols]);
-}
 
 %hook STUIStatusBar_Wrapper
 // 1.0.8-56 · **源头拦截** —— 探针（20260920-2218）证实：这条行的位置是
