@@ -25394,22 +25394,22 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
     // 1.0.8-61 · 动态基准 + 钉死：基准 = 本次横屏会话见过的最小 y（无胶囊时的系统原位）。
     // 滑杆 0 = 系统位置，-20 = 上移 20；权限胶囊出现时系统写的更低 y 不会抬高基准。
     if (!gEnabled || !gERControlCenterPresented || !ERLandscapePresentationActive()) {
-        static NSMutableDictionary *gERSTUIBaseY = nil;
+        static NSMapTable *gERSTUIBaseY = nil;
         static dispatch_once_t onceA;
-        dispatch_once(&onceA, ^{ gERSTUIBaseY = [NSMutableDictionary new]; });
+        dispatch_once(&onceA, ^{ gERSTUIBaseY = [NSMapTable strongToStrongObjectsMapTable]; });
         [gERSTUIBaseY removeObjectForKey:self];
         %orig(frame);
         return;
     }
     if (frame.size.width > 1.0) {
-        static NSMutableDictionary *gERSTUIBaseY = nil;
+        static NSMapTable *gERSTUIBaseY = nil;
         static dispatch_once_t onceB;
-        dispatch_once(&onceB, ^{ gERSTUIBaseY = [NSMutableDictionary new]; });
-        NSNumber *stored = gERSTUIBaseY[self];
+        dispatch_once(&onceB, ^{ gERSTUIBaseY = [NSMapTable strongToStrongObjectsMapTable]; });
+        NSNumber *stored = [gERSTUIBaseY objectForKey:self];
         CGFloat baseY = stored.doubleValue;
         if (!stored || frame.origin.y < baseY) {
             baseY = frame.origin.y;
-            gERSTUIBaseY[self] = @(baseY);
+            [gERSTUIBaseY setObject:@(baseY) forKey:self];
         }
         frame.origin.y = baseY + ERLandscapeStatusBarOffset();
     }
@@ -25436,14 +25436,14 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
         return;
     }
     if (frame.size.width > 1.0) {
-        static NSMutableDictionary *gERCCUIBaseY = nil;
+        static NSMapTable *gERCCUIBaseY = nil;
         static dispatch_once_t onceC;
-        dispatch_once(&onceC, ^{ gERCCUIBaseY = [NSMutableDictionary new]; });
-        NSNumber *stored = gERCCUIBaseY[self];
+        dispatch_once(&onceC, ^{ gERCCUIBaseY = [NSMapTable strongToStrongObjectsMapTable]; });
+        NSNumber *stored = [gERCCUIBaseY objectForKey:self];
         CGFloat baseY = stored.doubleValue;
         if (!stored || frame.origin.y < baseY) {
             baseY = frame.origin.y;
-            gERCCUIBaseY[self] = @(baseY);
+            [gERCCUIBaseY setObject:@(baseY) forKey:self];
         }
         frame.origin.y = baseY + ERLandscapeStatusBarOffset();
     }
