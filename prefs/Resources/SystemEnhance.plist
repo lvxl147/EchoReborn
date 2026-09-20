@@ -66,6 +66,30 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
+			<string>天气</string>
+			<key>footerText</key>
+			<string>天气磁贴的数据源：默认用天气框架缓存的定位城市。若它不是你所在的位置（比如显示成「北京」），在下面填你的城市名（支持中文，如「深圳」「杭州」），留空则保持默认。改完点其它任意设置项触发刷新即可，无需注销。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSEditTextCell</string>
+			<key>label</key>
+			<string>天气城市</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>Weather.CityOverride</string>
+			<key>default</key>
+			<string></string>
+			<key>placeholder</key>
+			<string>留空 = 跟随天气框架的定位城市</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>label</key>
 			<string>锁屏音乐</string>
 			<key>footerText</key>
 			<string>隐藏系统自带的那块锁屏音乐组件（iOS 17 上属于 MediaRemoteUI / MRU 系，封面 + 歌名 + 播放键那一块）。开启后锁屏不会再出现系统音乐条，避免和本插件自己的音乐胶囊重复显示。这一项与「底部组件 → 音乐胶囊」的总开关互不影响：只想藏系统的、不放自己的胶囊也可以。</string>

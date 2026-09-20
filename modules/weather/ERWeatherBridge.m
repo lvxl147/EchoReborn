@@ -238,6 +238,13 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic, copy)   NSArray<NSString *> *apiHourlyLabels;
 @property (nonatomic, assign) NSTimeInterval apiLastFetch;
 @property (nonatomic, assign) BOOL apiInFlight;
+// 1.0.8-42 · 城市覆盖（设置页「天气 → 天气城市」）
+@property (nonatomic, copy)   NSString *overrideCity;        // 上次已处理的城市名（用于发现变更）
+@property (nonatomic, assign) CGFloat overrideLat;
+@property (nonatomic, assign) CGFloat overrideLon;
+@property (nonatomic, copy)   NSString *overrideName;        // 地理编码返回的城市名（展示用）
+@property (nonatomic, assign) BOOL overrideResolved;
+@property (nonatomic, assign) BOOL overrideInFlight;
 @property (nonatomic, strong) NSMutableArray<NSString *> *resolvedNames;
 @end
 
@@ -499,7 +506,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-42 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-43 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -1023,12 +1030,40 @@ static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *i
     else                { *textOut = @"雷阵雨"; *iconCodeOut = 4; }
 }
 
+/// 设置页「天气城市」。每次现读，改完即生效。
+static NSString *ERWeatherCityOverride(void) {
+    NSString *value = nil;
+    CFPropertyListRef raw = CFPreferencesCopyAppValue(CFSTR("Weather.CityOverride"),
+                                                      CFSTR("com.strive.echoreborn.preferences"));
+    if (raw) {
+        if (CFGetTypeID(raw) == CFStringGetTypeID()) value = [(__bridge NSString *)raw copy];
+        CFRelease(raw);
+    }
+    return [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+}
+
 - (void)fetchWeatherFromPublicAPI {
-    if (self.apiInFlight) return;
+    if (self.apiInFlight || self.overrideInFlight) return;
     NSTimeInterval now = NSDate.date.timeIntervalSince1970;
     if (now - self.apiLastFetch < 600.0) return;   // 10 分钟一次足够
 
-    // 坐标：模型 location(WFLocation) 里的 geoLocation(CLLocation)
+    // ── ① 城市覆盖（设置页「天气城市」）─────────────────────────────────
+    // 用户填了城市就走 Open-Meteo 的地理编码拿坐标（顺带拿到标准城市名做展示），
+    // 不再依赖天气框架缓存的那个城市（它可能是「北京」而不是用户所在的位置）。
+    NSString *wanted = ERWeatherCityOverride();
+    if (wanted.length) {
+        if (![wanted isEqualToString:self.overrideCity]) {
+            self.overrideCity = wanted;
+            self.overrideResolved = NO;
+            [self geocodeCityName:wanted];
+            return;                       // 解析回来之后，下一次刷新就会带上坐标
+        }
+        if (!self.overrideResolved) return;
+        [self fetchForecastAtLatitude:self.overrideLat longitude:self.overrideLon city:self.overrideName];
+        return;
+    }
+
+    // ── ② 默认：天气框架模型里缓存的位置 ────────────────────────────────
     id wfLocation = ERWValueQuietly(self.todayModel, @"location");
     id clLocation = ERWValueQuietly(wfLocation, @"geoLocation");
     if (![clLocation isKindOfClass:[CLLocation class]]) {
@@ -1040,6 +1075,51 @@ static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *i
         ERWeatherLog(@"public api: zero coordinate — skip");
         return;
     }
+    NSString *cachedCity = ERWString(ERWValueQuietly(self.todayModel, @"city"));
+    [self fetchForecastAtLatitude:coordinate.latitude longitude:coordinate.longitude city:cachedCity];
+}
+
+/// Open-Meteo 地理编码：城市名 → 坐标 + 标准名
+- (void)geocodeCityName:(NSString *)name {
+    self.overrideInFlight = YES;
+    NSString *urlText = [NSString stringWithFormat:
+        @"https://geocoding-api.open-meteo.com/v1/search?name=%@&count=1&language=zh&format=json",
+        [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
+    ERWeatherLog(@"geocoding: %@", urlText);
+    __weak typeof(self) weakSelf = self;
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithURL:[NSURL URLWithString:urlText]
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            __strong typeof(self) strongSelf = weakSelf;
+            if (!strongSelf) return;
+            strongSelf.overrideInFlight = NO;
+            NSDictionary *root = nil;
+            @try { root = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil]; }
+            @catch (__unused NSException *exception) { root = nil; }
+            NSArray *results = ERWValueQuietly(root, @"results");
+            if (![results isKindOfClass:[NSArray class]] || !results.count) {
+                ERWeatherLog(@"geocoding: no result for %@", name);
+                return;
+            }
+            NSDictionary *first = results.firstObject;
+            NSNumber *lat = ERWValueQuietly(first, @"latitude");
+            NSNumber *lon = ERWValueQuietly(first, @"longitude");
+            NSString *resolved = ERWString(ERWValueQuietly(first, @"name"));
+            if (![lat isKindOfClass:[NSNumber class]] || ![lon isKindOfClass:[NSNumber class]]) {
+                ERWeatherLog(@"geocoding: bad result");
+                return;
+            }
+            strongSelf.overrideLat = [lat doubleValue];
+            strongSelf.overrideLon = [lon doubleValue];
+            strongSelf.overrideName = resolved.length ? resolved : name;
+            strongSelf.overrideResolved = YES;
+            strongSelf.apiLastFetch = 0.0;   // 解析完立即允许取一次天气
+            ERWeatherLog(@"geocoding: %@ -> %.4f,%.4f", strongSelf.overrideName,
+                         strongSelf.overrideLat, strongSelf.overrideLon);
+        }];
+    [task resume];
+}
+
+- (void)fetchForecastAtLatitude:(CGFloat)latitude longitude:(CGFloat)longitude city:(NSString *)city {
 
     self.apiInFlight = YES;
     self.apiLastFetch = now;
@@ -1047,7 +1127,7 @@ static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *i
         @"https://api.open-meteo.com/v1/forecast?latitude=%.4f&longitude=%.4f"
         @"&current=temperature_2m,weather_code&daily=temperature_2m_max,temperature_2m_min"
         @"&hourly=temperature_2m&forecast_days=1&timezone=auto",
-        coordinate.latitude, coordinate.longitude];
+        latitude, longitude];
     ERWeatherLog(@"public api: fetching %@", urlText);
 
     __weak typeof(self) weakSelf = self;
@@ -1142,8 +1222,9 @@ static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *i
         snapshot.conditionCode = self.apiConditionCode;
         snapshot.highLowText = self.apiHighLowText;
         snapshot.precipText = @"";
-        // 城市沿用上一次快照里的（Weather 框架缓存的「北京」），避免把城市清成占位
-        if (self.snapshot.cityText.length) snapshot.cityText = self.snapshot.cityText;
+        // 城市名：设置了「天气城市」就用地理编码返回的标准名，否则沿用框架缓存的
+        if (self.overrideResolved && self.overrideName.length) snapshot.cityText = self.overrideName;
+        else if (self.snapshot.cityText.length) snapshot.cityText = self.snapshot.cityText;
         // 小时条：每 2 小时取一个点，最多 6 个，与原实现的密度接近
         if (self.apiHourly.count) {
             NSMutableArray<ERWeatherHour *> *hours = [NSMutableArray array];
@@ -1277,7 +1358,7 @@ static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *i
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-42 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-43 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
