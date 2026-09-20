@@ -25218,6 +25218,15 @@ static UIView *ERLandscapeStatusChromeTarget(UIView *view) {
 static dispatch_source_t gERChromeReassertTimer = nil;
 static NSMapTable<UIView *, NSNumber *> *gERChromeReassertRises = nil;
 
+// 1.0.8-58 · 恢复这个判定（-54 清理时误删）：状态栏行成员（CCUIStatusBar/
+// CCUIStatusLabel/STUIStatusBar_Wrapper）现在由钉死钩子（setFrame:）持有，
+// 20Hz 重写不得再碰它们 —— 否则陈旧登记的 rise 会把行拖回老位置。
+static BOOL ERStatusBarRowOwned(NSString *name) {
+    return [name isEqualToString:@"CCUIStatusBar"] ||
+           [name isEqualToString:@"CCUIStatusLabel"] ||
+           [name isEqualToString:@"STUIStatusBar_Wrapper"];
+}
+
 static void ERStopLandscapeChromeReassert(void) {
     if (gERChromeReassertTimer) {
         dispatch_source_cancel(gERChromeReassertTimer);
