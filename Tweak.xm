@@ -25264,10 +25264,11 @@ static void ERSTUIProbeLog(UIView *view, const char *hook) {
     CFTimeInterval now = CACurrentMediaTime();
     if (now - gERSTUIProbeLast < 3.0) return;      // 3 秒一条，避免刷屏
     gERSTUIProbeLast = now;
-    CGRect windowRect = view.window ? [view convertRect:view.bounds toView:window] : CGRectZero;
+    UIWindow *hostWindow = view.window;
+    CGRect windowRect = hostWindow ? [view convertRect:view.bounds toView:hostWindow] : CGRectZero;
     ERLogInfo(@"STUI-PROBE %@ cls=%@ win=%@ frame=(%.1f,%.1f %.0fx%.0f) transform=(a=%.2f,b=%.2f,tx=%.2f,ty=%.2f)\n  调用栈:\n%@",
               [NSString stringWithUTF8String:hook], NSStringFromClass(view.class),
-              view.window ? NSStringFromClass(view.window.class) : @"(无窗口)",
+              hostWindow ? NSStringFromClass(hostWindow.class) : @"(无窗口)",
               CGRectGetMinY(windowRect), CGRectGetMinX(windowRect),
               CGRectGetWidth(windowRect), CGRectGetHeight(windowRect),
               view.transform.a, view.transform.b, view.transform.tx, view.transform.ty,
