@@ -12115,15 +12115,8 @@ static CGFloat ERLandscapePillOffset(void) {
     for (UIView *view in indicator) {
         // 1.0.8-60 · 胶囊类改由 setFrame: 源头拦截持有，indicator 的 transform 写入让位
         if ([NSStringFromClass(view.class) hasPrefix:@"CCUISensorAttribution"]) continue;
-        if (pillDiag) {
-            CGRect wr = view.window ? [view convertRect:view.bounds toView:view.window] : CGRectZero;
-            ERLogInfo(@"PILL-DIAG cls=%@ indicatorN=%lu pillOff=%.1f rise=%.1f win=(%.1f,%.1f %.0fx%.0f) ty=%.1f",
-                      NSStringFromClass(view.class), (unsigned long)indicator.count, pillOff, rise,
-                      CGRectGetMinX(wr), CGRectGetMinY(wr), CGRectGetWidth(wr), CGRectGetHeight(wr),
-                      view.transform.ty);
-        }
-        [self applyLandscapeRise:rise toView:view];
-        if (rise > 0.0) { [appliedViews addObject:view]; [appliedRises addObject:@(rise)]; }
+        // 1.0.8-60 · 非 SensorAttribution 的 indicator 成员仍走原路径（目前为空集）
+        [self applyLandscapeRise:0.0 toView:view];
     }
     if (active && pillDiag) {
         ERLogInfo(@"PILL-DIAG indicatorN=%lu pillOff=%.1f（胶囊类已改由源头拦截持有）",
