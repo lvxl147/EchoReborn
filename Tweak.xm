@@ -8461,7 +8461,7 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
 - (void)applyLandscapeChromeRiseForOverlay:(UIViewController *)overlay;
 - (void)scheduleLandscapeChromeRetryForOverlay:(UIViewController *)overlay;
 - (CGFloat)landscapeChromeRiseForContainer:(UIView *)container landscape:(BOOL)landscape;
-- (void)erSTUIDisplayLinkTick { ERSTUIDisplayLinkTick(); }
+- (void)erSTUIDisplayLinkTick;
 
 // 1.0.8-48 前置声明（定义在文件后部）
 static void ERSTUIDisplayLinkTick(void);
@@ -12494,6 +12494,8 @@ static void ERSTUIStartDisplayLink(void) {
 // 光靠类名猜不出来，只有把顶层视图按名次列出来（类名 + winY + 高 + 属于哪个窗口）
 // 才能一眼定名 —— 下一版就能直接改成移动那个真正的目标。
 // ---------------------------------------------------------------------------
+- (void)erSTUIDisplayLinkTick { ERSTUIDisplayLinkTick(); }
+
 - (void)dumpLandscapeTopViewsForDiagnosis {
     static CFTimeInterval lastDump = 0.0;
     CFTimeInterval now = CACurrentMediaTime();
