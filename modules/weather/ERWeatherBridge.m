@@ -230,7 +230,11 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @property (nonatomic, copy)   NSString *apiConditionText;
 @property (nonatomic, assign) NSInteger apiConditionCode;
 @property (nonatomic, copy)   NSString *apiHighLowText;
-@property (nonatomic, assign) NSArray<NSNumber *> *apiHourly;
+// 1.0.8-42 · **这里必须是 strong** —— 1.0.8-41 写成了 `assign`：对象属性不持有，
+// 临时数组一释放就成悬垂指针，下一轮 rebuildSnapshot 读它时 objc_retain 到垃圾内存
+// → SIGBUS → SpringBoard 进安全模式（20260920-1406 的崩溃栈：objc_retain 崩在
+// ERWeatherModule 的 NSURLSession 回调线程，正是读这个数组的地方）。
+@property (nonatomic, strong) NSArray<NSNumber *> *apiHourly;
 @property (nonatomic, copy)   NSArray<NSString *> *apiHourlyLabels;
 @property (nonatomic, assign) NSTimeInterval apiLastFetch;
 @property (nonatomic, assign) BOOL apiInFlight;
@@ -495,7 +499,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.8-41 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.8-42 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -1273,7 +1277,7 @@ static void ERWeatherMapWMOCode(NSInteger code, NSString **textOut, NSInteger *i
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.8-41 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.8-42 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
