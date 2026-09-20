@@ -66,7 +66,13 @@
 
 - (void)erResetTapped {
     UIViewController *presenter = [self erPresenter];
-    if (!presenter) return;
+    if (!presenter) {
+        // 1.0.8-62 · 兜底：拿不到控制器（部分自定义表格的 cell 层级里
+        // nextResponder 链上没有 UIViewController）时**直接执行恢复**，
+        // 不再静默返回 —— 这就是「恢复横屏布局点不了」的原因。
+        [self erPerformResetFromPresenter:nil];
+        return;
+    }
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"恢复横屏布局？"
                                                                   message:@"将清除横屏下的所有摆放，横屏恢复为按竖屏布局一分为二展示（左 1–4 行 / 右 5–8 行）。\n竖屏布局不受影响。"
                                                            preferredStyle:UIAlertControllerStyleAlert];
@@ -78,6 +84,15 @@
 }
 
 - (void)erPerformResetFromPresenter:(UIViewController *)presenter {
+    if (!presenter) {
+        // 无弹窗兜底：直接恢复 + 发刷新通知
+        CFPreferencesSetAppValue(CFSTR("COSMICLandscapeOrigins"), NULL, CFSTR("com.strive.echoreborn.preferences"));
+        CFPreferencesAppSynchronize(CFSTR("com.strive.echoreborn.preferences"));
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             CFSTR("com.strive.echoreborn/ReloadPrefs"),
+                                             NULL, NULL, YES);
+        return;
+    }
     CFStringRef domain = CFSTR("com.strive.echoreborn.preferences");
     CFPreferencesSetAppValue(CFSTR("COSMICLandscapeOrigins"), NULL, domain);   // NULL = 删除该键
     CFPreferencesAppSynchronize(domain);
