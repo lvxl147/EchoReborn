@@ -5355,6 +5355,7 @@ static NSArray<UIWindow *> *ERAllApplicationWindows(void) {
     return result;
 }
 
+static CGFloat gERQABaselineTopInset = -1.0;   // 1.0.8-61：本次 CC 会话的基准顶部安全区
 static CGFloat ERQuickAccessCenterYOffset(UIViewController *controller) {
     CGFloat statusBarHeight = 0.0;
     @try {
@@ -5367,6 +5368,11 @@ static CGFloat ERQuickAccessCenterYOffset(UIViewController *controller) {
     // Insets can read zero before the first layout pass; 56pt reproduces the
     // previous hard-coded geometry (top -48 on a 40pt button => centre -28).
     if (statusBarHeight < 1.0) statusBarHeight = 56.0;
+    // 1.0.8-61 · **基准锁定**：权限胶囊（相机/定位指示）出现时 iOS 会加大顶部安全区，
+    // 按钮就跟着下移。这里只认**本次会话第一次读到的值**（胶囊未出现时的原位），
+    // 之后一律用基准 —— 胶囊出现/消失按钮都纹丝不动；滑杆偏移照常叠加。
+    if (gERQABaselineTopInset < 0.0) gERQABaselineTopInset = statusBarHeight;
+    else statusBarHeight = gERQABaselineTopInset;
     CGFloat offset = -(statusBarHeight * 0.5) + gQuickAccessVerticalOffset;
     // 0.5.17 横屏修正：横屏 iPhone 的 safeAreaInsets.top 为 0，上面那行会落到
     // 硬编码 56 兜底 → offset = -28。竖屏时 host 顶部本来就低，-28 刚好把按钮放在
@@ -24950,6 +24956,42 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     UIView *coverSheetView = self.view;
     [manager attachToCoverSheetView:coverSheetView];
     [manager refresh];
+    // 1.0.9 · **锁屏音乐探针**（只读）：全窗口扫描类名含 Music/NowPlaying/MRU/Media/
+    // Player/Artwork 的视图，记录「类名 + 窗口坐标 + 所属窗口」。锁屏隐藏音乐一直
+    // 找不到目标 —— 这份清单能回答：音乐组件到底在不在本进程、类名是什么、在哪个窗口。
+    // 10 秒限流一次；只记录不修改。
+    @try {
+        static CFTimeInterval gERMusProbeLast = 0.0;
+        CFTimeInterval musNow = CACurrentMediaTime();
+        if (musNow - gERMusProbeLast >= 10.0) {
+            gERMusProbeLast = musNow;
+            NSMutableArray<NSString *> *found = [NSMutableArray array];
+            NSArray<NSString *> *keys = @[@"Music", @"NowPlaying", @"MRU", @"Media", @"Player", @"Artwork", @"NowPlaying"];
+            for (UIWindow *window in ERAllApplicationWindows()) {
+                if (window.hidden || window.alpha < 0.02) continue;
+                NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:window];
+                NSUInteger head = 0, guard = 0;
+                while (head < queue.count && guard++ < 4000 && found.count < 24) {
+                    UIView *view = queue[head++];
+                    NSString *name = NSStringFromClass(view.class);
+                    BOOL hit = NO;
+                    for (NSString *kw in keys) {
+                        if ([name containsString:kw]) { hit = YES; break; }
+                    }
+                    if (hit) {
+                        CGRect wr = [view convertRect:view.bounds toView:window];
+                        [found addObject:[NSString stringWithFormat:@"%@(%.0f,%.0f %.0fx%.0f)@%@%@",
+                                          name, CGRectGetMinX(wr), CGRectGetMinY(wr),
+                                          CGRectGetWidth(wr), CGRectGetHeight(wr),
+                                          NSStringFromClass(window.class),
+                                          view.hidden ? @" HID" : @""]];
+                    }
+                    if (view.subviews.count) [queue addObjectsFromArray:view.subviews];
+                }
+            }
+            ERLogInfo(@"MUS-PROBE 锁屏音乐相关视图=%@", found.count ? found : @"(全窗口未找到 —— 音乐组件在别的进程渲染)");
+        }
+    } @catch (__unused NSException *exception) {}
     // 锁屏视图树可能尚未布局完成，0.35s 后复查一次（原工程行为）
     __weak UIView *weakView = coverSheetView;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)),
