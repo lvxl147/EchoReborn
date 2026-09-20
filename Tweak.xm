@@ -17867,6 +17867,10 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         CGFloat containerHeight = collectionWindow ? CGRectGetHeight(collectionWindow.bounds)
                                                    : CGRectGetHeight(collectionView.bounds);
         UIEdgeInsets windowInsets = collectionWindow ? collectionWindow.safeAreaInsets : UIEdgeInsetsZero;
+        // 1.0.9-2 · 网格容器基准（本窗口会话见过的最小 winY）—— 提到函数作用域，供下面的补偿与 GRID-PROBE 共用。
+        static NSMapTable *gERGridContainerBaseY = nil;
+        static dispatch_once_t onceD;
+        dispatch_once(&onceD, ^{ gERGridContainerBaseY = [NSMapTable strongToStrongObjectsMapTable]; });
         CGFloat verticalShift = 0.0;
         if (ERLandscapePresentationActive()) {
             verticalShift = ERGridVerticalCenteringCompensationForFrame(frame, layoutRect, containerHeight,
@@ -17878,9 +17882,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             // 这里量「容器当前 winY − 基准 winY」的差，从单元上反向补回：
             // 网格的屏幕位置与胶囊彻底无关（基准取见过的最小 y = 无胶囊时的原位）。
             if (collectionWindow) {
-                static NSMapTable *gERGridContainerBaseY = nil;
-                static dispatch_once_t onceD;
-                dispatch_once(&onceD, ^{ gERGridContainerBaseY = [NSMapTable strongToStrongObjectsMapTable]; });
                 CGFloat containerWinY = [collectionView convertRect:collectionView.bounds toView:collectionWindow].origin.y;
                 NSNumber *storedBase = [gERGridContainerBaseY objectForKey:collectionWindow];
                 CGFloat baseWinY = storedBase.doubleValue;
