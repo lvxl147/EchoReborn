@@ -266,7 +266,7 @@
 			<key>label</key>
 			<string>横屏状态栏</string>
 			<key>footerText</key>
-			<string>iOS 17.2 横屏控制中心里可见的状态栏是 STUIStatusBar（y=0，高 44pt）。这个偏移直接作用在它上面：正值往下、负值往上，拖动即时生效、无需注销。0 = 系统原位。若不确定想要多少，先往两边各拖一次看画面变化，落在最舒服的值即可。</string>
+			<string>iOS 17.2 原生就把横屏控制中心的状态栏行放在 y≈43.7（禁用所有插件实测确认）。这个偏移以**原生位置**为基准，由渲染链路按帧维持（单一持有者，不和系统抢）：负值往上（-35 ≈ y=8.7，接近旧版位置）、正值往下、0 = 原生位置。拖动即时生效、无需注销。建议从 -10 / -20 开始试。</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -280,7 +280,7 @@
 			<key>key</key>
 			<string>Landscape.StatusBarOffset</string>
 			<key>default</key>
-			<real>0</real>
+			<real>-20</real>
 			<key>min</key>
 			<real>-120</real>
 			<key>max</key>
@@ -295,6 +295,36 @@
 			<string>arrow.up.arrow.down</string>
 			<key>erIconColor</key>
 			<string>blue</string>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>cellClass</key>
+			<string>ERSliderTrackCell</string>
+			<key>label</key>
+			<string>权限胶囊偏移</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>Landscape.PillOffset</string>
+			<key>default</key>
+			<real>0</real>
+			<key>min</key>
+			<real>-120</real>
+			<key>max</key>
+			<real>120</real>
+			<key>height</key>
+			<real>54</real>
+			<key>showValue</key>
+			<true/>
+			<key>isContinuous</key>
+			<false/>
+			<key>erIcon</key>
+			<string>camera</string>
+			<key>erIconColor</key>
+			<string>green</string>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>
