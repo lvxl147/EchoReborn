@@ -12469,12 +12469,14 @@ static void ERStatusBarRowTick(void) {
     if (diag) lastDiag = diagNow;
     NSMutableArray<NSString *> *diagEntries = diag ? [NSMutableArray array] : nil;
     static char kWrittenKey, kBaseKey;
+    // 1.0.8-54 · 扫描放宽：① 所有可见窗口（不再按类名过滤 —— 状态栏行可能挂在
+    // 别的窗口上）；② BFS 上限 900 → 4000（与收集路径一致；之前 900 的上限在
+    // 控制中心这棵大树里走不到状态栏，实机日志 owned=(none found) 就是这么来的）。
     for (UIWindow *window in ERAllApplicationWindows()) {
         if (window.hidden || window.alpha < 0.02) continue;
-        if (![NSStringFromClass(window.class) containsString:@"ControlCenter"]) continue;
         NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:window];
         NSUInteger head = 0, guard = 0;
-        while (head < queue.count && guard++ < 900) {
+        while (head < queue.count && guard++ < 4000) {
             UIView *view = queue[head++];
             NSString *name = NSStringFromClass(view.class);
             if (!ERStatusBarRowOwned(name)) {
