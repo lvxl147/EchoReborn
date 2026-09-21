@@ -628,6 +628,8 @@ static const void *kEREditGridStableBaseYKey = &kEREditGridStableBaseYKey;
 // 前四版 QABTN-PROBE 零命中、以及按钮一直"让位"却抓不到数据的原因）。
 static NSArray<UIWindow *> *ERAllApplicationWindows(void);   // 前向声明（本函数后面才定义）
 static BOOL ERLandscapePresentationActive(void);   // 同上：前向声明
+static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root);   // 前向声明
+static NSString *ERModuleIdentifier(UIViewController *controller);                        // 前向声明
 static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
 // 1.0.9-19 · 按钮「开环补偿」的两个独立偏移量（用户确认：横竖屏显示位置不同，必须分开）。
 // 依据：20260921-2009 日志实测 —— 正常时 hostWinY=45.7、胶囊在场时稳定在 69.2，差值 ≈ 23.5pt。
