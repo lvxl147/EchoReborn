@@ -9809,7 +9809,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
             CGFloat hostWinY = (qaHost && qaWindow) ? [qaHost convertRect:qaHost.bounds toView:qaWindow].origin.y : -1.0;
             ERLogInfo(@"QABTN-PROBE landscape=%d centerY=%.1f btnCenterWinY=%.1f hostWinY=%.1f topInsetUsed=%.1f drop=%.1f",
                       (int)ERLandscapePresentationActive(), buttonCenterY,
-                      hostWinY >= 0.0 ? hostWinY + buttonCenterY : -1.0, hostWinY, statusBarHeight,
+                      hostWinY >= 0.0 ? hostWinY + buttonCenterY : -1.0, hostWinY, gERQABaselineTopInset,
                       kERLandscapeCornerButtonDrop);
         }
     } @catch (__unused NSException *exception) {}
