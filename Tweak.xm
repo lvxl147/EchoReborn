@@ -22331,7 +22331,11 @@ static const void *kERZoomDidAnimateKey = &kERZoomDidAnimateKey;
         spring.fromValue = @0.05;
         spring.toValue = @1.0;
         spring.duration = ERAppZoom26Duration();
-        spring.dampingRatio = 0.82;            // 轻微回弹（iOS 26 的弹性）
+        // 弹簧参数用经典三件套（mass/stiffness/damping）——`dampingRatio` 是 iOS 17 SDK 才有的属性，
+        // 本工程用 16.5 SDK 编译，不能引用。这组值 ≈ response 0.42 / dampingRatio 0.82 的轻微回弹。
+        spring.mass = 1.0;
+        spring.stiffness = 280.0;
+        spring.damping = 24.0;
         spring.initialVelocity = 0.0;
         [layer addAnimation:spring forKey:@"erZoomIn"];
 
