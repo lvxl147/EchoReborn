@@ -26085,11 +26085,9 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(kERBootGraceSeconds * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         @try {
+            // 只解除标志即可：宽限期过后，下一次布局（用户操作/系统刷新）会自然生效
             gERBootGraceActive = NO;
             ERLogInfo(@"BOOTGUARD 启动宽限结束（%.1fs），插件开始生效", kERBootGraceSeconds);
-            for (UIViewController *bootOverlay in gOverlayControllers.allObjects) {
-                [[EchoRebornCoordinator sharedCoordinator] layoutOwnedDuplicateModulesForOverlay:bootOverlay];
-            }
         } @catch (__unused NSException *exception) {}
     });
     ERLogInfo(@"APPSW-PROBE ver=1.0.9-32 zoom=%d crossfade=%d snapshot=%d",
