@@ -22566,6 +22566,9 @@ static CGFloat ERAppZoom26Duration(void) { return ERPreferenceBool(@"AppZoom26Or
 static CGPoint gERZoomIconCenter = {0.0, 0.0};
 static BOOL gERZoomHasIconCenter = NO;
 static const void *kERZoomDidAnimateKey = &kERZoomDidAnimateKey;
+static const void *kERZoomDisplayLinkKey = &kERZoomDisplayLinkKey;
+static const void *kERZoomStartKey = &kERZoomStartKey;
+static const void *kERZoomAnchorKey = &kERZoomAnchorKey;
 
 @interface SBFullscreenZoomView : UIView
 @end
@@ -22612,9 +22615,6 @@ static const void *kERZoomDidAnimateKey = &kERZoomDidAnimateKey;
         //   · 每帧：scale 0.05→1（ease-out cubic）、opacity 0→1（前半段完成）
         //   · 完成后停表、恢复 identity
         // 之前用一次性 UIView/CA 动画会被系统布局/事务覆盖 —— 这就是"感觉不明显"的原因。
-        static const void *kERZoomDisplayLinkKey = &kERZoomDisplayLinkKey;
-        static const void *kERZoomStartKey = &kERZoomStartKey;
-        static const void *kERZoomAnchorKey = &kERZoomAnchorKey;
         CADisplayLink *link = objc_getAssociatedObject(self, kERZoomDisplayLinkKey);
         if (!link) {
             link = [CADisplayLink displayLinkWithTarget:self selector:@selector(erZoomTick:)];
