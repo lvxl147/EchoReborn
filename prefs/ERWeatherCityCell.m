@@ -52,10 +52,16 @@
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat width = CGRectGetWidth(self.contentView.bounds);
-    CGFloat buttonWidth = 56.0;
-    CGFloat left = 92.0;                    // 给左侧图标与「天气城市」标题留位
-    _field.frame = CGRectMake(left, 6.0, width - left - buttonWidth - 20.0, 30.0);
-    _confirm.frame = CGRectMake(width - buttonWidth - 12.0, 6.0, buttonWidth, 30.0);
+    // 1.0.9-8 · 用户反馈：
+    //   ① 输入框过于靠左（压在「天气城市」标题下面）→ 起点 92 → 130，右移 38pt；
+    //   ② 「确认」按钮偏大 → 高度与左侧图标一致（29pt）、宽度缩 1/5（56 → 45），文字大小不变。
+    CGFloat buttonWidth = 45.0;
+    CGFloat buttonHeight = 29.0;
+    CGFloat left = 130.0;                   // 给左侧图标与「天气城市」标题留位
+    CGFloat contentHeight = CGRectGetHeight(self.contentView.bounds);
+    CGFloat rowY = round((contentHeight - buttonHeight) * 0.5);
+    _field.frame = CGRectMake(left, rowY, width - left - buttonWidth - 20.0, buttonHeight);
+    _confirm.frame = CGRectMake(width - buttonWidth - 12.0, rowY, buttonWidth, buttonHeight);
 }
 
 - (void)erEditingChanged {

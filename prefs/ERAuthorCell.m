@@ -68,13 +68,14 @@
 
             [_nameLabel.leadingAnchor constraintEqualToAnchor:_avatar.trailingAnchor constant:12.0],
             [_nameLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.contentView.trailingAnchor constant:-16.0],
-            // 1.0.7-21（用户第 2 条）：卡片顶部留白过大 → 减半（15 → 8）。
-            [_nameLabel.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:8.0],
+            // 1.0.9-8 · 用户反馈：文字块（Strive + 签名）整体偏上、与 44pt 头像不齐 →
+            // 下移 4pt 与头像垂直居中对齐（顶部留白 8 → 12），底部同步收紧（-12 → -8）保持卡片高度。
+            [_nameLabel.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:12.0],
 
             [_subtitleLabel.leadingAnchor constraintEqualToAnchor:_nameLabel.leadingAnchor],
             [_subtitleLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.contentView.trailingAnchor constant:-16.0],
             [_subtitleLabel.topAnchor constraintEqualToAnchor:_nameLabel.bottomAnchor constant:3.0],
-            [_subtitleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-12.0],
+            [_subtitleLabel.bottomAnchor constraintLessThanOrEqualToAnchor:self.contentView.bottomAnchor constant:-8.0],
         ]];
     }
     return self;
