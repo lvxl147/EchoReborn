@@ -6,7 +6,7 @@
 
 // 版本串同时用于日志与预览层标题。EchoReborn 侧的版本号由 scripts/er_set_version.py
 // 统一写入（本文件里的 ver= 与 EchoRebornRebornDualCam 段一并同步）。
-static NSString *const kDualCamVersion = @"1.0.9-10";
+static NSString *const kDualCamVersion = @"1.0.9-11";
 static BOOL g_dualCamOn = NO;
 static NSHashTable *g_appSessions = nil;
 static UIWindow *g_overlayWindow = nil;
