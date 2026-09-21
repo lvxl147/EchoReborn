@@ -621,6 +621,8 @@ static BOOL ERIsActiveDragModuleIdentifier(NSString *identifier) {
 // 一页的内容总量不变（仍是 8 个 2×2 位），但整体变为 8 列 × 4 行，
 // 既放得下横屏可视高度，又能均匀铺满横屏宽度。
 static NSUInteger const kERLandscapeBlockRows = 4;      // 每块 4 行
+// 1.0.9-10 · 编辑网格纵向基准的「上一稳定值」键（抖动过滤用）
+static const void *kEREditGridStableBaseYKey = &kEREditGridStableBaseYKey;
 static NSUInteger const kERLandscapeBlockColumns = 4;   // 每块 4 列
 
 // ---- 横屏顶部 chrome 布局（0.5.17）----
@@ -22278,7 +22280,6 @@ static CGFloat ERAppZoom26Duration(void) { return ERPreferenceBool(@"AppZoom26Or
 static CGPoint gERZoomIconCenter = {0.0, 0.0};
 static BOOL gERZoomHasIconCenter = NO;
 static const void *kERZoomDidAnimateKey = &kERZoomDidAnimateKey;
-static const void *kEREditGridStableBaseYKey = &kEREditGridStableBaseYKey;
 
 @interface SBFullscreenZoomView : UIView
 @end
