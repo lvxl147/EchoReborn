@@ -13000,7 +13000,11 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     if ([objc_getAssociatedObject(gesture, @selector(modulePanned:)) isEqual:@"overlayPan"]) {
         if (!gEditModeActive) return NO;
         CGPoint location = [touch locationInView:gesture.view];
-        if (location.y > CGRectGetHeight(gesture.view.bounds) - MAX(92.0, gesture.view.safeAreaInsets.bottom + 68.0)) return NO;
+        // 1.0.9-31 · 修「最后一排碰运气」：横屏把底部留白从 92 收到 24（拒绝线 338 → 406）
+        CGFloat bottomGuard = ERLandscapePresentationActive()
+            ? MAX(24.0, gesture.view.safeAreaInsets.bottom + 8.0)
+            : MAX(92.0, gesture.view.safeAreaInsets.bottom + 68.0);
+        if (location.y > CGRectGetHeight(gesture.view.bounds) - bottomGuard) return NO;
         UIView *touchedView = touch.view;
         while (touchedView) {
             if (touchedView.tag == kERResizeButtonTag || touchedView.tag == kERRemoveButtonTag) return NO;
@@ -16264,9 +16268,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         moduleView = source.view;
         sourceID = ERModuleIdentifier(source);
         if (!sourceID.length || !moduleView) { gesture.enabled = NO; gesture.enabled = YES; return; }
-        // 1.0.9-27 · 全链路拖动探针（纯采集）：每一环的数值都会打到日志，用于精确定位「拖动复位」发生在哪一环。
-        ERLogInfo(@"DRAG Began pt=(%.0f,%.0f) src=%@ module=%@",
-                  currentPoint.x, currentPoint.y, sourceID, NSStringFromClass(moduleView.class));
         gERDragInProgress = YES;
         gERActiveDragModuleView = moduleView;
         gERActiveDragModuleIdentifier = [sourceID copy];
@@ -16535,11 +16536,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             CGFloat distance = hypot(CGRectGetMinX(slot) - CGRectGetMinX(proposed), CGRectGetMinY(slot) - CGRectGetMinY(proposed));
             if (distance < nearestSlotDistance) { nearestSlotDistance = distance; nearestSlot = index; }
         }
-        ERLogInfo(@"DRAG Slots tried=%lu band=%lu bounds=%lu nearest=%lu fp=%lux%lu grid=%lux%lu",
-                  (unsigned long)dragTried, (unsigned long)skippedBand, (unsigned long)skippedBounds,
-                  nearestSlot == NSNotFound ? 999UL : (unsigned long)nearestSlot,
-                  (unsigned long)footprintColumns, (unsigned long)footprintRows,
-                  (unsigned long)grid.columns, (unsigned long)grid.rows);
         if (moved && nearestSlot != NSNotFound && grid.columns > 0) {
             NSUInteger landingColumn = nearestSlot % grid.columns;
             NSUInteger landingRow = nearestSlot / grid.columns;
@@ -16629,9 +16625,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (!grid) grid = objc_getAssociatedObject(overlay, kEREditGridKey);
         UIView *previewTarget = objc_getAssociatedObject(gesture, kERDragPreviewTargetKey);
         BOOL moved = [objc_getAssociatedObject(gesture, kERDragMovedKey) boolValue];
-        // 1.0.9-27 · Ended 时的落点状态：landing 为空 = 松手时没有有效落点 = 复位
-        ERLogInfo(@"DRAG Ended moved=%d landing=%@",
-                  (int)moved, [objc_getAssociatedObject(gesture, kERDragLandingOriginKey) description] ?: @"无");
         // Heuristic removal: a press that never became a drag and lifted near the
         // module's top-left corner (the remove bubble) is read as a remove. The
         // module is otherwise restored in place by the normal (no-target) path
