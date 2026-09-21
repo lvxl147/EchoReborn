@@ -2074,8 +2074,8 @@ static BOOL ERRectArraysNearlyEqual(NSArray<NSValue *> *a, NSArray<NSValue *> *b
         }
     }
     for (UIGestureRecognizer *recognizer in self.gestureRecognizers) {
-        if ([recognizer isKindOfClass:[UIPanGestureRecognizer class]] && recognizer.enabled &&
-            !recognizer.isCancelled) {
+        // 注意：UIGestureRecognizer 没有 isCancelled 属性（那是 state 枚举），只用 enabled 判断
+        if ([recognizer isKindOfClass:[UIPanGestureRecognizer class]] && recognizer.enabled) {
             shieldHasUsablePan = YES;
             break;
         }
