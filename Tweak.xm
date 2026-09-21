@@ -22621,7 +22621,7 @@ static const void *kERZoomAnchorKey = &kERZoomAnchorKey;
             if (!link) return;
             link.preferredFramesPerSecond = 120;
             objc_setAssociatedObject(self, kERZoomDisplayLinkKey, link, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(self, kERZoomStartKey, @([CACurrentMediaTime()]), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(self, kERZoomStartKey, [NSNumber numberWithDouble:CACurrentMediaTime()], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             [link addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
 
             CGPoint local = [self.window convertPoint:gERZoomIconCenter toView:self];
