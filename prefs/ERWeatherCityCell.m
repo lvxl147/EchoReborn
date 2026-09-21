@@ -58,10 +58,19 @@
     CGFloat buttonWidth = 45.0;
     CGFloat buttonHeight = 29.0;
     CGFloat left = 130.0;                   // 给左侧图标与「天气城市」标题留位
+    // 1.0.9-9 · 高度兜底：自适应高度未就绪时 contentView.bounds 可能读到 0，
+    // 那样 rowY 会算出负值、输入框被压到「天气城市」标题下方（用户报的"没变化/还在文字下面"）。
     CGFloat contentHeight = CGRectGetHeight(self.contentView.bounds);
+    if (contentHeight < 24.0) contentHeight = MAX(CGRectGetHeight(self.bounds), 44.0);
     CGFloat rowY = round((contentHeight - buttonHeight) * 0.5);
+    if (rowY < 0.0) rowY = 6.0;
     _field.frame = CGRectMake(left, rowY, width - left - buttonWidth - 20.0, buttonHeight);
     _confirm.frame = CGRectMake(width - buttonWidth - 12.0, rowY, buttonWidth, buttonHeight);
+}
+
+- (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
+    [super refreshCellContentsWithSpecifier:specifier];
+    [self setNeedsLayout];
 }
 
 - (void)erEditingChanged {
