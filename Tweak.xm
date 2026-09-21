@@ -9781,15 +9781,15 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     // 原实现用 CGRectGetWidth(controller.view.bounds)，横屏下仍是竖屏的 430pt。
     NSLayoutConstraint *hostWidthConstraint = [host.widthAnchor constraintEqualToConstant:ERQuickAccessHostWidth(controller)];
     objc_setAssociatedObject(host, kERQuickAccessWidthConstraintKey, hostWidthConstraint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    // 1.0.9-9 · **锚点换到 overlay 根视图**（原来锚在系统的 animationHost 上）。
+    // 用户实测：权限胶囊出现时这两个按钮会跟着下移（"这是我们自己做的按钮，为什么会动"）——
+    // 因为 host.top 约束挂在 animationHost 上，系统为胶囊腾位时把 animationHost 下移，我们就跟着走。
+    // 1.0.9-10 · 实测锚到 controller.view 仍会动 —— 因为胶囊出现时**整个 overlay 面板本身**也会下移。
+    // 改锚到**窗口顶部**（SBControlCenterWindow，屏幕坐标，绝对不动）—— 按钮这才真正定住。
+    UIWindow *qaHostWindow = controller.view.window;
+    NSLayoutYAxisAnchor *topAnchorRef = qaHostWindow ? qaHostWindow.topAnchor : controller.view.topAnchor;
+    NSLayoutXAxisAnchor *leadingAnchorRef = qaHostWindow ? qaHostWindow.leadingAnchor : controller.view.leadingAnchor;
     [NSLayoutConstraint activateConstraints:@[
-        // 1.0.9-9 · **锚点换到 overlay 根视图**（原来锚在系统的 animationHost 上）。
-        // 用户实测：权限胶囊出现时这两个按钮会跟着下移（"这是我们自己做的按钮，为什么会动"）——
-        // 因为 host.top 约束挂在 animationHost 上，系统为胶囊腾位时把 animationHost 下移，我们就跟着走。
-        // 1.0.9-10 · 实测锚到 controller.view 仍会动 —— 因为胶囊出现时**整个 overlay 面板本身**也会下移。
-        // 改锚到**窗口顶部**（SBControlCenterWindow，屏幕坐标，绝对不动）—— 按钮这才真正定住。
-        UIWindow *qaHostWindow = controller.view.window;
-        NSLayoutYAxisAnchor *topAnchorRef = qaHostWindow ? qaHostWindow.topAnchor : controller.view.topAnchor;
-        NSLayoutXAxisAnchor *leadingAnchorRef = qaHostWindow ? qaHostWindow.leadingAnchor : controller.view.leadingAnchor;
         [host.topAnchor constraintEqualToAnchor:topAnchorRef constant:0.0],
         [host.leadingAnchor constraintEqualToAnchor:leadingAnchorRef constant:0.0],
         hostWidthConstraint,
