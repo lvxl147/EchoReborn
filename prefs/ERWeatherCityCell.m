@@ -57,7 +57,7 @@
     //   ② 「确认」按钮偏大 → 高度与左侧图标一致（29pt）、宽度缩 1/5（56 → 45），文字大小不变。
     CGFloat buttonWidth = 45.0;
     CGFloat buttonHeight = 29.0;
-    CGFloat left = 130.0;                   // 给左侧图标与「天气城市」标题留位
+    CGFloat left = 164.0;                   // 1.0.9-10 · 130 → 164（用户：再右移「两个字」≈34pt）
     // 1.0.9-9 · 高度兜底：自适应高度未就绪时 contentView.bounds 可能读到 0，
     // 那样 rowY 会算出负值、输入框被压到「天气城市」标题下方（用户报的"没变化/还在文字下面"）。
     CGFloat contentHeight = CGRectGetHeight(self.contentView.bounds);
