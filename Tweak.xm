@@ -16521,17 +16521,13 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // other module exists beneath the dragged footprint.
         NSUInteger nearestSlot = NSNotFound;
         CGFloat nearestSlotDistance = CGFLOAT_MAX;
-        NSUInteger dragTried = 0, skippedBand = 0, skippedBounds = 0;
         NSUInteger footprintColumns = MAX(1, (NSUInteger)llround((CGRectGetWidth(startFrame) + kERGridGap) / kERGridStep));
         NSUInteger footprintRows = MAX(1, (NSUInteger)llround((CGRectGetHeight(startFrame) + kERGridGap) / kERGridStep));
         for (NSUInteger index = 0; index < grid.slotRects.count; index++) {
             NSUInteger column = index % grid.columns;
             NSUInteger row = index / grid.columns;
             CCUILayoutRect candidateRect = {(CCUILayoutPoint){column, row}, (CCUILayoutSize){footprintColumns, footprintRows}};
-            dragTried++;
-            // 1.0.9-27 · 把两个拒绝原因分开计数：哪一个在横屏下把候选全拒了，一眼可见
-            if (!ERLogicalRectRespectsColumnBands(candidateRect)) { skippedBand++; continue; }
-            if (column + footprintColumns > grid.columns || row + footprintRows > grid.rows) { skippedBounds++; continue; }
+            if (!ERLogicalRectRespectsColumnBands(candidateRect) || column + footprintColumns > grid.columns || row + footprintRows > grid.rows) continue;
             CGRect slot = grid.slotRects[index].CGRectValue;
             CGFloat distance = hypot(CGRectGetMinX(slot) - CGRectGetMinX(proposed), CGRectGetMinY(slot) - CGRectGetMinY(proposed));
             if (distance < nearestSlotDistance) { nearestSlotDistance = distance; nearestSlot = index; }
