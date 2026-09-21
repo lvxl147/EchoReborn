@@ -627,6 +627,7 @@ static const void *kEREditGridStableBaseYKey = &kEREditGridStableBaseYKey;
 // dispatch_source_t 若是局部变量，函数返回后立即释放，定时器永远不会触发 —— 这就是
 // 前四版 QABTN-PROBE 零命中、以及按钮一直"让位"却抓不到数据的原因）。
 static NSArray<UIWindow *> *ERAllApplicationWindows(void);   // 前向声明（本函数后面才定义）
+static BOOL ERLandscapePresentationActive(void);   // 同上：前向声明
 static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
 static dispatch_source_t gERQABtnCorrectionTimer = nil;
 
