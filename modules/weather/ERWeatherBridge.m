@@ -506,7 +506,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.9-16 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.9-17 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -1384,7 +1384,7 @@ static NSString *ERWeatherCityOverride(void) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.9-16 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.9-17 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
