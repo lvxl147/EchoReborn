@@ -327,6 +327,52 @@
 			<key>label</key>
 			<string></string>
 		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>仿 iOS 26 的应用打开/关闭动画：从被点图标的中心缩放展开、关闭时收起。实现思路参考 26Anim（com.ngkhoi.26anim），只作用于 SpringBoard；若系统私有类不存在则自动跳过，不会造成崩溃。</string>
+			<key>label</key>
+			<string>iOS 26 开合动画</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>AppZoom26Enabled</string>
+			<key>label</key>
+			<string>开合动画</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>cell</key>
+			<string>PSSegmentCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>AppZoom26OriginalSpeed</string>
+			<key>label</key>
+			<string>动画速度</string>
+			<key>validTitles</key>
+			<array>
+				<string>iOS 26（快）</string>
+				<string>iOS 原生</string>
+			</array>
+			<key>validValues</key>
+			<array>
+				<integer>0</integer>
+				<integer>1</integer>
+			</array>
+		</dict>
 	</array>
 	<key>title</key>
 	<string>系统增强</string>
