@@ -626,6 +626,7 @@ static const void *kEREditGridStableBaseYKey = &kEREditGridStableBaseYKey;
 // 1.0.9-12 · 快捷按钮「位置校正」用的键与定时器（**必须 static 保活**：
 // dispatch_source_t 若是局部变量，函数返回后立即释放，定时器永远不会触发 —— 这就是
 // 前四版 QABTN-PROBE 零命中、以及按钮一直"让位"却抓不到数据的原因）。
+static NSArray<UIWindow *> *ERAllApplicationWindows(void);   // 前向声明（本函数后面才定义）
 static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
 static dispatch_source_t gERQABtnCorrectionTimer = nil;
 
