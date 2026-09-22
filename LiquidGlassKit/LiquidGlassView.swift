@@ -42,8 +42,8 @@ struct LiquidGlass {
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>
-        ) = (.zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero,
-             .zero, .zero, .zero, .zero, .zero, .zero, .zero, .zero)
+        ) = (SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD,
+             4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero)
     }
 
     let shaderUniforms: ShaderUniforms

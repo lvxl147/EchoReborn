@@ -71,9 +71,6 @@ EchoReborn_FILES = Tweak.xm \
                 LiquidSiri/Runtime/LGLiquidGlassRuntime.m \
                 LiquidSiri/Runtime/LGSnapshotCaptureSupport.m \
                 LiquidGlassKit/LiquidGlassView.swift \
-                LiquidGlassKit/LiquidGlassEffectView.swift \
-                LiquidGlassKit/LiquidGlassSlider.swift \
-                LiquidGlassKit/LiquidGlassSwitch.swift \
                 LiquidGlassKit/LiquidLensView.swift \
                 LiquidGlassKit/ZeroCopyBridge.swift
 # Union of what EchoReborn, Soko and LiquidSiri each linked separately.
