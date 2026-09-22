@@ -538,7 +538,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.9-35 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.9-36 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -721,6 +721,44 @@ static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *
 }
 
 - (void)requestModelUpdate {
+    // =======================================================================
+    // ★ 1.0.9-36 · **崩溃根治：不再触碰系统天气模型** ★
+    //
+    // 崩溃栈（多份 SpringBoard 日志一致）：
+    //   objc_retain_x1
+    //   ERWeatherModule（我们的 bundle）
+    //   Weather  -[WATodayModel _forecastUpdateCompleted:...]_block_invoke
+    //
+    // 说明：**系统天气模型内部持有的"我们"（completion block 槽位 / delegate 槽位）
+    // 在其异步回调时被 retain，而那时我们的对象已经释放** → 野指针 → 崩溃。
+    //
+    // 1.0.9-34/-35 已禁用 delegate 与 KVO 注册，并把 dealloc 也补上了，但 **崩溃点未变**
+    // —— 说明真正的持有者是 Weather 框架内部保存的那个 block 槽位，我们无法从外部清除。
+    //
+    // 所以本版改用**唯一确定的做法**：**完全不与系统模型发生"推送式"交互** ——
+    //   · 不 register delegate / KVO（已禁用）
+    //   · **不打开 setAutoUpdate:**（kickstartWeatherModel 不再调用）
+    //   · **不调用 executeModelUpdateWithCompletion: 等任何带 completion 的入口**
+    //   · 只保留 rebuildSnapshot 里的**同步读取**（valueForKey，一次性、无回调）
+    // 数据来源改为我们已实现好的 Open-Meteo 通路（纯 HTTPS 请求，零系统对象依赖）。
+    // =======================================================================
+    if (self.updating) {
+        ERWeatherLog(@"requestModelUpdate: re-entered — bail out (recursion guard)");
+        return;
+    }
+    self.updating = YES;
+    self.refreshInFlight = YES;
+    self.lastRefresh = NSDate.date.timeIntervalSince1970;
+    [self rebuildSnapshot];                      // 同步读缓存（安全，只为拿到城市/坐标）
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self fetchWeatherFromPublicAPI];        // 唯一数据来源：Open-Meteo
+        self.updating = NO;
+        self.refreshInFlight = NO;
+    });
+    return;
+
+    // ---- 以下为原「系统模型交互」路径，已停用（保留代码便于将来在明确安全的前提下恢复）----
+    if (self.updating) {
     // 1.0.8-35 · **重入保护** —— 20260920-0343 两次 SpringBoard 崩溃的根因就是这里。
     //
     // 崩溃栈：
@@ -1437,7 +1475,7 @@ static NSString *ERWeatherCityOverride(void) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.9-35 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.9-36 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
