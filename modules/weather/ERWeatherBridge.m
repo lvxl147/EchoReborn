@@ -251,6 +251,38 @@ static ERWCodeFn gERWSymbolGlyph = NULL;
 @implementation ERWeatherBridge
 
 // ---------------------------------------------------------------------------
+// 1.0.9-35 · **第二道防线：对象释放前清理系统侧的引用**
+//
+// 背景（20260922 的崩溃）：系统 `WATodayModel` 用 **assign（弱）语义**持有 delegate / KVO
+// 观察者，而本类**从不移除**它们 —— 一旦本对象释放，model 仍握着野指针；天气数据更新
+// 成功时回调它，`objc_retain` 野指针 → SpringBoard 崩溃循环 → 进不去桌面。
+//
+// ① 已在 kickstart 里禁用那两处注册（见 #if 0 段）；
+// ② 这里再加一道保险：即使将来有人重新启用注册，dealloc 也会先把引用清干净。
+//
+// 注意：一律用 ivar `_todayModel`，避免在 dealloc 阶段触发懒加载创建对象。
+// ---------------------------------------------------------------------------
+- (void)dealloc {
+    @try {
+        if (self.modelObserved) {
+            for (NSString *key in @[@"hourlyForecasts", @"dailyForecasts", @"currentConditions",
+                                    @"todayForecast", @"forecast", @"weatherData"]) {
+                @try { [_todayModel removeObserver:self forKeyPath:key]; }
+                @catch (__unused NSException *inner) {}
+            }
+            self.modelObserved = NO;
+        }
+        if (_todayModel && [_todayModel respondsToSelector:@selector(setDelegate:)]) {
+            id current = ERWValueQuietly(_todayModel, @"delegate");
+            if (current == self) {
+                @try { ((void (*)(id, SEL, id))objc_msgSend)(_todayModel, @selector(setDelegate:), nil); }
+                @catch (__unused NSException *inner) {}
+            }
+        }
+    } @catch (__unused NSException *exception) {}
+}
+
+// ---------------------------------------------------------------------------
 // 天气代码表
 // ---------------------------------------------------------------------------
 // 沿用 Weather 应用历代使用的 condition code 表 —— 参考插件的 30 个中文图标名
@@ -506,7 +538,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.9-34 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.9-35 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -1405,7 +1437,7 @@ static NSString *ERWeatherCityOverride(void) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.9-34 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.9-35 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
