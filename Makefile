@@ -74,6 +74,11 @@ EchoReborn_FILES = Tweak.xm \
 EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage CoreMotion \
                      Foundation SwiftUI AVFoundation Accelerate AudioToolbox MetalKit
 EchoReborn_PRIVATE_FRAMEWORKS = ControlCenterServices SpringBoardUIServices
+# 1.0.9-63 · 我们依赖 ellekit（control 里写的是 ellekit 而非 mobilesubstrate）。
+# 当我们直接在 Tweak.xm 里 extern 并调用 MSHookMessageEx 时，Theos 只有在 Logos
+# 生成的代码里用到它才会自动链接；手写 extern 不会触发，于是上一版链接失败
+# （undefined: _MSHookMessageEx）。这里显式补上链接。
+EchoReborn_LDFLAGS = -lsubstrate
 EchoReborn_CFLAGS = -fobjc-arc -Wno-nullability-completeness -Wno-deprecated-declarations \
                  -Wno-unused-variable -Wno-unused-function
 # Soko and LiquidSiri are Swift 5 sources; one -swift-version for the whole
