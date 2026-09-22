@@ -785,6 +785,7 @@ static void ERStartQuickAccessPositionCorrection(void) {
                                                      CGRectGetWidth(r), CGRectGetHeight(r),
                                                      sub.userInteractionEnabled ? "" : ":NOinter",
                                                      sub.hidden ? ":hidden" : ""]];
+                            }
                         }
                         NSMutableArray<NSString *> *addTexts = [NSMutableArray array];
                         if (gEditModeActive) {
@@ -9866,7 +9867,6 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
                         }
                         ERLogInfo(@"MODHEIGHT-TABLE(%lu) 单格≈%.1f | %@",
                                   (unsigned long)table.count, cellH, [table componentsJoinedByString:@" "]);
-                    }
                     }
                 }
             } @catch (__unused NSException *probeException) {}
