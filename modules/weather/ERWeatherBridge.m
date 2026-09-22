@@ -506,7 +506,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.9-33 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.9-34 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -943,7 +943,21 @@ static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *
     [self dumpModelCapabilitiesIfNeeded];
 
 
-    // ② 注册成 delegate（WATodayModel 的回调是 informally declared 的三个方法，见文件尾部）
+    // ② ★ 1.0.9-34 · **已禁用：这是"进不去桌面"的崩溃根因** ★
+    //
+    // 崩溃日志（SpringBoard 0x1395DF95）：
+    //   Exception Type: EXC_BAD_ACCESS (SIGSEGV) at 0x1
+    //   0 libobjc objc_retain_x1              ← retain 野指针
+    //   1 ERWeatherModule (我们的天气 bundle)
+    //   2 Weather -[WATodayModel _forecastUpdateCompleted:...]_block_invoke
+    //
+    // 机制：系统的 WATodayModel 用 **assign（弱）语义**持有 delegate。我们把 bridge
+    // 注册成它的 delegate 后，bridge 释放而 model 仍握着野指针 → 天气数据下载完成时
+    // （SpringBoard 启动后几秒）回调它 → retain 野指针 → 崩溃循环 → 进不去桌面。
+    //
+    // 数据不依赖回调：rebuildSnapshot 是**同步读取**模型的 valueForKey 路径，
+    // 刷新由我们自己的 15 秒节流 refreshIfNeeded 负责，功能不受影响。
+    #if 0
     if ([self.todayModel respondsToSelector:@selector(setDelegate:)]) {
         id current = ERWValueQuietly(self.todayModel, @"delegate");
         if (current != self) {
@@ -955,9 +969,15 @@ static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *
             }
         }
     }
+    #endif
 
     // ③ KVO 兜底：不走 delegate 的模型（比如 WAForecastModel 直接持有数据），
     //    数据回来时会改这些属性，一改我们就重画。
+    // ③ ★ 1.0.9-34 · **已禁用（同一根因的第二处）** ★
+    // KVO 观察者同样是 assign 语义，而本文件**没有任何 dealloc / removeObserver** ——
+    // 观察者释放后系统仍会通知它，restore 野指针后同样触发 objc_retain 崩溃。
+    // 我们不需要 KVO：数据由同步读取 + 15 秒节流刷新保证。
+    #if 0
     if (!self.modelObserved) {
         self.modelObserved = YES;
         for (NSString *key in @[@"hourlyForecasts", @"dailyForecasts", @"currentConditions",
@@ -970,6 +990,7 @@ static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *
             }
         }
     }
+    #endif
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
@@ -1384,7 +1405,7 @@ static NSString *ERWeatherCityOverride(void) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.9-33 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.9-34 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
