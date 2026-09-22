@@ -54,8 +54,8 @@ struct LiquidGlass {
     var shadowOverlay: Bool = false
 
     static func thumb(magnification: Double = 1) -> Self {
-        .init(
-            shaderUniforms: .init(
+        Self(
+            shaderUniforms: ShaderUniforms(
                 materialTint: .init(x: 0.9, y: 0.95, z: 1.0, w: 0.15), // Near-clear with cool bias.
                 glassThickness: 10,
                 refractiveIndex: 1.11,
@@ -77,8 +77,8 @@ struct LiquidGlass {
         )
     }
 
-    static let lens = Self.init(
-        shaderUniforms: .init(
+    static let lens = Self(
+        shaderUniforms: ShaderUniforms(
             glassThickness: 6,
             refractiveIndex: 1.1,
             dispersionStrength: 15,
@@ -98,8 +98,8 @@ struct LiquidGlass {
         shadowOverlay: true,
     )
 
-    static let regular = Self.init(
-        shaderUniforms: .init(
+    static let regular = Self(
+        shaderUniforms: ShaderUniforms(
             glassThickness: 10,
             refractiveIndex: 1.5,
             dispersionStrength: 5,
