@@ -724,6 +724,23 @@ static void LGReconcileQuickActionHosts(void) {
 
 #pragma mark - ③ 灵动岛（Liquidify 复刻）—— 目标类取自上游字符串表
 
+// Logos 需要完整类声明（否则 self.window/self.class 在 forward class 上不可用）
+@interface SBSystemApertureWindow : UIWindow
+@end
+
+// 读字符串偏好（Liquidify 渐变色等；域与 GlassKit 一致）
+static NSString *ERPreferenceStringFor(NSString *key) {
+    if (!key.length) return nil;
+    CFPropertyListRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                    CFSTR("com.strive.echoreborn.preferences"));
+    NSString *out = nil;
+    if (v) {
+        if (CFGetTypeID(v) == CFStringGetTypeID()) out = [(__bridge NSString *)v copy];
+        CFRelease(v);
+    }
+    return out;
+}
+
 // 上游特征：SBSystemApertureWindow 是灵动岛所在窗口；_SBUISystemApertureCAPackageView
 // 是主视图。我们对**窗口**做 layoutSubviews 钩子，在其子树里找"最外层的圆角容器"加玻璃，
 // 这样不依赖具体子类在 iOS 17 是否还在（窗口类稳定得多）。
@@ -739,7 +756,7 @@ static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideD
 static NSArray<UIColor *> *ERDIGradientColors(void) {
     NSMutableArray<UIColor *> *colors = [NSMutableArray array];
     for (NSUInteger i = 1; i <= 5; i++) {
-        NSString *hex = ERPreferenceString([NSString stringWithFormat:@"LiquidifyApertureGradientColor%lu", (unsigned long)i]);
+        NSString *hex = ERPreferenceStringFor([NSString stringWithFormat:@"LiquidifyApertureGradientColor%lu", (unsigned long)i]);
         if (!hex.length) continue;
         NSString *h = [hex stringByReplacingOccurrencesOfString:@"#" withString:@""];
         if (h.length != 6) continue;
@@ -799,7 +816,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         grad = [CAGradientLayer layer];
         objc_setAssociatedObject(win, kERDIGradientKey, grad, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
-    if (grad.superclass == nil || grad.superlayer != root.layer) [root.layer insertSublayer:grad above:glass.layer.superview];
+    if (grad.superlayer == nil || grad.superlayer != root.layer) [root.layer insertSublayer:grad above:glass.layer.superlayer];
     NSArray<UIColor *> *cols = ERDIGradientColors();
     if (cols.count >= 2) {
         grad.frame = root.bounds;
