@@ -785,7 +785,6 @@ static void ERStartQuickAccessPositionCorrection(void) {
                                                      CGRectGetWidth(r), CGRectGetHeight(r),
                                                      sub.userInteractionEnabled ? "" : ":NOinter",
                                                      sub.hidden ? ":hidden" : ""]];
-                            }
                         }
                         NSMutableArray<NSString *> *addTexts = [NSMutableArray array];
                         if (gEditModeActive) {
