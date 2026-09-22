@@ -69,10 +69,17 @@ EchoReborn_FILES = Tweak.xm \
                 LiquidSiri/Shared/LGGlassRenderer.m \
                 LiquidSiri/Shared/LGBackButtonSupport.m \
                 LiquidSiri/Runtime/LGLiquidGlassRuntime.m \
-                LiquidSiri/Runtime/LGSnapshotCaptureSupport.m
+                LiquidSiri/Runtime/LGSnapshotCaptureSupport.m \
+                LiquidGlassKit/LiquidGlassView.swift \
+                LiquidGlassKit/LiquidGlassEffectView.swift \
+                LiquidGlassKit/LiquidGlassSlider.swift \
+                LiquidGlassKit/LiquidGlassSwitch.swift \
+                LiquidGlassKit/LiquidLensView.swift \
+                LiquidGlassKit/ZeroCopyBridge.swift
 # Union of what EchoReborn, Soko and LiquidSiri each linked separately.
 EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage CoreMotion \
-                     Foundation SwiftUI AVFoundation Accelerate AudioToolbox MetalKit
+                     Foundation SwiftUI AVFoundation Accelerate AudioToolbox MetalKit \
+                     Metal MetalPerformanceShaders CoreVideo
 EchoReborn_PRIVATE_FRAMEWORKS = ControlCenterServices SpringBoardUIServices
 EchoReborn_CFLAGS = -fobjc-arc -Wno-nullability-completeness -Wno-deprecated-declarations \
                  -Wno-unused-variable -Wno-unused-function
@@ -107,6 +114,34 @@ EchoRebornDualCam_FRAMEWORKS = UIKit AVFoundation CoreMedia Photos CoreImage Cor
 #     fatal error: could not build module 'Photos'
 # 主 target 因为不 import Photos 所以一直没暴露这个问题。
 EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
+
+# ---------------------------------------------------------------------------
+# LiquidGlassKit 的 Metal shader 编译（Theos 不认 .metal，这里手工用 xcrun 编译）
+#
+# 两个 .metal → 一个 default.metallib → 落到
+#   <jbroot>/Library/Application Support/EchoReborn/LiquidGlassKit.bundle/default.metallib
+# 代码侧从该 bundle 加载（见 LiquidGlassKit/LiquidGlassView.swift 的 makeDefaultLibrary 调用）。
+# ---------------------------------------------------------------------------
+ER_LGK_BUNDLE_NAME = LiquidGlassKit.bundle
+ER_METAL_SRCS = LiquidGlassKit/LiquidGlassVertex.metal LiquidGlassKit/LiquidGlassFragment.metal
+ER_METALLIB_STAGE = $(THEOS_STAGING_DIR)/Library/Application Support/EchoReborn/$(ER_LGK_BUNDLE_NAME)
+
+before-package::
+	@mkdir -p "$(ER_METALLIB_STAGE)"; \
+	BUILD=$$(mktemp -d); \
+	ok=1; \
+	for src in $(ER_METAL_SRCS); do \
+	  out="$$BUILD/$$(basename $$src .metal).air"; \
+	  xcrun -sdk iphoneos metal -c "$$src" -o "$$out" || ok=0; \
+	done; \
+	if [ $$ok -eq 1 ]; then \
+	  xcrun -sdk iphoneos metallib $$BUILD/*.air -o "$(ER_METALLIB_STAGE)/default.metallib" && \
+	  cp Info.plist "$(ER_METALLIB_STAGE)/" 2>/dev/null; \
+	  echo "    LiquidGlassKit: default.metallib 已编译并打入 bundle"; \
+	else \
+	  echo "    WARNING: LiquidGlassKit shader 编译失败（不影响其余功能）"; \
+	fi; \
+	rm -rf "$$BUILD"
 
 INSTALL_TARGET_PROCESSES = SpringBoard backboardd
 
