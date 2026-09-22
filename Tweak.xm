@@ -602,11 +602,11 @@ static BOOL ERGlassSwitchEnabled(NSString *key) {
 
 #pragma mark - 上游 VolumeHUD.x 的接口声明
 
+// 注：`CCUIContinuousSliderView` 本项目已在别处声明（基类不同），这里不再重复定义，
+// 且这两个类只用于 isKindOfClass: 判定 —— 基类用 UIView 即可，避免前向引用与重复定义。
 @interface MTMaterialView : UIView
 @end
-@interface CCUIContinuousSliderView : UIControl
-@end
-@interface SBElasticSliderView : CCUIContinuousSliderView
+@interface SBElasticSliderView : UIView
 @end
 @interface SBElasticVolumeSliderView : SBElasticSliderView
 @end
