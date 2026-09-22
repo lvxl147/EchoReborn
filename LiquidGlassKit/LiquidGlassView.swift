@@ -42,8 +42,8 @@ struct LiquidGlass {
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>
-        ) = (SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD,
-             4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero)
+        ) = (SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero,
+             SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero, SIMD4<Float>.zero)
     }
 
     let shaderUniforms: ShaderUniforms
@@ -189,7 +189,7 @@ final class LiquidGlassRenderer {
         self.device = device
 
 #if SWIFT_PACKAGE
-        let library = try! device.makeDefaultLibrary(bundle: Bundle(for: LiquidGlassView.self))
+        let library = try! device.makeDefaultLibrary(bundle: .module)
 #else
         let mainBundle = Bundle(for: LiquidGlassView.self)
         let bundleURL = mainBundle.url(forResource: "LiquidGlassKitShaderResources", withExtension: "bundle")!
