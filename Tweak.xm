@@ -6423,11 +6423,29 @@ static void ERGlassRegisterControlCenterHost(void) {
 // 便于按真机结果继续收敛（这就是「先移植、再探查」的那一步）。
 // ===========================================================================
 
+// 1.0.9-49 · **默认关闭**判定。
+// 注意：GlassKit 的 lgHostEnabled() 在偏好为空时默认返回 YES（即默认开），
+// 而我们要求这两项**默认关闭** → 这里自己读偏好：只有显式设为 true 才启用。
+static BOOL ERGlassSwitchEnabled(NSString *key) {
+    if (!key.length) return NO;
+    CFPropertyListRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                    CFSTR("com.strive.echoreborn.preferences"));
+    BOOL on = NO;
+    if (v) {
+        if (CFGetTypeID(v) == CFBooleanGetTypeID() || CFGetTypeID(v) == CFNumberGetTypeID()) {
+            on = [(__bridge NSNumber *)v boolValue];
+        }
+        CFRelease(v);
+    }
+    return on;
+}
+
 #pragma mark - ① 锁屏快捷按钮（手电筒 / 相机）
 
 // 原实现沿父链找 CSQuickActionsButton。iOS 17 上该类可能改名，
 // 所以这里只要求父链里出现 QuickActions / CSQuickAction 特征词。
 static BOOL ERGlassQuickActionsMatcher(UIView *material) {
+    if (!ERGlassSwitchEnabled(@"QuickActions.Enabled")) return NO;   // 默认关
     if (!isExactClass(material, @"MTMaterialView")) return NO;
     UIView *node = material.superview;
     NSInteger depth = 0;
@@ -6453,6 +6471,7 @@ static CGFloat ERGlassQuickActionsRadius(UIView *material) {
 // 原实现 Hook SBElasticSliderMaterialWrapperView。iOS 17 上可能改名，
 // 这里放宽为父链特征词（Elastic / SliderMaterial / Volume / Brightness）。
 static BOOL ERGlassVolumeHUDMatcher(UIView *material) {
+    if (!ERGlassSwitchEnabled(@"VolumeHUD.Enabled")) return NO;      // 默认关
     if (!isExactClass(material, @"MTMaterialView")) return NO;
     UIView *node = material.superview;
     NSInteger depth = 0;
