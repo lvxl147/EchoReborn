@@ -48,16 +48,7 @@ open class LiquidGlassSwitch: UIControl {
         didSet { /* No-op for iOS 26 style */ }
     }
 
-    @available(iOS 14.0, *)
-    open var style: UISwitch.Style {
-        .sliding
-    }
 
-    @available(iOS 14.0, *)
-    open var preferredStyle: UISwitch.Style {
-        get { .sliding }
-        set { }
-    }
 
     // MARK: - Private Views
     
@@ -580,11 +571,7 @@ public protocol AnySwitch: UIControl {
     var onImage: UIImage? { get set }
     var offImage: UIImage? { get set }
     /// The switch's display style. This property always returns a concrete, resolved style (never UISwitchStyleAutomatic).
-    @available(iOS 14.0, *)
-    var style: UISwitch.Style { get }
     /// Request a style for the switch. If the style changed, then the switch may resize.
-    @available(iOS 14.0, *)
-    var preferredStyle: UISwitch.Style { get set }
     var isOn: Bool { get set }
     func setOn(_ on: Bool, animated: Bool)
 }
@@ -593,10 +580,8 @@ extension UISwitch: AnySwitch { }
 
 extension LiquidGlassSwitch: AnySwitch {
     public static func make(isNative: Bool = true) -> AnySwitch {
-        if #available(iOS 26.0, *), isNative {
-            UISwitch()
-        } else {
-            LiquidGlassSwitch()
-        }
+        // 1.0.9-77 · 只保留自研实现
+        _ = isNative
+        return LiquidGlassSwitch()
     }
 }

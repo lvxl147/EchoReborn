@@ -66,12 +66,6 @@ open class LiquidGlassSlider: UIControl {
     /// A Boolean value indicating whether changes in the slider's value generate continuous update events.
     open var isContinuous: Bool = true
     
-    /// The slider's visual style.
-    @available(iOS 26.0, *)
-    open var sliderStyle: UISlider.Style {
-        get { isThumbless ? .thumbless : .default }
-        set { isThumbless = (newValue == .thumbless) }
-    }
     
     /// Internal storage for slider style (true = thumbless, false = continuous).
     private var isThumbless: Bool = false
@@ -850,8 +844,6 @@ public protocol AnySlider: UIControl {
     var minimumValueImage: UIImage? { get set }
     var maximumValueImage: UIImage? { get set }
     var isContinuous: Bool { get set }
-    @available(iOS 26.0, *)
-    var sliderStyle: UISlider.Style { get set }
     var minimumTrackTintColor: UIColor? { get set }
     var maximumTrackTintColor: UIColor? { get set }
     var thumbTintColor: UIColor? { get set }
@@ -875,10 +867,8 @@ extension UISlider: AnySlider { }
 
 extension LiquidGlassSlider: AnySlider {
     public static func make(isNative: Bool = true) -> AnySlider {
-        if #available(iOS 26.0, *), isNative {
-            UISlider()
-        } else {
-            LiquidGlassSlider()
-        }
+        // 1.0.9-77 · 只保留自研实现（原生的 iOS 26 分支需要 iOS 26 SDK，本机不适用）
+        _ = isNative
+        return LiquidGlassSlider()
     }
 }
