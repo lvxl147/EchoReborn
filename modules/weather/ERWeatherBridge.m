@@ -538,7 +538,7 @@ static BOOL ERWConditionCodeIsNight(NSInteger code) {
 ///
 ///     [WEATHER] requested model update
 ///     [WEATHER] model update completed (args: nil / NSError)
-///     [WEATHER] snapshot ver=1.0.9-36 live=0 city=天气 temp=--° ... hours=0
+///     [WEATHER] snapshot ver=1.0.9-37 live=0 city=天气 temp=--° ... hours=0
 ///     [WEATHER] resolved keys: none
 ///
 /// 也就是说：确实拿到了一个 model（否则会先打 "no today model available"），
@@ -758,7 +758,6 @@ static void ERWeatherPrefsChangedCallback(CFNotificationCenterRef center, void *
     return;
 
     // ---- 以下为原「系统模型交互」路径，已停用（保留代码便于将来在明确安全的前提下恢复）----
-    if (self.updating) {
     // 1.0.8-35 · **重入保护** —— 20260920-0343 两次 SpringBoard 崩溃的根因就是这里。
     //
     // 崩溃栈：
@@ -1475,7 +1474,7 @@ static NSString *ERWeatherCityOverride(void) {
     }
     self.snapshot = snapshot;
 
-    ERWeatherLog(@"snapshot ver=1.0.9-36 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
+    ERWeatherLog(@"snapshot ver=1.0.9-37 live=%d city=%@ temp=%@ cond=%@(%ld) highLow=%@ precip=%@ hours=%lu",
                  live, snapshot.cityText, snapshot.temperatureText, snapshot.conditionText,
                  (long)conditionCode, snapshot.highLowText, snapshot.precipText,
                  (unsigned long)snapshot.hours.count);
