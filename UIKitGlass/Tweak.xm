@@ -17,6 +17,7 @@
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
+#import <objc/message.h>
 #import "GlassKit/LGGlassKit.h"
 #import "GlassKit/LGLiveBackdropView.h"
 
