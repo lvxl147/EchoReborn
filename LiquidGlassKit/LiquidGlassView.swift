@@ -24,18 +24,18 @@ struct LiquidGlass {
         var cornerRadius: Float = .zero             // Base rounding (e.g., 24 for subtle chamfer). Circle if half the side.
         var cornerRoundnessExponent: Float = 2      // 1 = diamond; 2 = circle; 4 = squircle.
         var materialTint: SIMD4<Float> = .zero      // RGBA; e.g., subtle cyan (0.2, 0.8, 1.0, 1.0)
-        var glassThickness: Float                   // Fake parallax depth (e.g., 8-16 px)
-        var refractiveIndex: Float                  // 1.45-1.52 for borosilicate glass feel
-        var dispersionStrength: Float               // 0.0-0.02; prismatic color split on edges
-        var fresnelDistanceRange: Float             // px falloff from silhouette (e.g., 32)
-        var fresnelIntensity: Float                 // 0.0-1.0; rim lighting boost
-        var fresnelEdgeSharpness: Float             // Power 1.0=linear, 8.0=crisp
-        var glareDistanceRange: Float               // Similar to fresnel, but for specular streaks
-        var glareAngleConvergence: Float            // 0.0-π; focuses rays toward light dir
-        var glareOppositeSideBias: Float            // >1.0 amplifies back-side highlights
-        var glareIntensity: Float                   // 1.0-4.0; bloom-like edge fire
-        var glareEdgeSharpness: Float               // Matches fresnel for consistency
-        var glareDirectionOffset: Float             // Radians; tilts streak asymmetry
+        var glassThickness: Float = 0                   // Fake parallax depth (e.g., 8-16 px)
+        var refractiveIndex: Float = 0                  // 1.45-1.52 for borosilicate glass feel
+        var dispersionStrength: Float = 0               // 0.0-0.02; prismatic color split on edges
+        var fresnelDistanceRange: Float = 0             // px falloff from silhouette (e.g., 32)
+        var fresnelIntensity: Float = 0                 // 0.0-1.0; rim lighting boost
+        var fresnelEdgeSharpness: Float = 0             // Power 1.0=linear, 8.0=crisp
+        var glareDistanceRange: Float = 0               // Similar to fresnel, but for specular streaks
+        var glareAngleConvergence: Float = 0            // 0.0-π; focuses rays toward light dir
+        var glareOppositeSideBias: Float = 0            // >1.0 amplifies back-side highlights
+        var glareIntensity: Float = 0                   // 1.0-4.0; bloom-like edge fire
+        var glareEdgeSharpness: Float = 0               // Matches fresnel for consistency
+        var glareDirectionOffset: Float = 0             // Radians; tilts streak asymmetry
         var rectangleCount: Int32 = .zero           // Number of active rectangles
         var rectangles: (                           // Array of rectangles (x, y, width, height) in points, upper-left origin.
             SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
