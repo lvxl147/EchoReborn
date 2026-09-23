@@ -487,7 +487,8 @@ final class LiquidGlassView: MTKView {
               let commandBuffer = commandQueue.makeCommandBuffer(),
               let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDesc) else { return }
 
-        encoder.setRenderPipelineState(LiquidGlassRenderer.shared.pipelineState)
+        guard let glassRenderer = LiquidGlassRenderer.shared else { return }
+        encoder.setRenderPipelineState(glassRenderer.pipelineState)
         encoder.setFragmentBuffer(uniformsBuffer, offset: 0, index: 0)
         
         if let texture = backgroundTexture {
