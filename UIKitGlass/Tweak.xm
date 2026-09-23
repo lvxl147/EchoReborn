@@ -25,9 +25,20 @@ static Class ERGlassViewClass(void) {
     static Class c = nil;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        c = NSClassFromString(@"EchoRebornUIKit.LiquidGlassView")
-         ?: NSClassFromString(@"LiquidGlassKit.LiquidGlassView")
-         ?: NSClassFromString(@"LiquidGlassView");
+        // -----------------------------------------------------------------
+        // 1.0.9-82 · **只认我们自己的类**（不要把 fallback 交给别人）。
+        //
+        // 1.0.9-81 的崩溃正是这里引起的：原来的写法还会去查
+        //   NSClassFromString(@"LiquidGlassKit.LiquidGlassView")
+        //   NSClassFromString(@"LiquidGlassView")
+        // 而设备上同时装着另一个液态玻璃插件（liquidass），它的渲染器也注入 UIKit，
+        // 于是这两个 fallback 会命中**它的**同名类 —— 那个实现依赖它自己的资源，
+        // 拿不到就直接 Swift trap（EXC_BREAKPOINT），把我们这条链路一起带走。
+        // 现在只查我们自己的 module 前缀，找不到就彻底不做。
+        // -----------------------------------------------------------------
+        Class cls = NSClassFromString(@"EchoRebornUIKit.LiquidGlassView");
+        if (cls && [cls isSubclassOfClass:[UIView class]]) c = cls;
+        else NSLog(@"[EchoRebornUIKit] 未找到自己的 LiquidGlassView（不做玻璃，避免误用他人实现）");
     });
     return c;
 }
