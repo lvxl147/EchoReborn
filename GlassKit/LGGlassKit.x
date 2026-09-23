@@ -140,7 +140,13 @@ LGLiveBackdropView *LGCreateRegisteredGlass(CGRect frame,
     if (!prefix.length) return nil;
     NSString *filterType = LGFilterTypeForHostPrefix(prefix);
     if (!filterType) {
-        LGLog(@"lifecycle rejected unknown host prefix=%@", prefix);
+        // 1.0.9-93 · rejected 日志 10 秒节流（之前被 0.5s 定时器 × 50 分钟刷出 6101 条拖卡桌面）
+        static CFTimeInterval lastRejLog = 0.0;
+        CFTimeInterval nowR = CACurrentMediaTime();
+        if (nowR - lastRejLog > 10.0) {
+            lastRejLog = nowR;
+            LGLog(@"lifecycle rejected unknown host prefix=%@", prefix);
+        }
         return nil;
     }
     return [[LGLiveBackdropView alloc]

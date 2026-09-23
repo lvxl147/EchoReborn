@@ -771,11 +771,19 @@ static NSArray<UIColor *> *ERDIGradientColors(void) {
 }
 
 static void ERApplyDynamicIslandGlass(UIWindow *win) {
-    // 1.0.9-74 · 隐藏开关关闭后，任何一次调用都会把窗口恢复显示（幂等）
+    // 1.0.9-93 · **隐藏灵动岛 = 独立功能**（"不使用时收起"），与玻璃互不干扰：
+    //   隐藏开 → 只隐藏窗口，**绝不创建玻璃**（也不再走后面的查找/创建流程）
+    //   隐藏关 → 恢复显示；玻璃是否创建由【灵动岛】开关决定
     static BOOL erDIWasHidden = NO;
     if (ERDIHideEnabled()) {
-        erDIWasHidden = YES;
-    } else if (erDIWasHidden && win) {
+        if (!erDIWasHidden && win) {
+            win.hidden = YES;
+            erDIWasHidden = YES;
+            ERLogInfo(@"DI-HIDE 已隐藏灵动岛窗口（收起状态）");
+        }
+        return;   // ← 直接返回，不再查找目标/创建玻璃
+    }
+    if (erDIWasHidden && win) {
         win.hidden = NO;
         erDIWasHidden = NO;
         ERLogInfo(@"DI-HIDE 已恢复灵动岛显示");
@@ -1216,7 +1224,12 @@ static void ERDITimerScan(void) {
     if (verbose) {
         ERLogInfo(@"DI-SCAN#%ld 进入 开关=%d 隐藏=%d", (long)scanCount, diOn ? 1 : 0, diHide ? 1 : 0);
     }
-    if (!diOn) return;            // 开关关闭：不介入
+    if (!diOn) {
+        // 总开关关闭：恢复被隐藏的窗口（幂等）
+        static BOOL wasOff = NO;
+        if (wasOff) { wasOff = NO; }
+        return;
+    }
 
     NSMutableArray<UIWindow *> *wins = [NSMutableArray array];
     @try {
@@ -1266,7 +1279,7 @@ static void ERStartDynamicIslandScanner(void) {
         return;
     }
     dispatch_source_set_timer(diTimer, dispatch_time(DISPATCH_TIME_NOW, 0),
-                              (uint64_t)(0.5 * NSEC_PER_SEC), (uint64_t)(0.2 * NSEC_PER_SEC));
+                              (uint64_t)(2.0 * NSEC_PER_SEC), (uint64_t)(0.5 * NSEC_PER_SEC));
     dispatch_source_set_event_handler(diTimer, ^{
         @try { ERDITimerScan(); } @catch (__unused NSException *e) {}
     });
