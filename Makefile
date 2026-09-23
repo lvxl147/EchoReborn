@@ -71,7 +71,10 @@ EchoReborn_FILES = Tweak.xm \
                 LiquidSiri/Runtime/LGLiquidGlassRuntime.m \
                 LiquidSiri/Runtime/LGSnapshotCaptureSupport.m \
                 LiquidGlassKit/LiquidGlassView.swift \
-                LiquidGlassKit/ZeroCopyBridge.swift
+                LiquidGlassKit/ZeroCopyBridge.swift \
+                LiquidGlassKit/LiquidGlassSlider.swift \
+                LiquidGlassKit/LiquidGlassSwitch.swift \
+                LiquidGlassKit/LiquidLensView.swift
 # Union of what EchoReborn, Soko and LiquidSiri each linked separately.
 EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage CoreMotion \
                      Foundation SwiftUI AVFoundation Accelerate AudioToolbox MetalKit \
