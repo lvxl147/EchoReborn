@@ -30,22 +30,6 @@
 		</dict>
 		<dict>
 			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>cellClass</key>
-			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>界面优化</string>
-			<key>action</key>
-			<string>openEnhancedSettings:</string>
-			<key>erIcon</key>
-			<string>slider.horizontal.3</string>
-			<key>erIconColor</key>
-			<string>purple</string>
-		</dict>
-		<dict>
-			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
 			<string>视觉效果</string>
