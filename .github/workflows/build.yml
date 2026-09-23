@@ -194,8 +194,7 @@ jobs:
           print('payload root layout OK for scheme %r' % scheme)
 
           required = ['EchoRebornPrefs', 'EchoReborn.dylib', 'EchoRebornBackboardd.dylib',
-                      'EchoRebornDualCam.dylib', 'EchoRebornUIKit.dylib', 'EchoReborn.plist',
-                      'EchoRebornDualCam.plist', 'EchoRebornUIKit.plist']
+                      'EchoRebornDualCam.dylib', 'EchoReborn.plist', 'EchoRebornDualCam.plist']
           missing = []
           for req in required:
               hits = sorted(x for x in names if req in x)
@@ -221,9 +220,7 @@ jobs:
           # 但仍会出现在 payload 里，这里一并允许。
           # 1.0.9-90: EchoRebornGlass.dylib / EchoRebornGlassCore.dylib 是**随包携带的预编译
           # 液态玻璃渲染器**（上游成品，自带 shader；已改名以避开与 liquidify 的 dpkg 冲突）。
-          expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib',
-                      'EchoRebornUIKit.dylib',
-                      'EchoRebornGlass.dylib', 'EchoRebornGlassCore.dylib'}
+          expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib'}
           extra = sorted(set(dylibs) - expected)
           print('dylibs in payload:', dylibs)
           for gone in ('Soko.dylib', 'LiquidSiri.dylib'):
