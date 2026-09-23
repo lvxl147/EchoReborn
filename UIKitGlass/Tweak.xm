@@ -32,7 +32,9 @@
 //   · 渲染由 backboardd 侧的 EchoRebornBackboardd.dylib 全局提供，任何进程都可用
 //   · 完全不引用外部插件的任何类
 static BOOL ERGlassKitAvailable(void) {
-    return LGCreateRegisteredGlass != NULL;
+    // 注：不能写 `LGCreateRegisteredGlass != NULL` —— 它是在链接期解析的**函数**，
+    // 编译器会判定该比较恒为真并以 -Werror 报错。能编译到这里就说明库已链接进来。
+    return YES;
 }
 
 static BOOL ERGlassPrefBool(NSString *key) {
