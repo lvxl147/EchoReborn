@@ -23,6 +23,58 @@
 static void *kERSwitchGlassKey = &kERSwitchGlassKey;
 static void *kERSliderGlassKey = &kERSliderGlassKey;
 
+
+// ---------------------------------------------------------------------------
+// 1.0.9-91 · **用上游组件做外观**（这才是"和参考插件一样"的做法）
+//
+// 上游提供的是**完整控件**（LGLiquidGlassSwitch / LGLiquidGlassSlider）—— 自带滑块式外形
+// 与拖拽变形动画。我们把它覆盖在原控件之上（userInteractionEnabled=NO，触摸穿透给原控件），
+// 并把原控件的状态同步过去，于是：
+//      外观 = 上游组件（和参考插件一样）
+//      交互 = 系统原控件（不会破坏系统行为）
+// ---------------------------------------------------------------------------
+static UIView *ERMakeUpstreamView(CGRect frame, NSString *className, BOOL isOn) {
+    Class cls = NSClassFromString(className);
+    if (!cls) return nil;
+    UIView *v = nil;
+    @try { v = [[cls alloc] initWithFrame:frame]; } @catch (__unused NSException *e) { v = nil; }
+    if (!v) return nil;
+    v.userInteractionEnabled = NO;          // 触摸穿透
+    v.autoresizingMask = UIViewAutoresizingNone;
+    if (isOn && [v respondsToSelector:NSSelectorFromString(@"setOn:")]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(v, NSSelectorFromString(@"setOn:"), YES);
+    }
+    return v;
+}
+
+static void ERSyncUpstreamView(UIView *host, const void *key, BOOL enabled,
+                               BOOL (^sizeOK)(CGRect), NSString *className, NSString *label,
+                               BOOL isOn) {
+    UIView *v = objc_getAssociatedObject(host, key);
+    if (!enabled || !NSClassFromString(className)) {
+        if (v) {
+            [v removeFromSuperview];
+            objc_setAssociatedObject(host, key, nil, OBJC_ASSOCIATION_ASSIGN);
+        }
+        return;
+    }
+    CGRect b = host.bounds;
+    if (sizeOK && !sizeOK(b)) return;
+    if (!v) {
+        v = ERMakeUpstreamView(b, className, isOn);
+        if (!v) return;
+        [host addSubview:v];
+        objc_setAssociatedObject(host, key, v, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        LGLog(@"[EchoRebornUIKit] %@ 已安装上游组件 %@ frame=%@", label, className, NSStringFromCGRect(b));
+    }
+    if (v.superview != host) [host addSubview:v];
+    v.frame = b;
+    if ([v respondsToSelector:NSSelectorFromString(@"setOn:")]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(v, NSSelectorFromString(@"setOn:"), isOn);
+    }
+    [host bringSubviewToFront:v];
+}
+
 static BOOL ERPrefBool(NSString *key) {
     if (!key.length) return NO;
     CFPropertyListRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
@@ -97,13 +149,13 @@ static void ERSyncGlass(UIView *host, const void *key, BOOL enabled,
         LGLog(@"[EchoRebornUIKit] SWITCH-HOOK 命中 cls=%@ bounds=%@ 选项=%d",
               NSStringFromClass(self.class), NSStringFromCGRect(self.bounds), on ? 1 : 0);
     }
-    // 只处理"正常尺寸"的开关，避免误伤特殊场景
-    ERSyncGlass(self, kERSwitchGlassKey, on,
-                ^BOOL(CGRect b) {
-                    return b.size.width >= 40 && b.size.width <= 90 &&
-                           b.size.height >= 20 && b.size.height <= 45;
-                },
-                @"PrefsSwitch", @"SWITCH-GLASS");
+    // 1.0.9-91 · 优先用**上游开关组件**做外观（与参考插件一致）；拿不到才退回 GlassKit 玻璃
+    ERSyncUpstreamView(self, kERSwitchGlassKey, on,
+                       ^BOOL(CGRect b) {
+                           return b.size.width >= 30 && b.size.width <= 110 &&
+                                  b.size.height >= 20 && b.size.height <= 50;
+                       },
+                       @"LGLiquidGlassSwitch", @"SWITCH-UPSTREAM", self.isOn);
 }
 
 %end
@@ -120,11 +172,12 @@ static void ERSyncGlass(UIView *host, const void *key, BOOL enabled,
         LGLog(@"[EchoRebornUIKit] SLIDER-HOOK 命中 cls=%@ bounds=%@ 选项=%d",
               NSStringFromClass(self.class), NSStringFromCGRect(self.bounds), on ? 1 : 0);
     }
-    ERSyncGlass(self, kERSliderGlassKey, on,
-                ^BOOL(CGRect b) {
-                    return b.size.width >= 80 && b.size.height >= 10 && b.size.height <= 90;
-                },
-                @"PrefsSlider", @"SLIDER-GLASS");
+    // 1.0.9-91 · 同上：优先上游滑条组件
+    ERSyncUpstreamView(self, kERSliderGlassKey, on,
+                       ^BOOL(CGRect b) {
+                           return b.size.width >= 60 && b.size.height >= 10 && b.size.height <= 90;
+                       },
+                       @"LGLiquidGlassSlider", @"SLIDER-UPSTREAM", NO);
 }
 
 %end
