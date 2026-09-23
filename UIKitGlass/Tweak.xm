@@ -31,10 +31,25 @@
 //   · 与 SpringBoard 侧的控制中心玻璃是同一套实现（已在设备上长期验证）
 //   · 渲染由 backboardd 侧的 EchoRebornBackboardd.dylib 全局提供，任何进程都可用
 //   · 完全不引用外部插件的任何类
-static BOOL ERGlassKitAvailable(void) {
-    // 注：不能写 `LGCreateRegisteredGlass != NULL` —— 它是在链接期解析的**函数**，
-    // 编译器会判定该比较恒为真并以 -Werror 报错。能编译到这里就说明库已链接进来。
-    return YES;
+// 1.0.9-84 · **首选上游 LiquidGlassView（它的源代码就在我们这支 dylib 里）**，
+// GlassKit 仅作兜底。
+//
+// 与 1.0.9-81 的关键区别：那次崩溃是"用 `?:` 猜类名"命中了**别的插件**的同名类；
+// 现在**只查我们自己的 module 前缀**（EchoRebornUIKit.*），并校验是 UIView 子类，
+// 命中不了就退到 GlassKit —— 绝不再引用外部插件的实现。
+static Class ERUpstreamGlassClass(void) {
+    static Class c = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Class cls = NSClassFromString(@"EchoRebornUIKit.LiquidGlassView");
+        if (cls && [cls isSubclassOfClass:[UIView class]]) {
+            c = cls;
+            LGLog(@"[EchoRebornUIKit] 使用上游 LiquidGlassView（自带着色器源码编译）");
+        } else {
+            LGLog(@"[EchoRebornUIKit] 未找到自己的 LiquidGlassView，将走 GlassKit 兜底");
+        }
+    });
+    return c;
 }
 
 static BOOL ERGlassPrefBool(NSString *key) {
@@ -55,10 +70,27 @@ static void *kERSliderGlassKey = &kERSliderGlassKey;
 
 // 创建一块玻璃视图（失败返回 nil，绝不抛异常到系统）
 static UIView *ERMakeGlass(CGRect frame, CGFloat cornerRadius, NSString *group) {
-    if (!ERGlassKitAvailable()) return nil;
+    // 优先：上游 LiquidGlassView（Metal 折射玻璃，着色器源码内嵌、运行时编译）
+    Class up = ERUpstreamGlassClass();
+    if (up) {
+        UIView *v = nil;
+        @try {
+            v = [[up alloc] initWithFrame:frame];
+        } @catch (__unused NSException *e) { v = nil; }
+        if (v) {
+            v.userInteractionEnabled = NO;
+            v.autoresizingMask = UIViewAutoresizingNone;
+            v.layer.cornerRadius = cornerRadius;
+            v.layer.cornerCurve = kCACornerCurveContinuous;
+            v.layer.masksToBounds = YES;
+            return v;
+        }
+        LGLog(@"[EchoRebornUIKit] LiquidGlassView 创建失败，改用 GlassKit");
+    }
+    // 兜底：本项目 GlassKit 管线
     LGLiveBackdropView *glass = LGCreateRegisteredGlass(frame, nil, group);
     if (!glass) return nil;
-    glass.userInteractionEnabled = NO;          // 绝不吃触摸
+    glass.userInteractionEnabled = NO;
     glass.autoresizingMask = UIViewAutoresizingNone;
     glass.layer.cornerRadius = cornerRadius;
     glass.layer.cornerCurve = kCACornerCurveContinuous;
@@ -135,6 +167,6 @@ static UIView *ERMakeGlass(CGRect frame, CGFloat cornerRadius, NSString *group) 
 %end
 
 %ctor {
-    LGLog(@"[EchoRebornUIKit] 已加载 proc=%@ glasskit=%@",
-          NSProcessInfo.processInfo.processName ?: @"?", ERGlassKitAvailable() ? @"有" : @"无");
+    LGLog(@"[EchoRebornUIKit] 已加载 proc=%@ 上游LiquidGlassView=%@",
+          NSProcessInfo.processInfo.processName ?: @"?", ERUpstreamGlassClass() ? @"有" : @"无");
 }
