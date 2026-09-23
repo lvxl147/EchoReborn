@@ -119,6 +119,9 @@ EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
 # 避免同一进程里出现两份同名 Swift 类。
 # ---------------------------------------------------------------------------
 EchoRebornUIKit_FILES = UIKitGlass/Tweak.xm \
+                GlassKit/LGGlassKit.x \
+                GlassKit/LGLiveBackdropView.m \
+                GlassKit/LGGlassLog.m \
                 LiquidGlassKit/LiquidGlassView.swift \
                 LiquidGlassKit/LiquidGlassShaderSource.swift \
                 LiquidGlassKit/ZeroCopyBridge.swift \
