@@ -121,13 +121,7 @@ EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
 EchoRebornUIKit_FILES = UIKitGlass/Tweak.xm \
                 GlassKit/LGGlassKit.x \
                 GlassKit/LGLiveBackdropView.m \
-                GlassKit/LGGlassLog.m \
-                LiquidGlassKit/LiquidGlassView.swift \
-                LiquidGlassKit/LiquidGlassShaderSource.swift \
-                LiquidGlassKit/ZeroCopyBridge.swift \
-                LiquidGlassKit/LiquidGlassSwitch.swift \
-                LiquidGlassKit/LiquidGlassSlider.swift \
-                LiquidGlassKit/LiquidLensView.swift
+                GlassKit/LGGlassLog.m
 EchoRebornUIKit_FRAMEWORKS = UIKit Foundation QuartzCore CoreVideo CoreImage Metal MetalKit MetalPerformanceShaders
 EchoRebornUIKit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-function
 EchoRebornUIKit_SWIFTFLAGS = -swift-version 5
@@ -142,6 +136,17 @@ EchoRebornUIKit_SWIFTFLAGS = -swift-version 5
 ER_LGK_BUNDLE_NAME = LiquidGlassKit.bundle
 ER_METAL_SRCS = LiquidGlassKit/LiquidGlassVertex.metal LiquidGlassKit/LiquidGlassFragment.metal
 ER_METALLIB_STAGE = $(THEOS_STAGING_DIR)/Library/Application Support/EchoReborn/$(ER_LGK_BUNDLE_NAME)
+
+# 1.0.9-86 · 把上游**预编译**的液态玻璃渲染器打进本包（shader 已内嵌在 dylib 里，无外部资源）。
+# 用它的二进制而不是重编源码：同一份源码在我们环境（Swift 5 / iOS 16.5）编译后运行期会 Swift trap。
+# 它的依赖 @loader_path/LGOffline.dylib 必须与它同目录，所以两个一起放。
+ER_PREBUILT_DYLIB_DIR = $(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries
+before-package::
+	@mkdir -p "$(ER_PREBUILT_DYLIB_DIR)"
+	@cp Prebuilt/LiquidGlassKeyboard.dylib "$(ER_PREBUILT_DYLIB_DIR)/" && \
+	 cp Prebuilt/LGOffline.dylib "$(ER_PREBUILT_DYLIB_DIR)/" && \
+	 cp Prebuilt/LiquidGlassKeyboard.plist "$(ER_PREBUILT_DYLIB_DIR)/" && \
+	 echo "    Prebuilt: 已打入液态玻璃渲染器"
 
 before-package::
 	@mkdir -p "$(ER_METALLIB_STAGE)"; \

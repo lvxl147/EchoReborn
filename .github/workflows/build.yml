@@ -216,8 +216,12 @@ jobs:
           # com.apple.camera（见 EchoRebornDualCam.plist），与主 dylib 互不重叠。
           # 1.0.9-81: EchoRebornUIKit.dylib 是第四支合法 dylib —— 液态玻璃渲染层，
           # Filter = com.apple.UIKit（与主 dylib 的进程集不重叠，见 EchoRebornUIKit.plist）。
+          # 1.0.9-86: LiquidGlassKeyboard.dylib / LGOffline.dylib 是**随包携带的预编译
+          # 液态玻璃渲染器**（上游编译好的成品，自带 shader）。它们不是本项目的 tweak，
+          # 但仍会出现在 payload 里，这里一并允许。
           expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib',
-                      'EchoRebornUIKit.dylib'}
+                      'EchoRebornUIKit.dylib',
+                      'LiquidGlassKeyboard.dylib', 'LGOffline.dylib'}
           extra = sorted(set(dylibs) - expected)
           print('dylibs in payload:', dylibs)
           for gone in ('Soko.dylib', 'LiquidSiri.dylib'):

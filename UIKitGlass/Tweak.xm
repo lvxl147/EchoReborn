@@ -37,19 +37,36 @@
 // 与 1.0.9-81 的关键区别：那次崩溃是"用 `?:` 猜类名"命中了**别的插件**的同名类；
 // 现在**只查我们自己的 module 前缀**（EchoRebornUIKit.*），并校验是 UIView 子类，
 // 命中不了就退到 GlassKit —— 绝不再引用外部插件的实现。
-static Class ERUpstreamGlassClass(void) {
-    static Class c = nil;
+// 1.0.9-86 · **上游组件的真实类名**（从它 dylib 的 __objc_classname 提取，已核对）：
+//   LGLiquidGlassView      玻璃容器（灵动岛 / 锁屏时间用）
+//   LGLiquidGlassSwitch    开关组件（滑块式，拇指收缩↔展开）
+//   LGLiquidGlassSlider    滑条组件（边缘回弹 + 触感）
+//   LGLiquidLensView       透镜组件
+//   LGLiquidGlassRenderer  渲染器
+//
+// 这些类由**随本包一起安装**的 LiquidGlassKeyboard.dylib 提供（我们直接用了它编译好的
+// 二进制 —— 同一份源码在我们环境重编会在运行期 Swift trap）。所以本项目**独立运行**：
+// 不依赖设备上是否装了别的插件。
+static Class ERUpstreamClass(NSString *name) {
+    Class c = NSClassFromString(name);
+    if (c && [c isSubclassOfClass:[UIView class]]) return c;
+    return nil;
+}
+
+static void ERProbeUpstreamComponents(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        Class cls = NSClassFromString(@"EchoRebornUIKit.LiquidGlassView");
-        if (cls && [cls isSubclassOfClass:[UIView class]]) {
-            c = cls;
-            LGLog(@"[EchoRebornUIKit] 使用上游 LiquidGlassView（自带着色器源码编译）");
-        } else {
-            LGLog(@"[EchoRebornUIKit] 未找到自己的 LiquidGlassView，将走 GlassKit 兜底");
+        NSArray<NSString *> *names = @[@"LGLiquidGlassView", @"LGLiquidGlassSwitch",
+                                       @"LGLiquidGlassSlider", @"LGLiquidLensView",
+                                       @"LGLiquidGlassRenderer", @"LGLiquidGlassEffectView",
+                                       @"LGBackdropView", @"LGShadowView", @"LGZeroCopyBridge"];
+        NSMutableArray<NSString *> *rows = [NSMutableArray array];
+        for (NSString *n in names) {
+            Class c = NSClassFromString(n);
+            [rows addObject:[NSString stringWithFormat:@"%@=%@", n, c ? @"有" : @"无"]];
         }
+        LGLog(@"[EchoRebornUIKit] 上游组件类: %@", [rows componentsJoinedByString:@" "]);
     });
-    return c;
 }
 
 static BOOL ERGlassPrefBool(NSString *key) {
@@ -114,17 +131,17 @@ static UIView *ERMakeGlass(CGRect frame, CGFloat cornerRadius, NSString *group) 
     if (b.size.width < 40 || b.size.width > 90 || b.size.height < 20 || b.size.height > 45) return;
 
     // 1.0.9-83 · 用本项目自己的 GlassKit 管线创建玻璃（不再触碰上游实现）
-    // 1.0.9-85 紧急：**停用玻璃创建**（1.0.9-84 打开开关仍闪退；崩溃点是 Swift trap，
-    // 用 @try 抓不住）。改为只记录命中，等方案 A（复用上游编译好的 dylib）落地后再启用。
+    // 1.0.9-86 · 上游渲染器已随本包安装（自带 shader）。本版先做**只读探针**：
+    // 确认能拿到它的组件类，再在下一版把玻璃真正接上去（避免又一次闪退）。
+    ERProbeUpstreamComponents();
     static CFTimeInterval lastLog = 0.0;
     CFTimeInterval now = CACurrentMediaTime();
     if (now - lastLog > 5.0) {
         lastLog = now;
-        LGLog(@"[EchoRebornUIKit] SWITCH-HOOK 命中 cls=%@ bounds=%@（玻璃创建已停用）",
-              NSStringFromClass(self.class), NSStringFromCGRect(b));
+        LGLog(@"[EchoRebornUIKit] SWITCH-HOOK 命中 cls=%@ bounds=%@ 上游开关组件=%@",
+              NSStringFromClass(self.class), NSStringFromCGRect(b),
+              ERUpstreamClass(@"LGLiquidGlassSwitch") ? @"有" : @"无");
     }
-}
-
 %end
 
 %hook UISlider
@@ -139,19 +156,18 @@ static UIView *ERMakeGlass(CGRect frame, CGFloat cornerRadius, NSString *group) 
     CGRect b = self.bounds;
     if (b.size.width < 80 || b.size.height < 10 || b.size.height > 90) return;  // 只处理"像滑条"的
     // 1.0.9-83 · 同上：滑条也用 GlassKit 玻璃
-    // 1.0.9-85 紧急：同上，滑条也暂不创建
+    // 1.0.9-86 · 同上：只读探针
     static CFTimeInterval lastLog2 = 0.0;
     CFTimeInterval now2 = CACurrentMediaTime();
     if (now2 - lastLog2 > 5.0) {
         lastLog2 = now2;
-        LGLog(@"[EchoRebornUIKit] SLIDER-HOOK 命中 cls=%@ bounds=%@（玻璃创建已停用）",
-              NSStringFromClass(self.class), NSStringFromCGRect(b));
+        LGLog(@"[EchoRebornUIKit] SLIDER-HOOK 命中 cls=%@ bounds=%@ 上游滑条组件=%@",
+              NSStringFromClass(self.class), NSStringFromCGRect(b),
+              ERUpstreamClass(@"LGLiquidGlassSlider") ? @"有" : @"无");
     }
-}
-
 %end
 
 %ctor {
-    LGLog(@"[EchoRebornUIKit] 已加载 proc=%@ 上游LiquidGlassView=%@",
-          NSProcessInfo.processInfo.processName ?: @"?", ERUpstreamGlassClass() ? @"有" : @"无");
+    LGLog(@"[EchoRebornUIKit] 已加载 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
+    ERProbeUpstreamComponents();
 }
