@@ -784,16 +784,17 @@ static BOOL ERDIisIdle(UIWindow *win) {
     if (ctrl) {
         NSArray *attached = nil;
         @try {
+            // 经 performSelector 取（避免对 id 直接发未知 selector 触发编译错误）
             if ([ctrl respondsToSelector:@selector(attachedElementIdentifiers)])
-                attached = [ctrl attachedElementIdentifiers];
+                attached = [ctrl performSelector:@selector(attachedElementIdentifiers)];
             else
                 attached = [ctrl valueForKey:@"attachedElementIdentifiers"];
         } @catch (__unused NSException *e) {}
-        if (attached && [attached count] > 0) return NO;
+        if (attached && [(NSArray *)attached count] > 0) return NO;
         for (NSString *k in @[@"elementContexts", @"presentedElementIdentifiers", @"attachedElementContexts"]) {
             @try {
                 id v = [ctrl valueForKey:k];
-                if (v && [v respondsToSelector:@selector(count)] && [v count] > 0) return NO;
+                if (v && [v respondsToSelector:@selector(count)] && [(NSArray *)v count] > 0) return NO;
             } @catch (__unused NSException *e) {}
         }
         return YES;
