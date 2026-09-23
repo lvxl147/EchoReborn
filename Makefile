@@ -118,9 +118,6 @@ EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
 # LiquidGlassKit（上游开源库，MIT，DnV1eX）在这里编译；主 dylib 不再重复编译它，
 # 避免同一进程里出现两份同名 Swift 类。
 # ---------------------------------------------------------------------------
-                GlassKit/LGGlassKit.x \
-                GlassKit/LGLiveBackdropView.m \
-                GlassKit/LGGlassLog.m
 
 # ---------------------------------------------------------------------------
 # LiquidGlassKit 的 Metal shader 编译（Theos 不认 .metal，这里手工用 xcrun 编译）
