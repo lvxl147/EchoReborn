@@ -69,12 +69,20 @@ static void ERSyncGlass(UIView *host, const void *key, BOOL enabled,
     if (!glass) {
         glass = ERMakeGlass(b, glassHost, label);
         if (!glass) return;
-        [host insertSubview:glass atIndex:0];
+        // -----------------------------------------------------------------
+        // 1.0.9-89 · **必须覆盖在最上层**。
+        //
+        // 之前用 insertSubview:atIndex:0（最底层），而 UISwitch / UISlider 的可见外观
+        // （轨道、圆钮、填充）是画在**它们自己的内部图层**上的 —— 玻璃被完全遮住，
+        // 所以"样式没有任何变化"。改为 addSubview（最上层）+ 触摸穿透，
+        // 玻璃才真正可见，同时不影响开关/滑条的拖动。
+        // -----------------------------------------------------------------
+        glass.alpha = 0.92;
+        [host addSubview:glass];
         objc_setAssociatedObject(host, key, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        LGLog(@"[EchoRebornUIKit] %@ 已安装 host=%@ frame=%@", label, glassHost, NSStringFromCGRect(b));
+        LGLog(@"[EchoRebornUIKit] %@ 已安装(最上层) host=%@ frame=%@", label, glassHost, NSStringFromCGRect(b));
     }
-    if (glass.superview != host) [host insertSubview:glass atIndex:0];
-    glass.frame = b;
+    if (glass.superview != host) [host addSubview:glass];
 }
 
 %hook UISwitch
