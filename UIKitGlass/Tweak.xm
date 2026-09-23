@@ -1,24 +1,27 @@
 // ===========================================================================
-// EchoRebornUIKit —— 注入 com.apple.UIKit 的液态玻璃注入层
+// EchoRebornUIKit —— 注入 com.apple.UIKit 的液态玻璃注入层（开关 / 滑条）
 //
-// 【独立运行】本包**自带**上游编译好的渲染器（Prebuilt/LiquidGlassKeyboard.dylib，
-// shader 已内嵌在其中），因此**不依赖设备上是否装了别的液态玻璃插件**。
+// 【渲染引擎】用本项目自带的：GlassKit/LGLiveBackdropView + EchoRebornBackboardd.dylib
+// （backboardd 侧的 Metal 渲染器，从 LiquidAss 移植；控制中心的玻璃就是它渲染的）。
 //
-// 为什么用它的二进制而不是重编源码：同一份源码在我们环境（Swift 5 / iOS 16.5）编译后，
-// 运行期会 Swift trap（实测 Preferences 闪退）；而它的成品在 iOS 17 上验证可用。
+// 【关键】host prefix 必须取自渲染器的注册表（GlassKit/LGGlassKit.x 里的 LG_HOST_REGISTRY）。
+//   1.0.9-87 之前我传的是 @"UIKitSwitch" —— 不在注册表里，渲染器直接
+//   `lifecycle rejected unknown host prefix=UIKitSwitch` 拒绝，所以一点效果都没有。
+//   注册表里本就有为开关/滑条预留的条目：
+//       X(PrefsSwitch, "echoreborn.liquidglass.prefsswitch", "PrefsSwitch", 0.50f,  6.50f, ...)
+//       X(PrefsSlider, "echoreborn.liquidglass.prefsslider", "PrefsSlider", 0.50f, 10.00f, ...)
+//   下面就用这两个 host。
 //
-// 上游组件类（从它 dylib 的 __objc_classname 提取）：
-//   LGLiquidGlassView / LGLiquidGlassSwitch / LGLiquidGlassSlider / LGLiquidLensView
-//   LGLiquidGlassRenderer / LGBackdropView / LGShadowView / LGZeroCopyBridge
-//
-// 本版（1.0.9-86）= **只读探针**：确认注入成功、并能拿到上述组件类。
-// 下一版据此把各功能分别接上（开关用 Switch、滑条用 Slider、灵动岛/锁屏时间用 View）。
+// 【独立运行】只依赖本包自带的东西，不引用任何外部插件。
 // ===========================================================================
 #import <UIKit/UIKit.h>
 #import <QuartzCore/QuartzCore.h>
 #import <objc/runtime.h>
 #import "GlassKit/LGGlassKit.h"
 #import "GlassKit/LGLiveBackdropView.h"
+
+static void *kERSwitchGlassKey = &kERSwitchGlassKey;
+static void *kERSliderGlassKey = &kERSliderGlassKey;
 
 static BOOL ERPrefBool(NSString *key) {
     if (!key.length) return NO;
@@ -33,41 +36,66 @@ static BOOL ERPrefBool(NSString *key) {
     return on;
 }
 
-static Class ERUpstreamClass(NSString *name) {
-    Class c = NSClassFromString(name);
-    if (c && [c isSubclassOfClass:[UIView class]]) return c;
-    return nil;
+// 统一创建一块玻璃：host 用注册表里的名字（PrefsSwitch / PrefsSlider）
+static UIView *ERMakeGlass(CGRect frame, NSString *host, NSString *group) {
+    LGLiveBackdropView *g = LGCreateRegisteredGlass(frame, group, host);
+    if (!g) {
+        LGLog(@"[EchoRebornUIKit] 玻璃创建失败 host=%@（不在渲染器注册表里？）", host);
+        return nil;
+    }
+    g.userInteractionEnabled = NO;             // 绝不吃触摸
+    g.autoresizingMask = UIViewAutoresizingNone;
+    g.layer.cornerRadius = frame.size.height * 0.5;
+    g.layer.cornerCurve = kCACornerCurveContinuous;
+    g.layer.masksToBounds = YES;
+    [g applyFilters];
+    lgTrackGlass(g, host, nil);
+    return g;
 }
 
-static void ERProbeUpstreamComponents(void) {
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        NSArray<NSString *> *names = @[@"LGLiquidGlassView", @"LGLiquidGlassSwitch",
-                                       @"LGLiquidGlassSlider", @"LGLiquidLensView",
-                                       @"LGLiquidGlassRenderer", @"LGBackdropView",
-                                       @"LGShadowView", @"LGZeroCopyBridge"];
-        NSMutableArray<NSString *> *rows = [NSMutableArray array];
-        for (NSString *n in names) {
-            [rows addObject:[NSString stringWithFormat:@"%@=%@", n, NSClassFromString(n) ? @"有" : @"无"]];
+static void ERSyncGlass(UIView *host, const void *key, BOOL enabled,
+                        BOOL (^sizeOK)(CGRect), NSString *glassHost, NSString *label) {
+    UIView *glass = objc_getAssociatedObject(host, key);
+    if (!enabled) {
+        if (glass) {
+            [glass removeFromSuperview];
+            objc_setAssociatedObject(host, key, nil, OBJC_ASSOCIATION_ASSIGN);
+            LGLog(@"[EchoRebornUIKit] %@ 已移除（选项关闭）", label);
         }
-        LGLog(@"[EchoRebornUIKit] 上游组件类: %@", [rows componentsJoinedByString:@" "]);
-    });
+        return;
+    }
+    CGRect b = host.bounds;
+    if (sizeOK && !sizeOK(b)) return;
+    if (!glass) {
+        glass = ERMakeGlass(b, glassHost, label);
+        if (!glass) return;
+        [host insertSubview:glass atIndex:0];
+        objc_setAssociatedObject(host, key, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        LGLog(@"[EchoRebornUIKit] %@ 已安装 host=%@ frame=%@", label, glassHost, NSStringFromCGRect(b));
+    }
+    if (glass.superview != host) [host insertSubview:glass atIndex:0];
+    glass.frame = b;
 }
 
 %hook UISwitch
 
 - (void)layoutSubviews {
     %orig;
-    ERProbeUpstreamComponents();
+    BOOL on = ERPrefBool(@"LiquidifySwitch.Enabled");
     static CFTimeInterval lastLog = 0.0;
     CFTimeInterval now = CACurrentMediaTime();
     if (now - lastLog > 5.0) {
         lastLog = now;
-        LGLog(@"[EchoRebornUIKit] SWITCH-HOOK 命中 cls=%@ bounds=%@ 开关组件=%@ 开关选项=%d",
-              NSStringFromClass(self.class), NSStringFromCGRect(self.bounds),
-              ERUpstreamClass(@"LGLiquidGlassSwitch") ? @"有" : @"无",
-              ERPrefBool(@"LiquidifySwitch.Enabled") ? 1 : 0);
+        LGLog(@"[EchoRebornUIKit] SWITCH-HOOK 命中 cls=%@ bounds=%@ 选项=%d",
+              NSStringFromClass(self.class), NSStringFromCGRect(self.bounds), on ? 1 : 0);
     }
+    // 只处理"正常尺寸"的开关，避免误伤特殊场景
+    ERSyncGlass(self, kERSwitchGlassKey, on,
+                ^BOOL(CGRect b) {
+                    return b.size.width >= 40 && b.size.width <= 90 &&
+                           b.size.height >= 20 && b.size.height <= 45;
+                },
+                @"PrefsSwitch", @"SWITCH-GLASS");
 }
 
 %end
@@ -76,20 +104,23 @@ static void ERProbeUpstreamComponents(void) {
 
 - (void)layoutSubviews {
     %orig;
+    BOOL on = ERPrefBool(@"LiquidifySlider.Enabled");
     static CFTimeInterval lastLog2 = 0.0;
     CFTimeInterval now2 = CACurrentMediaTime();
     if (now2 - lastLog2 > 5.0) {
         lastLog2 = now2;
-        LGLog(@"[EchoRebornUIKit] SLIDER-HOOK 命中 cls=%@ bounds=%@ 滑条组件=%@ 滑条选项=%d",
-              NSStringFromClass(self.class), NSStringFromCGRect(self.bounds),
-              ERUpstreamClass(@"LGLiquidGlassSlider") ? @"有" : @"无",
-              ERPrefBool(@"LiquidifySlider.Enabled") ? 1 : 0);
+        LGLog(@"[EchoRebornUIKit] SLIDER-HOOK 命中 cls=%@ bounds=%@ 选项=%d",
+              NSStringFromClass(self.class), NSStringFromCGRect(self.bounds), on ? 1 : 0);
     }
+    ERSyncGlass(self, kERSliderGlassKey, on,
+                ^BOOL(CGRect b) {
+                    return b.size.width >= 80 && b.size.height >= 10 && b.size.height <= 90;
+                },
+                @"PrefsSlider", @"SLIDER-GLASS");
 }
 
 %end
 
 %ctor {
     LGLog(@"[EchoRebornUIKit] 已加载 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
-    ERProbeUpstreamComponents();
 }
