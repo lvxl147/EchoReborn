@@ -188,29 +188,56 @@ final class LiquidGlassRenderer {
     let device: MTLDevice
     let pipelineState: MTLRenderPipelineState
 
-    private init() {
+    // 1.0.9-81 · 既有的多路径加载 + 内嵌源码兜底（绝不 try! / 绝不崩溃）
+    private static func loadLibrary(device: MTLDevice) -> MTLLibrary? {
+        // ① 部署路径（Makefile 把 default.metallib 放在这里）
+        let candidates = [
+            "/var/jb/Library/Application Support/EchoReborn/LiquidGlassKit.bundle",
+            "/Library/Application Support/EchoReborn/LiquidGlassKit.bundle",
+            Bundle(for: LiquidGlassView.self).bundlePath + "/LiquidGlassKit.bundle",
+            Bundle(for: LiquidGlassView.self).bundlePath,
+        ]
+        for path in candidates {
+            if let b = Bundle(path: path), let lib = try? device.makeDefaultLibrary(bundle: b) {
+                NSLog("[LiquidGlassKit] metallib 已加载: %@", path)
+                return lib
+            }
+        }
+        // ② 兜底：用内嵌源码现场编译（.metal 文本与上游逐字一致）
+        let source = LiquidGlassShaderSource.vertex + "\n" + LiquidGlassShaderSource.fragment
+        let options = MTLCompileOptions()
+        if let lib = try? device.makeLibrary(source: source, options: options) {
+            NSLog("[LiquidGlassKit] metallib 缺失，已用内嵌源码编译着色器")
+            return lib
+        }
+        NSLog("[LiquidGlassKit] 着色器加载失败（两种方式都不可用）")
+        return nil
+    }
+
+    private init?() {
         guard let device = MTLCreateSystemDefaultDevice() else {
-            fatalError("Metal not supported")
+            NSLog("[LiquidGlassKit] 无 Metal 设备")
+            return nil
         }
         self.device = device
+        guard let library = LiquidGlassRenderer.loadLibrary(device: device) else { return nil }
 
-#if SWIFT_PACKAGE
-        let library = try! device.makeDefaultLibrary(bundle: .module)
-#else
-        let mainBundle = Bundle(for: LiquidGlassView.self)
-        let bundleURL = mainBundle.url(forResource: "LiquidGlassKitShaderResources", withExtension: "bundle")!
-        let library = try! device.makeDefaultLibrary(bundle: Bundle(url: bundleURL)!)
-#endif
-
-        let vertexFunction = library.makeFunction(name: "fullscreenQuad")!
-        let fragmentFunction = library.makeFunction(name: "liquidGlassEffect")!
+        guard let vertexFunction = library.makeFunction(name: "fullscreenQuad"),
+              let fragmentFunction = library.makeFunction(name: "liquidGlassEffect") else {
+            NSLog("[LiquidGlassKit] 找不到着色器函数")
+            return nil
+        }
 
         let pipelineDescriptor = MTLRenderPipelineDescriptor()
         pipelineDescriptor.vertexFunction = vertexFunction
         pipelineDescriptor.fragmentFunction = fragmentFunction
         pipelineDescriptor.colorAttachments[0].pixelFormat = .bgra8Unorm  // Match MTKView
 
-        self.pipelineState = try! device.makeRenderPipelineState(descriptor: pipelineDescriptor)
+        guard let pipeline = try? device.makeRenderPipelineState(descriptor: pipelineDescriptor) else {
+            NSLog("[LiquidGlassKit] 渲染管线创建失败")
+            return nil
+        }
+        self.pipelineState = pipeline
     }
 }
 
@@ -242,7 +269,7 @@ final class LiquidGlassView: MTKView {
     init(_ liquidGlass: LiquidGlass) {
         self.liquidGlass = liquidGlass
 
-        super.init(frame: .zero, device: LiquidGlassRenderer.shared.device)
+        super.init(frame: .zero, device: MTLCreateSystemDefaultDevice())
         
         if liquidGlass.shadowOverlay {
             let shadowView = ShadowView()

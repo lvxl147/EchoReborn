@@ -34,7 +34,7 @@ THEOS_PACKAGE_SCHEME ?= rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam
+TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam EchoRebornUIKit
 
 # 0.5.26: Soko and LiquidSiri are no longer separate subprojects / dylibs.
 # Shipping them as their own Soko.dylib + LiquidSiri.dylib put a SECOND copy of
@@ -69,12 +69,7 @@ EchoReborn_FILES = Tweak.xm \
                 LiquidSiri/Shared/LGGlassRenderer.m \
                 LiquidSiri/Shared/LGBackButtonSupport.m \
                 LiquidSiri/Runtime/LGLiquidGlassRuntime.m \
-                LiquidSiri/Runtime/LGSnapshotCaptureSupport.m \
-                LiquidGlassKit/LiquidGlassView.swift \
-                LiquidGlassKit/ZeroCopyBridge.swift \
-                LiquidGlassKit/LiquidGlassSlider.swift \
-                LiquidGlassKit/LiquidGlassSwitch.swift \
-                LiquidGlassKit/LiquidLensView.swift
+                LiquidSiri/Runtime/LGSnapshotCaptureSupport.m
 # Union of what EchoReborn, Soko and LiquidSiri each linked separately.
 EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage CoreMotion \
                      Foundation SwiftUI AVFoundation Accelerate AudioToolbox MetalKit \
@@ -113,6 +108,26 @@ EchoRebornDualCam_FRAMEWORKS = UIKit AVFoundation CoreMedia Photos CoreImage Cor
 #     fatal error: could not build module 'Photos'
 # 主 target 因为不 import Photos 所以一直没暴露这个问题。
 EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
+
+# ---------------------------------------------------------------------------
+# 1.0.9-81 · EchoRebornUIKit：把液态玻璃渲染层注入 com.apple.UIKit（= 所有进程）
+#
+# 结构照抄上游 Liquidify：他们的渲染器放在 Filter = com.apple.UIKit 的 dylib 里，
+# 这样"开关 / 滑条 / 键盘"等出现在任意 App 的控件都能用上同一套渲染。
+#
+# LiquidGlassKit（上游开源库，MIT，DnV1eX）在这里编译；主 dylib 不再重复编译它，
+# 避免同一进程里出现两份同名 Swift 类。
+# ---------------------------------------------------------------------------
+EchoRebornUIKit_FILES = UIKitGlass/Tweak.xm \
+                LiquidGlassKit/LiquidGlassView.swift \
+                LiquidGlassKit/LiquidGlassShaderSource.swift \
+                LiquidGlassKit/ZeroCopyBridge.swift \
+                LiquidGlassKit/LiquidGlassSwitch.swift \
+                LiquidGlassKit/LiquidGlassSlider.swift \
+                LiquidGlassKit/LiquidLensView.swift
+EchoRebornUIKit_FRAMEWORKS = UIKit Foundation QuartzCore CoreVideo Metal MetalKit MetalPerformanceShaders
+EchoRebornUIKit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-function
+EchoRebornUIKit_SWIFTFLAGS = -swift-version 5
 
 # ---------------------------------------------------------------------------
 # LiquidGlassKit 的 Metal shader 编译（Theos 不认 .metal，这里手工用 xcrun 编译）
