@@ -34,7 +34,7 @@ THEOS_PACKAGE_SCHEME ?= rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam EchoRebornUIKit
+TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam
 
 # 0.5.26: Soko and LiquidSiri are no longer separate subprojects / dylibs.
 # Shipping them as their own Soko.dylib + LiquidSiri.dylib put a SECOND copy of
@@ -118,13 +118,9 @@ EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
 # LiquidGlassKit（上游开源库，MIT，DnV1eX）在这里编译；主 dylib 不再重复编译它，
 # 避免同一进程里出现两份同名 Swift 类。
 # ---------------------------------------------------------------------------
-EchoRebornUIKit_FILES = UIKitGlass/Tweak.xm \
                 GlassKit/LGGlassKit.x \
                 GlassKit/LGLiveBackdropView.m \
                 GlassKit/LGGlassLog.m
-EchoRebornUIKit_FRAMEWORKS = UIKit Foundation QuartzCore CoreVideo CoreImage Metal MetalKit MetalPerformanceShaders
-EchoRebornUIKit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-function
-EchoRebornUIKit_SWIFTFLAGS = -swift-version 5
 
 # ---------------------------------------------------------------------------
 # LiquidGlassKit 的 Metal shader 编译（Theos 不认 .metal，这里手工用 xcrun 编译）
@@ -146,22 +142,9 @@ ER_METALLIB_STAGE = $(THEOS_STAGING_DIR)/Library/Application Support/EchoReborn/
 # ---------------------------------------------------------------------------
 # 1.0.9-90 · 把上游**预编译**的渲染器随包携带，但**改名**以避开与设备上 liquidify 的
 # dpkg 同名冲突（上次就是 LGOffline.dylib 撞名导致装不上）。
-#   LiquidGlassKeyboard.dylib → EchoRebornGlass.dylib
-#   LGOffline.dylib           → EchoRebornGlassCore.dylib
-# 依赖关系用 install_name_tool 改到新名字（CI 跑在 macOS 上，工具可用）。
 # 它是我们**独立运行**的基础：LGLiquidGlassSwitch / Slider / View 等组件由它提供。
 # ---------------------------------------------------------------------------
-ER_PREBUILT_STAGE = $(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries
 before-package::
-	@mkdir -p "$(ER_PREBUILT_STAGE)"
-	@cp Prebuilt/LiquidGlassKeyboard.dylib "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib"
-	@cp Prebuilt/LGOffline.dylib "$(ER_PREBUILT_STAGE)/EchoRebornGlassCore.dylib"
-	@chmod +x "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlassCore.dylib"
-	@install_name_tool -id "@loader_path/EchoRebornGlass.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib" 2>/dev/null || true
-	@install_name_tool -id "@loader_path/EchoRebornGlassCore.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlassCore.dylib" 2>/dev/null || true
-	@install_name_tool -change "@loader_path/LGOffline.dylib" "@loader_path/EchoRebornGlassCore.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib" 2>/dev/null || true
-	@printf '%s\n' '{' '  Filter = { Bundles = ( "com.apple.UIKit" ); };' '}' > "$(ER_PREBUILT_STAGE)/EchoRebornGlass.plist"
-	@echo "    Prebuilt: 已打入并改名 EchoRebornGlass(+Core)，避开 dpkg 冲突"
 
 before-package::
 	@mkdir -p "$(ER_METALLIB_STAGE)"; \
