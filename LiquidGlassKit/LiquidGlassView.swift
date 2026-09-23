@@ -53,71 +53,77 @@ struct LiquidGlass {
     var tintColor: UIColor?
     var shadowOverlay: Bool = false
 
-// [1.0.9-78 移除]     static func thumb(magnification: Double = 1) -> Self {
-// [1.0.9-78 移除]         Self(
-// [1.0.9-78 移除]             shaderUniforms: ShaderUniforms(
-// [1.0.9-78 移除]                 materialTint: .init(x: 0.9, y: 0.95, z: 1.0, w: 0.15), // Near-clear with cool bias.
-// [1.0.9-78 移除]                 glassThickness: 10,
-// [1.0.9-78 移除]                 refractiveIndex: 1.11,
-// [1.0.9-78 移除]                 dispersionStrength: 5,
-// [1.0.9-78 移除]                 fresnelDistanceRange: 70,
-// [1.0.9-78 移除]                 fresnelIntensity: 0,
-// [1.0.9-78 移除]                 fresnelEdgeSharpness: 0,
-// [1.0.9-78 移除]                 glareDistanceRange: 30,
-// [1.0.9-78 移除]                 glareAngleConvergence: 0,
-// [1.0.9-78 移除]                 glareOppositeSideBias: 0,
-// [1.0.9-78 移除]                 glareIntensity: 0.01,
-// [1.0.9-78 移除]                 glareEdgeSharpness: -0.2,
-// [1.0.9-78 移除]                 glareDirectionOffset: .pi * 0.9,
-// [1.0.9-78 移除]             ),
-// [1.0.9-78 移除]             backgroundTextureSizeCoefficient: 1 / magnification,
-// [1.0.9-78 移除]             backgroundTextureScaleCoefficient: magnification,
-// [1.0.9-78 移除]             backgroundTextureBlurRadius: 0,
-// [1.0.9-78 移除]             shadowOverlay: true,
-// [1.0.9-78 移除]         )
-// [1.0.9-78 移除]     }
+    // ---------------------------------------------------------------------
+    // 1.0.9-80 · 预设改为"先建变量、再逐项赋值"的保守写法。
+    //
+    // 上游原版是一整个超长参数列表（`Self(shaderUniforms: ShaderUniforms(…13 个参数…), …)`），
+    // 在 Swift 5 下会触发 "unexpected ',' separator"（类型推断失败）。
+    // 逐项赋值把每一步的类型都固定下来，彻底绕开推断；参数值与上游逐条一致。
+    // ---------------------------------------------------------------------
+    static func thumb(magnification: Double = 1) -> Self {
+        var u = ShaderUniforms()
+        u.materialTint = SIMD4<Float>(x: 0.9, y: 0.95, z: 1.0, w: 0.15)
+        u.glassThickness = 10
+        u.refractiveIndex = 1.11
+        u.dispersionStrength = 5
+        u.fresnelDistanceRange = 70
+        u.fresnelIntensity = 0
+        u.fresnelEdgeSharpness = 0
+        u.glareDistanceRange = 30
+        u.glareAngleConvergence = 0
+        u.glareOppositeSideBias = 0
+        u.glareIntensity = 0.01
+        u.glareEdgeSharpness = -0.2
+        u.glareDirectionOffset = Float.pi * 0.9
+        return Self(shaderUniforms: u,
+                    backgroundTextureSizeCoefficient: 1 / magnification,
+                    backgroundTextureScaleCoefficient: magnification,
+                    backgroundTextureBlurRadius: 0,
+                    shadowOverlay: true)
+    }
 
-// [1.0.9-78 移除]     static let lens = Self(
-// [1.0.9-78 移除]         shaderUniforms: ShaderUniforms(
-// [1.0.9-78 移除]             glassThickness: 6,
-// [1.0.9-78 移除]             refractiveIndex: 1.1,
-// [1.0.9-78 移除]             dispersionStrength: 15,
-// [1.0.9-78 移除]             fresnelDistanceRange: 70,
-// [1.0.9-78 移除]             fresnelIntensity: 0,
-// [1.0.9-78 移除]             fresnelEdgeSharpness: 0,
-// [1.0.9-78 移除]             glareDistanceRange: 30,
-// [1.0.9-78 移除]             glareAngleConvergence: 0.1,
-// [1.0.9-78 移除]             glareOppositeSideBias: 1,
-// [1.0.9-78 移除]             glareIntensity: 0.1,
-// [1.0.9-78 移除]             glareEdgeSharpness: -0.1,
-// [1.0.9-78 移除]             glareDirectionOffset: -.pi / 4,
-// [1.0.9-78 移除]         ),
-// [1.0.9-78 移除]         backgroundTextureSizeCoefficient: 1.1,
-// [1.0.9-78 移除]         backgroundTextureScaleCoefficient: 0.8,
-// [1.0.9-78 移除]         backgroundTextureBlurRadius: 0,
-// [1.0.9-78 移除]         shadowOverlay: true,
-// [1.0.9-78 移除]     )
+    static let lens: Self = {
+        var u = ShaderUniforms()
+        u.glassThickness = 6
+        u.refractiveIndex = 1.1
+        u.dispersionStrength = 15
+        u.fresnelDistanceRange = 70
+        u.fresnelIntensity = 0
+        u.fresnelEdgeSharpness = 0
+        u.glareDistanceRange = 30
+        u.glareAngleConvergence = 0.1
+        u.glareOppositeSideBias = 1
+        u.glareIntensity = 0.1
+        u.glareEdgeSharpness = -0.1
+        u.glareDirectionOffset = -Float.pi / 4
+        return Self(shaderUniforms: u,
+                    backgroundTextureSizeCoefficient: 1.1,
+                    backgroundTextureScaleCoefficient: 0.8,
+                    backgroundTextureBlurRadius: 0,
+                    shadowOverlay: true)
+    }()
 
-// [1.0.9-78 移除]     static let regular = Self(
-// [1.0.9-78 移除]         shaderUniforms: ShaderUniforms(
-// [1.0.9-78 移除]             glassThickness: 10,
-// [1.0.9-78 移除]             refractiveIndex: 1.5,
-// [1.0.9-78 移除]             dispersionStrength: 5,
-// [1.0.9-78 移除]             fresnelDistanceRange: 70,
-// [1.0.9-78 移除]             fresnelIntensity: 0,
-// [1.0.9-78 移除]             fresnelEdgeSharpness: 0,
-// [1.0.9-78 移除]             glareDistanceRange: 30,
-// [1.0.9-78 移除]             glareAngleConvergence: 0.1,
-// [1.0.9-78 移除]             glareOppositeSideBias: 1,
-// [1.0.9-78 移除]             glareIntensity: 0.1,
-// [1.0.9-78 移除]             glareEdgeSharpness: -0.15,
-// [1.0.9-78 移除]             glareDirectionOffset: -.pi / 4,
-// [1.0.9-78 移除]         ),
-// [1.0.9-78 移除]         backgroundTextureSizeCoefficient: 1,
-// [1.0.9-78 移除]         backgroundTextureScaleCoefficient: 0.2,
-// [1.0.9-78 移除]         backgroundTextureBlurRadius: 0.3,
-// [1.0.9-78 移除]         tintColor: UIColor { $0.userInterfaceStyle == .dark ? #colorLiteral(red: 0, green: 0.04958364581, blue: 0.09951775161, alpha: 0.7981493615) : #colorLiteral(red: 0.9023525731, green: 0.9509486998, blue: 1, alpha: 0.8002892298) }//.systemBackground.withAlphaComponent(0.8),
-// [1.0.9-78 移除]     )
+    static let regular: Self = {
+        var u = ShaderUniforms()
+        u.glassThickness = 10
+        u.refractiveIndex = 1.5
+        u.dispersionStrength = 5
+        u.fresnelDistanceRange = 70
+        u.fresnelIntensity = 0
+        u.fresnelEdgeSharpness = 0
+        u.glareDistanceRange = 30
+        u.glareAngleConvergence = 0.1
+        u.glareOppositeSideBias = 1
+        u.glareIntensity = 0.1
+        u.glareEdgeSharpness = -0.15
+        u.glareDirectionOffset = -Float.pi / 4
+        return Self(shaderUniforms: u,
+                    backgroundTextureSizeCoefficient: 1,
+                    backgroundTextureScaleCoefficient: 0.2,
+                    backgroundTextureBlurRadius: 0.3,
+                    tintColor: UIColor(white: 0.06, alpha: 0.8),
+                    shadowOverlay: true)
+    }()
 }
 
 final class BackdropView: UIView {
