@@ -194,8 +194,8 @@ jobs:
           print('payload root layout OK for scheme %r' % scheme)
 
           required = ['EchoRebornPrefs', 'EchoReborn.dylib', 'EchoRebornBackboardd.dylib',
-                      'EchoRebornDualCam.dylib', 'EchoReborn.plist',
-                      'EchoRebornDualCam.plist']
+                      'EchoRebornDualCam.dylib', 'EchoRebornUIKit.dylib', 'EchoReborn.plist',
+                      'EchoRebornDualCam.plist', 'EchoRebornUIKit.plist']
           missing = []
           for req in required:
               hits = sorted(x for x in names if req in x)
@@ -214,7 +214,10 @@ jobs:
           dylibs = sorted(x.rsplit('/', 1)[-1] for x in names if x.endswith('.dylib'))
           # 1.0.7-5: EchoRebornDualCam.dylib 是第三支合法 dylib —— 相机双摄只注入
           # com.apple.camera（见 EchoRebornDualCam.plist），与主 dylib 互不重叠。
-          expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib'}
+          # 1.0.9-81: EchoRebornUIKit.dylib 是第四支合法 dylib —— 液态玻璃渲染层，
+          # Filter = com.apple.UIKit（与主 dylib 的进程集不重叠，见 EchoRebornUIKit.plist）。
+          expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib',
+                      'EchoRebornUIKit.dylib'}
           extra = sorted(set(dylibs) - expected)
           print('dylibs in payload:', dylibs)
           for gone in ('Soko.dylib', 'LiquidSiri.dylib'):
