@@ -128,7 +128,7 @@ EchoRebornUIKit_FILES = UIKitGlass/Tweak.xm \
                 LiquidGlassKit/LiquidGlassSwitch.swift \
                 LiquidGlassKit/LiquidGlassSlider.swift \
                 LiquidGlassKit/LiquidLensView.swift
-EchoRebornUIKit_FRAMEWORKS = UIKit Foundation QuartzCore CoreVideo CoreImage Metal MetalKit MetalPerformanceShaders simd
+EchoRebornUIKit_FRAMEWORKS = UIKit Foundation QuartzCore CoreVideo CoreImage Metal MetalKit MetalPerformanceShaders
 EchoRebornUIKit_CFLAGS = -fobjc-arc -Wno-deprecated-declarations -Wno-unused-function
 EchoRebornUIKit_SWIFTFLAGS = -swift-version 5
 
