@@ -219,8 +219,11 @@ jobs:
           # 1.0.9-86: LiquidGlassKeyboard.dylib / LGOffline.dylib 是**随包携带的预编译
           # 液态玻璃渲染器**（上游编译好的成品，自带 shader）。它们不是本项目的 tweak，
           # 但仍会出现在 payload 里，这里一并允许。
+          # 1.0.9-90: EchoRebornGlass.dylib / EchoRebornGlassCore.dylib 是**随包携带的预编译
+          # 液态玻璃渲染器**（上游成品，自带 shader；已改名以避开与 liquidify 的 dpkg 冲突）。
           expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib',
-                      'EchoRebornUIKit.dylib'}
+                      'EchoRebornUIKit.dylib',
+                      'EchoRebornGlass.dylib', 'EchoRebornGlassCore.dylib'}
           extra = sorted(set(dylibs) - expected)
           print('dylibs in payload:', dylibs)
           for gone in ('Soko.dylib', 'LiquidSiri.dylib'):

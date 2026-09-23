@@ -143,6 +143,26 @@ ER_METALLIB_STAGE = $(THEOS_STAGING_DIR)/Library/Application Support/EchoReborn/
 # 而且根本没必要：**本项目自带渲染引擎** —— EchoRebornBackboardd.dylib（backboardd 侧 Metal 渲染器，
 # 从 LiquidAss 移植）+ GlassKit/LGLiveBackdropView（玻璃视图），控制中心的液态玻璃就是这套渲染出来的。
 #
+# ---------------------------------------------------------------------------
+# 1.0.9-90 · 把上游**预编译**的渲染器随包携带，但**改名**以避开与设备上 liquidify 的
+# dpkg 同名冲突（上次就是 LGOffline.dylib 撞名导致装不上）。
+#   LiquidGlassKeyboard.dylib → EchoRebornGlass.dylib
+#   LGOffline.dylib           → EchoRebornGlassCore.dylib
+# 依赖关系用 install_name_tool 改到新名字（CI 跑在 macOS 上，工具可用）。
+# 它是我们**独立运行**的基础：LGLiquidGlassSwitch / Slider / View 等组件由它提供。
+# ---------------------------------------------------------------------------
+ER_PREBUILT_STAGE = $(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries
+before-package::
+	@mkdir -p "$(ER_PREBUILT_STAGE)"
+	@cp Prebuilt/LiquidGlassKeyboard.dylib "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib"
+	@cp Prebuilt/LGOffline.dylib "$(ER_PREBUILT_STAGE)/EchoRebornGlassCore.dylib"
+	@chmod +x "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlassCore.dylib"
+	@install_name_tool -id "@loader_path/EchoRebornGlass.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib" 2>/dev/null || true
+	@install_name_tool -id "@loader_path/EchoRebornGlassCore.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlassCore.dylib" 2>/dev/null || true
+	@install_name_tool -change "@loader_path/LGOffline.dylib" "@loader_path/EchoRebornGlassCore.dylib" "$(ER_PREBUILT_STAGE)/EchoRebornGlass.dylib" 2>/dev/null || true
+	@printf '%s\n' '{' '  Filter = { Bundles = ( "com.apple.UIKit" ); };' '}' > "$(ER_PREBUILT_STAGE)/EchoRebornGlass.plist"
+	@echo "    Prebuilt: 已打入并改名 EchoRebornGlass(+Core)，避开 dpkg 冲突"
+
 before-package::
 	@mkdir -p "$(ER_METALLIB_STAGE)"; \
 	BUILD=$$(mktemp -d); \
