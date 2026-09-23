@@ -114,22 +114,15 @@ static UIView *ERMakeGlass(CGRect frame, CGFloat cornerRadius, NSString *group) 
     if (b.size.width < 40 || b.size.width > 90 || b.size.height < 20 || b.size.height > 45) return;
 
     // 1.0.9-83 · 用本项目自己的 GlassKit 管线创建玻璃（不再触碰上游实现）
-    UIView *glass = objc_getAssociatedObject(self, kERSwitchGlassKey);
-    if (!glass) {
-        glass = ERMakeGlass(b, b.size.height * 0.5, @"UIKitSwitch");
-        if (!glass) return;
-        [self insertSubview:glass atIndex:0];
-        objc_setAssociatedObject(self, kERSwitchGlassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        static CFTimeInterval lastLog = 0.0;
-        CFTimeInterval now = CACurrentMediaTime();
-        if (now - lastLog > 5.0) {
-            lastLog = now;
-            LGLog(@"[EchoRebornUIKit] SWITCH-GLASS 已安装 cls=%@ bounds=%@",
-                  NSStringFromClass(self.class), NSStringFromCGRect(b));
-        }
+    // 1.0.9-85 紧急：**停用玻璃创建**（1.0.9-84 打开开关仍闪退；崩溃点是 Swift trap，
+    // 用 @try 抓不住）。改为只记录命中，等方案 A（复用上游编译好的 dylib）落地后再启用。
+    static CFTimeInterval lastLog = 0.0;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - lastLog > 5.0) {
+        lastLog = now;
+        LGLog(@"[EchoRebornUIKit] SWITCH-HOOK 命中 cls=%@ bounds=%@（玻璃创建已停用）",
+              NSStringFromClass(self.class), NSStringFromCGRect(b));
     }
-    if (glass.superview != self) [self insertSubview:glass atIndex:0];
-    glass.frame = b;
 }
 
 %end
@@ -146,22 +139,14 @@ static UIView *ERMakeGlass(CGRect frame, CGFloat cornerRadius, NSString *group) 
     CGRect b = self.bounds;
     if (b.size.width < 80 || b.size.height < 10 || b.size.height > 90) return;  // 只处理"像滑条"的
     // 1.0.9-83 · 同上：滑条也用 GlassKit 玻璃
-    UIView *glass = objc_getAssociatedObject(self, kERSliderGlassKey);
-    if (!glass) {
-        glass = ERMakeGlass(b, b.size.height * 0.5, @"UIKitSlider");
-        if (!glass) return;
-        [self insertSubview:glass atIndex:0];
-        objc_setAssociatedObject(self, kERSliderGlassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        static CFTimeInterval lastLog2 = 0.0;
-        CFTimeInterval now2 = CACurrentMediaTime();
-        if (now2 - lastLog2 > 5.0) {
-            lastLog2 = now2;
-            LGLog(@"[EchoRebornUIKit] SLIDER-GLASS 已安装 cls=%@ bounds=%@",
-                  NSStringFromClass(self.class), NSStringFromCGRect(b));
-        }
+    // 1.0.9-85 紧急：同上，滑条也暂不创建
+    static CFTimeInterval lastLog2 = 0.0;
+    CFTimeInterval now2 = CACurrentMediaTime();
+    if (now2 - lastLog2 > 5.0) {
+        lastLog2 = now2;
+        LGLog(@"[EchoRebornUIKit] SLIDER-HOOK 命中 cls=%@ bounds=%@（玻璃创建已停用）",
+              NSStringFromClass(self.class), NSStringFromCGRect(b));
     }
-    if (glass.superview != self) [self insertSubview:glass atIndex:0];
-    glass.frame = b;
 }
 
 %end
