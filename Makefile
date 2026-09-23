@@ -137,17 +137,12 @@ ER_LGK_BUNDLE_NAME = LiquidGlassKit.bundle
 ER_METAL_SRCS = LiquidGlassKit/LiquidGlassVertex.metal LiquidGlassKit/LiquidGlassFragment.metal
 ER_METALLIB_STAGE = $(THEOS_STAGING_DIR)/Library/Application Support/EchoReborn/$(ER_LGK_BUNDLE_NAME)
 
-# 1.0.9-86 · 把上游**预编译**的液态玻璃渲染器打进本包（shader 已内嵌在 dylib 里，无外部资源）。
-# 用它的二进制而不是重编源码：同一份源码在我们环境（Swift 5 / iOS 16.5）编译后运行期会 Swift trap。
-# 它的依赖 @loader_path/LGOffline.dylib 必须与它同目录，所以两个一起放。
-ER_PREBUILT_DYLIB_DIR = $(THEOS_STAGING_DIR)/Library/MobileSubstrate/DynamicLibraries
-before-package::
-	@mkdir -p "$(ER_PREBUILT_DYLIB_DIR)"
-	@cp Prebuilt/LiquidGlassKeyboard.dylib "$(ER_PREBUILT_DYLIB_DIR)/" && \
-	 cp Prebuilt/LGOffline.dylib "$(ER_PREBUILT_DYLIB_DIR)/" && \
-	 cp Prebuilt/LiquidGlassKeyboard.plist "$(ER_PREBUILT_DYLIB_DIR)/" && \
-	 echo "    Prebuilt: 已打入液态玻璃渲染器"
-
+# 1.0.9-87 · **撤销 1.0.9-86 的"外借渲染器"做法**：
+#   · 它带来的 LGOffline.dylib 与设备上已装的 liquidify 包**同名冲突** → dpkg 拒绝安装
+#   · 还把包体积从 1.2MB 撑到 3.7MB（多了 9.1MB 的 dylib）
+# 而且根本没必要：**本项目自带渲染引擎** —— EchoRebornBackboardd.dylib（backboardd 侧 Metal 渲染器，
+# 从 LiquidAss 移植）+ GlassKit/LGLiveBackdropView（玻璃视图），控制中心的液态玻璃就是这套渲染出来的。
+#
 before-package::
 	@mkdir -p "$(ER_METALLIB_STAGE)"; \
 	BUILD=$$(mktemp -d); \

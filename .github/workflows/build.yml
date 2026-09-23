@@ -220,8 +220,7 @@ jobs:
           # 液态玻璃渲染器**（上游编译好的成品，自带 shader）。它们不是本项目的 tweak，
           # 但仍会出现在 payload 里，这里一并允许。
           expected = {'EchoReborn.dylib', 'EchoRebornBackboardd.dylib', 'EchoRebornDualCam.dylib',
-                      'EchoRebornUIKit.dylib',
-                      'LiquidGlassKeyboard.dylib', 'LGOffline.dylib'}
+                      'EchoRebornUIKit.dylib'}
           extra = sorted(set(dylibs) - expected)
           print('dylibs in payload:', dylibs)
           for gone in ('Soko.dylib', 'LiquidSiri.dylib'):
