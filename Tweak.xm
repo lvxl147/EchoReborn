@@ -991,6 +991,26 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         if (nowNC - lastNoCur > 5.0) { lastNoCur = nowNC; ERLogInfo(@"DI-111 未找到黑底胶囊（不动灵动岛）"); }
         return;
     }
+    // 1.0.9-114 · **宿主改选 _SBGainMapView**（若存在）：
+    //   113 把渐变插到 curtain 自己 sublayers 的最顶仍被盖住（shot2 依旧 4662 黑点）
+    //   → 黑的不是 curtain 的 backgroundColor，而是与它同尺寸、画在其上的
+    //   `_SBGainMapView`。把渐变挂到 GainMap 的 layer 顶部 = 必在一切黑层之上。
+    //   （内容/文字在 SBSystemApertureContainerViewContentView，不在其中，不遮内容）
+    {
+        NSMutableArray<UIView *> *stH = [NSMutableArray arrayWithObject:win];
+        NSInteger guardH = 0;
+        UIView *gain = nil; CGFloat bestGain = 0.0;
+        while (stH.count && guardH++ < 8000) {
+            UIView *v = stH.lastObject; [stH removeLastObject];
+            if ([NSStringFromClass(v.class) isEqualToString:@"_SBGainMapView"]) {
+                CGRect b = v.bounds;
+                CGFloat a = CGRectGetWidth(b) * CGRectGetHeight(b);
+                if (a > bestGain) { bestGain = a; gain = v; }
+            }
+            [stH addObjectsFromArray:v.subviews];
+        }
+        if (gain && bestGain >= 1500.0) curtain = gain;
+    }
     CGRect cb = curtain.bounds;
     if (CGRectGetWidth(cb) < 8.0 || CGRectGetHeight(cb) < 8.0) {
         static CFTimeInterval lastBad = 0.0;
