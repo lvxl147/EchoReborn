@@ -888,6 +888,10 @@ static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
     return out_;
 }
 
+// 1.0.9-122 · 容器视图由扫描器在【全部窗口】里找（设备上有两个 SBSystemApertureWindow，
+//   扫描命中的第一个窗口里只有 curtain/gainmap，ContainerView 在另一个 —— 121 的容器=无 即此因）
+static __weak UIView *gERDIContainerView = nil;
+
 static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-93 · **隐藏灵动岛 = 独立功能**（"不使用时收起"），与玻璃互不干扰：
     //   隐藏开 → 只隐藏窗口，**绝不创建玻璃**（也不再走后面的查找/创建流程）
@@ -1080,21 +1084,8 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   空闲位置 125×36.67 —— 我们的玻璃铺在 gainmap 上，就成了浮在展开岛上方的小胶囊。
     //   而 ContainerView **随岛伸缩**（空闲 125 → 展开 189），全部内容都是它的子孙。
     //   → 玻璃插它 index 0（背景层）：铺满整条岛、永远在内容之下、和岛完全重合。
-    UIView *container = nil;
-    CGFloat bestContainerArea = 0.0;
-    {
-        NSMutableArray<UIView *> *stC = [NSMutableArray arrayWithObject:win];
-        NSInteger guardK = 0;
-        while (stC.count && guardK++ < 8000) {
-            UIView *v = stC.lastObject; [stC removeLastObject];
-            if ([NSStringFromClass(v.class) isEqualToString:@"SBSystemApertureContainerView"]) {
-                CGRect b = v.bounds;
-                CGFloat a = CGRectGetWidth(b) * CGRectGetHeight(b);
-                if (a > bestContainerArea) { bestContainerArea = a; container = v; }
-            }
-            [stC addObjectsFromArray:v.subviews];
-        }
-    }
+    UIView *container = gERDIContainerView;   // 1.0.9-122 · 扫描器已跨全部窗口找好
+    CGFloat bestContainerArea = container ? (CGRectGetWidth(container.bounds) * CGRectGetHeight(container.bounds)) : 0.0;
     BOOL diExpanded = (container && CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
     UIView *glassHost = curtain;
     CGRect gb = glassHost.bounds;
@@ -1899,6 +1890,22 @@ static void ERDITimerScan(void) {
             @try { ERDIDumpWindows(wins); } @catch (__unused NSException *e) {}
             @try { ERDIDumpPill(wins); } @catch (__unused NSException *e) {}
         }
+    }
+    // 1.0.9-122 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
+    {
+        UIView *best = nil; CGFloat bestA = 0.0;
+        NSMutableArray<UIView *> *stC = [NSMutableArray arrayWithArray:wins];
+        NSInteger guardK = 0;
+        while (stC.count && guardK++ < 20000) {
+            UIView *v = stC.lastObject; [stC removeLastObject];
+            if ([NSStringFromClass(v.class) isEqualToString:@"SBSystemApertureContainerView"]) {
+                CGRect b = v.bounds;
+                CGFloat a = CGRectGetWidth(b) * CGRectGetHeight(b);
+                if (a > bestA) { bestA = a; best = v; }
+            }
+            [stC addObjectsFromArray:v.subviews];
+        }
+        gERDIContainerView = best;
     }
     NSMutableArray<UIWindow *> *ordered = [NSMutableArray array];
     for (UIWindow *w in wins) if ([NSStringFromClass(w.class) containsString:@"Aperture"]) [ordered addObject:w];
