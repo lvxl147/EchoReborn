@@ -766,6 +766,17 @@ static void ERDIRemoveInjectedLayers(UIView *rootView) {
         for (CALayer *l in [cl.sublayers copy]) {
             if ([l.name hasPrefix:@"ERDI::"]) [l removeFromSuperlayer];
         }
+        // 1.0.9-116 · 恢复被我们改色的文字
+        if (objc_getAssociatedObject(v, kERDITextOriginalKey)) {
+            ((UILabel *)v).textColor = objc_getAssociatedObject(v, kERDITextOriginalKey);
+            objc_setAssociatedObject(v, kERDITextOriginalKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        // 1.0.9-116 · 撤掉玻璃描边
+        if (objc_getAssociatedObject(v, kERDIGlassMarkKey)) {
+            cl.borderWidth = 0.0;
+            cl.borderColor = nil;
+            objc_setAssociatedObject(v, kERDIGlassMarkKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
         if ([NSStringFromClass(v.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
             cl.shadowOpacity = 0.0;
             cl.masksToBounds = YES;
@@ -846,6 +857,29 @@ static NSArray<UIColor *> *ERDIGradientColors(void) {
 //   之前用 [colors valueForKey:@"CGColor"]，但本机 UIColor 的 CGColor 方法
 //   **不参与 KVC** → 抛 NSUnknownKeyException → 渐变从未被赋色（层全透明）。
 //   这就是「装了很多版都完全没效果」的真正根因之一。
+// 1.0.9-116 · 关联键：记录文字原色 / 已加玻璃标记（关闭开关时恢复）
+static void *kERDITextOriginalKey = &kERDITextOriginalKey;
+static void *kERDIGlassMarkKey = &kERDIGlassMarkKey;
+
+// 1.0.9-116 · 在渐变色列上按 t∈[0,1] 取色（线性插值）—— 给「文字渐变」用
+static UIColor *ERColorAtStop(NSArray<UIColor *> *cols, CGFloat t) {
+    if (!cols.count) return [UIColor whiteColor];
+    if (cols.count == 1) return cols.firstObject;
+    if (t <= 0) return cols.firstObject;
+    if (t >= 1) return cols.lastObject;
+    CGFloat seg = 1.0 / (CGFloat)(cols.count - 1);
+    NSUInteger i = (NSUInteger)(t / seg);
+    if (i >= cols.count - 1) return cols.lastObject;
+    CGFloat f = (t - (CGFloat)i * seg) / seg;
+    CGFloat r0 = 0, g0 = 0, b0 = 0, a0 = 0, r1 = 0, g1 = 0, b1 = 0, a1 = 0;
+    [cols[i] getRed:&r0 green:&g0 blue:&b0 alpha:&a0];
+    [cols[i + 1] getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
+    return [UIColor colorWithRed:(r0 + (r1 - r0) * f)
+                           green:(g0 + (g1 - g0) * f)
+                            blue:(b0 + (b1 - b0) * f)
+                           alpha:(a0 + (a1 - a0) * f)];
+}
+
 static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
     NSMutableArray *out_ = [NSMutableArray arrayWithCapacity:colors.count];
     for (UIColor *c in colors) { if (c) [out_ addObject:(id)c.CGColor]; }
@@ -1024,103 +1058,128 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     }
 
     @try {
+    // 1.0.9-116 · **观感重做**（照参考插件的真实语义）：
+    //   · LiquidifyApertureGradientColor1..5 / TextColorMode = **灵动岛文字**的渐变色
+    //     （Liquidify.dylib 字符串表实证：setTextColor: + LiquidifyApertureTextColorMode）
+    //   · 背景 = 岛本身变成「深色玻璃」：近黑渐变 + 顶部高光 + 发丝描边；
+    //     不再叠彩色胶囊（用户反馈"好像一个胶囊放在上面"就是这个错）。
+    //   · 展开态：沿父链找胶囊形祖先，玻璃盖满整条岛。
     NSArray<UIColor *> *cols = ERDIGradientColors();
     if (cols.count < 2) {
-        // 默认「液态玻璃」配色：蓝 → 紫 → 粉 → 白（对标参考插件的 5 色渐变观感）
-        cols = @[[UIColor colorWithRed:0.55 green:0.78 blue:1.00 alpha:1.0],
-                 [UIColor colorWithRed:0.72 green:0.68 blue:1.00 alpha:1.0],
-                 [UIColor colorWithRed:1.00 green:0.80 blue:0.92 alpha:1.0],
-                 [UIColor colorWithRed:1.00 green:1.00 blue:1.00 alpha:1.0]];
+        cols = @[[UIColor colorWithRed:0.40 green:0.78 blue:1.00 alpha:1.0],
+                 [UIColor colorWithRed:0.65 green:0.60 blue:1.00 alpha:1.0],
+                 [UIColor colorWithRed:1.00 green:0.55 blue:0.85 alpha:1.0],
+                 [UIColor colorWithRed:1.00 green:0.85 blue:0.60 alpha:1.0],
+                 [UIColor colorWithRed:0.55 green:1.00 blue:0.85 alpha:1.0]];
     }
 
-    CALayer *cl = curtain.layer;
+    // ---- 展开态容器：从宿主沿父链收集所有「胶囊形」祖先，取最外层 ----
+    UIView *outer = nil;
+    {
+        UIView *cur = curtain;
+        UIView *par = curtain.superview;
+        while (par && par != win) {
+            CGRect pb = par.bounds;
+            CGFloat pw = CGRectGetWidth(pb), ph = CGRectGetHeight(pb);
+            if (ph >= 30.0 && ph <= 90.0 && pw >= 130.0 && pw <= 330.0 && ph > 0.0 && pw / ph > 2.0) {
+                outer = par;
+                cur = par; par = par.superview;
+            } else break;
+        }
+    }
+    BOOL diExpanded = (outer && CGRectGetWidth(outer.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
+    UIView *glassHost = diExpanded ? outer : curtain;
+    CGRect gb = glassHost.bounds;
+    CGFloat gw = CGRectGetWidth(gb), gh = CGRectGetHeight(gb);
+    if (gw < 8.0 || gh < 8.0) return;
+
+    CALayer *cl = glassHost.layer;
     CAGradientLayer *grad = nil;
     CAGradientLayer *spec = nil;
     for (CALayer *l in cl.sublayers) {
         if ([l.name isEqualToString:@"ERDI::gradient"]) grad = (CAGradientLayer *)l;
         else if ([l.name isEqualToString:@"ERDI::specular"]) spec = (CAGradientLayer *)l;
     }
-    if (!grad) {
-        grad = [CAGradientLayer layer];
-        grad.name = @"ERDI::gradient";
-        [cl addSublayer:grad];
-    }
-    if (!spec) {
-        spec = [CAGradientLayer layer];
-        spec.name = @"ERDI::specular";
-        [cl addSublayer:spec];
-    }
-    // 1.0.9-113 · **必须置顶**：curtain 里还有同尺寸的 _SBGainMapView（渲染为黑），
-    //   之前插在 index 0/1（它之下）→ 被 GainMap 盖住，依旧全黑（shot2 实证仍 4662 个黑点）。
-    //   addSublayer 对已存在的层 = 移到最顶。而内容（文字/图标）在
-    //   SBSystemApertureContainerViewContentView，不在 curtain 里 → 压顶不遮内容。
+    if (!grad) { grad = [CAGradientLayer layer]; grad.name = @"ERDI::gradient"; [cl addSublayer:grad]; }
+    if (!spec) { spec = [CAGradientLayer layer]; spec.name = @"ERDI::specular"; [cl addSublayer:spec]; }
     if ([cl.sublayers indexOfObject:grad] != cl.sublayers.count - 2) [cl addSublayer:grad];
     if ([cl.sublayers indexOfObject:spec] != cl.sublayers.count - 1) [cl addSublayer:spec];
-    CGFloat radius = CGRectGetHeight(cb) * 0.5;
-    grad.frame = cb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0; grad.hidden = NO;
-    spec.frame = cb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
+
+    CGFloat radius = gh * 0.5;
+    grad.frame = gb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0; grad.hidden = NO;
+    spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
     if (@available(iOS 13.0, *)) { grad.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
-    grad.colors = (id)ERCGColorArray(cols);
-    grad.startPoint = CGPointMake(0.0, 0.0);
-    grad.endPoint = CGPointMake(1.0, 1.0);
-    // 顶部高光：让渐变有「玻璃」的镜面感（参考插件观感的关键）
-    // 1.0.9-111 · 与 grad 同款写法（UIColor 数组 + valueForKey），避免 MRC 下
-    //   字面量数组直接持有 CGColorRef 造成悬垂指针。
-    NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.60],
-                                  [UIColor colorWithWhite:1.0 alpha:0.12],
+
+    // 背景：深色玻璃（近黑、顶部略亮）—— 彩色留给文字
+    NSArray<UIColor *> *glassCols = @[[UIColor colorWithWhite:0.16 alpha:1.0],
+                                      [UIColor colorWithWhite:0.07 alpha:1.0],
+                                      [UIColor colorWithWhite:0.02 alpha:1.0]];
+    grad.colors = (id)ERCGColorArray(glassCols);
+    grad.startPoint = CGPointMake(0.5, 0.0);
+    grad.endPoint = CGPointMake(0.5, 1.0);
+    // 顶部高光：玻璃反光
+    NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.28],
+                                  [UIColor colorWithWhite:1.0 alpha:0.07],
                                   [UIColor colorWithWhite:1.0 alpha:0.00]];
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
-    spec.endPoint = CGPointMake(0.5, 0.62);
+    spec.endPoint = CGPointMake(0.5, 0.55);
+    // 发丝描边：玻璃边缘
+    cl.borderWidth = 1.0;
+    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
+    objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 1.0.9-115 · **展开态**：给外层「加宽的胶囊容器」也铺一层背景渐变（index 0 = 背景）。
-    //   114 实证玻璃已可见，但只覆盖 125pt 的中间段；展开态（播放中 209pt）两侧仍是黑底。
-    //   找法：从宿主往上找第一个 宽>=145、高30~90、宽高比>2.2 的胶囊形祖先。
-    //   插在它 index 0 → 在其黑底之上、内容（专辑图/波形）之下。
-    //   若该容器把黑画在自己的 index 0 sublayer 上，本层会被压住 → 最坏退回 114 的样子，无回归。
+    // ---- 文字渐变：岛上所有 UILabel 按 x 位置在 5 色上取色（Liquidify 的 TextColorMode=gradient）----
     {
-        UIView *anc = curtain.superview;
-        while (anc && anc != win) {
-            CGRect b = anc.bounds;
-            CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
-            if (bw >= 145.0 && bh >= 30.0 && bh <= 90.0 && (bh > 0.0 && bw / bh > 2.2)) {
-                CALayer *al = anc.layer;
-                CAGradientLayer *bg = nil;
-                for (CALayer *l in al.sublayers) {
-                    if ([l.name isEqualToString:@"ERDI::islandbg"]) { bg = (CAGradientLayer *)l; break; }
-                }
-                if (!bg) {
-                    bg = [CAGradientLayer layer];
-                    bg.name = @"ERDI::islandbg";
-                    [al insertSublayer:bg atIndex:0];
-                }
-                bg.frame = b;
-                bg.cornerRadius = bh * 0.5;
-                if (@available(iOS 13.0, *)) bg.cornerCurve = kCACornerCurveContinuous;
-                bg.colors = (id)ERCGColorArray(cols);
-                bg.startPoint = CGPointMake(0.0, 0.0);
-                bg.endPoint = CGPointMake(1.0, 1.0);
-                bg.opacity = 0.92;
-                bg.hidden = NO;
-                break;
+        NSMutableArray<UIView *> *stk = [NSMutableArray arrayWithObject:glassHost];
+        NSInteger guardT = 0;
+        while (stk.count && guardT++ < 4000) {
+            UIView *v = stk.lastObject; [stk removeLastObject];
+            if ([v isKindOfClass:[UILabel class]]) {
+                if (!objc_getAssociatedObject(v, kERDITextOriginalKey))
+                    objc_setAssociatedObject(v, kERDITextOriginalKey, v.textColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                CGRect r = [v convertRect:v.bounds toView:glassHost];
+                CGFloat t = gw > 0 ? CGRectGetMidX(r) / gw : 0.0;
+                v.textColor = ERColorAtStop(cols, MIN(MAX(t, 0.0), 1.0));
             }
-            anc = anc.superview;
+            [stk addObjectsFromArray:v.subviews];
         }
     }
 
-    // 辉光（LiquidifyApertureGlowEnabled）
+    // ---- 其它宿主上遗留的玻璃层一律隐藏（空闲/展开切换后不叠加、不残留）----
+    {
+        NSMutableArray<UIView *> *stk2 = [NSMutableArray arrayWithObject:win];
+        NSInteger guardH = 0;
+        while (stk2.count && guardH++ < 8000) {
+            UIView *v = stk2.lastObject; [stk2 removeLastObject];
+            if (v != glassHost) {
+                for (CALayer *sub in v.layer.sublayers) {
+                    if ([sub.name hasPrefix:@"ERDI::"]) sub.hidden = YES;
+                }
+            }
+            [stk2 addObjectsFromArray:v.subviews];
+        }
+    }
+
+    // 辉光（LiquidifyApertureGlowEnabled）：中性白光，避免给玻璃染色
     if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
         cl.masksToBounds = NO;
-        cl.shadowColor = (cols.firstObject ?: [UIColor whiteColor]).CGColor;
-        cl.shadowOpacity = 0.80;
-        cl.shadowRadius = 20.0;
+        cl.shadowColor = [UIColor whiteColor].CGColor;
+        cl.shadowOpacity = 0.55;
+        cl.shadowRadius = 18.0;
         cl.shadowOffset = CGSizeZero;
     } else if (cl.shadowOpacity != 0.0) {
         cl.shadowOpacity = 0.0;
     }
-    // 黑底：能清就清（系统可能重置，但渐变在它之上，清不掉也照样可见）
-    curtain.layer.backgroundColor = [UIColor clearColor].CGColor;
-    curtain.opaque = NO;
+
+    static CFTimeInterval lastG116 = 0.0;
+    CFTimeInterval nowG116 = CACurrentMediaTime();
+    if (nowG116 - lastG116 > 5.0) {
+        lastG116 = nowG116;
+        ERLogInfo(@"DI-116 宿主=%@ 展开=%d bounds=%@ 文字渐变=%lu色",
+                  NSStringFromClass(glassHost.class), diExpanded ? 1 : 0,
+                  NSStringFromCGRect(gb), (unsigned long)cols.count);
+    }
     } @catch (NSException *ex110) {
         // 1.0.9-111 · 异常必须落盘，否则永远只能靠猜
         ERLogError(@"DI-111 注入异常 %@ reason=%@ 胶囊=%@",
