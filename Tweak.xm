@@ -755,6 +755,10 @@ static void *kERDIRootKey = &kERDIRootKey;   // 1.0.9-109 · 被我们隐藏的�
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
 
+// 1.0.9-116 · 关联键：记录文字原色 / 已加玻璃标记（关闭开关时恢复）
+static void *kERDITextOriginalKey = &kERDITextOriginalKey;
+static void *kERDIGlassMarkKey = &kERDIGlassMarkKey;
+
 // 1.0.9-110 · 关闭「液态玻璃」时彻底摘掉我们注入到黑底胶囊里的层
 static void ERDIRemoveInjectedLayers(UIView *rootView) {
     if (!rootView) return;
@@ -857,10 +861,6 @@ static NSArray<UIColor *> *ERDIGradientColors(void) {
 //   之前用 [colors valueForKey:@"CGColor"]，但本机 UIColor 的 CGColor 方法
 //   **不参与 KVC** → 抛 NSUnknownKeyException → 渐变从未被赋色（层全透明）。
 //   这就是「装了很多版都完全没效果」的真正根因之一。
-// 1.0.9-116 · 关联键：记录文字原色 / 已加玻璃标记（关闭开关时恢复）
-static void *kERDITextOriginalKey = &kERDITextOriginalKey;
-static void *kERDIGlassMarkKey = &kERDIGlassMarkKey;
-
 // 1.0.9-116 · 在渐变色列上按 t∈[0,1] 取色（线性插值）—— 给「文字渐变」用
 static UIColor *ERColorAtStop(NSArray<UIColor *> *cols, CGFloat t) {
     if (!cols.count) return [UIColor whiteColor];
@@ -1076,14 +1076,13 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // ---- 展开态容器：从宿主沿父链收集所有「胶囊形」祖先，取最外层 ----
     UIView *outer = nil;
     {
-        UIView *cur = curtain;
         UIView *par = curtain.superview;
         while (par && par != win) {
             CGRect pb = par.bounds;
             CGFloat pw = CGRectGetWidth(pb), ph = CGRectGetHeight(pb);
             if (ph >= 30.0 && ph <= 90.0 && pw >= 130.0 && pw <= 330.0 && ph > 0.0 && pw / ph > 2.0) {
                 outer = par;
-                cur = par; par = par.superview;
+                par = par.superview;
             } else break;
         }
     }
@@ -1136,11 +1135,12 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         while (stk.count && guardT++ < 4000) {
             UIView *v = stk.lastObject; [stk removeLastObject];
             if ([v isKindOfClass:[UILabel class]]) {
+                UILabel *lb = (UILabel *)v;
                 if (!objc_getAssociatedObject(v, kERDITextOriginalKey))
-                    objc_setAssociatedObject(v, kERDITextOriginalKey, v.textColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    objc_setAssociatedObject(v, kERDITextOriginalKey, lb.textColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 CGRect r = [v convertRect:v.bounds toView:glassHost];
                 CGFloat t = gw > 0 ? CGRectGetMidX(r) / gw : 0.0;
-                v.textColor = ERColorAtStop(cols, MIN(MAX(t, 0.0), 1.0));
+                lb.textColor = ERColorAtStop(cols, MIN(MAX(t, 0.0), 1.0));
             }
             [stk addObjectsFromArray:v.subviews];
         }
