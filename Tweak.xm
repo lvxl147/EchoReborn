@@ -1075,21 +1075,28 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
                  [UIColor colorWithRed:0.55 green:1.00 blue:0.85 alpha:1.0]];
     }
 
-    // ---- 展开态容器：从宿主沿父链收集所有「胶囊形」祖先，取最外层 ----
-    UIView *outer = nil;
+    // ---- 1.0.9-121 · **展开态正解**：宿主改用 `SBSystemApertureContainerView` ----
+    //   设备实拍（用户反馈"上面有一个单独的灵动岛"）：展开时 curtain/gainmap 仍停在
+    //   空闲位置 125×36.67 —— 我们的玻璃铺在 gainmap 上，就成了浮在展开岛上方的小胶囊。
+    //   而 ContainerView **随岛伸缩**（空闲 125 → 展开 189），全部内容都是它的子孙。
+    //   → 玻璃插它 index 0（背景层）：铺满整条岛、永远在内容之下、和岛完全重合。
+    UIView *container = nil;
+    CGFloat bestContainerArea = 0.0;
     {
-        UIView *par = curtain.superview;
-        while (par && par != win) {
-            CGRect pb = par.bounds;
-            CGFloat pw = CGRectGetWidth(pb), ph = CGRectGetHeight(pb);
-            if (ph >= 30.0 && ph <= 90.0 && pw >= 130.0 && pw <= 330.0 && ph > 0.0 && pw / ph > 2.0) {
-                outer = par;
-                par = par.superview;
-            } else break;
+        NSMutableArray<UIView *> *stC = [NSMutableArray arrayWithObject:win];
+        NSInteger guardK = 0;
+        while (stC.count && guardK++ < 8000) {
+            UIView *v = stC.lastObject; [stC removeLastObject];
+            if ([NSStringFromClass(v.class) isEqualToString:@"SBSystemApertureContainerView"]) {
+                CGRect b = v.bounds;
+                CGFloat a = CGRectGetWidth(b) * CGRectGetHeight(b);
+                if (a > bestContainerArea) { bestContainerArea = a; container = v; }
+            }
+            [stC addObjectsFromArray:v.subviews];
         }
     }
-    BOOL diExpanded = (outer && CGRectGetWidth(outer.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
-    UIView *glassHost = diExpanded ? outer : curtain;
+    BOOL diExpanded = (container && CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
+    UIView *glassHost = curtain;
     CGRect gb = glassHost.bounds;
     CGFloat gw = CGRectGetWidth(gb), gh = CGRectGetHeight(gb);
     if (gw < 8.0 || gh < 8.0) return;
@@ -1130,6 +1137,36 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
+    // 1.0.9-121 · **把同款玻璃铺到 ContainerView 的背景层（index 0）**
+    //   gainmap 上那块保留 —— 它正好压住 curtain 的黑底；ContainerView 这块负责
+    //   展开时的整条背景。两者同材质，铺满后视觉上是一整块玻璃。
+    if (container && bestContainerArea >= 1500.0) {
+        CALayer *al = container.layer;
+        CAGradientLayer *bg = nil;
+        for (CALayer *l in al.sublayers) {
+            if ([l.name isEqualToString:@"ERDI::islandbg"]) { bg = (CAGradientLayer *)l; break; }
+        }
+        if (!bg) {
+            bg = [CAGradientLayer layer];
+            bg.name = @"ERDI::islandbg";
+            [al insertSublayer:bg atIndex:0];
+        }
+        CGRect cb2 = container.bounds;
+        bg.frame = cb2;
+        bg.cornerRadius = CGRectGetHeight(cb2) * 0.5;
+        bg.masksToBounds = YES;
+        bg.opacity = 1.0;
+        bg.hidden = NO;
+        if (@available(iOS 13.0, *)) bg.cornerCurve = kCACornerCurveContinuous;
+        bg.colors = (id)ERCGColorArray(glassCols);
+        bg.startPoint = CGPointMake(0.5, 0.0);
+        bg.endPoint = CGPointMake(0.5, 1.0);
+        // 展开时边框也铺到整条岛
+        al.borderWidth = 1.0;
+        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
+        objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+
     // ---- 文字渐变：岛上所有 UILabel 按 x 位置在 5 色上取色（Liquidify 的 TextColorMode=gradient）----
     {
         NSMutableArray<UIView *> *stk = [NSMutableArray arrayWithObject:glassHost];
@@ -1154,7 +1191,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         NSInteger guardH = 0;
         while (stk2.count && guardH++ < 8000) {
             UIView *v = stk2.lastObject; [stk2 removeLastObject];
-            if (v != glassHost) {
+            if (v != glassHost && v != container) {
                 for (CALayer *sub in v.layer.sublayers) {
                     if ([sub.name hasPrefix:@"ERDI::"]) sub.hidden = YES;
                 }
@@ -1178,9 +1215,11 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     CFTimeInterval nowG116 = CACurrentMediaTime();
     if (nowG116 - lastG116 > 5.0) {
         lastG116 = nowG116;
-        ERLogInfo(@"DI-116 宿主=%@ 展开=%d bounds=%@ 文字渐变=%lu色",
-                  NSStringFromClass(glassHost.class), diExpanded ? 1 : 0,
-                  NSStringFromCGRect(gb), (unsigned long)cols.count);
+        ERLogInfo(@"DI-121 宿主=%@ bounds=%@ 容器=%@ 容器bounds=%@ 展开=%d 文字渐变=%lu色",
+                  NSStringFromClass(glassHost.class), NSStringFromCGRect(gb),
+                  container ? NSStringFromClass(container.class) : @"无",
+                  container ? NSStringFromCGRect(container.bounds) : @"-",
+                  diExpanded ? 1 : 0, (unsigned long)cols.count);
     }
     } @catch (NSException *ex110) {
         // 1.0.9-111 · 异常必须落盘，否则永远只能靠猜
