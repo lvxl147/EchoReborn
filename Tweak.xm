@@ -1073,6 +1073,41 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.62);
 
+    // 1.0.9-115 · **展开态**：给外层「加宽的胶囊容器」也铺一层背景渐变（index 0 = 背景）。
+    //   114 实证玻璃已可见，但只覆盖 125pt 的中间段；展开态（播放中 209pt）两侧仍是黑底。
+    //   找法：从宿主往上找第一个 宽>=145、高30~90、宽高比>2.2 的胶囊形祖先。
+    //   插在它 index 0 → 在其黑底之上、内容（专辑图/波形）之下。
+    //   若该容器把黑画在自己的 index 0 sublayer 上，本层会被压住 → 最坏退回 114 的样子，无回归。
+    {
+        UIView *anc = curtain.superview;
+        while (anc && anc != win) {
+            CGRect b = anc.bounds;
+            CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
+            if (bw >= 145.0 && bh >= 30.0 && bh <= 90.0 && (bh > 0.0 && bw / bh > 2.2)) {
+                CALayer *al = anc.layer;
+                CAGradientLayer *bg = nil;
+                for (CALayer *l in al.sublayers) {
+                    if ([l.name isEqualToString:@"ERDI::islandbg"]) { bg = (CAGradientLayer *)l; break; }
+                }
+                if (!bg) {
+                    bg = [CAGradientLayer layer];
+                    bg.name = @"ERDI::islandbg";
+                    [al insertSublayer:bg atIndex:0];
+                }
+                bg.frame = b;
+                bg.cornerRadius = bh * 0.5;
+                if (@available(iOS 13.0, *)) bg.cornerCurve = kCACornerCurveContinuous;
+                bg.colors = (id)ERCGColorArray(cols);
+                bg.startPoint = CGPointMake(0.0, 0.0);
+                bg.endPoint = CGPointMake(1.0, 1.0);
+                bg.opacity = 0.92;
+                bg.hidden = NO;
+                break;
+            }
+            anc = anc.superview;
+        }
+    }
+
     // 辉光（LiquidifyApertureGlowEnabled）
     if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
         cl.masksToBounds = NO;

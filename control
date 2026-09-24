@@ -1,7 +1,7 @@
 Package: com.strive.echoreborn
 Icon: file:///Library/PreferenceBundles/EchoRebornPrefs.bundle/icon.png
 Name: Echo Reborn
-Version: 1.0.9-114
+Version: 1.0.9-115
 Architecture: iphoneos-arm64
 Description: 基于 ccaster 二次开发并更名的控制中心增强插件，支持 iOS 16 / iOS 17，让控制中心更完整。全部设置项已汉化，并整合锁屏控件（Soko 移植）与 iOS27 Siri（LiquidSiri 移植），单包即含三套功能。更新记录见插件详情页的「更新记录」分页。
 Maintainer: Strive
