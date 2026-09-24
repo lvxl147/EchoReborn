@@ -1682,6 +1682,44 @@ static void ERMaybeScreenshot(UIWindow *win) {
 //   postNotificationName:object: 广播 `com.niceios._<键名>`；ApertureInSB.dylib 里有
 //   testnotify / publishBulletinRequest:destinations:（测试公告由此发布）。
 //   所以在 SpringBoard 里（本 tweak 同进程）直接广播这组 Darwin 通知即可等效"点测试按钮"。
+// 1.0.9-120 · 发一条**真实的本地通知** —— NiceAperture 的岛本来就是显示系统通知的
+//   （prefs: notifyenable=True），这条通路一定走它自己的监听，不再伪造媒体会话。
+static void ERDiagPostLocalNotification(void) {
+    void *h = dlopen("/System/Library/Frameworks/UserNotifications.framework/UserNotifications", RTLD_NOW);
+    if (!h) { ERLogError(@"UNTEST dlopen UserNotifications 失败"); return; }
+    Class ncc = NSClassFromString(@"UNUserNotificationCenter");
+    if (!ncc) { ERLogError(@"UNTEST UNUserNotificationCenter 不存在"); return; }
+    id center = ((id(*)(id, SEL))objc_msgSend)(ncc, NSSelectorFromString(@"currentNotificationCenter"));
+    if (!center) { ERLogInfo(@"UNTEST center=nil（SpringBoard 拿不到）"); return; }
+
+    Class contentCls = NSClassFromString(@"UNMutableNotificationContent");
+    Class trigCls = NSClassFromString(@"UNTimeIntervalNotificationTrigger");
+    Class reqCls = NSClassFromString(@"UNNotificationRequest");
+    Class soundCls = NSClassFromString(@"UNNotificationSound");
+    if (!contentCls || !trigCls || !reqCls) { ERLogError(@"UNTEST 类缺失"); return; }
+
+    id content = [[contentCls alloc] init];
+    [content setValue:@"EchoReborn 玻璃测试" forKey:@"title"];
+    [content setValue:@"灵动岛玻璃观感验证 —— 这是一条诊断通知" forKey:@"body"];
+    if (soundCls) {
+        id sound = ((id(*)(id, SEL))objc_msgSend)(soundCls, NSSelectorFromString(@"defaultSound"));
+        if (sound) [content setValue:sound forKey:@"sound"];
+    }
+    id trigger = [[trigCls alloc] initWithTimeInterval:0.2 repeats:NO];
+    id request = [[reqCls alloc] initWithIdentifier:[NSString stringWithFormat:@"er-diag-%f", [[NSDate date] timeIntervalSince1970]]
+                                            content:content trigger:trigger];
+
+    unsigned long opts = 1u | 2u | 4u | 8u;   // badge / sound / alert / carPlay
+    id authBlock = ^(unsigned long granted, id err) {
+        ERLogInfo(@"UNTEST 授权=%lu err=%@", granted, err);
+        if (!granted) return;
+        id addBlock = ^(id e2) { ERLogInfo(@"UNTEST 投递完成 err=%@", e2); };
+        ((void(*)(id, SEL, id, id))objc_msgSend)(center, NSSelectorFromString(@"addNotificationRequest:withCompletionHandler:"), request, addBlock);
+    };
+    ((void(*)(id, SEL, unsigned long, id))objc_msgSend)(center, NSSelectorFromString(@"requestAuthorizationWithOptions:completionHandler:"), opts, authBlock);
+    ERLogInfo(@"UNTEST 已发起本地通知");
+}
+
 static void ERDiagIslandTest(void) {
     CFNotificationCenterRef c = CFNotificationCenterGetDarwinNotifyCenter();
     if (!c) { ERLogError(@"ISLAND-TEST 无 Darwin 通知中心"); return; }
@@ -1708,6 +1746,11 @@ static void ERMaybeDiagAudio(void) {
         [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"audio.stop"] error:nil];
         if (gERDiagPlayer) { [gERDiagPlayer stop]; gERDiagPlayer = nil; }
         ERLogInfo(@"AUDIO-STOP 已停止");
+        return;
+    }
+    if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"untest.req"]]) {
+        [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"untest.req"] error:nil];
+        ERDiagPostLocalNotification();
         return;
     }
     if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"islandtest.req"]]) {
