@@ -1023,14 +1023,19 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     if (!grad) {
         grad = [CAGradientLayer layer];
         grad.name = @"ERDI::gradient";
-        [cl insertSublayer:grad atIndex:0];
+        [cl addSublayer:grad];
     }
     if (!spec) {
         spec = [CAGradientLayer layer];
         spec.name = @"ERDI::specular";
-        NSUInteger gi = [cl.sublayers indexOfObject:grad];
-        [cl insertSublayer:spec atIndex:(gi == NSNotFound ? 0u : (NSUInteger)(gi + 1))];
+        [cl addSublayer:spec];
     }
+    // 1.0.9-113 · **必须置顶**：curtain 里还有同尺寸的 _SBGainMapView（渲染为黑），
+    //   之前插在 index 0/1（它之下）→ 被 GainMap 盖住，依旧全黑（shot2 实证仍 4662 个黑点）。
+    //   addSublayer 对已存在的层 = 移到最顶。而内容（文字/图标）在
+    //   SBSystemApertureContainerViewContentView，不在 curtain 里 → 压顶不遮内容。
+    if ([cl.sublayers indexOfObject:grad] != cl.sublayers.count - 2) [cl addSublayer:grad];
+    if ([cl.sublayers indexOfObject:spec] != cl.sublayers.count - 1) [cl addSublayer:spec];
     CGFloat radius = CGRectGetHeight(cb) * 0.5;
     grad.frame = cb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0; grad.hidden = NO;
     spec.frame = cb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
