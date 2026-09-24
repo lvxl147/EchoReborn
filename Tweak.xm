@@ -842,6 +842,16 @@ static NSArray<UIColor *> *ERDIGradientColors(void) {
     return colors;
 }
 
+// 1.0.9-112 · UIColor 数组 -> CGColor 数组。
+//   之前用 [colors valueForKey:@"CGColor"]，但本机 UIColor 的 CGColor 方法
+//   **不参与 KVC** → 抛 NSUnknownKeyException → 渐变从未被赋色（层全透明）。
+//   这就是「装了很多版都完全没效果」的真正根因之一。
+static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
+    NSMutableArray *out_ = [NSMutableArray arrayWithCapacity:colors.count];
+    for (UIColor *c in colors) { if (c) [out_ addObject:(id)c.CGColor]; }
+    return out_;
+}
+
 static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-93 · **隐藏灵动岛 = 独立功能**（"不使用时收起"），与玻璃互不干扰：
     //   隐藏开 → 只隐藏窗口，**绝不创建玻璃**（也不再走后面的查找/创建流程）
@@ -1025,7 +1035,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     grad.frame = cb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0; grad.hidden = NO;
     spec.frame = cb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
     if (@available(iOS 13.0, *)) { grad.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
-    grad.colors = (id)[cols valueForKey:@"CGColor"];
+    grad.colors = (id)ERCGColorArray(cols);
     grad.startPoint = CGPointMake(0.0, 0.0);
     grad.endPoint = CGPointMake(1.0, 1.0);
     // 顶部高光：让渐变有「玻璃」的镜面感（参考插件观感的关键）
@@ -1034,7 +1044,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.60],
                                   [UIColor colorWithWhite:1.0 alpha:0.12],
                                   [UIColor colorWithWhite:1.0 alpha:0.00]];
-    spec.colors = (id)[sheen valueForKey:@"CGColor"];
+    spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.62);
 
@@ -1512,11 +1522,15 @@ static void ERMaybeScreenshot(UIWindow *win) {
         [[UIColor blackColor] setFill];
         UIRectFill(CGRectMake(0, 0, screenSize.width, screenSize.height));
     }
+    // 1.0.9-112 · afterScreenUpdates:NO（多次 YES 会互相干扰），并逐窗口记录成败
+    NSMutableArray<NSString *> *per = [NSMutableArray array];
     for (UIWindow *w in list) {
         @try {
             CGRect f = w.bounds;
             if (f.size.width > 1.0 && f.size.height > 1.0) {
-                if ([w drawViewHierarchyInRect:f afterScreenUpdates:YES]) ok = YES;
+                BOOL r = [w drawViewHierarchyInRect:f afterScreenUpdates:NO];
+                if (r) ok = YES;
+                [per addObject:[NSString stringWithFormat:@"%@:%d", NSStringFromClass(w.class), r ? 1 : 0]];
             }
         } @catch (__unused NSException *e) {}
     }
@@ -1524,7 +1538,22 @@ static void ERMaybeScreenshot(UIWindow *win) {
     UIGraphicsEndImageContext();
     NSData *png = img ? UIImagePNGRepresentation(img) : nil;
     if (png) [png writeToFile:@"/var/mobile/Library/Logs/EchoReborn/shot.png" atomically:YES];
-    ERLogInfo(@"DI-SHOT windows=%lu ok=%d bytes=%lu", (unsigned long)list.count, ok, (unsigned long)png.length);
+
+    // 1.0.9-112 · aperture 窗口单图（109 时代可正常出图，留作对照）
+    if (win) {
+        @try {
+            UIGraphicsBeginImageContextWithOptions(win.bounds.size, NO, 1.0);
+            BOOL ok2 = [win drawViewHierarchyInRect:win.bounds afterScreenUpdates:NO];
+            UIImage *img2 = UIGraphicsGetImageFromCurrentImageContext();
+            UIGraphicsEndImageContext();
+            NSData *png2 = img2 ? UIImagePNGRepresentation(img2) : nil;
+            if (png2) [png2 writeToFile:@"/var/mobile/Library/Logs/EchoReborn/shot2.png" atomically:YES];
+            ERLogInfo(@"DI-SHOT2 win=%@ ok=%d bytes=%lu", NSStringFromClass(win.class), ok2, (unsigned long)png2.length);
+        } @catch (__unused NSException *e) {}
+    }
+    ERLogInfo(@"DI-SHOT windows=%lu ok=%d bytes=%lu 明细=%@",
+              (unsigned long)list.count, ok, (unsigned long)png.length,
+              [per componentsJoinedByString:@" "]);
 }
 
 static void ERDITimerScan(void) {
