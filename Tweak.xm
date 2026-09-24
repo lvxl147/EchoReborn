@@ -957,7 +957,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   插到胶囊**之下**（内容仍在上层）；并把系统黑底胶囊隐藏 —— 参考插件生效时根本没有它。
     UIView *host = root.superview ?: win;
     CGRect capsule = [root convertRect:root.bounds toView:host];
-    CGRect glassFrame = CGRectInset(capsule, -10.0, -10.0);
+    glassFrame = CGRectInset(capsule, -10.0, -10.0);   // 复用外层变量（避免重复声明）
     if (glass.superview != host) [host insertSubview:glass belowSubview:root];
     glass.hidden = NO;
     glass.frame = glassFrame;
