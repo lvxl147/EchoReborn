@@ -1682,6 +1682,7 @@ static void ERMaybeScreenshot(UIWindow *win) {
 //   → 产生 Now Playing 会话 → NiceAperture 把岛展开 → 远程截图即可看到展开态玻璃。
 //   出现 audio.stop → 立即停止并释放。
 static AVAudioPlayer *gERDiagPlayer = nil;
+static void ERDiagRegisterNowPlaying(void);   // 1.0.9-118 前向声明
 static void ERMaybeDiagAudio(void) {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *dir = @"/var/mobile/Library/Logs/EchoReborn";
