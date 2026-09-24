@@ -19,6 +19,7 @@
 #import <crt_externs.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <AVFoundation/AVFoundation.h>
 
 // ---------------------------------------------------------------------------
 // jailbreak root resolution
@@ -1675,6 +1676,38 @@ static void ERMaybeScreenshot(UIWindow *win) {
               [per componentsJoinedByString:@" "]);
 }
 
+// 1.0.9-117 · 诊断音频触发（用户不在机器旁时，SSH 就能自己验证玻璃观感）：
+//   出现 audio.req → 让 SpringBoard 循环播放 /var/mobile/er_test.mp3（音量 0.35）
+//   → 产生 Now Playing 会话 → NiceAperture 把岛展开 → 远程截图即可看到展开态玻璃。
+//   出现 audio.stop → 立即停止并释放。
+static AVAudioPlayer *gERDiagPlayer = nil;
+static void ERMaybeDiagAudio(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = @"/var/mobile/Library/Logs/EchoReborn";
+    if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"audio.stop"]]) {
+        [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"audio.stop"] error:nil];
+        if (gERDiagPlayer) { [gERDiagPlayer stop]; gERDiagPlayer = nil; }
+        ERLogInfo(@"AUDIO-STOP 已停止");
+        return;
+    }
+    NSString *req = [dir stringByAppendingPathComponent:@"audio.req"];
+    if (![fm fileExistsAtPath:req]) return;
+    [fm removeItemAtPath:req error:nil];
+    if (gERDiagPlayer && gERDiagPlayer.isPlaying) return;   // 已在放，不重复起
+    NSString *mp3 = @"/var/mobile/er_test.mp3";
+    if (![fm fileExistsAtPath:mp3]) { ERLogInfo(@"AUDIO-REQ 缺少 %@", mp3); return; }
+    NSError *err = nil;
+    AVAudioPlayer *p = [[AVAudioPlayer alloc] initWithContentsOfFile:mp3 error:&err];
+    if (!p) { ERLogError(@"AUDIO-REQ 初始化失败 %@", err); return; }
+    p.numberOfLoops = -1;
+    p.volume = 0.35;
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback error:nil];
+    [[AVAudioSession sharedInstance] setActive:YES error:nil];
+    BOOL okP = [p play];
+    gERDiagPlayer = p;
+    ERLogInfo(@"AUDIO-REQ 播放=%d 时长=%.1fs", okP, p.duration);
+}
+
 static void ERDITimerScan(void) {
     static NSInteger scanCount = 0;
     scanCount++;
@@ -1723,6 +1756,7 @@ static void ERDITimerScan(void) {
         if (ERDIFindApertureInTree(w, &v)) { found = v; foundWindow = w; break; }
     }
     @try { ERMaybeScreenshot(foundWindow); } @catch (__unused NSException *e) {}
+    @try { ERMaybeDiagAudio(); } @catch (__unused NSException *e) {}
 
     if (verbose) {
         ERLogInfo(@"DI-SCAN#%ld 窗口=%lu 找到=%@ %@", (long)scanCount, (unsigned long)wins.count,
