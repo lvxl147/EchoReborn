@@ -20,6 +20,7 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #import <AVFoundation/AVFoundation.h>
+#include <dlfcn.h>
 
 // ---------------------------------------------------------------------------
 // jailbreak root resolution
@@ -1706,6 +1707,54 @@ static void ERMaybeDiagAudio(void) {
     BOOL okP = [p play];
     gERDiagPlayer = p;
     ERLogInfo(@"AUDIO-REQ 播放=%d 时长=%.1fs", okP, p.duration);
+    ERDiagRegisterNowPlaying();
+}
+
+// 1.0.9-118 · 让系统把 SpringBoard 当成"正在播放的 App"：
+//   只播音频还不够 —— NiceAperture 读的是系统的 Now Playing 会话。
+//   这里用 dlopen 挂 MediaPlayer（避免改 Makefile），设置 nowPlayingInfo
+//   并注册远程命令（play/pause/上一首/下一首），系统才会把本会话上报为 playing。
+static BOOL gERDiagNPSetup = NO;
+static void ERDiagRegisterNowPlaying(void) {
+    if (gERDiagNPSetup) return;
+    gERDiagNPSetup = YES;
+    void *h = dlopen("/System/Library/Frameworks/MediaPlayer.framework/MediaPlayer", RTLD_NOW);
+    if (!h) { ERLogError(@"AUDIO dlopen MediaPlayer 失败"); return; }
+    id center = nil;
+    Class npc = NSClassFromString(@"MPNowPlayingInfoCenter");
+    if (npc) {
+        id c = ((id(*)(id, SEL))objc_msgSend)(npc, NSSelectorFromString(@"defaultCenter"));
+        if (c) {
+            NSDictionary *info = @{@"title": @"EchoReborn 玻璃测试",
+                                   @"artist": @"诊断音频",
+                                   @"albumTitle": @"EchoReborn",
+                                   @"playbackRate": @1.0,
+                                   @"duration": @4.5,
+                                   @"elapsedTime": @0.0};
+            [c setValue:info forKey:@"nowPlayingInfo"];
+            center = c;
+            ERLogInfo(@"AUDIO nowPlayingInfo 已设置");
+        }
+    }
+    Class rcc = NSClassFromString(@"MPRemoteCommandCenter");
+    if (rcc) {
+        id rc = ((id(*)(id, SEL))objc_msgSend)(rcc, NSSelectorFromString(@"sharedCommandCenter"));
+        if (rc) {
+            NSInteger added = 0;
+            for (NSString *cmdName in @[@"playCommand", @"pauseCommand", @"togglePlayPauseCommand",
+                                        @"nextTrackCommand", @"previousTrackCommand"]) {
+                id cmd = [rc valueForKey:cmdName];
+                if (!cmd) continue;
+                SEL add = NSSelectorFromString(@"addTargetWithHandler:");
+                if (![cmd respondsToSelector:add]) continue;
+                id block = ^(id evt) { return (long)0; };
+                ((id(*)(id, SEL, id))objc_msgSend)(cmd, add, block);
+                added++;
+            }
+            ERLogInfo(@"AUDIO 远程命令已注册 %ld 个", (long)added);
+        }
+    }
+    if (!center) ERLogInfo(@"AUDIO MPNowPlayingInfoCenter 不可用");
 }
 
 static void ERDITimerScan(void) {
