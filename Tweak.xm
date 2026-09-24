@@ -1677,6 +1677,24 @@ static void ERMaybeScreenshot(UIWindow *win) {
               [per componentsJoinedByString:@" "]);
 }
 
+// 1.0.9-119 · 触发 NiceAperture 的「测试通知」元素 —— 岛上出现文字 → 展开 → 远程验证玻璃。
+//   逆向依据：NiceAperturePrefs 用 CFNotificationCenterGetDarwinNotifyCenter +
+//   postNotificationName:object: 广播 `com.niceios._<键名>`；ApertureInSB.dylib 里有
+//   testnotify / publishBulletinRequest:destinations:（测试公告由此发布）。
+//   所以在 SpringBoard 里（本 tweak 同进程）直接广播这组 Darwin 通知即可等效"点测试按钮"。
+static void ERDiagIslandTest(void) {
+    CFNotificationCenterRef c = CFNotificationCenterGetDarwinNotifyCenter();
+    if (!c) { ERLogError(@"ISLAND-TEST 无 Darwin 通知中心"); return; }
+    for (NSString *n in @[@"com.niceios._testnotify",
+                          @"com.niceios._testnotifytitle",
+                          @"com.niceios._testnotifydetail",
+                          @"com.niceios.niceaperture",
+                          @"com.niceios.myipc"]) {
+        CFNotificationCenterPostNotification(c, (__bridge CFStringRef)n, NULL, NULL, YES);
+    }
+    ERLogInfo(@"ISLAND-TEST 已广播 5 个 Darwin 通知");
+}
+
 // 1.0.9-117 · 诊断音频触发（用户不在机器旁时，SSH 就能自己验证玻璃观感）：
 //   出现 audio.req → 让 SpringBoard 循环播放 /var/mobile/er_test.mp3（音量 0.35）
 //   → 产生 Now Playing 会话 → NiceAperture 把岛展开 → 远程截图即可看到展开态玻璃。
@@ -1690,6 +1708,11 @@ static void ERMaybeDiagAudio(void) {
         [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"audio.stop"] error:nil];
         if (gERDiagPlayer) { [gERDiagPlayer stop]; gERDiagPlayer = nil; }
         ERLogInfo(@"AUDIO-STOP 已停止");
+        return;
+    }
+    if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"islandtest.req"]]) {
+        [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"islandtest.req"] error:nil];
+        ERDiagIslandTest();
         return;
     }
     NSString *req = [dir stringByAppendingPathComponent:@"audio.req"];
