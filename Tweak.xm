@@ -955,22 +955,45 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   这等价于参考插件「驱动背景」（CCSystemApertureBackgroundDriver / setBackgroundView:），
     //   而不是「在窗口上叠一层」。
     UIView *curtain = nil;
+    CGFloat bestCurtainArea = 0.0;
     {
         NSMutableArray<UIView *> *st = [NSMutableArray arrayWithObject:win];
         NSInteger guardC = 0;
         while (st.count && guardC++ < 8000) {
             UIView *v = st.lastObject; [st removeLastObject];
-            if ([NSStringFromClass(v.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) { curtain = v; break; }
+            // 1.0.9-111 · **收集所有**黑底胶囊，取面积最大者。
+            //   上一版 break 在第一个命中 —— 若它藏在隐藏分支里 bounds 退化，
+            //   就会在下面 bounds<8 的检查里**静默 return**（这正是 110 装上后仍无效果的根因）。
+            if ([NSStringFromClass(v.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
+                CGRect b = v.bounds;
+                CGFloat a = CGRectGetWidth(b) * CGRectGetHeight(b);
+                if (a > bestCurtainArea) { bestCurtainArea = a; curtain = v; }
+            }
             [st addObjectsFromArray:v.subviews];
         }
-        if (!curtain) curtain = root;   // 退化：用原启发式找到的胶囊
+        if (!curtain || bestCurtainArea < 1500.0) {
+            if (root) { curtain = root; bestCurtainArea = CGRectGetWidth(root.bounds) * CGRectGetHeight(root.bounds); }
+        }
     }
-    if (!curtain) return;
-
-    CALayer *cl = curtain.layer;
+    if (!curtain) {
+        static CFTimeInterval lastNoCur = 0.0;
+        CFTimeInterval nowNC = CACurrentMediaTime();
+        if (nowNC - lastNoCur > 5.0) { lastNoCur = nowNC; ERLogInfo(@"DI-111 未找到黑底胶囊（不动灵动岛）"); }
+        return;
+    }
     CGRect cb = curtain.bounds;
-    if (CGRectGetWidth(cb) < 8.0 || CGRectGetHeight(cb) < 8.0) return;
+    if (CGRectGetWidth(cb) < 8.0 || CGRectGetHeight(cb) < 8.0) {
+        static CFTimeInterval lastBad = 0.0;
+        CFTimeInterval nowB = CACurrentMediaTime();
+        if (nowB - lastBad > 5.0) {
+            lastBad = nowB;
+            ERLogInfo(@"DI-111 胶囊 bounds 退化 %@ cls=%@ area=%.0f",
+                      NSStringFromCGRect(cb), NSStringFromClass(curtain.class), bestCurtainArea);
+        }
+        return;
+    }
 
+    @try {
     NSArray<UIColor *> *cols = ERDIGradientColors();
     if (cols.count < 2) {
         // 默认「液态玻璃」配色：蓝 → 紫 → 粉 → 白（对标参考插件的 5 色渐变观感）
@@ -980,6 +1003,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
                  [UIColor colorWithRed:1.00 green:1.00 blue:1.00 alpha:1.0]];
     }
 
+    CALayer *cl = curtain.layer;
     CAGradientLayer *grad = nil;
     CAGradientLayer *spec = nil;
     for (CALayer *l in cl.sublayers) {
@@ -1005,15 +1029,14 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     grad.startPoint = CGPointMake(0.0, 0.0);
     grad.endPoint = CGPointMake(1.0, 1.0);
     // 顶部高光：让渐变有「玻璃」的镜面感（参考插件观感的关键）
-    spec.colors = (id)@[(id)[UIColor colorWithWhite:1.0 alpha:0.60].CGColor,
-                        (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
-                        (id)[UIColor colorWithWhite:1.0 alpha:0.00].CGColor];
+    // 1.0.9-111 · 与 grad 同款写法（UIColor 数组 + valueForKey），避免 MRC 下
+    //   字面量数组直接持有 CGColorRef 造成悬垂指针。
+    NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.60],
+                                  [UIColor colorWithWhite:1.0 alpha:0.12],
+                                  [UIColor colorWithWhite:1.0 alpha:0.00]];
+    spec.colors = (id)[sheen valueForKey:@"CGColor"];
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.62);
-
-    // 黑底：能清就清（系统可能重置，但渐变在它之上，清不掉也照样可见）
-    cl.backgroundColor = [UIColor clearColor].CGColor;
-    curtain.opaque = NO;
 
     // 辉光（LiquidifyApertureGlowEnabled）
     if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
@@ -1025,16 +1048,25 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     } else if (cl.shadowOpacity != 0.0) {
         cl.shadowOpacity = 0.0;
     }
+    // 黑底：能清就清（系统可能重置，但渐变在它之上，清不掉也照样可见）
+    curtain.layer.backgroundColor = [UIColor clearColor].CGColor;
+    curtain.opaque = NO;
+    } @catch (NSException *ex110) {
+        // 1.0.9-111 · 异常必须落盘，否则永远只能靠猜
+        ERLogError(@"DI-111 注入异常 %@ reason=%@ 胶囊=%@",
+                   ex110.name, ex110.reason, NSStringFromClass(curtain.class));
+    }
 
     static CFTimeInterval lastG110 = 0.0;
     CFTimeInterval nowG110 = CACurrentMediaTime();
     if (nowG110 - lastG110 > 5.0) {
         lastG110 = nowG110;
-        ERLogInfo(@"DI-GLASS110 curtain=%@ bounds=%@ sublayers=%lu 精确=%d",
-                  NSStringFromClass(curtain.class), NSStringFromCGRect(cb),
-                  (unsigned long)cl.sublayers.count,
-                  [NSStringFromClass(curtain.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ? 1 : 0);
+        ERLogInfo(@"DI-GLASS110 curtain=%@ bounds=%@ sublayers=%lu area=%.0f",
+                  NSStringFromClass(curtain.class), NSStringFromCGRect(curtain.bounds),
+                  (unsigned long)curtain.layer.sublayers.count, bestCurtainArea);
     }
+
+
 }
 
 // 1.0.9-59 · **已整体撤销对灵动岛的系统改动**。
