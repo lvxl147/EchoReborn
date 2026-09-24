@@ -1705,9 +1705,9 @@ static void ERDiagPostLocalNotification(void) {
         id sound = ((id(*)(id, SEL))objc_msgSend)(soundCls, NSSelectorFromString(@"defaultSound"));
         if (sound) [content setValue:sound forKey:@"sound"];
     }
-    id trigger = [[trigCls alloc] initWithTimeInterval:0.2 repeats:NO];
-    id request = [[reqCls alloc] initWithIdentifier:[NSString stringWithFormat:@"er-diag-%f", [[NSDate date] timeIntervalSince1970]]
-                                            content:content trigger:trigger];
+    id trigger = ((id(*)(id, SEL, double, BOOL))objc_msgSend)([trigCls alloc], NSSelectorFromString(@"initWithTimeInterval:repeats:"), 0.2, NO);
+    id ident = [NSString stringWithFormat:@"er-diag-%f", [[NSDate date] timeIntervalSince1970]];
+    id request = ((id(*)(id, SEL, id, id, id))objc_msgSend)([reqCls alloc], NSSelectorFromString(@"initWithIdentifier:content:trigger:"), ident, content, trigger);
 
     unsigned long opts = 1u | 2u | 4u | 8u;   // badge / sound / alert / carPlay
     id authBlock = ^(unsigned long granted, id err) {
