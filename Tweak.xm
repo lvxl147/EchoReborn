@@ -1492,7 +1492,7 @@ static void ERMaybeScreenshot(UIWindow *win) {
     UIGraphicsEndImageContext();
     NSData *png = img ? UIImagePNGRepresentation(img) : nil;
     if (png) [png writeToFile:@"/var/mobile/Library/Logs/EchoReborn/shot.png" atomically:YES];
-    ERLogInfo(@"DI-SHOT win=%@ ok=%d bytes=%lu", NSStringFromClass(target.class), ok, (unsigned long)png.length);
+    ERLogInfo(@"DI-SHOT windows=%lu ok=%d bytes=%lu", (unsigned long)list.count, ok, (unsigned long)png.length);
 }
 
 static void ERDITimerScan(void) {
