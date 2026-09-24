@@ -1697,7 +1697,7 @@ static void ERMaybeDiagAudio(void) {
     NSString *mp3 = @"/var/mobile/er_test.mp3";
     if (![fm fileExistsAtPath:mp3]) { ERLogInfo(@"AUDIO-REQ 缺少 %@", mp3); return; }
     NSError *err = nil;
-    AVAudioPlayer *p = [[AVAudioPlayer alloc] initWithContentsOfFile:mp3 error:&err];
+    AVAudioPlayer *p = [[AVAudioPlayer alloc] initWithContentsOfURL:[NSURL fileURLWithPath:mp3] error:&err];
     if (!p) { ERLogError(@"AUDIO-REQ 初始化失败 %@", err); return; }
     p.numberOfLoops = -1;
     p.volume = 0.35;
