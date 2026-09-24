@@ -755,6 +755,25 @@ static void *kERDIRootKey = &kERDIRootKey;   // 1.0.9-109 · 被我们隐藏的�
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
 
+// 1.0.9-110 · 关闭「液态玻璃」时彻底摘掉我们注入到黑底胶囊里的层
+static void ERDIRemoveInjectedLayers(UIView *rootView) {
+    if (!rootView) return;
+    NSMutableArray<UIView *> *st = [NSMutableArray arrayWithObject:rootView];
+    NSInteger guard = 0;
+    while (st.count && guard++ < 8000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        CALayer *cl = v.layer;
+        for (CALayer *l in [cl.sublayers copy]) {
+            if ([l.name hasPrefix:@"ERDI::"]) [l removeFromSuperlayer];
+        }
+        if ([NSStringFromClass(v.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
+            cl.shadowOpacity = 0.0;
+            cl.masksToBounds = YES;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+}
+
 // 1.0.9-109 · **空闲判定**（修复 1.0.9-57"把所有灵动岛都隐藏"的 bug）：
 //   隐藏灵动岛 = 仅当系统岛**无活动元素**时才收起成原生感叹号 Pill；
 //   有活动（计时/音乐/通话/录屏/导航…）→ 视为使用中，绝不收起。
@@ -850,6 +869,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
             hiddenRoot.hidden = NO;
             objc_setAssociatedObject(win, kERDIRootKey, nil, OBJC_ASSOCIATION_ASSIGN);
         }
+        ERDIRemoveInjectedLayers(win);   // 1.0.9-110
         return;
     }
     // 1.0.9-109 · 删除无条件的「隐藏分支」——它正是 1.0.9-57「隐藏所有灵动岛」bug 的根源
@@ -921,106 +941,99 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         return;
     }
 
-    // 1.0.9-109 · 弃用 LGLiveBackdropView：实测它在 aperture 窗口**渲染不出任何内容**
-    //   （压顶=白块、垫底+清黑底=全透明）。参考插件用的是**自绘普通 UIView**，这里照做。
-    UIView *glass = objc_getAssociatedObject(win, kERDIGlassKey);
-    if (!glass) {
-        glass = [[UIView alloc] initWithFrame:CGRectZero];
-        glass.userInteractionEnabled = NO;
-        objc_setAssociatedObject(win, kERDIGlassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    // ---------------------------------------------------------------------
-    // 1.0.9-109 · **玻璃只盖住胶囊区域，绝不铺满窗口**（延续 1.0.9-94 的约束）。
+    // 1.0.9-110 · **根因修复**（设备截图实证）
     //
-    // 现在 `root` 已是正确的胶囊子视图（不再是窗口自身），`root != win` 成立，
-    // 走坐标换算分支。兜底坐标取 iPhone 15 Pro Max 已知胶囊位置（顶部居中 125×37），
-    // 仅在换算结果明显畸形（全屏/退化）时回退，避免玻璃铺满或错位。
-    // ---------------------------------------------------------------------
-    CGRect glassFrame = CGRectMake((CGRectGetWidth(win.bounds) - 125.0) / 2.0, 11.0, 125.0, 37.0);
-    if (root && root != win) {
-        CGRect r = [root convertRect:root.bounds toView:win];
-        // 合理性判定：宽度 40~400、高度 15~160（含默认态与展开态），排除整窗级矩形
-        if (r.size.width >= 40.0 && r.size.width <= 400.0 &&
-            r.size.height >= 15.0 && r.size.height <= 160.0) {
-            glassFrame = r;
+    // 上一版把玻璃 UIView 加到 `SBSystemApertureWindow` 并 bringSubviewToFront。
+    // 设备取证：窗口 subviews 恒为 2 —— [0] 我们的玻璃、[1] 系统的
+    // `SBFTouchPassThroughView`（428x926 全屏）。系统在每次布局后都会把它压回最上层，
+    // 于是玻璃永远在黑底之下。对窗口做 drawViewHierarchy 得到的 PNG **100% 纯黑**
+    // （428x926 里只有胶囊区域 4152 个不透明黑点）→ 用户「完全没变化」。
+    //
+    // 本版改为**把渐变注入黑底胶囊内部**：
+    //   `_SBSystemApertureMagiciansCurtainView`（黑底药丸 125x36.67）的第 0 号 sublayer
+    //   → 位于黑底之上、内容（_SBGainMapView 等）之下。
+    //   这等价于参考插件「驱动背景」（CCSystemApertureBackgroundDriver / setBackgroundView:），
+    //   而不是「在窗口上叠一层」。
+    UIView *curtain = nil;
+    {
+        NSMutableArray<UIView *> *st = [NSMutableArray arrayWithObject:win];
+        NSInteger guardC = 0;
+        while (st.count && guardC++ < 8000) {
+            UIView *v = st.lastObject; [st removeLastObject];
+            if ([NSStringFromClass(v.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) { curtain = v; break; }
+            [st addObjectsFromArray:v.subviews];
         }
+        if (!curtain) curtain = root;   // 退化：用原启发式找到的胶囊
     }
-    // 1.0.9-109 · 玻璃作为【灵动岛的背景层】：插到胶囊最底层(index 0)，**不再 bringSubviewToFront**（压顶会盖住灵动岛）
-    // 1.0.9-109 · 并清掉胶囊自带的黑底，让玻璃真正成为背景（等效参考插件的"驱动背景"）
-    static BOOL loggedProbe2 = NO;
-    if (!loggedProbe2) {
-        loggedProbe2 = YES;
-        ERLogInfo(@"DI-PROBE2 CCSystemApertureBackgroundDriver=%@",
-                  NSClassFromString(@"CCSystemApertureBackgroundDriver") ? @"有" : @"无");
-    }
-    // 1.0.9-109 · 玻璃尺寸 = **胶囊外扩 10pt**（参考插件实测：胶囊 125×36.67 → 玻璃 145×46.67），
-    //   插到胶囊**之下**（内容仍在上层）；并把系统黑底胶囊隐藏 —— 参考插件生效时根本没有它。
-    // 1.0.9-109 · 玻璃放到【窗口最顶层】：载体已是**自绘半透明渐变**（backdrop 已弃用），
-    //   压过 curtain / GainMap 才看得见；半透明所以**不会遮挡内容**（1.0.9-102 遮挡是因为 backdrop 变白块）。
-    CGRect capsule = [root convertRect:root.bounds toView:win];
-    glassFrame = CGRectInset(capsule, -10.0, -5.0);   // 左右+10、上下+5 → 145×46.67（对齐参考插件实测）
-    if (glass.superview != win) [win addSubview:glass];
-    [win bringSubviewToFront:glass];
-    glass.hidden = NO;
-    glass.frame = glassFrame;
-    glass.autoresizingMask = 0;   // 靠 0.5s 扫描跟随展开/收起重算
-    glass.userInteractionEnabled = NO;   // 顶层也不能吃触摸
-    glass.layer.cornerRadius = CGRectGetHeight(glassFrame) * 0.5;
-    glass.layer.masksToBounds = YES;
-    if (@available(iOS 13.0, *)) glass.layer.cornerCurve = kCACornerCurveContinuous;
-    ERLogInfo(@"DI-GLASS109 glass=%@ capsule=%@", NSStringFromCGRect(glassFrame), NSStringFromCGRect(capsule));
+    if (!curtain) return;
 
-    // 5 色渐变叠加（跟随上游 LiquidifyApertureGradientColor1..5）
-    CAGradientLayer *grad = objc_getAssociatedObject(win, kERDIGradientKey);
-    if (!grad) {
-        grad = [CAGradientLayer layer];
-        objc_setAssociatedObject(win, kERDIGradientKey, grad, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    if (grad.superlayer == nil || grad.superlayer != glass.layer) [glass.layer addSublayer:grad];
-    // 1.0.9-109 · 玻璃现在是"背景层"，未设渐变色时给一组默认玻璃色（黑底灵动岛才看得出效果）
+    CALayer *cl = curtain.layer;
+    CGRect cb = curtain.bounds;
+    if (CGRectGetWidth(cb) < 8.0 || CGRectGetHeight(cb) < 8.0) return;
+
     NSArray<UIColor *> *cols = ERDIGradientColors();
     if (cols.count < 2) {
-        cols = @[[UIColor colorWithRed:0.72 green:0.86 blue:1.00 alpha:1.0],
-                 [UIColor colorWithRed:0.80 green:0.72 blue:1.00 alpha:1.0],
+        // 默认「液态玻璃」配色：蓝 → 紫 → 粉 → 白（对标参考插件的 5 色渐变观感）
+        cols = @[[UIColor colorWithRed:0.55 green:0.78 blue:1.00 alpha:1.0],
+                 [UIColor colorWithRed:0.72 green:0.68 blue:1.00 alpha:1.0],
+                 [UIColor colorWithRed:1.00 green:0.80 blue:0.92 alpha:1.0],
                  [UIColor colorWithRed:1.00 green:1.00 blue:1.00 alpha:1.0]];
     }
-    if (cols.count >= 2) {
-        grad.frame = glass.bounds;
-        grad.colors = (id)[cols valueForKey:@"CGColor"];
-        grad.startPoint = CGPointMake(0.0, 0.5);
-        grad.endPoint = CGPointMake(1.0, 0.5);
-        grad.opacity = 0.5;
-        grad.hidden = NO;
-    } else {
-        grad.hidden = YES;
+
+    CAGradientLayer *grad = nil;
+    CAGradientLayer *spec = nil;
+    for (CALayer *l in cl.sublayers) {
+        if ([l.name isEqualToString:@"ERDI::gradient"]) grad = (CAGradientLayer *)l;
+        else if ([l.name isEqualToString:@"ERDI::specular"]) spec = (CAGradientLayer *)l;
+    }
+    if (!grad) {
+        grad = [CAGradientLayer layer];
+        grad.name = @"ERDI::gradient";
+        [cl insertSublayer:grad atIndex:0];
+    }
+    if (!spec) {
+        spec = [CAGradientLayer layer];
+        spec.name = @"ERDI::specular";
+        NSUInteger gi = [cl.sublayers indexOfObject:grad];
+        [cl insertSublayer:spec atIndex:(gi == NSNotFound ? 0u : (NSUInteger)(gi + 1))];
+    }
+    CGFloat radius = CGRectGetHeight(cb) * 0.5;
+    grad.frame = cb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0; grad.hidden = NO;
+    spec.frame = cb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
+    if (@available(iOS 13.0, *)) { grad.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
+    grad.colors = (id)[cols valueForKey:@"CGColor"];
+    grad.startPoint = CGPointMake(0.0, 0.0);
+    grad.endPoint = CGPointMake(1.0, 1.0);
+    // 顶部高光：让渐变有「玻璃」的镜面感（参考插件观感的关键）
+    spec.colors = (id)@[(id)[UIColor colorWithWhite:1.0 alpha:0.60].CGColor,
+                        (id)[UIColor colorWithWhite:1.0 alpha:0.12].CGColor,
+                        (id)[UIColor colorWithWhite:1.0 alpha:0.00].CGColor];
+    spec.startPoint = CGPointMake(0.5, 0.0);
+    spec.endPoint = CGPointMake(0.5, 0.62);
+
+    // 黑底：能清就清（系统可能重置，但渐变在它之上，清不掉也照样可见）
+    cl.backgroundColor = [UIColor clearColor].CGColor;
+    curtain.opaque = NO;
+
+    // 辉光（LiquidifyApertureGlowEnabled）
+    if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
+        cl.masksToBounds = NO;
+        cl.shadowColor = (cols.firstObject ?: [UIColor whiteColor]).CGColor;
+        cl.shadowOpacity = 0.80;
+        cl.shadowRadius = 20.0;
+        cl.shadowOffset = CGSizeZero;
+    } else if (cl.shadowOpacity != 0.0) {
+        cl.shadowOpacity = 0.0;
     }
 
-    // 1.0.9-109 · 渐变阴影（LiquidifyApertureGlowEnabled）：在玻璃**之后**加一层彩色辉光，
-    //   只向外发光、不遮灵动岛内容。颜色取渐变色 1（未设则白）。
-    UIView *glow = objc_getAssociatedObject(win, kERDIGlowKey);
-    if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
-        if (!glow) {
-            glow = [[UIView alloc] initWithFrame:CGRectZero];
-            glow.userInteractionEnabled = NO;
-            glow.backgroundColor = [UIColor clearColor];
-            glow.layer.masksToBounds = NO;
-            objc_setAssociatedObject(win, kERDIGlowKey, glow, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
-        if (glow.superview != win) [win insertSubview:glow belowSubview:root];  // 1.0.9-109 · 辉光垫在胶囊**下面**
-        glow.frame = glassFrame;
-        glow.layer.cornerRadius = glass.layer.cornerRadius;
-        glow.layer.shadowColor = (cols.count ? cols.firstObject : [UIColor whiteColor]).CGColor;
-        glow.layer.shadowOpacity = 0.9f;
-        glow.layer.shadowRadius = 14.0f;
-        glow.layer.shadowOffset = CGSizeZero;
-        glow.layer.shadowPath = [UIBezierPath bezierPathWithRoundedRect:glow.bounds
-                                                           cornerRadius:glow.layer.cornerRadius].CGPath;
-        glow.hidden = NO;
-        static CFTimeInterval lastGlow = 0.0;
-        CFTimeInterval nowG = CACurrentMediaTime();
-        if (nowG - lastGlow > 5.0) { lastGlow = nowG; ERLogInfo(@"DI-GLOW 已应用辉光 frame=%@", NSStringFromCGRect(glow.frame)); }
-    } else if (glow) {
-        glow.hidden = YES;
+    static CFTimeInterval lastG110 = 0.0;
+    CFTimeInterval nowG110 = CACurrentMediaTime();
+    if (nowG110 - lastG110 > 5.0) {
+        lastG110 = nowG110;
+        ERLogInfo(@"DI-GLASS110 curtain=%@ bounds=%@ sublayers=%lu 精确=%d",
+                  NSStringFromClass(curtain.class), NSStringFromCGRect(cb),
+                  (unsigned long)cl.sublayers.count,
+                  [NSStringFromClass(curtain.class) isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ? 1 : 0);
     }
 }
 
@@ -1438,11 +1451,43 @@ static void ERMaybeScreenshot(UIWindow *win) {
     NSFileManager *fm = [NSFileManager defaultManager];
     if (![fm fileExistsAtPath:req]) return;
     [fm removeItemAtPath:req error:nil];
-    UIWindow *target = win ?: UIApplication.sharedApplication.keyWindow;
-    if (!target) { ERLogInfo(@"DI-SHOT no target window"); return; }
-    UIGraphicsBeginImageContextWithOptions(target.bounds.size, NO, 1.0);
+    // 1.0.9-110 · **合成全屏**：按 windowLevel 从小到大把所有可见窗口画进同一张图，
+    //   这样截出来的才是用户真正看到的样子（上一版只画 aperture 窗口，无法验证效果）。
+    NSMutableArray<UIWindow *> *list = [NSMutableArray array];
+    @try {
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *w in ((UIWindowScene *)scene).windows) {
+                if (!w.hidden && w.alpha > 0.01) [list addObject:w];
+            }
+        }
+        if (!list.count) {
+            for (UIWindow *w in UIApplication.sharedApplication.windows) {
+                if (!w.hidden && w.alpha > 0.01) [list addObject:w];
+            }
+        }
+        if (!list.count && win) [list addObject:win];
+        [list sortUsingComparator:^NSComparisonResult(UIWindow *a, UIWindow *b) {
+            if (a.windowLevel < b.windowLevel) return NSOrderedAscending;
+            if (a.windowLevel > b.windowLevel) return NSOrderedDescending;
+            return NSOrderedSame;
+        }];
+    } @catch (__unused NSException *e) {}
+    CGSize screenSize = [UIScreen mainScreen].bounds.size;
+    UIGraphicsBeginImageContextWithOptions(screenSize, YES, 1.0);
     BOOL ok = NO;
-    @try { ok = [target drawViewHierarchyInRect:target.bounds afterScreenUpdates:YES]; } @catch (__unused NSException *e) {}
+    {
+        [[UIColor blackColor] setFill];
+        UIRectFill(CGRectMake(0, 0, screenSize.width, screenSize.height));
+    }
+    for (UIWindow *w in list) {
+        @try {
+            CGRect f = w.bounds;
+            if (f.size.width > 1.0 && f.size.height > 1.0) {
+                if ([w drawViewHierarchyInRect:f afterScreenUpdates:YES]) ok = YES;
+            }
+        } @catch (__unused NSException *e) {}
+    }
     UIImage *img = UIGraphicsGetImageFromCurrentImageContext();
     UIGraphicsEndImageContext();
     NSData *png = img ? UIImagePNGRepresentation(img) : nil;
