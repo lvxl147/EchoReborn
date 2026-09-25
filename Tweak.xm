@@ -1750,6 +1750,23 @@ static void ERMaybeScreenshot(UIWindow *win) {
     NSData *png = img ? UIImagePNGRepresentation(img) : nil;
     if (png) [png writeToFile:@"/var/mobile/Library/Logs/EchoReborn/shot.png" atomically:YES];
 
+    // 1.0.9-127 · **真实屏幕截图**：drawViewHierarchy 拍不到磨砂/backdrop 类效果
+    //   （Liquidify 的 CCLiquidGlassView、我们的 UIVisualEffectView 都拍不到），
+    //   这正是我一直"盲调"的原因。走系统帧缓冲（SpringBoard 进程有权限）拍真屏。
+    @try {
+        extern UIImage *_UICreateScreenUIImage(void);
+        UIImage *realImg = _UICreateScreenUIImage();
+        NSData *realData = realImg ? UIImagePNGRepresentation(realImg) : nil;
+        if (realData) {
+            [realData writeToFile:@"/var/mobile/Library/Logs/EchoReborn/real.png" atomically:YES];
+            ERLogInfo(@"DI-REAL 真屏截图 bytes=%lu", (unsigned long)realData.length);
+        } else {
+            ERLogInfo(@"DI-REAL 真屏截图失败");
+        }
+    } @catch (__unused NSException *e) {
+        ERLogError(@"DI-REAL 异常 %@", e);
+    }
+
     // 1.0.9-112 · aperture 窗口单图（109 时代可正常出图，留作对照）
     if (win) {
         @try {
