@@ -904,15 +904,20 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
     while (st.count && guard++ < 20000) {
         UIView *v = st.lastObject; [st removeLastObject];
         NSString *cn = NSStringFromClass(v.class);
+        CGRect b = v.bounds;
+        CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
+        BOOL islandSized = (bw >= 120.0 && bw <= 340.0 && bh >= 30.0 && bh <= 90.0);
         if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
-            [cn isEqualToString:@"SBSystemApertureContainerView"]) {
+            ([cn isEqualToString:@"SBSystemApertureContainerView"] && islandSized)) {
+            // 1.0.9-126 · 岛尺寸的容器才清背景；405×204 的大容器是实时活动，不能动
             if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
         } else if ([cn isEqualToString:@"_SBGainMapView"] ||
                    [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
             if (!v.hidden) v.hidden = YES;
             if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
-        } else if ([cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
-                   [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
+        } else if (islandSized &&
+                   ([cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
+                    [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"])) {
             if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
         }
         [st addObjectsFromArray:v.subviews];
@@ -1098,7 +1103,13 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   → 玻璃插它 index 0（背景层）：铺满整条岛、永远在内容之下、和岛完全重合。
     UIView *container = gERDIContainerView;   // 1.0.9-122 · 扫描器已跨全部窗口找好
     CGFloat bestContainerArea = container ? (CGRectGetWidth(container.bounds) * CGRectGetHeight(container.bounds)) : 0.0;
-    BOOL diExpanded = (container && CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
+    // 1.0.9-126 · 容器必须是岛尺寸（见扫描器过滤；这里再防一手）
+    BOOL containerIsIslandNow = (container &&
+        CGRectGetWidth(container.bounds) >= 120.0 && CGRectGetWidth(container.bounds) <= 340.0 &&
+        CGRectGetHeight(container.bounds) >= 30.0 && CGRectGetHeight(container.bounds) <= 90.0);
+    if (container && !containerIsIslandNow) container = nil;   // 大容器（实时活动）绝不铺玻璃
+    BOOL diExpanded = (containerIsIslandNow &&
+                       CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
     // 1.0.9-124 · 空闲 → 玻璃在 curtain（125，随岛 idle 尺寸）
     //             展开 → 玻璃在 container（随岛伸缩的大容器）；curtain 上的玻璃收掉
     UIView *glassHost = diExpanded ? container : curtain;
@@ -1160,7 +1171,10 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
     //   原生黑底（container 自身 backgroundColor / LumaTracking 等 backdrop）已被清空，
     //   这块玻璃就是展开岛的**唯一背景**。
-    if (container && bestContainerArea >= 1500.0) {
+    BOOL containerIsIsland = (container &&
+        CGRectGetWidth(container.bounds) >= 120.0 && CGRectGetWidth(container.bounds) <= 340.0 &&
+        CGRectGetHeight(container.bounds) >= 30.0 && CGRectGetHeight(container.bounds) <= 90.0);
+    if (container && bestContainerArea >= 1500.0 && containerIsIsland) {
         CALayer *al = container.layer;
         UIVisualEffectView *cbg = nil;
         for (UIView *sv in container.subviews) {
@@ -1949,8 +1963,13 @@ static void ERDITimerScan(void) {
             UIView *v = stC.lastObject; [stC removeLastObject];
             if ([NSStringFromClass(v.class) isEqualToString:@"SBSystemApertureContainerView"]) {
                 CGRect b = v.bounds;
-                CGFloat a = CGRectGetWidth(b) * CGRectGetHeight(b);
-                if (a > bestA) { bestA = a; best = v; }
+                CGFloat w = CGRectGetWidth(b), h = CGRectGetHeight(b);
+                // 1.0.9-126 · **只认岛尺寸的容器**（Liquidify 实测：它的玻璃是 189×36.67，
+                //   从不铺到 405×204 的实时活动大容器上 —— 用户截图里那块"大黑板"就是这么来的）
+                if (w >= 120.0 && w <= 340.0 && h >= 30.0 && h <= 90.0 && h > 0.0 && w / h > 2.0) {
+                    CGFloat a = w * h;
+                    if (a > bestA) { bestA = a; best = v; }
+                }
             }
             [stC addObjectsFromArray:v.subviews];
         }
