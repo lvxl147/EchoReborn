@@ -1081,6 +1081,28 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     }
 
     @try {
+    // 1.0.9-128 · **Liquidify 接管检测**：它装着且在管岛时（岛树里有 CCLiquidGlassView），
+    //   我们自动退出 —— 两套玻璃叠加只会互相破坏，用户手机必须正常可用。
+    {
+        NSMutableArray<UIView *> *stL = [NSMutableArray arrayWithObject:win];
+        NSInteger guardL = 0;
+        BOOL liquidifyOwns = NO;
+        while (stL.count && guardL++ < 8000) {
+            UIView *v = stL.lastObject; [stL removeLastObject];
+            if ([NSStringFromClass(v.class) isEqualToString:@"CCLiquidGlassView"]) { liquidifyOwns = YES; break; }
+            [stL addObjectsFromArray:v.subviews];
+        }
+        if (liquidifyOwns) {
+            static CFTimeInterval lastLQ = 0.0;
+            CFTimeInterval nowLQ = CACurrentMediaTime();
+            if (nowLQ - lastLQ > 10.0) {
+                lastLQ = nowLQ;
+                ERLogInfo(@"DI-128 Liquidify 正在管理灵动岛（CCLiquidGlassView 在场）→ EchoReborn 自动退出，避免冲突");
+            }
+            return;
+        }
+    }
+
     // 1.0.9-116 · **观感重做**（照参考插件的真实语义）：
     //   · LiquidifyApertureGradientColor1..5 / TextColorMode = **灵动岛文字**的渐变色
     //     （Liquidify.dylib 字符串表实证：setTextColor: + LiquidifyApertureTextColorMode）
@@ -1970,8 +1992,11 @@ static void ERDITimerScan(void) {
             @try { ERDIDumpPill(wins); } @catch (__unused NSException *e) {}
         }
     }
-    // 1.0.9-124 · 先剥掉原生黑底（覆盖全部窗口），玻璃才是唯一背景
-    @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
+    // 1.0.9-128 · **剥离必须跟随开关**：开关关 → 岛 100% 原生（124 曾无条件剥离，
+    //   导致关掉开关后岛变透明消失 —— 用户 18:23 真屏截图证实）
+    if (diOn) {
+        @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
+    }
 
     // 1.0.9-122 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
     {
