@@ -892,6 +892,33 @@ static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
 //   扫描命中的第一个窗口里只有 curtain/gainmap，ContainerView 在另一个 —— 121 的容器=无 即此因）
 static __weak UIView *gERDIContainerView = nil;
 
+// 1.0.9-124 · **去掉原生黑底**（替换式，对齐 Liquidify「移除原背景 + 玻璃替换」）
+//   关键认知（设备取证）：107 只清了 curtain 的 backgroundColor 但黑还在 ——
+//   因为真正画黑的是它的子视图 `_SBGainMapView`（HDR gain map 渲染层）。
+//   所以：curtain / container / 岛内 backdrop → 清 backgroundColor；
+//         gainmap → 整体隐藏（hidden + layer.opacity=0，系统若重置则每 tick 重申）。
+//   注意：gainmap 隐藏后， HDR 提亮能力没了 —— 这正是"去掉原背景"的代价，观感反而更稳定。
+static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
+    NSMutableArray<UIView *> *st = [NSMutableArray arrayWithArray:wins];
+    NSInteger guard = 0;
+    while (st.count && guard++ < 20000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        NSString *cn = NSStringFromClass(v.class);
+        if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
+            [cn isEqualToString:@"SBSystemApertureContainerView"]) {
+            if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
+        } else if ([cn isEqualToString:@"_SBGainMapView"] ||
+                   [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
+            if (!v.hidden) v.hidden = YES;
+            if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
+        } else if ([cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
+                   [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
+            if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+}
+
 static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-93 · **隐藏灵动岛 = 独立功能**（"不使用时收起"），与玻璃互不干扰：
     //   隐藏开 → 只隐藏窗口，**绝不创建玻璃**（也不再走后面的查找/创建流程）
@@ -1049,8 +1076,11 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
             }
             [stH addObjectsFromArray:v.subviews];
         }
-        if (gain && bestGain >= 1500.0) curtain = gain;
+        // 1.0.9-124 · **替换式**：gainmap 不再当玻璃宿主 —— 它就是画黑的原生背景，
+        //   由 ERDIStripOriginalBackground（扫描器里，覆盖全部窗口）把它整体隐藏；
+        //   玻璃铺在 curtain 上（backgroundColor 同时被清空）→ 岛的可见表面 = 玻璃。
     }
+    if (!curtain) return;
     CGRect cb = curtain.bounds;
     if (CGRectGetWidth(cb) < 8.0 || CGRectGetHeight(cb) < 8.0) {
         static CFTimeInterval lastBad = 0.0;
@@ -1087,7 +1117,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     UIView *container = gERDIContainerView;   // 1.0.9-122 · 扫描器已跨全部窗口找好
     CGFloat bestContainerArea = container ? (CGRectGetWidth(container.bounds) * CGRectGetHeight(container.bounds)) : 0.0;
     BOOL diExpanded = (container && CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
-    UIView *glassHost = curtain;
+    // 1.0.9-124 · 空闲 → 玻璃在 curtain（125，随岛 idle 尺寸）
+    //             展开 → 玻璃在 container（随岛伸缩的大容器）；curtain 上的玻璃收掉
+    UIView *glassHost = diExpanded ? container : curtain;
     CGRect gb = glassHost.bounds;
     CGFloat gw = CGRectGetWidth(gb), gh = CGRectGetHeight(gb);
     if (gw < 8.0 || gh < 8.0) return;
@@ -1111,10 +1143,11 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0;
     if (@available(iOS 13.0, *)) { grad.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
 
-    // 背景：深色玻璃（近黑、顶部略亮）—— 彩色留给文字
-    NSArray<UIColor *> *glassCols = @[[UIColor colorWithWhite:0.16 alpha:1.0],
-                                      [UIColor colorWithWhite:0.07 alpha:1.0],
-                                      [UIColor colorWithWhite:0.02 alpha:1.0]];
+    // 1.0.9-124 · 背景：**半透明玻璃**（原生黑底已被移除，玻璃是唯一背景，
+    //   半透明才能透出岛后面的内容 —— 这才是"替换"出来的液态玻璃，而不是深色贴片）
+    NSArray<UIColor *> *glassCols = @[[UIColor colorWithWhite:0.10 alpha:0.74],
+                                      [UIColor colorWithWhite:0.04 alpha:0.64],
+                                      [UIColor colorWithWhite:0.00 alpha:0.55]];
     grad.colors = (id)ERCGColorArray(glassCols);
     grad.startPoint = CGPointMake(0.5, 0.0);
     grad.endPoint = CGPointMake(0.5, 1.0);
@@ -1130,9 +1163,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-    // 1.0.9-121 · **把同款玻璃铺到 ContainerView 的背景层（index 0）**
-    //   gainmap 上那块保留 —— 它正好压住 curtain 的黑底；ContainerView 这块负责
-    //   展开时的整条背景。两者同材质，铺满后视觉上是一整块玻璃。
+    // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
+    //   原生黑底（container 自身 backgroundColor / LumaTracking 等 backdrop）已被清空，
+    //   这块玻璃就是展开岛的**唯一背景**。
     if (container && bestContainerArea >= 1500.0) {
         CALayer *al = container.layer;
         CAGradientLayer *bg = nil;
@@ -1199,13 +1232,12 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   空闲（容器与 gainmap 同尺寸）→ 显示 gainmap 那块（它压在 curtain 黑底之上，已实测可见）
     //   展开（容器明显更宽）        → 只显示 ContainerView 那块，收掉 gainmap 上的"多余胶囊"
     BOOL contGlassOn = (container && bestContainerArea >= 1500.0 && diExpanded);
-    grad.hidden  = contGlassOn ? YES : NO;
-    spec.hidden  = contGlassOn ? YES : NO;
-    if (!contGlassOn && container) {
-        // 空闲时把容器那块也收掉，避免同位置双玻璃叠加
-        for (CALayer *l in container.layer.sublayers) {
-            if ([l.name isEqualToString:@"ERDI::islandbg"]) l.hidden = YES;
-        }
+    // curtain 玻璃 = 空闲岛背景；展开时收掉（否则又是"上面多出的胶囊"）
+    grad.hidden = contGlassOn ? YES : NO;
+    spec.hidden = contGlassOn ? YES : NO;
+    // 容器玻璃 = 展开岛背景；空闲时收掉（空闲时它和 curtain 同框，双玻璃会更暗）
+    for (CALayer *l in (container ? container.layer.sublayers : @[])) {
+        if ([l.name isEqualToString:@"ERDI::islandbg"]) l.hidden = contGlassOn ? NO : YES;
     }
 
     // 辉光（LiquidifyApertureGlowEnabled）：中性白光，避免给玻璃染色
@@ -1223,11 +1255,10 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     CFTimeInterval nowG116 = CACurrentMediaTime();
     if (nowG116 - lastG116 > 5.0) {
         lastG116 = nowG116;
-        ERLogInfo(@"DI-121 宿主=%@ bounds=%@ 容器=%@ 容器bounds=%@ 展开=%d 文字渐变=%lu色",
-                  NSStringFromClass(glassHost.class), NSStringFromCGRect(gb),
-                  container ? NSStringFromClass(container.class) : @"无",
-                  container ? NSStringFromCGRect(container.bounds) : @"-",
-                  diExpanded ? 1 : 0, (unsigned long)cols.count);
+        ERLogInfo(@"DI-124 模式=%@ 玻璃宿主=%@ bounds=%@ 容器=%@ 文字渐变=%lu色",
+                  diExpanded ? @"展开" : @"空闲",
+                  NSStringFromClass(glassHost.class), NSStringFromCGRect(glassHost.bounds),
+                  container ? @"有" : @"无", (unsigned long)cols.count);
     }
     } @catch (NSException *ex110) {
         // 1.0.9-111 · 异常必须落盘，否则永远只能靠猜
@@ -1908,6 +1939,9 @@ static void ERDITimerScan(void) {
             @try { ERDIDumpPill(wins); } @catch (__unused NSException *e) {}
         }
     }
+    // 1.0.9-124 · 先剥掉原生黑底（覆盖全部窗口），玻璃才是唯一背景
+    @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
+
     // 1.0.9-122 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
     {
         UIView *best = nil; CGFloat bestA = 0.0;
