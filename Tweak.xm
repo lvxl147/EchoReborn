@@ -1105,8 +1105,10 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     if ([cl.sublayers indexOfObject:spec] != cl.sublayers.count - 1) [cl addSublayer:spec];
 
     CGFloat radius = gh * 0.5;
-    grad.frame = gb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0; grad.hidden = NO;
-    spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
+    // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
+    //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
+    grad.frame = gb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0;
+    spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0;
     if (@available(iOS 13.0, *)) { grad.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
 
     // 背景：深色玻璃（近黑、顶部略亮）—— 彩色留给文字
@@ -1144,7 +1146,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         }
         CGRect cb2 = container.bounds;
         bg.frame = cb2;
-        bg.cornerRadius = CGRectGetHeight(cb2) * 0.5;
+        // 1.0.9-123 · 圆角优先用系统给容器设置的值（展开容器很大，高/2 会变成夸张的胶囊）
+        CGFloat sysR = al.cornerRadius;
+        bg.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
         bg.masksToBounds = YES;
         bg.opacity = 1.0;
         bg.hidden = NO;
@@ -1188,6 +1192,19 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
                 }
             }
             [stk2 addObjectsFromArray:v.subviews];
+        }
+    }
+
+    // 1.0.9-123 · **两块玻璃按状态互斥显示**：
+    //   空闲（容器与 gainmap 同尺寸）→ 显示 gainmap 那块（它压在 curtain 黑底之上，已实测可见）
+    //   展开（容器明显更宽）        → 只显示 ContainerView 那块，收掉 gainmap 上的"多余胶囊"
+    BOOL contGlassOn = (container && bestContainerArea >= 1500.0 && diExpanded);
+    grad.hidden  = contGlassOn ? YES : NO;
+    spec.hidden  = contGlassOn ? YES : NO;
+    if (!contGlassOn && container) {
+        // 空闲时把容器那块也收掉，避免同位置双玻璃叠加
+        for (CALayer *l in container.layer.sublayers) {
+            if ([l.name isEqualToString:@"ERDI::islandbg"]) l.hidden = YES;
         }
     }
 
