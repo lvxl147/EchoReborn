@@ -1754,8 +1754,10 @@ static void ERMaybeScreenshot(UIWindow *win) {
     //   （Liquidify 的 CCLiquidGlassView、我们的 UIVisualEffectView 都拍不到），
     //   这正是我一直"盲调"的原因。走系统帧缓冲（SpringBoard 进程有权限）拍真屏。
     @try {
-        extern UIImage *_UICreateScreenUIImage(void);
-        UIImage *realImg = _UICreateScreenUIImage();
+        // ObjC++ 里 extern 声明会被 C++ 名字修饰，改用 dlsym 取符号
+        UIImage *(*UICreateScreenUIImage)(void) =
+            (UIImage *(*)(void))dlsym(RTLD_DEFAULT, "_UICreateScreenUIImage");
+        UIImage *realImg = UICreateScreenUIImage ? UICreateScreenUIImage() : nil;
         NSData *realData = realImg ? UIImagePNGRepresentation(realImg) : nil;
         if (realData) {
             [realData writeToFile:@"/var/mobile/Library/Logs/EchoReborn/real.png" atomically:YES];
