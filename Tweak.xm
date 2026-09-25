@@ -892,36 +892,67 @@ static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
 //   扫描命中的第一个窗口里只有 curtain/gainmap，ContainerView 在另一个 —— 121 的容器=无 即此因）
 static __weak UIView *gERDIContainerView = nil;
 
-// 1.0.9-124 · **去掉原生黑底**（替换式，对齐 Liquidify「移除原背景 + 玻璃替换」）
-//   关键认知（设备取证）：107 只清了 curtain 的 backgroundColor 但黑还在 ——
-//   因为真正画黑的是它的子视图 `_SBGainMapView`（HDR gain map 渲染层）。
-//   所以：curtain / container / 岛内 backdrop → 清 backgroundColor；
-//         gainmap → 整体隐藏（hidden + layer.opacity=0，系统若重置则每 tick 重申）。
-//   注意：gainmap 隐藏后， HDR 提亮能力没了 —— 这正是"去掉原背景"的代价，观感反而更稳定。
+// 1.0.9-130 · **黑色背景全域清除**（用户指令：把任何灵动岛的黑色背景全部去掉）
+//   规则：遍历灵动岛窗口（SBSystemAperture*）的每一个视图：
+//   ① 已知画黑的（curtain/gainmap）→ 整体隐藏
+//   ② 其余视图：backgroundColor 为「不透明近黑」的一律清除
+//   原色记在关联对象里，关开关时按原样还原。
+static void *kERDIOrigBGKey = &kERDIOrigBGKey;
+static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins);
 static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
-    NSMutableArray<UIView *> *st = [NSMutableArray arrayWithArray:wins];
+    NSMutableArray<UIWindow *> *apertures = [NSMutableArray array];
+    for (UIWindow *w in wins) {
+        if ([NSStringFromClass(w.class) containsString:@"Aperture"]) [apertures addObject:w];
+    }
+    NSMutableArray<UIView *> *st = [NSMutableArray arrayWithArray:apertures];
     NSInteger guard = 0;
-    while (st.count && guard++ < 20000) {
+    while (st.count && guard++ < 30000) {
         UIView *v = st.lastObject; [st removeLastObject];
         NSString *cn = NSStringFromClass(v.class);
-        CGRect b = v.bounds;
-        CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
-        BOOL islandSized = (bw >= 120.0 && bw <= 340.0 && bh >= 30.0 && bh <= 90.0);
-        if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
-            // 1.0.9-129 · **curtain 的黑是绘制内容（drawRect），清 backgroundColor 从 107 起就无效**
-            //   → 必须隐藏整个视图。玻璃不再铺在它身上（改铺容器），所以可以整只藏掉。
-            if (!v.hidden) v.hidden = YES;
-        } else if ([cn isEqualToString:@"SBSystemApertureContainerView"] && islandSized) {
-            // 岛尺寸的容器才清背景；405×204 的大容器是实时活动，不能动
-            if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
-        } else if ([cn isEqualToString:@"_SBGainMapView"] ||
-                   [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
+        if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
+            [cn isEqualToString:@"_SBGainMapView"] ||
+            [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
+            // 画黑的元凶：整体隐藏（它们的黑是绘制内容/材质，清背景色无效）
             if (!v.hidden) v.hidden = YES;
             if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
-        } else if (islandSized &&
-                   ([cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
-                    [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"])) {
-            if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
+        } else {
+            CGColorRef bgc = v.layer.backgroundColor;
+            if (bgc) {
+                UIColor *c = [UIColor colorWithCGColor:bgc];
+                CGFloat r = 0, g = 0, b = 0, a = 0;
+                [c getRed:&r green:&g blue:&b alpha:&a];
+                if (a >= 0.90 && r <= 0.13 && g <= 0.13 && b <= 0.13) {
+                    if (!objc_getAssociatedObject(v, kERDIOrigBGKey))
+                        objc_setAssociatedObject(v, kERDIOrigBGKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    v.layer.backgroundColor = [UIColor clearColor].CGColor;
+                }
+            }
+        }
+        [st addObjectsFromArray:v.subviews];
+    }
+}
+
+// 1.0.9-130 · 关开关时按记录还原全部黑色背景 + 复位隐藏的视图
+static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
+    NSMutableArray<UIWindow *> *apertures = [NSMutableArray array];
+    for (UIWindow *w in wins) {
+        if ([NSStringFromClass(w.class) containsString:@"Aperture"]) [apertures addObject:w];
+    }
+    NSMutableArray<UIView *> *st = [NSMutableArray arrayWithArray:apertures];
+    NSInteger guard = 0;
+    while (st.count && guard++ < 30000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        NSString *cn = NSStringFromClass(v.class);
+        UIColor *orig = objc_getAssociatedObject(v, kERDIOrigBGKey);
+        if (orig) {
+            v.layer.backgroundColor = orig.CGColor;
+            objc_setAssociatedObject(v, kERDIOrigBGKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
+            [cn isEqualToString:@"_SBGainMapView"] ||
+            [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
+            if (v.hidden) v.hidden = NO;
+            if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
         }
         [st addObjectsFromArray:v.subviews];
     }
@@ -2008,23 +2039,8 @@ static void ERDITimerScan(void) {
     if (diOn) {
         @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
     } else {
-        // 1.0.9-129 · 开关关 → 恢复原生的 curtain/gainmap（岛回到 100% 原生）
-        @try {
-            NSMutableArray<UIView *> *stR = [NSMutableArray arrayWithArray:wins];
-            NSInteger guardR = 0;
-            while (stR.count && guardR++ < 20000) {
-                UIView *v = stR.lastObject; [stR removeLastObject];
-                NSString *cn = NSStringFromClass(v.class);
-                if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
-                    if (v.hidden) v.hidden = NO;
-                } else if ([cn isEqualToString:@"_SBGainMapView"] ||
-                           [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
-                    if (v.hidden) v.hidden = NO;
-                    if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
-                }
-                [stR addObjectsFromArray:v.subviews];
-            }
-        } @catch (__unused NSException *e) {}
+        // 1.0.9-130 · 开关关 → 按记录还原全部黑色背景 + 复位隐藏（岛回 100% 原生）
+        @try { ERDIRestoreOriginalBackground(wins); } @catch (__unused NSException *e) {}
     }
 
     // 1.0.9-122 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
