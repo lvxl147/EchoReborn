@@ -1107,32 +1107,44 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     if (gw < 8.0 || gh < 8.0) return;
 
     CALayer *cl = glassHost.layer;
-    CAGradientLayer *grad = nil;
+
+    // 1.0.9-125 · **真·液态玻璃 = 系统磨砂**（用户 Liquidify 实测参数：
+    //   LiquidifyGlassBlurRadius=6.21、TextColorMode=native、Glow 关、无渐变色）
+    //   → 背景用 UIVisualEffectView 超薄深材质模糊，叠加顶部高光；渐变/文字着色全部弃用。
+    UIVisualEffectView *blur = nil;
+    for (UIView *sv in glassHost.subviews) {
+        if ([sv isKindOfClass:NSClassFromString(@"UIVisualEffectView")] &&
+            [sv.layer.name isEqualToString:@"ERDI::blur"]) { blur = (UIVisualEffectView *)sv; break; }
+    }
+    if (!blur) {
+        blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        blur.layer.name = @"ERDI::blur";
+        blur.userInteractionEnabled = NO;
+        [glassHost insertSubview:blur atIndex:0];
+    }
+
+    // 旧的渐变玻璃层全部退役
+    for (CALayer *l in cl.sublayers) {
+        if ([l.name isEqualToString:@"ERDI::gradient"]) [l removeFromSuperlayer];
+    }
+
     CAGradientLayer *spec = nil;
     for (CALayer *l in cl.sublayers) {
-        if ([l.name isEqualToString:@"ERDI::gradient"]) grad = (CAGradientLayer *)l;
-        else if ([l.name isEqualToString:@"ERDI::specular"]) spec = (CAGradientLayer *)l;
+        if ([l.name isEqualToString:@"ERDI::specular"]) spec = (CAGradientLayer *)l;
     }
-    if (!grad) { grad = [CAGradientLayer layer]; grad.name = @"ERDI::gradient"; [cl addSublayer:grad]; }
     if (!spec) { spec = [CAGradientLayer layer]; spec.name = @"ERDI::specular"; [cl addSublayer:spec]; }
-    if ([cl.sublayers indexOfObject:grad] != cl.sublayers.count - 2) [cl addSublayer:grad];
+    // 高光必须压在磨砂之上
     if ([cl.sublayers indexOfObject:spec] != cl.sublayers.count - 1) [cl addSublayer:spec];
 
     CGFloat radius = gh * 0.5;
     // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
-    grad.frame = gb; grad.cornerRadius = radius; grad.masksToBounds = YES; grad.opacity = 1.0;
-    spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0;
-    if (@available(iOS 13.0, *)) { grad.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
+    blur.frame = gb;
+    blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
+    spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
+    if (@available(iOS 13.0, *)) { blur.layer.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
 
-    // 1.0.9-124 · 背景：**半透明玻璃**（原生黑底已被移除，玻璃是唯一背景，
-    //   半透明才能透出岛后面的内容 —— 这才是"替换"出来的液态玻璃，而不是深色贴片）
-    NSArray<UIColor *> *glassCols = @[[UIColor colorWithWhite:0.10 alpha:0.74],
-                                      [UIColor colorWithWhite:0.04 alpha:0.64],
-                                      [UIColor colorWithWhite:0.00 alpha:0.55]];
-    grad.colors = (id)ERCGColorArray(glassCols);
-    grad.startPoint = CGPointMake(0.5, 0.0);
-    grad.endPoint = CGPointMake(0.5, 1.0);
+    // （渐变底已弃用 —— 磨砂材质本身就是玻璃的"底色"）
     // 顶部高光：玻璃反光
     NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.28],
                                   [UIColor colorWithWhite:1.0 alpha:0.07],
@@ -1150,46 +1162,40 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   这块玻璃就是展开岛的**唯一背景**。
     if (container && bestContainerArea >= 1500.0) {
         CALayer *al = container.layer;
-        CAGradientLayer *bg = nil;
-        for (CALayer *l in al.sublayers) {
-            if ([l.name isEqualToString:@"ERDI::islandbg"]) { bg = (CAGradientLayer *)l; break; }
+        UIVisualEffectView *cbg = nil;
+        for (UIView *sv in container.subviews) {
+            if ([sv isKindOfClass:NSClassFromString(@"UIVisualEffectView")] &&
+                [sv.layer.name isEqualToString:@"ERDI::blur"]) { cbg = (UIVisualEffectView *)sv; break; }
         }
-        if (!bg) {
-            bg = [CAGradientLayer layer];
-            bg.name = @"ERDI::islandbg";
-            [al insertSublayer:bg atIndex:0];
+        if (!cbg) {
+            cbg = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+            cbg.layer.name = @"ERDI::blur";
+            cbg.userInteractionEnabled = NO;
+            [container insertSubview:cbg atIndex:0];
         }
         CGRect cb2 = container.bounds;
-        bg.frame = cb2;
+        cbg.frame = cb2;
         // 1.0.9-123 · 圆角优先用系统给容器设置的值（展开容器很大，高/2 会变成夸张的胶囊）
         CGFloat sysR = al.cornerRadius;
-        bg.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
-        bg.masksToBounds = YES;
-        bg.opacity = 1.0;
-        bg.hidden = NO;
-        if (@available(iOS 13.0, *)) bg.cornerCurve = kCACornerCurveContinuous;
-        bg.colors = (id)ERCGColorArray(glassCols);
-        bg.startPoint = CGPointMake(0.5, 0.0);
-        bg.endPoint = CGPointMake(0.5, 1.0);
+        cbg.layer.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
+        cbg.layer.masksToBounds = YES;
+        if (@available(iOS 13.0, *)) cbg.layer.cornerCurve = kCACornerCurveContinuous;
         // 展开时边框也铺到整条岛
         al.borderWidth = 1.0;
         al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
         objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
-    // ---- 文字渐变：岛上所有 UILabel 按 x 位置在 5 色上取色（Liquidify 的 TextColorMode=gradient）----
+    // ---- 文字：保持原生（用户 Liquidify 的 TextColorMode=native）----
+    //     之前按 5 色渐变给岛上 UILabel 着色的逻辑停用；若有历史着色，恢复原色。
     {
         NSMutableArray<UIView *> *stk = [NSMutableArray arrayWithObject:glassHost];
         NSInteger guardT = 0;
         while (stk.count && guardT++ < 4000) {
             UIView *v = stk.lastObject; [stk removeLastObject];
-            if ([v isKindOfClass:[UILabel class]]) {
-                UILabel *lb = (UILabel *)v;
-                if (!objc_getAssociatedObject(v, kERDITextOriginalKey))
-                    objc_setAssociatedObject(v, kERDITextOriginalKey, lb.textColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                CGRect r = [v convertRect:v.bounds toView:glassHost];
-                CGFloat t = gw > 0 ? CGRectGetMidX(r) / gw : 0.0;
-                lb.textColor = ERColorAtStop(cols, MIN(MAX(t, 0.0), 1.0));
+            if ([v isKindOfClass:[UILabel class]] && objc_getAssociatedObject(v, kERDITextOriginalKey)) {
+                ((UILabel *)v).textColor = objc_getAssociatedObject(v, kERDITextOriginalKey);
+                objc_setAssociatedObject(v, kERDITextOriginalKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             }
             [stk addObjectsFromArray:v.subviews];
         }
@@ -1213,13 +1219,23 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-123 · **两块玻璃按状态互斥显示**：
     //   空闲（容器与 gainmap 同尺寸）→ 显示 gainmap 那块（它压在 curtain 黑底之上，已实测可见）
     //   展开（容器明显更宽）        → 只显示 ContainerView 那块，收掉 gainmap 上的"多余胶囊"
-    BOOL contGlassOn = (container && bestContainerArea >= 1500.0 && diExpanded);
-    // curtain 玻璃 = 空闲岛背景；展开时收掉（否则又是"上面多出的胶囊"）
-    grad.hidden = contGlassOn ? YES : NO;
-    spec.hidden = contGlassOn ? YES : NO;
-    // 容器玻璃 = 展开岛背景；空闲时收掉（空闲时它和 curtain 同框，双玻璃会更暗）
-    for (CALayer *l in (container ? container.layer.sublayers : @[])) {
-        if ([l.name isEqualToString:@"ERDI::islandbg"]) l.hidden = contGlassOn ? NO : YES;
+    // 1.0.9-125 · 幕后清理：非当前宿主上的磨砂/高光层全部隐藏
+    //   （空闲 → curtain 的玻璃显示、container 的收起；展开 → 反之）
+    {
+        NSMutableArray<UIView *> *stH2 = [NSMutableArray arrayWithObject:win];
+        NSInteger guardH2 = 0;
+        while (stH2.count && guardH2++ < 8000) {
+            UIView *v = stH2.lastObject; [stH2 removeLastObject];
+            if (v != glassHost) {
+                for (UIView *sv in v.subviews) {
+                    if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
+                }
+                for (CALayer *l in v.layer.sublayers) {
+                    if ([l.name hasPrefix:@"ERDI::"]) l.hidden = YES;
+                }
+            }
+            [stH2 addObjectsFromArray:v.subviews];
+        }
     }
 
     // 辉光（LiquidifyApertureGlowEnabled）：中性白光，避免给玻璃染色
