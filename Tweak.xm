@@ -907,9 +907,12 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
         CGRect b = v.bounds;
         CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
         BOOL islandSized = (bw >= 120.0 && bw <= 340.0 && bh >= 30.0 && bh <= 90.0);
-        if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
-            ([cn isEqualToString:@"SBSystemApertureContainerView"] && islandSized)) {
-            // 1.0.9-126 · 岛尺寸的容器才清背景；405×204 的大容器是实时活动，不能动
+        if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
+            // 1.0.9-129 · **curtain 的黑是绘制内容（drawRect），清 backgroundColor 从 107 起就无效**
+            //   → 必须隐藏整个视图。玻璃不再铺在它身上（改铺容器），所以可以整只藏掉。
+            if (!v.hidden) v.hidden = YES;
+        } else if ([cn isEqualToString:@"SBSystemApertureContainerView"] && islandSized) {
+            // 岛尺寸的容器才清背景；405×204 的大容器是实时活动，不能动
             if (v.layer.backgroundColor) v.layer.backgroundColor = [UIColor clearColor].CGColor;
         } else if ([cn isEqualToString:@"_SBGainMapView"] ||
                    [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
@@ -1130,11 +1133,19 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         CGRectGetWidth(container.bounds) >= 120.0 && CGRectGetWidth(container.bounds) <= 340.0 &&
         CGRectGetHeight(container.bounds) >= 30.0 && CGRectGetHeight(container.bounds) <= 90.0);
     if (container && !containerIsIslandNow) container = nil;   // 大容器（实时活动）绝不铺玻璃
-    BOOL diExpanded = (containerIsIslandNow &&
-                       CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
-    // 1.0.9-124 · 空闲 → 玻璃在 curtain（125，随岛 idle 尺寸）
-    //             展开 → 玻璃在 container（随岛伸缩的大容器）；curtain 上的玻璃收掉
-    UIView *glassHost = diExpanded ? container : curtain;
+    // 1.0.9-129 · **玻璃唯一宿主 = ContainerView**（严格对齐 Liquidify：
+    //   它的 CCLiquidGlassView 就在容器里，随岛伸缩，空闲 125 → 展开 189；
+    //   curtain 已被整体隐藏，岛的黑底不复存在，玻璃就是唯一的背景）
+    //   Liquidify 空闲时什么都不显示（IMG_8029 实拍：干干净净）—— 因为空闲时岛被系统隐藏，
+    //   容器不在/不可见，玻璃自然也不在。我们跟它一致。
+    if (!container) {
+        static CFTimeInterval lastNoC = 0.0;
+        CFTimeInterval nowNC2 = CACurrentMediaTime();
+        if (nowNC2 - lastNoC > 10.0) { lastNoC = nowNC2; ERLogInfo(@"DI-129 容器不在（岛空闲/隐藏）→ 不铺玻璃"); }
+        return;
+    }
+    UIView *glassHost = container;
+    BOOL diExpanded = (curtain && CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
     CGRect gb = glassHost.bounds;
     CGFloat gw = CGRectGetWidth(gb), gh = CGRectGetHeight(gb);
     if (gw < 8.0 || gh < 8.0) return;
@@ -1996,6 +2007,24 @@ static void ERDITimerScan(void) {
     //   导致关掉开关后岛变透明消失 —— 用户 18:23 真屏截图证实）
     if (diOn) {
         @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
+    } else {
+        // 1.0.9-129 · 开关关 → 恢复原生的 curtain/gainmap（岛回到 100% 原生）
+        @try {
+            NSMutableArray<UIView *> *stR = [NSMutableArray arrayWithArray:wins];
+            NSInteger guardR = 0;
+            while (stR.count && guardR++ < 20000) {
+                UIView *v = stR.lastObject; [stR removeLastObject];
+                NSString *cn = NSStringFromClass(v.class);
+                if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"]) {
+                    if (v.hidden) v.hidden = NO;
+                } else if ([cn isEqualToString:@"_SBGainMapView"] ||
+                           [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
+                    if (v.hidden) v.hidden = NO;
+                    if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
+                }
+                [stR addObjectsFromArray:v.subviews];
+            }
+        } @catch (__unused NSException *e) {}
     }
 
     // 1.0.9-122 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
