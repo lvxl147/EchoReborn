@@ -1931,6 +1931,32 @@ static void ERMaybeDiagAudio(void) {
         ERDiagPostLocalNotification();
         return;
     }
+    if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"tree.req"]]) {
+        [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"tree.req"] error:nil];
+        // 1.0.9-133 · 全量视图清单：类名 / 窗口坐标帧 / hidden / alpha / 背景色
+        //   用于精确定位真屏上残余的深色带（y=0-10, x=40-325）到底是哪个视图。
+        for (UIWindow *w in gERDIApertureWindows) {
+            ERLogInfo(@"DI-FULL ==== 窗口 %@ frame=%@ ====", NSStringFromClass(w.class), NSStringFromCGRect(w.frame));
+            NSMutableArray<UIView *> *stF = [NSMutableArray arrayWithObject:w];
+            NSInteger guardF = 0;
+            while (stF.count && guardF++ < 20000) {
+                UIView *v = stF.lastObject; [stF removeLastObject];
+                CGRect wf = [v convertRect:v.bounds toView:w];
+                NSString *bgs = @"无";
+                CGColorRef bgc = v.layer.backgroundColor;
+                if (bgc) {
+                    CGFloat r = 0, g = 0, b = 0, a = 0;
+                    [([UIColor colorWithCGColor:bgc]) getRed:&r green:&g blue:&b alpha:&a];
+                    bgs = [NSString stringWithFormat:@"rgba(%.2f,%.2f,%.2f,%.2f)", r, g, b, a];
+                }
+                ERLogInfo(@"DI-FULL %@ frame=%@ hidden=%d alpha=%.2f bg=%@",
+                          NSStringFromClass(v.class), NSStringFromCGRect(wf),
+                          v.hidden ? 1 : 0, v.layer.opacity, bgs);
+                [stF addObjectsFromArray:v.subviews];
+            }
+        }
+        return;
+    }
     if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"islandtest.req"]]) {
         [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"islandtest.req"] error:nil];
         ERDiagIslandTest();
