@@ -1298,7 +1298,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         if (lgcls && [sv isKindOfClass:lgcls] && [sv.layer.name isEqualToString:@"ERDI::lg"]) { lgGlass = sv; break; }
     }
     if (!lgGlass && lgcls) {
-        lgGlass = [[lgcls alloc] initWithFrame:glassBounds groupName:@"EchoRebornIsland"
+        lgGlass = [[lgcls alloc] initWithFrame:gb groupName:@"EchoRebornIsland"
                                     filterType:@"echoreborn.liquidglass.banner"];
         lgGlass.layer.name = @"ERDI::lg";
         lgGlass.userInteractionEnabled = NO;
@@ -1310,13 +1310,14 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         }
     }
     if (lgGlass) {
+        CGFloat lgR = diExpanded ? (cl.cornerRadius > 1.0 ? cl.cornerRadius : MIN(gh * 0.5, 45.0)) : (gh * 0.5);
         lgGlass.frame = diExpanded ? CGRectInset(gb, -2.5, -2.5) : gb;
         lgGlass.hidden = NO;
-        lgGlass.layer.cornerRadius = radius;
+        lgGlass.layer.cornerRadius = lgR;
         lgGlass.layer.masksToBounds = YES;
         [(id)lgGlass setLgShapeRect:CGRectMake(0, 0, lgGlass.bounds.size.width, lgGlass.bounds.size.height)];
-        [(id)lgGlass setLgShapeCornerRadius:radius];
-        [(id)lgGlass setLgSpecularEnabledOverride:@YES];   // 边缘高光：开
+        [(id)lgGlass setLgShapeCornerRadius:lgR];
+        [(id)lgGlass setLgSpecularEnabledOverride:@YES];
     }
 
     // 旧的渐变玻璃层全部退役
