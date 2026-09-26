@@ -903,6 +903,25 @@ static __weak UIView *gERDIGiantContentView = nil;     // 1.0.9-140 · 其 Conte
 static void *kERDIOrigBGKey = &kERDIOrigBGKey;
 static void *kERDIOrigShadowKey = &kERDIOrigShadowKey;
 static void *kERDILaBackdropKey = &kERDILaBackdropKey;
+
+// 1.0.9-149 · **播放内容检测**（替代不可靠的宽度阈值）：
+//   默认态容器宽度会变（165/189 都出现过），宽度阈值无法区分"默认"与"音乐紧凑"。
+//   真正的信号：容器子树里有没有**播放内容**——专辑图（有图像的 UIImageView）
+//   或歌名（有文字的 UILabel）。默认态子树是空壳（既无图也无字）。
+//   排除 BSUICAPackageView 子树（EchoReborn 自己的快捷指令按钮，不算播放内容）。
+static BOOL ERDIHasPlaybackContent(UIView *root) {
+    if (!root) return NO;
+    NSMutableArray<UIView *> *st = [NSMutableArray arrayWithObject:root];
+    NSInteger guard = 0;
+    while (st.count && guard++ < 6000) {
+        UIView *v = st.lastObject; [st removeLastObject];
+        if ([NSStringFromClass(v.class) containsString:@"BSUICAPackageView"]) continue;
+        if ([v isKindOfClass:[UIImageView class]] && ((UIImageView *)v).image) return YES;
+        if ([v isKindOfClass:[UILabel class]] && ((UILabel *)v).text.length > 0) return YES;
+        [st addObjectsFromArray:v.subviews];
+    }
+    return NO;
+}
 static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins);
 static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
     NSMutableArray<UIWindow *> *apertures = [NSMutableArray array];
@@ -1242,6 +1261,26 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         static CFTimeInterval lastNoC2 = 0.0;
         CFTimeInterval nowNC3 = CACurrentMediaTime();
         if (nowNC3 - lastNoC2 > 10.0) { lastNoC2 = nowNC3; ERLogInfo(@"DI-140 容器不在（岛空闲/隐藏）→ 不铺玻璃"); }
+        return;
+    }
+    // 1.0.9-149 · **内容检测**：宿主子树无播放内容（无专辑图/无文字）= 默认态
+    //   → 玻璃全隐藏。这替代不可靠的宽度阈值（默认态宽度 165/189 漂移）。
+    if (!ERDIHasPlaybackContent(glassHost)) {
+        static CFTimeInterval lastIdle = 0.0;
+        CFTimeInterval nowIdle = CACurrentMediaTime();
+        if (nowIdle - lastIdle > 10.0) { lastIdle = nowIdle; ERLogInfo(@"DI-149 宿主无播放内容（默认态）→ 玻璃全隐藏"); }
+        NSMutableArray<UIView *> *stI = [NSMutableArray arrayWithArray:(gERDIApertureWindows ?: (NSArray *)@[win])];
+        NSInteger guardI = 0;
+        while (stI.count && guardI++ < 30000) {
+            UIView *v = stI.lastObject; [stI removeLastObject];
+            for (UIView *sv in v.subviews) {
+                if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
+            }
+            for (CALayer *l in v.layer.sublayers) {
+                if ([l.name hasPrefix:@"ERDI::"]) l.hidden = YES;
+            }
+            [stI addObjectsFromArray:v.subviews];
+        }
         return;
     }
     CGRect gb = glassHost.bounds;
