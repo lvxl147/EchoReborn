@@ -900,6 +900,7 @@ static NSArray *gERDIApertureWindows = nil;   // 1.0.9-132 · 本 tick 的全部
 //   原色记在关联对象里，关开关时按原样还原。
 static void *kERDIOrigBGKey = &kERDIOrigBGKey;
 static void *kERDIOrigShadowKey = &kERDIOrigShadowKey;
+static void *kERDILaBackdropKey = &kERDILaBackdropKey;
 static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins);
 static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
     NSMutableArray<UIWindow *> *apertures = [NSMutableArray array];
@@ -939,6 +940,20 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
                     v.layer.backgroundColor = [UIColor clearColor].CGColor;
                 }
             }
+            // 1.0.9-138 · **实时活动的黑色圆角背景**（tree.req 取证：UIView
+            //   frame=(12.7,12.3 403x202) 与 (12.3,12.0 404x203)，黑色圆角是绘制内容，
+            //   清背景色无效）→ 按尺寸+位置特征整体隐藏。
+            CGRect wfv = [v convertRect:v.bounds toView:nil];
+            CGFloat fw = CGRectGetWidth(wfv), fh = CGRectGetHeight(wfv);
+            CGFloat fx = CGRectGetMinX(wfv), fy = CGRectGetMinY(wfv);
+            BOOL laBackdrop = (fw >= 395.0 && fw <= 415.0 && fh >= 195.0 && fh <= 210.0 &&
+                               fx >= 5.0 && fx <= 20.0 && fy >= 5.0 && fy <= 20.0);
+            if (laBackdrop) {
+                if (!objc_getAssociatedObject(v, kERDILaBackdropKey))
+                    objc_setAssociatedObject(v, kERDILaBackdropKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                if (!v.hidden) v.hidden = YES;
+                if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
+            }
         }
         // 1.0.9-136 · **阴影全域清除**：真屏 f100 实拍 —— 岛上方悬挂一团黑色阴影，
         //   是某个滑出屏幕的容器投下的。谁的阴影都不要：全窗口 shadowOpacity=0，
@@ -973,13 +988,16 @@ static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
             v.layer.shadowOpacity = (float)origShadow.floatValue;
             objc_setAssociatedObject(v, kERDIOrigShadowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
+        UIColor *wasLa = objc_getAssociatedObject(v, kERDILaBackdropKey);
         if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
             [cn isEqualToString:@"_SBGainMapView"] ||
             [cn isEqualToString:@"_SBSystemApertureGainMapView"] ||
             [cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
-            [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
+            [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"] ||
+            (wasLa != nil)) {
             if (v.hidden) v.hidden = NO;
             if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
+            objc_setAssociatedObject(v, kERDILaBackdropKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         [st addObjectsFromArray:v.subviews];
     }
@@ -1243,14 +1261,15 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
     blur.frame = gb;
     blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
+    blur.alpha = 0.45;  // 1.0.9-138 · 液态玻璃：磨砂减淡（SystemUltraThinMaterialDark 全强度太闷）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
     spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
     if (@available(iOS 13.0, *)) { blur.layer.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
 
     // （渐变底已弃用 —— 磨砂材质本身就是玻璃的"底色"）
     // 顶部高光：玻璃反光
-    NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.28],
-                                  [UIColor colorWithWhite:1.0 alpha:0.07],
+    NSArray<UIColor *> *sheen = @[[UIColor colorWithWhite:1.0 alpha:0.45],
+                                  [UIColor colorWithWhite:1.0 alpha:0.12],
                                   [UIColor colorWithWhite:1.0 alpha:0.00]];
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
