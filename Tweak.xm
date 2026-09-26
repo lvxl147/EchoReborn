@@ -1008,6 +1008,20 @@ static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
             if (v.hidden) v.hidden = NO;
             if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
         }
+        // 1.0.9-155 · 恢复被事件逻辑隐藏的层（ERDIEventApply 用 kERDIEventHiddenKey 标记）。
+        //   层可能没有 owner view，所以在每个 view 的 layer 子树里单独扫一遍。
+        {
+            NSMutableArray<CALayer *> *lst = [NSMutableArray arrayWithObject:v.layer];
+            NSInteger lguard = 0;
+            while (lst.count && lguard++ < 6000) {
+                CALayer *l = lst.lastObject; [lst removeLastObject];
+                if (objc_getAssociatedObject(l, kERDIEventHiddenKey)) {
+                    l.hidden = NO;
+                    objc_setAssociatedObject(l, kERDIEventHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                [lst addObjectsFromArray:l.sublayers];
+            }
+        }
         [st addObjectsFromArray:v.subviews];
     }
 }
@@ -1519,6 +1533,221 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
         if (afterOrig) afterOrig(view);
     });
     class_replaceMethod(cls, origSel, newImp, method_getTypeEncoding(origM));
+}
+
+// ===========================================================================
+// 1.0.9-155 · **创建点接管**（复刻 Liquidify 逆向实证，2 秒轮询铺玻璃退役）
+//
+// 逆向来源：er789/_rev_lq/（Liquidify.dylib 1.3.7-4 静态分析，未加密 cryptid=0）：
+//   MSHookMessageEx(_SBUISystemApertureCAPackageView,
+//                   layoutSubviews / didMoveToWindow / intrinsicContentSize / sizeThatFits:)
+//   → orig 后统一处理（0x328efc）：
+//     ① "Root Layer" 锚点（系统岛根层 layer.name 自带标记，cfstring @0x8b1da8 实证）
+//     ② 挂载函数（0x3295ec）：isKindOfClass:CABackdropLayer 或 bounds 宽/高 >120
+//        → 当场 hidden —— 系统黑底无论以何种尺寸重绘，下一次布局同帧再藏，零空窗
+//     ③ 玻璃视图与内容几何对齐；条件不满足时 dispatch 一次性重试（非常驻 timer）
+//
+// 本版对齐复刻：
+//   · 事件驱动：hook 由 ERDIInstallPackageViewHooks 安装（目标 _SBUISystemApertureCAPackageView）
+//   · ERDITimerScan 不再铺玻璃（轮询退役，只保留 strip/还原兜底）
+//   · 黑底隐藏策略 = Liquidify 的 CABackdropLayer 实证 + 143 已验证的黑底家族类名 +
+//     「>120 且背景近黑」兜底 —— 全尺寸通用，无白名单盲区（修紧凑/展开边缘黑线）
+//   · 玻璃圆角读系统 cornerRadius（修展开态两端月牙露黑/填充不全：143 用 高/2 算错）
+// ===========================================================================
+
+static void *kERDIEventHiddenKey = &kERDIEventHiddenKey;   // 155 · 被 155 事件逻辑隐藏的层（关开关还原用）
+
+static void ERDIEventApply(UIView *capsule) {
+    if (!capsule) return;
+    if (!ERDIEnabled()) return;                    // 开关关：不做事（还原走 ERDIRestoreOriginalBackground）
+    UIWindow *win = capsule.window;
+    if (!win || win.hidden) return;
+    @try {
+        CGFloat cw = CGRectGetWidth(capsule.bounds), ch = CGRectGetHeight(capsule.bounds);
+        if (cw < 8.0 || ch < 8.0) {
+            // didMoveToWindow 早于首次布局 → 一次性重试（Liquidify 同款兜底，非常驻）
+            static NSMutableDictionary *pending = nil;
+            if (!pending) pending = [NSMutableDictionary dictionary];
+            NSString *k = [NSValue valueWithNonretainedObject:capsule].description;
+            if (![pending[k] boolValue]) {
+                pending[k] = @YES;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    [pending removeObjectForKey:k];
+                    ERDIEventApply(capsule);
+                });
+            }
+            return;
+        }
+
+        // ---- ① Root Layer 锚点（Liquidify：layer.name == "Root Layer"）----
+        CALayer *rootLayer = nil;
+        if ([capsule.layer.name isEqualToString:@"Root Layer"]) {
+            rootLayer = capsule.layer;
+        } else {
+            NSMutableArray<CALayer *> *st = [NSMutableArray arrayWithObject:capsule.layer];
+            NSInteger guard = 0;
+            while (st.count && guard++ < 4000) {
+                CALayer *l = st.lastObject; [st removeLastObject];
+                if ([l.name isEqualToString:@"Root Layer"]) { rootLayer = l; break; }
+                [st addObjectsFromArray:l.sublayers];
+            }
+        }
+        static CFTimeInterval lastRoot = 0.0;
+        CFTimeInterval nowR = CACurrentMediaTime();
+        if (nowR - lastRoot > 10.0) {
+            lastRoot = nowR;
+            ERLogInfo(@"DI-155 锚点 capsule=%@ layer.name=%@ RootLayer=%@ bounds=%@",
+                      NSStringFromClass(capsule.class),
+                      capsule.layer.name ?: @"(nil)",
+                      rootLayer ? @"命中" : @"未命中(胶囊层保底)",
+                      NSStringFromCGRect(capsule.bounds));
+        }
+        CALayer *scanRoot = rootLayer ?: capsule.layer;
+
+        // ---- ② 黑底隐藏（Liquidify 0x3295ec：CABackdropLayer/>120 → hidden；对齐黑底家族）----
+        //   层级遍历：a) CABackdropLayer（系统磨砂底，Liquidify 实证隐藏）
+        //            b) GainMap/Curtain/LumaTracking/KeyLine 家族（143 已实证的画黑元凶）
+        //            c) 宽或高 >120 且背景近黑（覆盖未知黑底，绝不误伤普通内容层）
+        //   系统重绘恢复后，下一次 layoutSubviews 同帧再藏 → 没有 2 秒空窗
+        Class backdropCls = objc_getClass("CABackdropLayer");
+        NSInteger hidCount = 0;
+        {
+            NSMutableArray<CALayer *> *stk = [NSMutableArray arrayWithObject:scanRoot];
+            NSInteger guard2 = 0;
+            while (stk.count && guard2++ < 6000) {
+                CALayer *l = stk.lastObject; [stk removeLastObject];
+                if (l == capsule.layer) { [stk addObjectsFromArray:l.sublayers]; continue; }
+                NSString *cn = NSStringFromClass(object_getClass(l));   // 私有类按类名字符串判定（不引符号）
+                BOOL isBackdrop = backdropCls && [l isKindOfClass:backdropCls];
+                BOOL knownBlack = [cn containsString:@"GainMap"] ||
+                                  [cn containsString:@"Curtain"] ||
+                                  [cn containsString:@"LumaTracking"] ||
+                                  [cn containsString:@"KeyLine"] ||
+                                  [cn containsString:@"Backdrop"];
+                CGFloat lw = CGRectGetWidth(l.bounds), lh = CGRectGetHeight(l.bounds);
+                BOOL big = (lw > 120.0 || lh > 120.0);
+                BOOL nearBlack = NO;
+                if (big && l.backgroundColor) {
+                    UIColor *c = [UIColor colorWithCGColor:l.backgroundColor];
+                    CGFloat r = 0, g = 0, b = 0, a = 0;
+                    if ([c getRed:&r green:&g blue:&b alpha:&a])
+                        nearBlack = (a >= 0.90 && r <= 0.13 && g <= 0.13 && b <= 0.13);
+                }
+                BOOL shouldHide = isBackdrop || knownBlack || (big && nearBlack);
+                if (shouldHide && !l.hidden) {
+                    l.hidden = YES;
+                    objc_setAssociatedObject(l, kERDIEventHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    hidCount++;
+                    static CFTimeInterval lastHide = 0.0;
+                    CFTimeInterval nowH = CACurrentMediaTime();
+                    if (nowH - lastHide > 5.0) {
+                        lastHide = nowH;
+                        ERLogInfo(@"DI-155 藏黑底 %@ name=%@ bounds=%@ backdrop=%d black=%d",
+                                  cn, l.name ?: @"(nil)",
+                                  NSStringFromCGRect(l.bounds), isBackdrop ? 1 : 0, nearBlack ? 1 : 0);
+                    }
+                }
+                [stk addObjectsFromArray:l.sublayers];
+            }
+        }
+
+        // ---- ③ 玻璃同步（宿主 = 胶囊本体；圆角读系统值）----
+        UIView *blur = nil;
+        for (UIView *sv in capsule.subviews) {
+            if ([sv isKindOfClass:[UIVisualEffectView class]] &&
+                [sv.layer.name isEqualToString:@"ERDI::blur"]) { blur = sv; break; }
+        }
+        if (!blur) {
+            blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+            blur.layer.name = @"ERDI::blur";
+            blur.userInteractionEnabled = NO;
+            [capsule insertSubview:blur atIndex:0];
+        }
+        blur.frame = capsule.bounds;
+        blur.hidden = NO;
+        blur.alpha = (cw > 340.0) ? 0.55 : 0.68;     // 展开淡、紧凑浓（沿用 140/143 实测值）
+        CGFloat sysR = capsule.layer.cornerRadius;
+        blur.layer.cornerRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
+        blur.layer.masksToBounds = YES;
+        if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
+        capsule.layer.borderWidth = 1.5;
+        capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
+        objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+
+        // ---- ④ 本窗口旧玻璃残留清理（跨窗口兜底仍由 timer strip 承担）----
+        {
+            NSMutableArray<UIView *> *stc = [NSMutableArray arrayWithObject:win];
+            NSInteger guard3 = 0;
+            while (stc.count && guard3++ < 8000) {
+                UIView *v = stc.lastObject; [stc removeLastObject];
+                if (v != capsule) {
+                    for (UIView *sv in v.subviews)
+                        if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
+                    for (CALayer *sl in v.layer.sublayers)
+                        if ([sl.name hasPrefix:@"ERDI::"]) sl.hidden = YES;
+                }
+                [stc addObjectsFromArray:v.subviews];
+            }
+        }
+
+        // ---- ⑤ 状态日志（5 秒节流）----
+        static CFTimeInterval lastStat = 0.0;
+        CFTimeInterval nowS2 = CACurrentMediaTime();
+        if (nowS2 - lastStat > 5.0) {
+            lastStat = nowS2;
+            ERLogInfo(@"DI-155 玻璃 bounds=%@ 圆角=%.1f(系统%.1f) alpha=%.2f 本帧藏层=%ld",
+                      NSStringFromCGRect(capsule.bounds),
+                      blur.layer.cornerRadius, sysR, blur.alpha, (long)hidCount);
+        }
+    } @catch (__unused NSException *e) {
+        ERLogError(@"DI-155 异常: %@", e);
+    }
+}
+
+// 1.0.9-155 · 事件驱动 hook 安装（对齐 Liquidify：只 hook 岛胶囊本体）
+static void ERDIInstallPackageViewHooks(void) {
+    static BOOL installed = NO;
+    static NSInteger attempts = 0;
+    if (installed) return;
+    Class cls = objc_getClass("_SBUISystemApertureCAPackageView");
+    if (!cls) {
+        // 类可能延迟注册 → 一次性重试（最多 5 次，Liquidify 同款兜底思路）
+        attempts++;
+        if (attempts <= 5) {
+            ERLogInfo(@"DI-155 类未注册，第 %ld 次重试…", (long)attempts);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ ERDIInstallPackageViewHooks(); });
+        } else {
+            ERLogInfo(@"DI-155 放弃：_SBUISystemApertureCAPackageView 不存在（类名随系统变更？）");
+        }
+        return;
+    }
+    installed = YES;
+    // 隐藏开关（ERDIHideEnabled）分支保持原行为：空闲收起/使用中恢复
+    ERSafeSwizzleLayout(cls, @selector(layoutSubviews), ^(UIView *view) {
+        if (ERDIHideEnabled()) {
+            UIWindow *w = view.window;
+            if (w) {
+                if (ERDIisIdle(w)) { if (!w.hidden) { w.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛"); } }
+                else { if (w.hidden) { w.hidden = NO; ERLogInfo(@"DI-HIDE 使用中→恢复"); } }
+            }
+            return;
+        }
+        @try { ERDIEventApply(view); } @catch (__unused NSException *e) {}
+    });
+    ERSafeSwizzleLayout(cls, @selector(didMoveToWindow), ^(UIView *view) {
+        if (ERDIHideEnabled()) {
+            UIWindow *w = view.window;
+            if (w) {
+                if (ERDIisIdle(w)) { if (!w.hidden) { w.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛(didMoveToWindow)"); } }
+                else { if (w.hidden) { w.hidden = NO; ERLogInfo(@"DI-HIDE 使用中→恢复"); } }
+            }
+            return;
+        }
+        @try { ERDIEventApply(view); } @catch (__unused NSException *e) {}
+    });
+    ERLogInfo(@"DI-155 事件驱动 hook 已安装: _SBUISystemApertureCAPackageView (layoutSubviews + didMoveToWindow)");
 }
 
 // 本版**不调用**该函数（急救）。下一版确认安全后再启用。
@@ -2337,10 +2566,10 @@ static void ERDITimerScan(void) {
         foundWindow.hidden = NO; ERLogInfo(@"DI-HIDE 开关关闭→恢复灵动岛显示");
     }
 
-    if (diOn) {
-        @try { ERApplyDynamicIslandGlass(foundWindow ?: (UIWindow *)found); }
-        @catch (__unused NSException *e) {}
-    }
+    // 1.0.9-155 · **轮询铺玻璃退役**：玻璃改由 ERDIInstallPackageViewHooks 的事件驱动
+    //   （_SBUISystemApertureCAPackageView 的 layoutSubviews/didMoveToWindow）同帧施加，
+    //   消除 2 秒空窗（用户实测"展开 1-2 秒由暗变亮"的根因）。timer 只保留
+    //   strip（黑底清理兜底）/restore（关开关还原）/诊断取证职责。
 
     // 1.0.9-109 · 常驻状态打点（每 10s 一次），不再依赖 verbose，便于真机定位
     {
@@ -4585,6 +4814,7 @@ static void ERLoadPrefs(void) {
     @try {
         ERStartVolumeHUDClassScanner();
         ERStartDynamicIslandScanner();
+        ERDIInstallPackageViewHooks();   // 1.0.9-155 · 事件驱动创建点接管（Liquidify 复刻）
         ERLogInfo(@"LIQUIDASS-INIT 已调用 di=%d hide=%d global=%d",
                   ERDIEnabled() ? 1 : 0, ERDIHideEnabled() ? 1 : 0,
                   ERGlassSwitchEnabled(@"Global.Enabled") ? 1 : 0);
