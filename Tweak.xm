@@ -1286,9 +1286,10 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     CGFloat radius = gh * 0.5;
     // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
-    // 1.0.9-144 · 展开态玻璃**外扩 2.5pt**：黑背景视图 (408×207@10,9.7) 比宿主
-    //   (405×204@11.7,11.3) 大 ~1.7pt 且外扩 —— 玻璃不外扩就会露出一圈黑线（用户截图实证）。
-    blur.frame = diExpanded ? CGRectInset(gb, -2.5, -2.5) : gb;
+    // 1.0.9-146 · 展开态玻璃**外扩 4pt**：系统在实时活动外缘画的黑描边 (~2pt) 与
+    //   玻璃之间有 ~4pt 缝隙（用户截图：状态栏从缝隙透出）→ 4pt 外扩盖住描边与缝隙。
+    blur.frame = diExpanded ? CGRectInset(gb, -4.0, -4.0) : gb;
+    if (diExpanded) glassHost.clipsToBounds = NO;   // 1.0.9-146 · 外扩部分不被宿主裁掉
     blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
     blur.alpha = diExpanded ? 0.55 : 0.68;  // 1.0.9-140 · 液态玻璃强度（用户反馈 0.45 太透不明显）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
@@ -1303,9 +1304,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.55);
-    // 1.0.9-142 · **边缘高光在最外边**（对标控制中心液态玻璃的亮边）：白 0.40 / 1.5pt
-    cl.borderWidth = 1.5;
-    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
+    // 1.0.9-146 · 玻璃自带黑边（融合系统描边；原生岛边缘本就是黑的，视觉连贯）
+    cl.borderWidth = 2.5;
+    cl.borderColor = [UIColor colorWithWhite:0.05 alpha:0.90].CGColor;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
@@ -1334,9 +1335,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         cbg.layer.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
         cbg.layer.masksToBounds = YES;
         if (@available(iOS 13.0, *)) cbg.layer.cornerCurve = kCACornerCurveContinuous;
-        // 1.0.9-142 · 展开态边缘高光（最外边）
-        al.borderWidth = 1.5;
-        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
+        // 1.0.9-146 · 展开态同样黑边
+        al.borderWidth = 2.5;
+        al.borderColor = [UIColor colorWithWhite:0.05 alpha:0.90].CGColor;
         objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
