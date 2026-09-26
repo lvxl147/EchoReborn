@@ -2112,6 +2112,10 @@ static void ERDITimerScan(void) {
                 [stC addObjectsFromArray:v.subviews];
             }
         }
+        // 1.0.9-137 · **默认态（无内容）不铺玻璃**：容器宽 125 = 岛上无内容（空闲），
+        //   此时不该有玻璃（用户三类定义：默认态应透明无物；有内容才铺磨砂）。
+        //   宽度 ≥140（音乐紧凑 189 / 展开才算有内容。
+        if (best && CGRectGetWidth(best.bounds) < 140.0) best = nil;
         gERDIContainerView = best;
         gERDIApertureWindows = [wins filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF.class.description CONTAINS 'Aperture'"]];
         // 1.0.9-134 · **容器滑出岛位置（展开/收起动画、y≈-15）→ 玻璃立即全部隐藏**
