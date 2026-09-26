@@ -940,20 +940,10 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
                     v.layer.backgroundColor = [UIColor clearColor].CGColor;
                 }
             }
-            // 1.0.9-138 · **实时活动的黑色圆角背景**（tree.req 取证：UIView
-            //   frame=(12.7,12.3 403x202) 与 (12.3,12.0 404x203)，黑色圆角是绘制内容，
-            //   清背景色无效）→ 按尺寸+位置特征整体隐藏。
-            CGRect wfv = [v convertRect:v.bounds toView:nil];
-            CGFloat fw = CGRectGetWidth(wfv), fh = CGRectGetHeight(wfv);
-            CGFloat fx = CGRectGetMinX(wfv), fy = CGRectGetMinY(wfv);
-            BOOL laBackdrop = (fw >= 395.0 && fw <= 415.0 && fh >= 195.0 && fh <= 210.0 &&
-                               fx >= 5.0 && fx <= 20.0 && fy >= 5.0 && fy <= 20.0);
-            if (laBackdrop) {
-                if (!objc_getAssociatedObject(v, kERDILaBackdropKey))
-                    objc_setAssociatedObject(v, kERDILaBackdropKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                if (!v.hidden) v.hidden = YES;
-                if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
-            }
+            // 1.0.9-139 · 138 曾按尺寸隐藏 (403x202@12,12) 的视图 —— 实测它承载着
+            //   展开态的内容与触摸，隐藏后整岛消失且不可触（用户实测）。
+            //   该视图的黑色圆角是系统绘制的 Live Activity 背景，**不能动**，
+            //   展开态保留原生背景（黑底上浮内容），玻璃只在紧凑态呈现。
         }
         // 1.0.9-136 · **阴影全域清除**：真屏 f100 实拍 —— 岛上方悬挂一团黑色阴影，
         //   是某个滑出屏幕的容器投下的。谁的阴影都不要：全窗口 shadowOpacity=0，
@@ -988,16 +978,13 @@ static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
             v.layer.shadowOpacity = (float)origShadow.floatValue;
             objc_setAssociatedObject(v, kERDIOrigShadowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
-        UIColor *wasLa = objc_getAssociatedObject(v, kERDILaBackdropKey);
         if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
             [cn isEqualToString:@"_SBGainMapView"] ||
             [cn isEqualToString:@"_SBSystemApertureGainMapView"] ||
             [cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
-            [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"] ||
-            (wasLa != nil)) {
+            [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
             if (v.hidden) v.hidden = NO;
             if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
-            objc_setAssociatedObject(v, kERDILaBackdropKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         [st addObjectsFromArray:v.subviews];
     }
