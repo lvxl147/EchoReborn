@@ -1286,7 +1286,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     CGFloat radius = gh * 0.5;
     // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
-    blur.frame = gb;
+    // 1.0.9-144 · 展开态玻璃**外扩 2.5pt**：黑背景视图 (408×207@10,9.7) 比宿主
+    //   (405×204@11.7,11.3) 大 ~1.7pt 且外扩 —— 玻璃不外扩就会露出一圈黑线（用户截图实证）。
+    blur.frame = diExpanded ? CGRectInset(gb, -2.5, -2.5) : gb;
     blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
     blur.alpha = diExpanded ? 0.55 : 0.68;  // 1.0.9-140 · 液态玻璃强度（用户反馈 0.45 太透不明显）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
@@ -2222,7 +2224,9 @@ static void ERDITimerScan(void) {
             if (best && fabs(cw - lastCW) > 2.0) stableTicks = 0;
             else if (best) stableTicks++;
             lastCW = cw;
-            if (best && stableTicks < 4) { best = nil; glassActive = NO; }   // 过渡中 ≤2s 不显玻璃
+            // 1.0.9-144 · 稳定等待 4 tick→2 tick（1 秒）：紧凑玻璃更快回归；
+            //   展开态玻璃不走此门槛（巨型容器一出现立即显示，消除"先暗后亮"）。
+            if (best && stableTicks < 2) { best = nil; glassActive = NO; }
             if (best && !glassActive) best = nil;
         }
         gERDIContainerView = best;
