@@ -899,6 +899,7 @@ static NSArray *gERDIApertureWindows = nil;   // 1.0.9-132 · 本 tick 的全部
 //   ② 其余视图：backgroundColor 为「不透明近黑」的一律清除
 //   原色记在关联对象里，关开关时按原样还原。
 static void *kERDIOrigBGKey = &kERDIOrigBGKey;
+static void *kERDIOrigShadowKey = &kERDIOrigShadowKey;
 static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins);
 static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
     NSMutableArray<UIWindow *> *apertures = [NSMutableArray array];
@@ -939,6 +940,14 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
                 }
             }
         }
+        // 1.0.9-136 · **阴影全域清除**：真屏 f100 实拍 —— 岛上方悬挂一团黑色阴影，
+        //   是某个滑出屏幕的容器投下的。谁的阴影都不要：全窗口 shadowOpacity=0，
+        //   原值记录，关开关还原。
+        if (v.layer.shadowOpacity != 0.0) {
+            if (!objc_getAssociatedObject(v, kERDIOrigShadowKey))
+                objc_setAssociatedObject(v, kERDIOrigShadowKey, @(v.layer.shadowOpacity), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            v.layer.shadowOpacity = 0.0;
+        }
         [st addObjectsFromArray:v.subviews];
     }
 }
@@ -958,6 +967,11 @@ static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
         if (orig) {
             v.layer.backgroundColor = orig.CGColor;
             objc_setAssociatedObject(v, kERDIOrigBGKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        NSNumber *origShadow = objc_getAssociatedObject(v, kERDIOrigShadowKey);
+        if (origShadow) {
+            v.layer.shadowOpacity = (float)origShadow.floatValue;
+            objc_setAssociatedObject(v, kERDIOrigShadowKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
         if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
             [cn isEqualToString:@"_SBGainMapView"] ||
