@@ -1244,15 +1244,8 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         if (nowNC3 - lastNoC2 > 10.0) { lastNoC2 = nowNC3; ERLogInfo(@"DI-140 容器不在（岛空闲/隐藏）→ 不铺玻璃"); }
         return;
     }
-    // 1.0.9-151 · 内容检测带 4 拍防抖（动画中内容视图短暂消失不触发闪烁）
-    static NSInteger contentDebounce = 0;
-    static BOOL contentStableState = YES;
-    BOOL hasContentNow = ERDIHasPlaybackContent(glassHost);
-    if (hasContentNow != contentStableState) {
-        contentDebounce++;
-        if (contentDebounce >= 8) { contentStableState = hasContentNow; contentDebounce = 0; }
-    } else { contentDebounce = 0; }
-    if (!contentStableState) {
+    // 1.0.9-152 · 回退 151 防抖（用户实测 151 液态玻璃消失），恢复 149 简单判定
+    if (!ERDIHasPlaybackContent(glassHost)) {
         static CFTimeInterval lastIdle = 0.0;
         CFTimeInterval nowIdle = CACurrentMediaTime();
         if (nowIdle - lastIdle > 10.0) { lastIdle = nowIdle; ERLogInfo(@"DI-149 宿主无播放内容（默认态）→ 玻璃全隐藏"); }
@@ -1309,16 +1302,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 高光必须压在磨砂之上
     if ([cl.sublayers indexOfObject:spec] != cl.sublayers.count - 1) [cl addSublayer:spec];
 
-    // 1.0.9-151 · **圆角修正（"没填充满"的根因）**：展开容器 204pt 高，高/2=102pt
-    //   是全胶囊形，而实时活动是 ~40pt 圆角的圆角矩形 → 玻璃四角盖不住 → 原生黑从四角露出。
-    //   展开态：优先用系统给宿主设置的圆角值，fallback 45pt；紧凑态保持高/2（胶囊正确）。
-    CGFloat radius;
-    if (diExpanded) {
-        CGFloat sysR = cl.cornerRadius;
-        radius = (sysR > 1.0) ? sysR : MIN(gh * 0.5, 45.0);
-    } else {
-        radius = gh * 0.5;
-    }
+    CGFloat radius = gh * 0.5;   // 1.0.9-152 · 回退 151（用户实测 151 液态玻璃消失）
     // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
     // 1.0.9-146 · 展开态玻璃**外扩 4pt**：系统在实时活动外缘画的黑描边 (~2pt) 与
