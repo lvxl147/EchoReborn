@@ -891,6 +891,7 @@ static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
 // 1.0.9-122 · 容器视图由扫描器在【全部窗口】里找（设备上有两个 SBSystemApertureWindow，
 //   扫描命中的第一个窗口里只有 curtain/gainmap，ContainerView 在另一个 —— 121 的容器=无 即此因）
 static __weak UIView *gERDIContainerView = nil;
+static NSArray *gERDIApertureWindows = nil;   // 1.0.9-132 · 本 tick 的全部 aperture 窗口（清理用）
 
 // 1.0.9-130 · **黑色背景全域清除**（用户指令：把任何灵动岛的黑色背景全部去掉）
 //   规则：遍历灵动岛窗口（SBSystemAperture*）的每一个视图：
@@ -1300,9 +1301,13 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-125 · 幕后清理：非当前宿主上的磨砂/高光层全部隐藏
     //   （空闲 → curtain 的玻璃显示、container 的收起；展开 → 反之）
     {
-        NSMutableArray<UIView *> *stH2 = [NSMutableArray arrayWithObject:win];
+        // 1.0.9-132 · **遍历全部 aperture 窗口**清理非当前宿主的玻璃层。
+        //   之前只遍历命中的 win —— 残留在另一个 aperture 窗口里的旧磨砂
+        //   （位于 y≈-15 的容器上）永远清不到，就是左上角那颗胶囊。
+        NSArray *roots = gERDIApertureWindows ?: @[win];
+        NSMutableArray<UIView *> *stH2 = [NSMutableArray arrayWithArray:roots];
         NSInteger guardH2 = 0;
-        while (stH2.count && guardH2++ < 8000) {
+        while (stH2.count && guardH2++ < 30000) {
             UIView *v = stH2.lastObject; [stH2 removeLastObject];
             if (v != glassHost) {
                 for (UIView *sv in v.subviews) {
@@ -2076,6 +2081,7 @@ static void ERDITimerScan(void) {
             }
         }
         gERDIContainerView = best;
+        gERDIApertureWindows = [wins filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF.class.description CONTAINS 'Aperture'"]];
     }
     NSMutableArray<UIWindow *> *ordered = [NSMutableArray array];
     for (UIWindow *w in wins) if ([NSStringFromClass(w.class) containsString:@"Aperture"]) [ordered addObject:w];
