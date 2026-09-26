@@ -2043,24 +2043,37 @@ static void ERDITimerScan(void) {
         @try { ERDIRestoreOriginalBackground(wins); } @catch (__unused NSException *e) {}
     }
 
-    // 1.0.9-122 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
+    // 1.0.9-122/131 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
+    //   过滤条件（全部满足才收）：
+    //   ① 岛尺寸（宽120-340 高30-90 宽高比>2）—— 126 加，防铺到 405×204 实时活动大容器
+    //   ② **岛位置**（窗口坐标：x 60-380，y 5-40）—— 131 加：另一个 aperture 窗口里有个
+    //      同尺寸但位于 y≈-15 的容器，玻璃铺上去只露出底部 10pt，就是用户标注的
+    //      "左上角多余胶囊"（真屏取证：深色像素 y=0-10、x=40-284）
     {
         UIView *best = nil; CGFloat bestA = 0.0;
-        NSMutableArray<UIView *> *stC = [NSMutableArray arrayWithArray:wins];
-        NSInteger guardK = 0;
-        while (stC.count && guardK++ < 20000) {
-            UIView *v = stC.lastObject; [stC removeLastObject];
-            if ([NSStringFromClass(v.class) isEqualToString:@"SBSystemApertureContainerView"]) {
-                CGRect b = v.bounds;
-                CGFloat w = CGRectGetWidth(b), h = CGRectGetHeight(b);
-                // 1.0.9-126 · **只认岛尺寸的容器**（Liquidify 实测：它的玻璃是 189×36.67，
-                //   从不铺到 405×204 的实时活动大容器上 —— 用户截图里那块"大黑板"就是这么来的）
-                if (w >= 120.0 && w <= 340.0 && h >= 30.0 && h <= 90.0 && h > 0.0 && w / h > 2.0) {
-                    CGFloat a = w * h;
-                    if (a > bestA) { bestA = a; best = v; }
+        for (UIWindow *w in wins) {
+            if (![NSStringFromClass(w.class) containsString:@"Aperture"]) continue;
+            NSMutableArray<UIView *> *stC = [NSMutableArray arrayWithObject:w];
+            NSInteger guardK = 0;
+            while (stC.count && guardK++ < 8000) {
+                UIView *v = stC.lastObject; [stC removeLastObject];
+                if ([NSStringFromClass(v.class) isEqualToString:@"SBSystemApertureContainerView"]) {
+                    CGRect b = v.bounds;
+                    CGFloat wdt = CGRectGetWidth(b), hgt = CGRectGetHeight(b);
+                    BOOL sizeOK = (wdt >= 120.0 && wdt <= 340.0 && hgt >= 30.0 && hgt <= 90.0 &&
+                                   hgt > 0.0 && wdt / hgt > 2.0);
+                    if (sizeOK) {
+                        CGRect wf = [v convertRect:b toView:w];
+                        CGFloat wy = CGRectGetMinY(wf), wx = CGRectGetMinX(wf);
+                        BOOL posOK = (wy >= 5.0 && wy <= 40.0 && wx >= 60.0 && CGRectGetMaxX(wf) <= 380.0);
+                        if (posOK) {
+                            CGFloat a = wdt * hgt;
+                            if (a > bestA) { bestA = a; best = v; }
+                        }
+                    }
                 }
+                [stC addObjectsFromArray:v.subviews];
             }
-            [stC addObjectsFromArray:v.subviews];
         }
         gERDIContainerView = best;
     }
