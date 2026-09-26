@@ -894,6 +894,7 @@ static __weak UIView *gERDIContainerView = nil;
 static NSArray *gERDIApertureWindows = nil;   // 1.0.9-132 · 本 tick 的全部 aperture 窗口（清理用）
 static __weak UIView *gERDIGiantContainerView = nil;   // 1.0.9-140 · 展开态容器（实时活动 405×204）
 static __weak UIView *gERDIGiantContentView = nil;     // 1.0.9-140 · 其 ContentView（玻璃垫在它下面）
+static BOOL gERDIHasContent = NO;                      // 1.0.9-150 · 本 tick 是否有播放内容
 
 // 1.0.9-130 · **黑色背景全域清除**（用户指令：把任何灵动岛的黑色背景全部去掉）
 //   规则：遍历灵动岛窗口（SBSystemAperture*）的每一个视图：
@@ -2273,7 +2274,7 @@ static void ERDITimerScan(void) {
         {
             BOOL hasContent = NO;
             if (best && ERDIHasPlaybackContent(best)) hasContent = YES;
-            if (!hasContent && giant && ERDIHasPlaybackContent(giant)) hasContent = YES;
+            if (!hasContent && gERDIGiantContainerView && ERDIHasPlaybackContent(gERDIGiantContainerView)) hasContent = YES;
             gERDIHasContent = hasContent;
             if (diOn && !hasContent) {
                 @try { ERDIRestoreOriginalBackground(wins); } @catch (__unused NSException *e) {}
