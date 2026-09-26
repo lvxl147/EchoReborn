@@ -892,6 +892,8 @@ static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
 //   扫描命中的第一个窗口里只有 curtain/gainmap，ContainerView 在另一个 —— 121 的容器=无 即此因）
 static __weak UIView *gERDIContainerView = nil;
 static NSArray *gERDIApertureWindows = nil;   // 1.0.9-132 · 本 tick 的全部 aperture 窗口（清理用）
+static __weak UIView *gERDIGiantContainerView = nil;   // 1.0.9-140 · 展开态容器（实时活动 405×204）
+static __weak UIView *gERDIGiantContentView = nil;     // 1.0.9-140 · 其 ContentView（玻璃垫在它下面）
 
 // 1.0.9-130 · **黑色背景全域清除**（用户指令：把任何灵动岛的黑色背景全部去掉）
 //   规则：遍历灵动岛窗口（SBSystemAperture*）的每一个视图：
@@ -1201,14 +1203,27 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   curtain 已被整体隐藏，岛的黑底不复存在，玻璃就是唯一的背景）
     //   Liquidify 空闲时什么都不显示（IMG_8029 实拍：干干净净）—— 因为空闲时岛被系统隐藏，
     //   容器不在/不可见，玻璃自然也不在。我们跟它一致。
-    if (!container) {
+    if (!container && !gERDIGiantContainerView) {
         static CFTimeInterval lastNoC = 0.0;
         CFTimeInterval nowNC2 = CACurrentMediaTime();
         if (nowNC2 - lastNoC > 10.0) { lastNoC = nowNC2; ERLogInfo(@"DI-129 容器不在（岛空闲/隐藏）→ 不铺玻璃"); }
         return;
     }
-    UIView *glassHost = container;
-    BOOL diExpanded = (curtain && CGRectGetWidth(container.bounds) > CGRectGetWidth(curtain.bounds) + 5.0);
+    UIView *glassHost = nil;
+    BOOL diExpanded = NO;
+    if (gERDIGiantContainerView && gERDIGiantContentView && gERDIGiantContentView.superview) {
+        // 1.0.9-140 · **展开态**：玻璃宿主 = ContentView 的父视图，
+        //   玻璃插在 ContentView 之下（黑背景之上、内容之下）—— 不隐藏任何系统视图。
+        glassHost = gERDIGiantContentView.superview;
+        diExpanded = YES;
+    } else if (container) {
+        glassHost = container;   // 紧凑态（音乐 189pt）
+    } else {
+        static CFTimeInterval lastNoC2 = 0.0;
+        CFTimeInterval nowNC3 = CACurrentMediaTime();
+        if (nowNC3 - lastNoC2 > 10.0) { lastNoC2 = nowNC3; ERLogInfo(@"DI-140 容器不在（岛空闲/隐藏）→ 不铺玻璃"); }
+        return;
+    }
     CGRect gb = glassHost.bounds;
     CGFloat gw = CGRectGetWidth(gb), gh = CGRectGetHeight(gb);
     if (gw < 8.0 || gh < 8.0) return;
@@ -1227,7 +1242,12 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
         blur.layer.name = @"ERDI::blur";
         blur.userInteractionEnabled = NO;
-        [glassHost insertSubview:blur atIndex:0];
+        if (diExpanded && gERDIGiantContentView) {
+            NSUInteger ci = [glassHost.subviews indexOfObject:gERDIGiantContentView];
+            [glassHost insertSubview:blur atIndex:(ci == NSNotFound ? 0u : ci)];   // 内容正下方
+        } else {
+            [glassHost insertSubview:blur atIndex:0];
+        }
     }
 
     // 旧的渐变玻璃层全部退役
@@ -1248,7 +1268,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
     blur.frame = gb;
     blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
-    blur.alpha = 0.45;  // 1.0.9-138 · 液态玻璃：磨砂减淡（SystemUltraThinMaterialDark 全强度太闷）
+    blur.alpha = diExpanded ? 0.55 : 0.68;  // 1.0.9-140 · 液态玻璃强度（用户反馈 0.45 太透不明显）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
     spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
     if (@available(iOS 13.0, *)) { blur.layer.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
@@ -2123,6 +2143,28 @@ static void ERDITimerScan(void) {
         //   宽度 ≥140（音乐紧凑 189 / 展开才算有内容。
         if (best && CGRectGetWidth(best.bounds) < 140.0) best = nil;
         gERDIContainerView = best;
+        // 1.0.9-140 · 展开态容器（宽>340 的实时活动容器）与其 ContentView：
+        //   玻璃要垫在 ContentView 之下（黑背景之上、内容之下）—— 不隐藏任何系统视图。
+        {
+            UIView *giant = nil, *giantContent = nil;
+            for (UIWindow *w in wins) {
+                if (![NSStringFromClass(w.class) containsString:@"Aperture"]) continue;
+                NSMutableArray<UIView *> *stG = [NSMutableArray arrayWithObject:w];
+                NSInteger guardG = 0;
+                while (stG.count && guardG++ < 8000) {
+                    UIView *v = stG.lastObject; [stG removeLastObject];
+                    NSString *cn = NSStringFromClass(v.class);
+                    if ([cn isEqualToString:@"SBSystemApertureContainerView"]) {
+                        if (CGRectGetWidth(v.bounds) > 340.0 && !giant) giant = v;
+                    } else if ([cn isEqualToString:@"_SBSystemApertureContainerViewContentView"]) {
+                        if (CGRectGetWidth(v.bounds) > 340.0 && !giantContent) giantContent = v;
+                    }
+                    [stG addObjectsFromArray:v.subviews];
+                }
+            }
+            gERDIGiantContainerView = giant;
+            gERDIGiantContentView = giantContent;
+        }
         gERDIApertureWindows = [wins filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF.class.description CONTAINS 'Aperture'"]];
         // 1.0.9-134 · **容器滑出岛位置（展开/收起动画、y≈-15）→ 玻璃立即全部隐藏**
         //   紧凑岛在 Live Activity 展开时会向上滑出屏幕，我们的磨砂跟着走，
@@ -2130,11 +2172,13 @@ static void ERDITimerScan(void) {
         //   容器不在岛位置 = 不该有玻璃 → 全部隐藏；回到岛位置再显示。
         {
             NSArray *roots = gERDIApertureWindows ?: (NSArray *)wins;
+            BOOL expandedNow = (gERDIGiantContainerView != nil);
+            UIView *keep = expandedNow ? nil : best;   // 1.0.9-140 · 展开态全隐藏（稍后按展开宿主重建）
             NSMutableArray<UIView *> *stH3 = [NSMutableArray arrayWithArray:roots];
             NSInteger guardH3 = 0;
             while (stH3.count && guardH3++ < 30000) {
                 UIView *v = stH3.lastObject; [stH3 removeLastObject];
-                if (v != best) {
+                if (v != keep) {
                     for (UIView *sv in v.subviews) {
                         if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
                     }
