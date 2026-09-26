@@ -1216,6 +1216,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
     blur.frame = gb;
+    blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
     spec.frame = gb; spec.cornerRadius = radius; spec.masksToBounds = YES; spec.opacity = 1.0; spec.hidden = NO;
     if (@available(iOS 13.0, *)) { blur.layer.cornerCurve = kCACornerCurveContinuous; spec.cornerCurve = kCACornerCurveContinuous; }
@@ -1298,28 +1299,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-123 · **两块玻璃按状态互斥显示**：
     //   空闲（容器与 gainmap 同尺寸）→ 显示 gainmap 那块（它压在 curtain 黑底之上，已实测可见）
     //   展开（容器明显更宽）        → 只显示 ContainerView 那块，收掉 gainmap 上的"多余胶囊"
-    // 1.0.9-125 · 幕后清理：非当前宿主上的磨砂/高光层全部隐藏
-    //   （空闲 → curtain 的玻璃显示、container 的收起；展开 → 反之）
-    {
-        // 1.0.9-132 · **遍历全部 aperture 窗口**清理非当前宿主的玻璃层。
-        //   之前只遍历命中的 win —— 残留在另一个 aperture 窗口里的旧磨砂
-        //   （位于 y≈-15 的容器上）永远清不到，就是左上角那颗胶囊。
-        NSArray *roots = gERDIApertureWindows ?: @[win];
-        NSMutableArray<UIView *> *stH2 = [NSMutableArray arrayWithArray:roots];
-        NSInteger guardH2 = 0;
-        while (stH2.count && guardH2++ < 30000) {
-            UIView *v = stH2.lastObject; [stH2 removeLastObject];
-            if (v != glassHost) {
-                for (UIView *sv in v.subviews) {
-                    if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
-                }
-                for (CALayer *l in v.layer.sublayers) {
-                    if ([l.name hasPrefix:@"ERDI::"]) l.hidden = YES;
-                }
-            }
-            [stH2 addObjectsFromArray:v.subviews];
-        }
-    }
+    // （1.0.9-134 · 非）当前宿主的玻璃清理已上移到扫描器：容器一离开岛位置就全部隐藏）
 
     // 辉光（LiquidifyApertureGlowEnabled）：中性白光，避免给玻璃染色
     if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
@@ -2108,6 +2088,27 @@ static void ERDITimerScan(void) {
         }
         gERDIContainerView = best;
         gERDIApertureWindows = [wins filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF.class.description CONTAINS 'Aperture'"]];
+        // 1.0.9-134 · **容器滑出岛位置（展开/收起动画、y≈-15）→ 玻璃立即全部隐藏**
+        //   紧凑岛在 Live Activity 展开时会向上滑出屏幕，我们的磨砂跟着走，
+        //   在屏幕顶边露出一条深色带（真屏取证 y=0-10, x=40-325）。
+        //   容器不在岛位置 = 不该有玻璃 → 全部隐藏；回到岛位置再显示。
+        {
+            NSArray *roots = gERDIApertureWindows ?: (NSArray *)wins;
+            NSMutableArray<UIView *> *stH3 = [NSMutableArray arrayWithArray:roots];
+            NSInteger guardH3 = 0;
+            while (stH3.count && guardH3++ < 30000) {
+                UIView *v = stH3.lastObject; [stH3 removeLastObject];
+                if (v != best) {
+                    for (UIView *sv in v.subviews) {
+                        if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
+                    }
+                    for (CALayer *l in v.layer.sublayers) {
+                        if ([l.name hasPrefix:@"ERDI::"]) l.hidden = YES;
+                    }
+                }
+                [stH3 addObjectsFromArray:v.subviews];
+            }
+        }
     }
     NSMutableArray<UIWindow *> *ordered = [NSMutableArray array];
     for (UIWindow *w in wins) if ([NSStringFromClass(w.class) containsString:@"Aperture"]) [ordered addObject:w];
