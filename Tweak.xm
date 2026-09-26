@@ -2005,6 +2005,28 @@ static void ERMaybeDiagAudio(void) {
         ERDiagPostLocalNotification();
         return;
     }
+    if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"transition.req"]]) {
+        // 1.0.9-143 · 过渡期连拍 dump：文件存在期间每 tick 全量输出（10 秒窗口），
+        //   用户长按展开时自动抓到过渡瞬间的完整视图状态。
+        static NSInteger trTicks = 0;
+        trTicks++;
+        if (trTicks > 20) { [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"transition.req"] error:nil]; trTicks = 0; }
+        else {
+            for (UIWindow *w in gERDIApertureWindows) {
+                NSMutableArray<UIView *> *stF = [NSMutableArray arrayWithObject:w];
+                NSInteger guardF = 0;
+                while (stF.count && guardF++ < 20000) {
+                    UIView *v = stF.lastObject; [stF removeLastObject];
+                    CGRect wf = [v convertRect:v.bounds toView:w];
+                    ERLogInfo(@"DI-TR%ld %@ frame=%@ hidden=%d alpha=%.2f",
+                              (long)trTicks, NSStringFromClass(v.class), NSStringFromCGRect(wf),
+                              v.hidden ? 1 : 0, v.layer.opacity);
+                    [stF addObjectsFromArray:v.subviews];
+                }
+            }
+        }
+        return;
+    }
     if ([fm fileExistsAtPath:[dir stringByAppendingPathComponent:@"tree.req"]]) {
         [fm removeItemAtPath:[dir stringByAppendingPathComponent:@"tree.req"] error:nil];
         // 1.0.9-133 · 全量视图清单：类名 / 窗口坐标帧 / hidden / alpha / 背景色
@@ -2188,10 +2210,19 @@ static void ERDITimerScan(void) {
         //   显示阈值 150 / 隐藏阈值 135，中间为保持区。
         {
             static BOOL glassActive = YES;
+            static CGFloat lastCW = 0.0;
             CGFloat cw = best ? CGRectGetWidth(best.bounds) : 0.0;
             // 1.0.9-142 · 阈值实测校准：默认态容器 165pt（含 CC 模块按钮）、音乐紧凑 189pt
             if (glassActive && cw < 172.0) glassActive = NO;
             if (!glassActive && cw >= 185.0) glassActive = YES;
+            // 1.0.9-143 · **过渡检测**：容器宽度在变（|Δ|>2pt）= 展开/收起动画进行中
+            //   → 玻璃立即全隐藏（用户实测：长按瞬间胶囊出现 1-2 秒）。
+            //   动画结束（宽度稳定）后按阈值恢复。
+            static NSInteger stableTicks = 0;
+            if (best && fabs(cw - lastCW) > 2.0) stableTicks = 0;
+            else if (best) stableTicks++;
+            lastCW = cw;
+            if (best && stableTicks < 4) { best = nil; glassActive = NO; }   // 过渡中 ≤2s 不显玻璃
             if (best && !glassActive) best = nil;
         }
         gERDIContainerView = best;
