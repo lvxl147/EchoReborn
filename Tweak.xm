@@ -1244,9 +1244,15 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         if (nowNC3 - lastNoC2 > 10.0) { lastNoC2 = nowNC3; ERLogInfo(@"DI-140 容器不在（岛空闲/隐藏）→ 不铺玻璃"); }
         return;
     }
-    // 1.0.9-149 · **内容检测**：宿主子树无播放内容（无专辑图/无文字）= 默认态
-    //   → 玻璃全隐藏。这替代不可靠的宽度阈值（默认态宽度 165/189 漂移）。
-    if (!ERDIHasPlaybackContent(glassHost)) {
+    // 1.0.9-151 · 内容检测带 4 拍防抖（动画中内容视图短暂消失不触发闪烁）
+    static NSInteger contentDebounce = 0;
+    static BOOL contentStableState = YES;
+    BOOL hasContentNow = ERDIHasPlaybackContent(glassHost);
+    if (hasContentNow != contentStableState) {
+        contentDebounce++;
+        if (contentDebounce >= 8) { contentStableState = hasContentNow; contentDebounce = 0; }
+    } else { contentDebounce = 0; }
+    if (!contentStableState) {
         static CFTimeInterval lastIdle = 0.0;
         CFTimeInterval nowIdle = CACurrentMediaTime();
         if (nowIdle - lastIdle > 10.0) { lastIdle = nowIdle; ERLogInfo(@"DI-149 宿主无播放内容（默认态）→ 玻璃全隐藏"); }
@@ -1303,7 +1309,16 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 高光必须压在磨砂之上
     if ([cl.sublayers indexOfObject:spec] != cl.sublayers.count - 1) [cl addSublayer:spec];
 
-    CGFloat radius = gh * 0.5;
+    // 1.0.9-151 · **圆角修正（"没填充满"的根因）**：展开容器 204pt 高，高/2=102pt
+    //   是全胶囊形，而实时活动是 ~40pt 圆角的圆角矩形 → 玻璃四角盖不住 → 原生黑从四角露出。
+    //   展开态：优先用系统给宿主设置的圆角值，fallback 45pt；紧凑态保持高/2（胶囊正确）。
+    CGFloat radius;
+    if (diExpanded) {
+        CGFloat sysR = cl.cornerRadius;
+        radius = (sysR > 1.0) ? sysR : MIN(gh * 0.5, 45.0);
+    } else {
+        radius = gh * 0.5;
+    }
     // 1.0.9-123 · **展开时收掉 gainmap 上的玻璃** —— 它停在空闲位置，展开后就是
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
     // 1.0.9-146 · 展开态玻璃**外扩 4pt**：系统在实时活动外缘画的黑描边 (~2pt) 与
@@ -2268,22 +2283,8 @@ static void ERDITimerScan(void) {
             gERDIGiantContainerView = giant;
             gERDIGiantContentView = giantContent;
         }
-        // 1.0.9-150 · **内容感知状态机**（根本解法）：
-        //   有播放内容（专辑图/歌名）→ 剥离原生背景 + 铺玻璃
-        //   无播放内容（默认态）→ **恢复原生岛**（curtain/gainmap 复原 = 系统自带样式）
-        {
-            BOOL hasContent = NO;
-            if (best && ERDIHasPlaybackContent(best)) hasContent = YES;
-            if (!hasContent && gERDIGiantContainerView && ERDIHasPlaybackContent(gERDIGiantContainerView)) hasContent = YES;
-            gERDIHasContent = hasContent;
-            if (diOn && !hasContent) {
-                @try { ERDIRestoreOriginalBackground(wins); } @catch (__unused NSException *e) {}
-            }
-        }
-        // 1.0.9-150 · 剥离原生背景：仅「开关开 + 有播放内容」时执行
-        if (diOn && gERDIHasContent) {
-            @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
-        }
+        // 1.0.9-151 · 剥离原生背景：跟随开关（150 的逐拍内容检测在动画中不稳定导致
+        //   玻璃整体闪烁，回退；内容检测保留在玻璃应用层做一次防抖判定）
         gERDIApertureWindows = [wins filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF.class.description CONTAINS 'Aperture'"]];
         // 1.0.9-134 · **容器滑出岛位置（展开/收起动画、y≈-15）→ 玻璃立即全部隐藏**
         //   紧凑岛在 Live Activity 展开时会向上滑出屏幕，我们的磨砂跟着走，
@@ -2292,7 +2293,7 @@ static void ERDITimerScan(void) {
         {
             NSArray *roots = gERDIApertureWindows ?: (NSArray *)wins;
             BOOL expandedNow = (gERDIGiantContainerView != nil);
-            UIView *keep = (expandedNow || gERDIHasContent) ? nil : best;   // 1.0.9-150 · 无内容/展开态全隐藏
+            UIView *keep = expandedNow ? nil : best;   // 1.0.9-151 · 回退 150
             NSMutableArray<UIView *> *stH3 = [NSMutableArray arrayWithArray:roots];
             NSInteger guardH3 = 0;
             while (stH3.count && guardH3++ < 30000) {
