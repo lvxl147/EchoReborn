@@ -942,6 +942,18 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
                     v.layer.backgroundColor = [UIColor clearColor].CGColor;
                 }
             }
+            // 1.0.9-142 · **紧凑态同款**：实时活动背景视图 (129,12 164x35) 的黑描边
+            //   也透过玻璃可见（默认态胶囊的黑边）→ 一并清 contents。
+            if ([cn isEqualToString:@"UIView"]) {
+                CGRect wfv2 = [v convertRect:v.bounds toView:nil];
+                CGFloat fw2 = CGRectGetWidth(wfv2), fh2 = CGRectGetHeight(wfv2);
+                CGFloat fx2 = CGRectGetMinX(wfv2), fy2 = CGRectGetMinY(wfv2);
+                BOOL compactBackdrop = (fw2 >= 155.0 && fw2 <= 175.0 && fh2 >= 32.0 && fh2 <= 40.0 &&
+                                        fx2 >= 120.0 && fx2 <= 140.0 && fy2 >= 8.0 && fy2 <= 16.0);
+                if (compactBackdrop && v.layer.contents) {
+                    v.layer.contents = nil;
+                }
+            }
             // 1.0.9-141 · 实时活动的黑色圆角背景（(403x202@12,12) 与 (404x203@12,12)）
             //   是绘制内容，透过半透明玻璃可见（用户截图：展开态圆角内侧一圈黑线）。
             //   138 隐藏整视图会连内容+触摸一起干掉（实测全岛消失）。
@@ -1289,9 +1301,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.55);
-    // 1.0.9-141 · **边缘高光**（液态玻璃亮边，用户要求加回）：白 0.30 细边
-    cl.borderWidth = 1.0;
-    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
+    // 1.0.9-142 · **边缘高光在最外边**（对标控制中心液态玻璃的亮边）：白 0.40 / 1.5pt
+    cl.borderWidth = 1.5;
+    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
@@ -1320,9 +1332,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         cbg.layer.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
         cbg.layer.masksToBounds = YES;
         if (@available(iOS 13.0, *)) cbg.layer.cornerCurve = kCACornerCurveContinuous;
-        // 1.0.9-141 · 展开态同样加边缘高光
-        al.borderWidth = 1.0;
-        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
+        // 1.0.9-142 · 展开态边缘高光（最外边）
+        al.borderWidth = 1.5;
+        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
@@ -1361,15 +1373,37 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   展开（容器明显更宽）        → 只显示 ContainerView 那块，收掉 gainmap 上的"多余胶囊"
     // （1.0.9-134 · 非）当前宿主的玻璃清理已上移到扫描器：容器一离开岛位置就全部隐藏）
 
-    // 辉光（LiquidifyApertureGlowEnabled）：中性白光，避免给玻璃染色
+    // 1.0.9-142 · **渐变阴影**（完全对标 Liquidify GlowEnabled）：
+    //   玻璃之下垫 5 色渐变发光层（双层：内圈贴边 + 外圈扩散），颜色 = GradientColor1..5。
+    //   阴影团从岛边缘向外柔化扩散 —— Liquidify 用独立 shadowView + 高斯模糊实现，
+    //   我们用双层渐变模拟（公开 API）。
     if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
-        cl.masksToBounds = NO;
-        cl.shadowColor = [UIColor whiteColor].CGColor;
-        cl.shadowOpacity = 0.55;
-        cl.shadowRadius = 18.0;
-        cl.shadowOffset = CGSizeZero;
-    } else if (cl.shadowOpacity != 0.0) {
-        cl.shadowOpacity = 0.0;
+        CAGradientLayer *glowIn = nil, *glowOut = nil;
+        for (CALayer *l in cl.sublayers) {
+            if ([l.name isEqualToString:@"ERDI::glowIn"]) glowIn = (CAGradientLayer *)l;
+            else if ([l.name isEqualToString:@"ERDI::glowOut"]) glowOut = (CAGradientLayer *)l;
+        }
+        if (!glowIn) {
+            glowIn = [CAGradientLayer layer]; glowIn.name = @"ERDI::glowIn";
+            glowIn.startPoint = CGPointMake(0.0, 0.0); glowIn.endPoint = CGPointMake(1.0, 1.0);
+            [cl insertSublayer:glowIn atIndex:0];   // 置底（磨砂之下）
+        }
+        if (!glowOut) {
+            glowOut = [CAGradientLayer layer]; glowOut.name = @"ERDI::glowOut";
+            glowOut.startPoint = CGPointMake(0.0, 0.0); glowOut.endPoint = CGPointMake(1.0, 1.0);
+            [cl insertSublayer:glowOut atIndex:0];
+        }
+        CGRect gIn = CGRectInset(gb, -4, -4);
+        CGRect gOut = CGRectInset(gb, -14, -14);
+        glowIn.frame = gIn;  glowIn.cornerRadius = CGRectGetHeight(gIn) * 0.5;
+        glowIn.colors = (id)ERCGColorArray(cols);  glowIn.opacity = 0.50;  glowIn.hidden = NO;
+        glowOut.frame = gOut; glowOut.cornerRadius = CGRectGetHeight(gOut) * 0.5;
+        glowOut.colors = (id)ERCGColorArray(cols); glowOut.opacity = 0.22;  glowOut.hidden = NO;
+    } else {
+        for (CALayer *l in cl.sublayers) {
+            if ([l.name isEqualToString:@"ERDI::glowIn"] || [l.name isEqualToString:@"ERDI::glowOut"])
+                l.hidden = YES;
+        }
     }
 
     static CFTimeInterval lastG116 = 0.0;
@@ -2155,8 +2189,9 @@ static void ERDITimerScan(void) {
         {
             static BOOL glassActive = YES;
             CGFloat cw = best ? CGRectGetWidth(best.bounds) : 0.0;
-            if (glassActive && cw < 135.0) glassActive = NO;
-            if (!glassActive && cw >= 150.0) glassActive = YES;
+            // 1.0.9-142 · 阈值实测校准：默认态容器 165pt（含 CC 模块按钮）、音乐紧凑 189pt
+            if (glassActive && cw < 172.0) glassActive = NO;
+            if (!glassActive && cw >= 185.0) glassActive = YES;
             if (best && !glassActive) best = nil;
         }
         gERDIContainerView = best;
