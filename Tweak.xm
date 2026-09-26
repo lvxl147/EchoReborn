@@ -902,6 +902,7 @@ static BOOL gERDIHasContent = NO;                      // 1.0.9-150 · 本 tick 
 //   ② 其余视图：backgroundColor 为「不透明近黑」的一律清除
 //   原色记在关联对象里，关开关时按原样还原。
 static void *kERDIOrigBGKey = &kERDIOrigBGKey;
+static void *kERDIEventHiddenKey = &kERDIEventHiddenKey;   // 1.0.9-155 · 被 155 事件逻辑隐藏的层（关开关还原用；restore/ERDIEventApply 共用）
 static void *kERDIOrigShadowKey = &kERDIOrigShadowKey;
 static void *kERDILaBackdropKey = &kERDILaBackdropKey;
 
@@ -1555,7 +1556,7 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
 //   · 玻璃圆角读系统 cornerRadius（修展开态两端月牙露黑/填充不全：143 用 高/2 算错）
 // ===========================================================================
 
-static void *kERDIEventHiddenKey = &kERDIEventHiddenKey;   // 155 · 被 155 事件逻辑隐藏的层（关开关还原用）
+// （kERDIEventHiddenKey 已上移至 904 行区域 —— 155 修复：restore 函数在 983 行先用后声明的编译错误）
 
 static void ERDIEventApply(UIView *capsule) {
     if (!capsule) return;
