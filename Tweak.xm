@@ -916,6 +916,16 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
             // 画黑的元凶：整体隐藏（它们的黑是绘制内容/材质，清背景色无效）
             if (!v.hidden) v.hidden = YES;
             if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
+        } else if ([cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
+                   [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
+            // 1.0.9-135 · **KeyLine 描边是绘制内容**（cap_20 真屏取证：岛轮廓外扩几 pt
+            //   有一圈黑色描边，形状与 AdaptiveKeyLineBackdrop 吻合）。岛尺寸的一律整体隐藏。
+            CGRect b = v.bounds;
+            CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
+            if (bw >= 120.0 && bw <= 340.0 && bh >= 30.0 && bh <= 90.0) {
+                if (!v.hidden) v.hidden = YES;
+                if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
+            }
         } else {
             CGColorRef bgc = v.layer.backgroundColor;
             if (bgc) {
@@ -951,7 +961,9 @@ static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
         }
         if ([cn isEqualToString:@"_SBSystemApertureMagiciansCurtainView"] ||
             [cn isEqualToString:@"_SBGainMapView"] ||
-            [cn isEqualToString:@"_SBSystemApertureGainMapView"]) {
+            [cn isEqualToString:@"_SBSystemApertureGainMapView"] ||
+            [cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
+            [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
             if (v.hidden) v.hidden = NO;
             if (v.layer.opacity != 1.0) v.layer.opacity = 1.0;
         }
@@ -1229,9 +1241,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.55);
-    // 发丝描边：玻璃边缘
-    cl.borderWidth = 1.0;
-    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
+    // 1.0.9-135 · 描边弃用（纯玻璃无装饰；黑色描边来自 KeyLine backdrop，已隐藏）
+    cl.borderWidth = 0.0;
+    cl.borderColor = nil;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
@@ -1260,9 +1272,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         cbg.layer.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
         cbg.layer.masksToBounds = YES;
         if (@available(iOS 13.0, *)) cbg.layer.cornerCurve = kCACornerCurveContinuous;
-        // 展开时边框也铺到整条岛
-        al.borderWidth = 1.0;
-        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.20].CGColor;
+        // 1.0.9-135 · 展开态同样不加描边
+        al.borderWidth = 0.0;
+        al.borderColor = nil;
         objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
