@@ -1288,8 +1288,8 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   用户看到的"多余的小胶囊"。此时玻璃由 ContainerView 那块负责（见下）。
     // 1.0.9-146 · 展开态玻璃**外扩 4pt**：系统在实时活动外缘画的黑描边 (~2pt) 与
     //   玻璃之间有 ~4pt 缝隙（用户截图：状态栏从缝隙透出）→ 4pt 外扩盖住描边与缝隙。
-    blur.frame = diExpanded ? CGRectInset(gb, -4.0, -4.0) : gb;
-    if (diExpanded) glassHost.clipsToBounds = NO;   // 1.0.9-146 · 外扩部分不被宿主裁掉
+    // 1.0.9-148 · 外扩回退 4pt→2.5pt（146 实测更糟：超出岛且黑线更重），量准坐标后再定
+    blur.frame = diExpanded ? CGRectInset(gb, -2.5, -2.5) : gb;
     blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
     blur.alpha = diExpanded ? 0.55 : 0.68;  // 1.0.9-140 · 液态玻璃强度（用户反馈 0.45 太透不明显）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
@@ -1304,9 +1304,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.55);
-    // 1.0.9-146 · 玻璃自带黑边（融合系统描边；原生岛边缘本就是黑的，视觉连贯）
-    cl.borderWidth = 2.5;
-    cl.borderColor = [UIColor colorWithWhite:0.05 alpha:0.90].CGColor;
+    // 1.0.9-148 · 边缘暂回中性白 0.30（量准坐标后再定最终样式）
+    cl.borderWidth = 1.5;
+    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
@@ -1335,9 +1335,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         cbg.layer.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
         cbg.layer.masksToBounds = YES;
         if (@available(iOS 13.0, *)) cbg.layer.cornerCurve = kCACornerCurveContinuous;
-        // 1.0.9-146 · 展开态同样黑边
-        al.borderWidth = 2.5;
-        al.borderColor = [UIColor colorWithWhite:0.05 alpha:0.90].CGColor;
+        // 1.0.9-148 · 展开态同样回中性
+        al.borderWidth = 1.5;
+        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
         objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
@@ -1413,10 +1413,12 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     CFTimeInterval nowG116 = CACurrentMediaTime();
     if (nowG116 - lastG116 > 5.0) {
         lastG116 = nowG116;
-        ERLogInfo(@"DI-124 模式=%@ 玻璃宿主=%@ bounds=%@ 容器=%@ 文字渐变=%lu色",
+        CGRect hostWf = [glassHost convertRect:glassHost.bounds toView:nil];
+        ERLogInfo(@"DI-148 模式=%@ 宿主=%@ bounds=%@ 宿主窗口帧=%@ blur帧=%@ 容器=%@",
                   diExpanded ? @"展开" : @"空闲",
                   NSStringFromClass(glassHost.class), NSStringFromCGRect(glassHost.bounds),
-                  container ? @"有" : @"无", (unsigned long)cols.count);
+                  NSStringFromCGRect(hostWf), NSStringFromCGRect(blur.frame),
+                  container ? @"有" : @"无");
     }
     } @catch (NSException *ex110) {
         // 1.0.9-111 · 异常必须落盘，否则永远只能靠猜
