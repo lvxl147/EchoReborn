@@ -942,10 +942,18 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
                     v.layer.backgroundColor = [UIColor clearColor].CGColor;
                 }
             }
-            // 1.0.9-139 · 138 曾按尺寸隐藏 (403x202@12,12) 的视图 —— 实测它承载着
-            //   展开态的内容与触摸，隐藏后整岛消失且不可触（用户实测）。
-            //   该视图的黑色圆角是系统绘制的 Live Activity 背景，**不能动**，
-            //   展开态保留原生背景（黑底上浮内容），玻璃只在紧凑态呈现。
+            // 1.0.9-141 · 实时活动的黑色圆角背景（(403x202@12,12) 与 (404x203@12,12)）
+            //   是绘制内容，透过半透明玻璃可见（用户截图：展开态圆角内侧一圈黑线）。
+            //   138 隐藏整视图会连内容+触摸一起干掉（实测全岛消失）。
+            //   **改用 layer.contents=nil**：只清绘制位图，视图/子视图/触摸全部保留。
+            CGRect wfv = [v convertRect:v.bounds toView:nil];
+            CGFloat fw = CGRectGetWidth(wfv), fh = CGRectGetHeight(wfv);
+            CGFloat fx = CGRectGetMinX(wfv), fy = CGRectGetMinY(wfv);
+            BOOL laBackdrop = (fw >= 395.0 && fw <= 415.0 && fh >= 195.0 && fh <= 210.0 &&
+                               fx >= 5.0 && fx <= 20.0 && fy >= 5.0 && fy <= 20.0);
+            if (laBackdrop && v.layer.contents) {
+                v.layer.contents = nil;   // 清绘制内容；系统重绘时下一 tick 再清
+            }
         }
         // 1.0.9-136 · **阴影全域清除**：真屏 f100 实拍 —— 岛上方悬挂一团黑色阴影，
         //   是某个滑出屏幕的容器投下的。谁的阴影都不要：全窗口 shadowOpacity=0，
@@ -1281,9 +1289,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     spec.colors = (id)ERCGColorArray(sheen);
     spec.startPoint = CGPointMake(0.5, 0.0);
     spec.endPoint = CGPointMake(0.5, 0.55);
-    // 1.0.9-135 · 描边弃用（纯玻璃无装饰；黑色描边来自 KeyLine backdrop，已隐藏）
-    cl.borderWidth = 0.0;
-    cl.borderColor = nil;
+    // 1.0.9-141 · **边缘高光**（液态玻璃亮边，用户要求加回）：白 0.30 细边
+    cl.borderWidth = 1.0;
+    cl.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
     objc_setAssociatedObject(glassHost, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
     // 1.0.9-124 · **展开态：玻璃铺在 ContainerView 背景层（index 0）**
@@ -1312,9 +1320,9 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         cbg.layer.cornerRadius = (sysR > 1.0) ? sysR : (CGRectGetHeight(cb2) * 0.5);
         cbg.layer.masksToBounds = YES;
         if (@available(iOS 13.0, *)) cbg.layer.cornerCurve = kCACornerCurveContinuous;
-        // 1.0.9-135 · 展开态同样不加描边
-        al.borderWidth = 0.0;
-        al.borderColor = nil;
+        // 1.0.9-141 · 展开态同样加边缘高光
+        al.borderWidth = 1.0;
+        al.borderColor = [UIColor colorWithWhite:1.0 alpha:0.30].CGColor;
         objc_setAssociatedObject(container, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
 
@@ -2141,7 +2149,16 @@ static void ERDITimerScan(void) {
         // 1.0.9-137 · **默认态（无内容）不铺玻璃**：容器宽 125 = 岛上无内容（空闲），
         //   此时不该有玻璃（用户三类定义：默认态应透明无物；有内容才铺磨砂）。
         //   宽度 ≥140（音乐紧凑 189 / 展开才算有内容。
-        if (best && CGRectGetWidth(best.bounds) < 140.0) best = nil;
+        // 1.0.9-141 · **迟滞区间**防闪烁：弹簧动画收尾时宽度会在阈值附近震荡，
+        //   单阈值 140 会让玻璃反复显隐（用户实测"变为默认时闪几下"）。
+        //   显示阈值 150 / 隐藏阈值 135，中间为保持区。
+        {
+            static BOOL glassActive = YES;
+            CGFloat cw = best ? CGRectGetWidth(best.bounds) : 0.0;
+            if (glassActive && cw < 135.0) glassActive = NO;
+            if (!glassActive && cw >= 150.0) glassActive = YES;
+            if (best && !glassActive) best = nil;
+        }
         gERDIContainerView = best;
         // 1.0.9-140 · 展开态容器（宽>340 的实时活动容器）与其 ContentView：
         //   玻璃要垫在 ContentView 之下（黑背景之上、内容之下）—— 不隐藏任何系统视图。
