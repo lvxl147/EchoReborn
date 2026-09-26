@@ -961,30 +961,10 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
                     v.layer.backgroundColor = [UIColor clearColor].CGColor;
                 }
             }
-            // 1.0.9-142 · **紧凑态同款**：实时活动背景视图 (129,12 164x35) 的黑描边
-            //   也透过玻璃可见（默认态胶囊的黑边）→ 一并清 contents。
-            if ([cn isEqualToString:@"UIView"]) {
-                CGRect wfv2 = [v convertRect:v.bounds toView:nil];
-                CGFloat fw2 = CGRectGetWidth(wfv2), fh2 = CGRectGetHeight(wfv2);
-                CGFloat fx2 = CGRectGetMinX(wfv2), fy2 = CGRectGetMinY(wfv2);
-                BOOL compactBackdrop = (fw2 >= 155.0 && fw2 <= 175.0 && fh2 >= 32.0 && fh2 <= 40.0 &&
-                                        fx2 >= 120.0 && fx2 <= 140.0 && fy2 >= 8.0 && fy2 <= 16.0);
-                if (compactBackdrop && v.layer.contents) {
-                    v.layer.contents = nil;
-                }
-            }
-            // 1.0.9-141 · 实时活动的黑色圆角背景（(403x202@12,12) 与 (404x203@12,12)）
-            //   是绘制内容，透过半透明玻璃可见（用户截图：展开态圆角内侧一圈黑线）。
-            //   138 隐藏整视图会连内容+触摸一起干掉（实测全岛消失）。
-            //   **改用 layer.contents=nil**：只清绘制位图，视图/子视图/触摸全部保留。
-            CGRect wfv = [v convertRect:v.bounds toView:nil];
-            CGFloat fw = CGRectGetWidth(wfv), fh = CGRectGetHeight(wfv);
-            CGFloat fx = CGRectGetMinX(wfv), fy = CGRectGetMinY(wfv);
-            BOOL laBackdrop = (fw >= 395.0 && fw <= 415.0 && fh >= 195.0 && fh <= 210.0 &&
-                               fx >= 5.0 && fx <= 20.0 && fy >= 5.0 && fy <= 20.0);
-            if (laBackdrop && v.layer.contents) {
-                v.layer.contents = nil;   // 清绘制内容；系统重绘时下一 tick 再清
-            }
+            // 1.0.9-150 · **移除 contents=nil 逻辑**（141 引入）：实测它清掉了实时活动
+            //   的黑色填充 → 展开态"没填充满/发虚"（用户确认 141 起出现）。
+            //   展开态保留系统原生的黑色 Live Activity 背景（黑底浮内容，系统本来就这样），
+            //   玻璃垫在内容之下提供磨砂。黑"线"是系统 Live Activity 的固有边缘。
         }
         // 1.0.9-136 · **阴影全域清除**：真屏 f100 实拍 —— 岛上方悬挂一团黑色阴影，
         //   是某个滑出屏幕的容器投下的。谁的阴影都不要：全窗口 shadowOpacity=0，
@@ -2205,14 +2185,7 @@ static void ERDITimerScan(void) {
             @try { ERDIDumpPill(wins); } @catch (__unused NSException *e) {}
         }
     }
-    // 1.0.9-128 · **剥离必须跟随开关**：开关关 → 岛 100% 原生（124 曾无条件剥离，
-    //   导致关掉开关后岛变透明消失 —— 用户 18:23 真屏截图证实）
-    if (diOn) {
-        @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
-    } else {
-        // 1.0.9-130 · 开关关 → 按记录还原全部黑色背景 + 复位隐藏（岛回 100% 原生）
-        @try { ERDIRestoreOriginalBackground(wins); } @catch (__unused NSException *e) {}
-    }
+
 
     // 1.0.9-122/131 · **跨全部窗口**找 ContainerView（随岛伸缩的那块）
     //   过滤条件（全部满足才收）：
@@ -2294,6 +2267,22 @@ static void ERDITimerScan(void) {
             gERDIGiantContainerView = giant;
             gERDIGiantContentView = giantContent;
         }
+        // 1.0.9-150 · **内容感知状态机**（根本解法）：
+        //   有播放内容（专辑图/歌名）→ 剥离原生背景 + 铺玻璃
+        //   无播放内容（默认态）→ **恢复原生岛**（curtain/gainmap 复原 = 系统自带样式）
+        {
+            BOOL hasContent = NO;
+            if (best && ERDIHasPlaybackContent(best)) hasContent = YES;
+            if (!hasContent && giant && ERDIHasPlaybackContent(giant)) hasContent = YES;
+            gERDIHasContent = hasContent;
+            if (diOn && !hasContent) {
+                @try { ERDIRestoreOriginalBackground(wins); } @catch (__unused NSException *e) {}
+            }
+        }
+        // 1.0.9-150 · 剥离原生背景：仅「开关开 + 有播放内容」时执行
+        if (diOn && gERDIHasContent) {
+            @try { ERDIStripOriginalBackground(wins); } @catch (__unused NSException *e) {}
+        }
         gERDIApertureWindows = [wins filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF.class.description CONTAINS 'Aperture'"]];
         // 1.0.9-134 · **容器滑出岛位置（展开/收起动画、y≈-15）→ 玻璃立即全部隐藏**
         //   紧凑岛在 Live Activity 展开时会向上滑出屏幕，我们的磨砂跟着走，
@@ -2302,7 +2291,7 @@ static void ERDITimerScan(void) {
         {
             NSArray *roots = gERDIApertureWindows ?: (NSArray *)wins;
             BOOL expandedNow = (gERDIGiantContainerView != nil);
-            UIView *keep = expandedNow ? nil : best;   // 1.0.9-140 · 展开态全隐藏（稍后按展开宿主重建）
+            UIView *keep = (expandedNow || gERDIHasContent) ? nil : best;   // 1.0.9-150 · 无内容/展开态全隐藏
             NSMutableArray<UIView *> *stH3 = [NSMutableArray arrayWithArray:roots];
             NSInteger guardH3 = 0;
             while (stH3.count && guardH3++ < 30000) {
