@@ -1289,6 +1289,36 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         }
     }
 
+    // 1.0.9-153 · **液态玻璃 = LGLiveBackdropView**（GlassKit：CABackdropLayer 真背景模糊
+    //   + CAFilter 高斯 + 方向高光层 + 边缘层，与 Liquidify 同一技术路线）。
+    //   系统磨砂 UIVisualEffectView 垫底兜底，LG 玻璃叠其上提供折射/高光/边缘。
+    UIView *lgGlass = nil;
+    Class lgcls = NSClassFromString(@"LGLiveBackdropView");
+    for (UIView *sv in glassHost.subviews) {
+        if (lgcls && [sv isKindOfClass:lgcls] && [sv.layer.name isEqualToString:@"ERDI::lg"]) { lgGlass = sv; break; }
+    }
+    if (!lgGlass && lgcls) {
+        lgGlass = [[lgcls alloc] initWithFrame:glassBounds groupName:@"EchoRebornIsland"
+                                    filterType:@"echoreborn.liquidglass.banner"];
+        lgGlass.layer.name = @"ERDI::lg";
+        lgGlass.userInteractionEnabled = NO;
+        if (diExpanded && gERDIGiantContentView) {
+            NSUInteger ci = [glassHost.subviews indexOfObject:gERDIGiantContentView];
+            [glassHost insertSubview:lgGlass atIndex:(ci == NSNotFound ? 0u : ci)];   // 内容正下方
+        } else {
+            [glassHost insertSubview:lgGlass atIndex:0];
+        }
+    }
+    if (lgGlass) {
+        lgGlass.frame = diExpanded ? CGRectInset(gb, -2.5, -2.5) : gb;
+        lgGlass.hidden = NO;
+        lgGlass.layer.cornerRadius = radius;
+        lgGlass.layer.masksToBounds = YES;
+        [(id)lgGlass setLgShapeRect:CGRectMake(0, 0, lgGlass.bounds.size.width, lgGlass.bounds.size.height)];
+        [(id)lgGlass setLgShapeCornerRadius:radius];
+        [(id)lgGlass setLgSpecularEnabledOverride:@YES];   // 边缘高光：开
+    }
+
     // 旧的渐变玻璃层全部退役
     for (CALayer *l in cl.sublayers) {
         if ([l.name isEqualToString:@"ERDI::gradient"]) [l removeFromSuperlayer];
