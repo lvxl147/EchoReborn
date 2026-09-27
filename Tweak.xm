@@ -1705,11 +1705,20 @@ static void ERDIEventPollTick(void) {
     Class ctr = objc_getClass("SBSystemApertureContainerView");
     Class pkg = objc_getClass("_SBUISystemApertureCAPackageView");
     if (!ctr && !pkg) return;
+    // 1.0.9-158 · 每 tick 自行枚举窗口（不再依赖 gERDIApertureWindows 的 2 秒快照）：
+    //   真机实证展开期间系统会临时挂出额外的 aperture 窗口，2 秒快照在这些窗口存续的
+    //   头几秒内看不到它们 → 展开态从未被轮询覆盖（DI-156 玻璃日志无 405 宽记录）。
     static NSMutableArray<UIView *> *buf = nil;
     if (!buf) buf = [NSMutableArray array];
     @try {
-        for (UIWindow *w in gERDIApertureWindows) {
+        // 双源并集：实时 windows 枚举 + 2 秒快照（ERDITimerScan 维护），幂等处理重复实例无害
+        NSMutableArray<UIWindow *> *srcs = [NSMutableArray array];
+        [srcs addObjectsFromArray:UIApplication.sharedApplication.windows];
+        for (UIWindow *w in gERDIApertureWindows)
+            if (![srcs containsObject:w]) [srcs addObject:w];
+        for (UIWindow *w in srcs) {
             if (w.hidden) continue;
+            if (![NSStringFromClass(w.class) containsString:@"Aperture"]) continue;
             [buf removeAllObjects];
             [buf addObject:w];
             NSInteger guard = 0;
