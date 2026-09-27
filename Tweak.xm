@@ -1598,7 +1598,7 @@ static void ERDIEventApply(UIView *capsule) {
         CFTimeInterval nowR = CACurrentMediaTime();
         if (nowR - lastRoot > 10.0) {
             lastRoot = nowR;
-            ERLogInfo(@"DI-155 锚点 capsule=%@ layer.name=%@ RootLayer=%@ bounds=%@",
+            ERLogInfo(@"DI-156 锚点 capsule=%@ layer.name=%@ RootLayer=%@ bounds=%@",
                       NSStringFromClass(capsule.class),
                       capsule.layer.name ?: @"(nil)",
                       rootLayer ? @"命中" : @"未命中(胶囊层保底)",
@@ -1644,7 +1644,7 @@ static void ERDIEventApply(UIView *capsule) {
                     CFTimeInterval nowH = CACurrentMediaTime();
                     if (nowH - lastHide > 5.0) {
                         lastHide = nowH;
-                        ERLogInfo(@"DI-155 藏黑底 %@ name=%@ bounds=%@ backdrop=%d black=%d",
+                        ERLogInfo(@"DI-156 藏黑底 %@ name=%@ bounds=%@ backdrop=%d black=%d",
                                   cn, l.name ?: @"(nil)",
                                   NSStringFromCGRect(l.bounds), isBackdrop ? 1 : 0, nearBlack ? 1 : 0);
                     }
@@ -1697,36 +1697,19 @@ static void ERDIEventApply(UIView *capsule) {
         CFTimeInterval nowS2 = CACurrentMediaTime();
         if (nowS2 - lastStat > 5.0) {
             lastStat = nowS2;
-            ERLogInfo(@"DI-155 玻璃 bounds=%@ 圆角=%.1f(系统%.1f) alpha=%.2f 本帧藏层=%ld",
+            ERLogInfo(@"DI-156 玻璃 bounds=%@ 圆角=%.1f(系统%.1f) alpha=%.2f 本帧藏层=%ld",
                       NSStringFromCGRect(capsule.bounds),
                       blur.layer.cornerRadius, sysR, blur.alpha, (long)hidCount);
         }
     } @catch (__unused NSException *e) {
-        ERLogError(@"DI-155 异常: %@", e);
+        ERLogError(@"DI-156 异常: %@", e);
     }
 }
 
-// 1.0.9-155 · 事件驱动 hook 安装（对齐 Liquidify：只 hook 岛胶囊本体）
-static void ERDIInstallPackageViewHooks(void) {
-    static BOOL installed = NO;
-    static NSInteger attempts = 0;
-    if (installed) return;
-    Class cls = objc_getClass("_SBUISystemApertureCAPackageView");
-    if (!cls) {
-        // 类可能延迟注册 → 一次性重试（最多 5 次，Liquidify 同款兜底思路）
-        attempts++;
-        if (attempts <= 5) {
-            ERLogInfo(@"DI-155 类未注册，第 %ld 次重试…", (long)attempts);
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ ERDIInstallPackageViewHooks(); });
-        } else {
-            ERLogInfo(@"DI-155 放弃：_SBUISystemApertureCAPackageView 不存在（类名随系统变更？）");
-        }
-        return;
-    }
-    installed = YES;
-    // 隐藏开关（ERDIHideEnabled）分支保持原行为：空闲收起/使用中恢复
-    ERSafeSwizzleLayout(cls, @selector(layoutSubviews), ^(UIView *view) {
+// 1.0.9-156 · 单类安装（layoutSubviews + didMoveToWindow → ERDIEventApply）
+static void ERDISwizzlePackageClass(Class cls, NSString *label) {
+    if (!cls) return;
+    void (^applyBlock)(UIView *view) = ^(UIView *view) {
         if (ERDIHideEnabled()) {
             UIWindow *w = view.window;
             if (w) {
@@ -1736,19 +1719,38 @@ static void ERDIInstallPackageViewHooks(void) {
             return;
         }
         @try { ERDIEventApply(view); } @catch (__unused NSException *e) {}
-    });
-    ERSafeSwizzleLayout(cls, @selector(didMoveToWindow), ^(UIView *view) {
-        if (ERDIHideEnabled()) {
-            UIWindow *w = view.window;
-            if (w) {
-                if (ERDIisIdle(w)) { if (!w.hidden) { w.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛(didMoveToWindow)"); } }
-                else { if (w.hidden) { w.hidden = NO; ERLogInfo(@"DI-HIDE 使用中→恢复"); } }
-            }
-            return;
+    };
+    ERSafeSwizzleLayout(cls, @selector(layoutSubviews), applyBlock);
+    ERSafeSwizzleLayout(cls, @selector(didMoveToWindow), applyBlock);
+    ERLogInfo(@"DI-156 事件 hook 已安装: %@ (layoutSubviews + didMoveToWindow)", label);
+}
+
+// 1.0.9-156 · hook 目标按系统版本分派：
+//   iOS 17+：_SBUISystemApertureCAPackageView（Liquidify 逆向实证）
+//   iOS 16 ：SBSystemApertureContainerView（真机 16.6 日志实证：
+//            17:07:38 dump：ContainerView → ContentView → SAUIElementView + KeyLine/LumaTracking，
+//            CAPackageView 在 16.6 根本不出现 —— 155 在 16.6 完全落空的原因）
+static void ERDIInstallPackageViewHooks(void) {
+    static BOOL installed = NO;
+    static NSInteger attempts = 0;
+    if (installed) return;
+    Class pkg = objc_getClass("_SBUISystemApertureCAPackageView");   // iOS 17+
+    Class ctr = objc_getClass("SBSystemApertureContainerView");      // iOS 16 岛容器
+    if (!pkg && !ctr) {
+        // 类可能延迟注册 → 一次性重试（最多 5 次，Liquidify 同款兜底思路）
+        attempts++;
+        if (attempts <= 5) {
+            ERLogInfo(@"DI-156 类未注册，第 %ld 次重试…", (long)attempts);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ ERDIInstallPackageViewHooks(); });
+        } else {
+            ERLogInfo(@"DI-156 放弃：CAPackageView/ContainerView 均不存在（类名随系统变更？）");
         }
-        @try { ERDIEventApply(view); } @catch (__unused NSException *e) {}
-    });
-    ERLogInfo(@"DI-155 事件驱动 hook 已安装: _SBUISystemApertureCAPackageView (layoutSubviews + didMoveToWindow)");
+        return;
+    }
+    installed = YES;
+    if (pkg) ERDISwizzlePackageClass(pkg, @"_SBUISystemApertureCAPackageView (iOS17)");
+    if (ctr) ERDISwizzlePackageClass(ctr, @"SBSystemApertureContainerView (iOS16 岛容器)");
 }
 
 // 本版**不调用**该函数（急救）。下一版确认安全后再启用。
