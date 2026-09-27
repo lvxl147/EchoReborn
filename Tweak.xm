@@ -1676,23 +1676,12 @@ static void ERDIEventApply(UIView *capsule) {
         capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-        // ---- ④ 本窗口旧玻璃残留清理（跨窗口兜底仍由 timer strip 承担）----
-        {
-            NSMutableArray<UIView *> *stc = [NSMutableArray arrayWithObject:win];
-            NSInteger guard3 = 0;
-            while (stc.count && guard3++ < 8000) {
-                UIView *v = stc.lastObject; [stc removeLastObject];
-                if (v != capsule) {
-                    for (UIView *sv in v.subviews)
-                        if ([sv.layer.name isEqualToString:@"ERDI::blur"]) sv.hidden = YES;
-                    for (CALayer *sl in v.layer.sublayers)
-                        if ([sl.name hasPrefix:@"ERDI::"]) sl.hidden = YES;
-                }
-                [stc addObjectsFromArray:v.subviews];
-            }
-        }
-
-        // ---- ⑤ 状态日志（5 秒节流）----
+        // ---- ④ 状态日志（5 秒节流）----
+        // 1.0.9-157 · **跨容器残留清理删除**：iOS 16.6 真机 dump 实证同一设备存在
+        //   多个 SBSystemApertureWindow（紧凑/展开各一容器实例），155/156 的
+        //   「藏掉本窗口其他容器玻璃」逻辑把展开容器的玻璃当残留误杀
+        //   （真机 17:35:50 dump：展开容器玻璃 UIVisualEffectView 405x204 alpha=0.55 hidden=1）。
+        //   多实例玻璃共存无害（各自随窗口显隐），关开关还原由 ERDIRestoreOriginalBackground 负责。
         static CFTimeInterval lastStat = 0.0;
         CFTimeInterval nowS2 = CACurrentMediaTime();
         if (nowS2 - lastStat > 5.0) {
@@ -1704,6 +1693,35 @@ static void ERDIEventApply(UIView *capsule) {
     } @catch (__unused NSException *e) {
         ERLogError(@"DI-156 异常: %@", e);
     }
+}
+
+// 1.0.9-157 · 轻量轮询 tick：0.3 秒遍历 aperture 窗口内全部容器实例逐个 ERDIEventApply。
+// 为什么事件驱动不够：真机 17:35:50 展开态 dump 实证 —— 展开容器（405x204）预布局后
+// 仅以 transform 动画显示，layoutSubviews 不再触发，事件 hook 打不进展开态；
+// 且黑底（纯黑 UIView 404x202 / 大 GainMap / KeyLine / LumaTracking）在系统重绘后恢复，
+// 需要 tick 级保持。0.3 秒幂等同步 = 空窗比 143 的 2 秒小 6 倍且状态永不回退。
+static void ERDIEventPollTick(void) {
+    if (!ERDIEnabled()) return;
+    Class ctr = objc_getClass("SBSystemApertureContainerView");
+    Class pkg = objc_getClass("_SBUISystemApertureCAPackageView");
+    if (!ctr && !pkg) return;
+    static NSMutableArray<UIView *> *buf = nil;
+    if (!buf) buf = [NSMutableArray array];
+    @try {
+        for (UIWindow *w in gERDIApertureWindows) {
+            if (w.hidden) continue;
+            [buf removeAllObjects];
+            [buf addObject:w];
+            NSInteger guard = 0;
+            while (buf.count && guard++ < 600) {
+                UIView *v = buf.lastObject; [buf removeLastObject];
+                if ((ctr && [v isKindOfClass:ctr]) || (pkg && [v isKindOfClass:pkg])) {
+                    ERDIEventApply(v);
+                }
+                [buf addObjectsFromArray:v.subviews];
+            }
+        }
+    } @catch (__unused NSException *e) {}
 }
 
 // 1.0.9-156 · 单类安装（layoutSubviews + didMoveToWindow → ERDIEventApply）
@@ -1751,6 +1769,17 @@ static void ERDIInstallPackageViewHooks(void) {
     installed = YES;
     if (pkg) ERDISwizzlePackageClass(pkg, @"_SBUISystemApertureCAPackageView (iOS17)");
     if (ctr) ERDISwizzlePackageClass(ctr, @"SBSystemApertureContainerView (iOS16 岛容器)");
+
+    // 1.0.9-157 · 启动 0.3 秒轻量轮询（主队列，仅扫 aperture 窗口内容器实例）
+    static dispatch_source_t s_pollTimer = nil;
+    if (!s_pollTimer) {
+        s_pollTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+        dispatch_source_set_timer(s_pollTimer, dispatch_time(DISPATCH_TIME_NOW, 0),
+                                  (uint64_t)(0.3 * NSEC_PER_SEC), (uint64_t)(0.05 * NSEC_PER_SEC));
+        dispatch_source_set_event_handler(s_pollTimer, ^{ ERDIEventPollTick(); });
+        dispatch_resume(s_pollTimer);
+        ERLogInfo(@"DI-157 事件轮询已启动（0.3s，aperture 窗口容器实例幂等同步）");
+    }
 }
 
 // 本版**不调用**该函数（急救）。下一版确认安全后再启用。
