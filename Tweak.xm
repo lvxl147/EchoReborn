@@ -1711,9 +1711,22 @@ static void ERDIEventPollTick(void) {
     static NSMutableArray<UIView *> *buf = nil;
     if (!buf) buf = [NSMutableArray array];
     @try {
-        // 双源并集：实时 windows 枚举 + 2 秒快照（ERDITimerScan 维护），幂等处理重复实例无害
+        // 1.0.9-159 · 窗口枚举对齐 ERDITimerScan（2443 行）：
+        //   sharedApplication.windows 在 iOS 16 SpringBoard 只回主 scene 的部分窗口
+        //   （真机实证：稳态仅 1 个 aperture 窗口），而 connectedScenes→UIWindowScene.windows
+        //   才能拿到全部 aperture 窗口（展开期间 3 个，DI-FULL/transition dump 实证）。
+        //   158 用错枚举 → 轮询从未见到展开窗口 → 玻璃 hidden=1/黑底 hidden=0。
         NSMutableArray<UIWindow *> *srcs = [NSMutableArray array];
-        [srcs addObjectsFromArray:UIApplication.sharedApplication.windows];
+        @try {
+            NSArray<UIWindow *> *legacy = UIApplication.sharedApplication.windows;
+            if (legacy.count) [srcs addObjectsFromArray:legacy];
+            for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+                if ([scene isKindOfClass:[UIWindowScene class]]) {
+                    UIWindowScene *ws = (UIWindowScene *)scene;
+                    if (ws.windows.count) [srcs addObjectsFromArray:ws.windows];
+                }
+            }
+        } @catch (...) {}
         for (UIWindow *w in gERDIApertureWindows)
             if (![srcs containsObject:w]) [srcs addObject:w];
         for (UIWindow *w in srcs) {
