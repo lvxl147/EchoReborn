@@ -1597,9 +1597,9 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
 // 形变期间（展开动画 dur≈0.42s）其 backdrop 采样跟不上渲染服务器，环带短暂渲染成黑色
 // —— 位置正是边缘环带、时长正是动画期 + 采样追平。修法：capsule bounds 逐帧变化期间
 // 临时隐藏折射环，bounds 连续稳定 3 帧（约 50ms）后再恢复；玻璃本体无 transform 不受影响。
-static NSString *kERDIPrevBoundsKey = @"ERDI prevBounds";
-static NSString *kERDIStableCountKey = @"ERDI stableCount";
-static NSString *kERDIMorphKey = @"ERDI morphing";
+static void *kERDIPrevBoundsKey = &kERDIPrevBoundsKey;   // 1.0.9-164 · 上一帧 capsule bounds
+static void *kERDIStableCountKey = &kERDIStableCountKey; // 1.0.9-164 · bounds 连续稳定帧数
+static void *kERDIMorphKey = &kERDIMorphKey;             // 1.0.9-164 · 上一帧是否处于形变期
 
 // ---- 1.0.9-163 · 零断言圆角路径（修 v162 安全模式崩溃）----
 // CGPathAddRoundedRect 内部断言：cornerWidth/Height 不得超过 rect 宽/高的一半。
