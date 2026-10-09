@@ -1591,6 +1591,16 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
 
 // （kERDIEventHiddenKey 已上移至 904 行区域 —— 155 修复：restore 函数在 983 行先用后声明的编译错误）
 
+// ---- 1.0.9-164 · 形变期折射环抑制（修展开/收起"黑边闪 0.5-1s"）----
+// 实机反馈（v163，EchoReborn-log-20261009-215501.txt）：展开/收起时灵动岛边缘黑边闪
+// 0.5-1s 后消失。定位：折射环 = 带 1.12 放大 transform 的 CABackdropLayer，bounds 快速
+// 形变期间（展开动画 dur≈0.42s）其 backdrop 采样跟不上渲染服务器，环带短暂渲染成黑色
+// —— 位置正是边缘环带、时长正是动画期 + 采样追平。修法：capsule bounds 逐帧变化期间
+// 临时隐藏折射环，bounds 连续稳定 3 帧（约 50ms）后再恢复；玻璃本体无 transform 不受影响。
+static NSString *kERDIPrevBoundsKey = @"ERDI prevBounds";
+static NSString *kERDIStableCountKey = @"ERDI stableCount";
+static NSString *kERDIMorphKey = @"ERDI morphing";
+
 // ---- 1.0.9-163 · 零断言圆角路径（修 v162 安全模式崩溃）----
 // CGPathAddRoundedRect 内部断言：cornerWidth/Height 不得超过 rect 宽/高的一半。
 // 灵动岛紧凑态外圈 rect 高仅 36.67 而系统 capsuleRadius=26.3 > 18.3 → _CGHandleAssert → abort。
@@ -1855,7 +1865,22 @@ static void ERDIEventApply(UIView *capsule) {
             refract.masksToBounds = YES;
             if (@available(iOS 13.0, *)) refract.cornerCurve = kCACornerCurveContinuous;
             refract.transform = CATransform3DMakeScale(1.12, 1.12, 1);
-            refract.hidden = NO;
+            // 1.0.9-164 · 形变期折射环抑制：bounds 变化帧隐藏，连续稳定 3 帧后恢复
+            {
+                NSValue *pv = objc_getAssociatedObject(capsule.layer, kERDIPrevBoundsKey);
+                CGRect prevB = pv ? [pv CGRectValue] : capsule.bounds;
+                BOOL changed = fabs(prevB.size.width - cw) > 0.5 || fabs(prevB.size.height - ch) > 0.5;
+                NSInteger stable = changed ? 0 : ([objc_getAssociatedObject(capsule.layer, kERDIStableCountKey) integerValue] + 1);
+                BOOL morphing = stable < 3;
+                objc_setAssociatedObject(capsule.layer, kERDIPrevBoundsKey, [NSValue valueWithCGRect:capsule.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(capsule.layer, kERDIStableCountKey, @(stable), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                BOOL lastMorph = [objc_getAssociatedObject(capsule.layer, kERDIMorphKey) boolValue];
+                refract.hidden = morphing;
+                if (morphing != lastMorph) {
+                    ERLogInfo(@"DI-V164 折射环%@ bounds=%.1fx%.1f 圆角=%.1f", morphing ? @"形变隐藏" : @"恢复显示", cw, ch, capsuleRadius);
+                    objc_setAssociatedObject(capsule.layer, kERDIMorphKey, @(morphing), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            }
             {
                 CAShapeLayer *ring = (CAShapeLayer *)refract.mask;
                 if ([ring isKindOfClass:[CAShapeLayer class]]) {
