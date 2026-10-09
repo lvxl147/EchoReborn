@@ -1662,7 +1662,7 @@ static void ERDIEventApply(UIView *capsule) {
 
         // ---- ⓪ 形变检测（1.0.9-165 · 形变期整体回退原生渲染）----
         NSValue *pvB = objc_getAssociatedObject(capsule.layer, kERDIPrevBoundsKey);
-        NSValue *pvR = objc_getAssociatedObject(capsule.layer, kERDIPrevRadiusKey);
+        NSNumber *pvR = objc_getAssociatedObject(capsule.layer, kERDIPrevRadiusKey);
         CGRect prevB = pvB ? [pvB CGRectValue] : capsule.bounds;
         CGFloat prevR = pvR ? [pvR floatValue] : capsule.layer.cornerRadius;
         BOOL shapeChanged = fabs(prevB.size.width - cw) > 0.5 ||
