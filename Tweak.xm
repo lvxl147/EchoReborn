@@ -90,6 +90,7 @@ static BOOL ERControlCenterClusterAvailable(void) {
 
 static CFStringRef const kERPrefsDomain = CFSTR("com.strive.echoreborn.preferences");
 static NSString *const kERReloadNotification = @"com.strive.echoreborn/ReloadPrefs";
+#import <notify.h>   // 1.0.9-167 · notify_register_dispatch（操作按钮缩进即时生效）
 // Posted by the Settings pane's 快捷指令 page when 重新扫描 is tapped. The pane
 // runs in the Preferences process and cannot read the store itself, so it asks
 // SpringBoard to redo the scan and republish the snapshot.
