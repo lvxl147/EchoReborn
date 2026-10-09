@@ -184,6 +184,26 @@
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
+			<string>PSSliderCell</string>
+			<key>default</key>
+			<real>20</real>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>LiquidifyDynamicIslandBlurRadius</string>
+			<key>label</key>
+			<string>玻璃模糊半径</string>
+			<key>max</key>
+			<real>60</real>
+			<key>min</key>
+			<real>0</real>
+			<key>showValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
 			<true/>

@@ -743,6 +743,20 @@ static NSString *ERPreferenceStringFor(NSString *key) {
     return out;
 }
 
+// 1.0.9-160 · 数字偏好读取（兼容 number/string 两种存法；PSSliderCell 写 number）
+static CGFloat ERPreferenceFloatFor(NSString *key, CGFloat fallback) {
+    if (!key.length) return fallback;
+    CFPropertyListRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                    CFSTR("com.strive.echoreborn.preferences"));
+    CGFloat out = fallback;
+    if (v) {
+        if (CFGetTypeID(v) == CFNumberGetTypeID()) out = [(__bridge NSNumber *)v doubleValue];
+        else if (CFGetTypeID(v) == CFStringGetTypeID()) out = [(__bridge NSString *)v doubleValue];
+        CFRelease(v);
+    }
+    return out;
+}
+
 // 上游特征：SBSystemApertureWindow 是灵动岛所在窗口；_SBUISystemApertureCAPackageView
 // 是主视图。我们对**窗口**做 layoutSubviews 钩子，在其子树里找"最外层的圆角容器"加玻璃，
 // 这样不依赖具体子类在 iOS 17 是否还在（窗口类稳定得多）。
@@ -753,6 +767,10 @@ static void *kERDIGlassKey = &kERDIGlassKey;
 static void *kERDIGradientKey = &kERDIGradientKey;
 static void *kERDIGlowKey = &kERDIGlowKey;   // 1.0.9-109 · 渐变阴影（辉光层）
 static void *kERDIRootKey = &kERDIRootKey;   // 1.0.9-109 · 被我们隐藏的系统黑底胶囊（关开关时必须恢复）
+// 1.0.9-160 · 液态玻璃层（CABackdropLayer + 标准 gaussianBlur 滤镜链）状态键
+static void *kERDIBackdropCfgKey = &kERDIBackdropCfgKey;   // 私有 backdrop 开关只设一次
+static void *kERDIFilterKey = &kERDIFilterKey;             // 已挂到层上的 gaussianBlur 滤镜
+static void *kERDIRadiusKey = &kERDIRadiusKey;             // 滤镜当前生效的 inputRadius
 
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
@@ -1619,6 +1637,11 @@ static void ERDIEventApply(UIView *capsule) {
             while (stk.count && guard2++ < 6000) {
                 CALayer *l = stk.lastObject; [stk removeLastObject];
                 if (l == capsule.layer) { [stk addObjectsFromArray:l.sublayers]; continue; }
+                // 1.0.9-160 · **自家玻璃保护（关键修复）**：ERDI:: 命名的层绝不隐藏。
+                //   下面的判定按类名字符串匹配，"Backdrop" 字样会命中 CABackdropLayer ——
+                //   我们注入的液态玻璃层（CABackdropLayer）若不豁免，会在 0.3 秒后的
+                //   下一个 tick 被当系统黑底杀掉 = 玻璃永远不可见（153"整岛消失"的元凶之一）。
+                if ([l.name hasPrefix:@"ERDI::"]) { [stk addObjectsFromArray:l.sublayers]; continue; }
                 NSString *cn = NSStringFromClass(object_getClass(l));   // 私有类按类名字符串判定（不引符号）
                 BOOL isBackdrop = backdropCls && [l isKindOfClass:backdropCls];
                 BOOL knownBlack = [cn containsString:@"GainMap"] ||
@@ -1654,24 +1677,101 @@ static void ERDIEventApply(UIView *capsule) {
         }
 
         // ---- ③ 玻璃同步（宿主 = 胶囊本体；圆角读系统值）----
+        // 1.0.9-160 · **真·液态玻璃（Liquidify 逆向实证配方，deb#1 @0x4058cc 反汇编验证）**：
+        //   CABackdropLayer + 标准 CAFilter 链（gaussianBlur…）。全部是渲染服务器本来就
+        //   认识的标准滤镜类型，不依赖 backboardd 注册任何自定义 filter —— 153 的失败根因：
+        //   LGLiveBackdropView 用自定义类型 echoreborn.liquidglass.dynamicisland，渲染服务
+        //   器不认识，带未知滤镜的层被整层丢弃 → "整岛消失"；而 154-159 回退的 UIVisual
+        //   EffectView 只是静态磨砂，没有实时取景，谈不上"液态"。
+        //   滤镜构建失败/私有 backdrop 不可用 → 回退系统磨砂（Liquidify 同款兜底：
+        //   "Private backdrop unavailable; liquid glass label is running without live backdrop."）。
+        CGFloat sysR = capsule.layer.cornerRadius;
+        CGFloat capsuleRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
+        CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 20.0);
+        if (liquidRadius < 0.0) liquidRadius = 0.0;
+        if (liquidRadius > 60.0) liquidRadius = 60.0;
+
+        // 旧 UIVisualEffectView 磨砂（兜底层，按名字查找）
         UIView *blur = nil;
         for (UIView *sv in capsule.subviews) {
             if ([sv isKindOfClass:[UIVisualEffectView class]] &&
                 [sv.layer.name isEqualToString:@"ERDI::blur"]) { blur = sv; break; }
         }
-        if (!blur) {
-            blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
-            blur.layer.name = @"ERDI::blur";
-            blur.userInteractionEnabled = NO;
-            [capsule insertSubview:blur atIndex:0];
+
+        BOOL liquidOK = NO;
+        CALayer *glassL = nil;
+        Class backdropCls3 = objc_getClass("CABackdropLayer");
+        Class filterCls3 = objc_getClass("CAFilter");
+        if (backdropCls3 && filterCls3) {
+            @try {
+                for (CALayer *l in capsule.layer.sublayers) {
+                    if ([l.name isEqualToString:@"ERDI::glass"]) { glassL = l; break; }
+                }
+                if (!glassL) {
+                    glassL = [[backdropCls3 alloc] init];
+                    glassL.name = @"ERDI::glass";
+                    objc_setAssociatedObject(glassL, kERDIBackdropCfgKey, @NO, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    [capsule.layer insertSublayer:glassL atIndex:0];   // 置底：玻璃 = 岛的背景
+                }
+                if (!glassL.superlayer) [capsule.layer insertSublayer:glassL atIndex:0];
+                if (!objc_getAssociatedObject(glassL, kERDIBackdropCfgKey)) {
+                    // 私有开关：实时取景留在渲染服务器空间（liquidass/LGLiveBackdropView 同款）
+                    @try { [glassL setValue:@NO forKey:@"layerUsesCoreImageFilters"]; } @catch (...) {}
+                    objc_setAssociatedObject(glassL, kERDIBackdropCfgKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+                // 标准高斯模糊滤镜（Liquidify 0x4058cc：filter ctor → setValue inputRadius
+                // → NSMutableArray → setValue:forKey:@"filters"；类型是渲染服务器原生认识的
+                // "gaussianBlur"，不再需要任何自定义注册）
+                id gauss = objc_getAssociatedObject(glassL, kERDIFilterKey);
+                if (!gauss || glassL.filters.count == 0) {
+                    gauss = ((id (*)(Class, SEL, NSString *))objc_msgSend)(
+                        filterCls3, NSSelectorFromString(@"filterWithType:"), @"gaussianBlur");
+                    if (gauss) {
+                        @try { [gauss setValue:@(liquidRadius) forKey:@"inputRadius"]; } @catch (...) {}
+                        @try { [gauss setValue:@YES forKey:@"inputNormalizeEdges"]; } @catch (...) {}
+                        glassL.filters = @[gauss];
+                        objc_setAssociatedObject(glassL, kERDIFilterKey, gauss, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        objc_setAssociatedObject(glassL, kERDIRadiusKey, @(liquidRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    }
+                } else {
+                    NSNumber *appliedR = objc_getAssociatedObject(glassL, kERDIRadiusKey);
+                    if (!appliedR || fabs(appliedR.doubleValue - liquidRadius) > 0.4) {
+                        @try { [gauss setValue:@(liquidRadius) forKey:@"inputRadius"]; } @catch (...) {}
+                        objc_setAssociatedObject(glassL, kERDIRadiusKey, @(liquidRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    }
+                }
+                liquidOK = (gauss != nil && glassL.superlayer != nil);
+            } @catch (NSException *e160) {
+                liquidOK = NO;
+            }
         }
-        blur.frame = capsule.bounds;
-        blur.hidden = NO;
-        blur.alpha = (cw > 340.0) ? 0.55 : 0.68;     // 展开淡、紧凑浓（沿用 140/143 实测值）
-        CGFloat sysR = capsule.layer.cornerRadius;
-        blur.layer.cornerRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
-        blur.layer.masksToBounds = YES;
-        if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
+
+        if (liquidOK) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            // 胶囊自身底色清透明：玻璃子层在本层底色之下（不透明黑底会把玻璃完全盖住）
+            if (capsule.layer.backgroundColor) capsule.layer.backgroundColor = [UIColor clearColor].CGColor;
+            glassL.frame = capsule.bounds;
+            glassL.cornerRadius = capsuleRadius;
+            glassL.masksToBounds = YES;
+            if (@available(iOS 13.0, *)) glassL.cornerCurve = kCACornerCurveContinuous;
+            glassL.hidden = NO;
+            [CATransaction commit];
+            blur.hidden = YES;   // 真玻璃在场，静态磨砂退位
+        } else {
+            if (!blur) {
+                blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+                blur.layer.name = @"ERDI::blur";
+                blur.userInteractionEnabled = NO;
+                [capsule insertSubview:blur atIndex:0];
+            }
+            blur.frame = capsule.bounds;
+            blur.hidden = NO;
+            blur.alpha = (cw > 340.0) ? 0.55 : 0.68;     // 展开淡、紧凑浓（沿用 140/143 实测值）
+            blur.layer.cornerRadius = capsuleRadius;
+            blur.layer.masksToBounds = YES;
+            if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
+        }
         capsule.layer.borderWidth = 1.5;
         capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
