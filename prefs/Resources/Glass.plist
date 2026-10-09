@@ -186,7 +186,7 @@
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>default</key>
-			<real>20</real>
+			<real>50</real>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
@@ -194,7 +194,7 @@
 			<key>label</key>
 			<string>玻璃模糊半径</string>
 			<key>max</key>
-			<real>60</real>
+			<real>80</real>
 			<key>min</key>
 			<real>0</real>
 			<key>showValue</key>

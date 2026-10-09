@@ -771,6 +771,7 @@ static void *kERDIRootKey = &kERDIRootKey;   // 1.0.9-109 · 被我们隐藏的�
 static void *kERDIBackdropCfgKey = &kERDIBackdropCfgKey;   // 私有 backdrop 开关只设一次
 static void *kERDIFilterKey = &kERDIFilterKey;             // 已挂到层上的 gaussianBlur 滤镜
 static void *kERDIRadiusKey = &kERDIRadiusKey;             // 滤镜当前生效的 inputRadius
+static void *kERDITintKey = &kERDITintKey;                 // 1.0.9-161 · 玻璃增感 tint 子层（liquidass "fill" 同款）
 
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
@@ -1059,6 +1060,11 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
         if (win.hidden) { win.hidden = NO; ERLogInfo(@"DI-HIDE 使用中→恢复正常系统状态"); }
         // 使用中：继续往下 → 建玻璃
     }
+    // 1.0.9-161 · **旧玻璃路径整体退役**：本函数在液态玻璃开启时只保留上面的
+    //   「空闲收起」功能；铺玻璃 + 黑底处理全权移交 ERDIEventApply（v161 两插件重写版）。
+    //   160 时代两套玻璃并行（本函数铺旧 UIVisualEffectView / ERDIEventApply 铺
+    //   CABackdropLayer），互相覆盖且都被黑底压住 —— 用户实证"没有任何效果"。
+    if (ERDIEnabled()) return;
     if (!ERDIEnabled()) {
         UIView *g = objc_getAssociatedObject(win, kERDIGlassKey);
         if (g) g.hidden = YES;
@@ -1599,50 +1605,54 @@ static void ERDIEventApply(UIView *capsule) {
             return;
         }
 
-        // ---- ① Root Layer 锚点（Liquidify：layer.name == "Root Layer"）----
-        CALayer *rootLayer = nil;
-        if ([capsule.layer.name isEqualToString:@"Root Layer"]) {
-            rootLayer = capsule.layer;
-        } else {
-            NSMutableArray<CALayer *> *st = [NSMutableArray arrayWithObject:capsule.layer];
-            NSInteger guard = 0;
-            while (st.count && guard++ < 4000) {
-                CALayer *l = st.lastObject; [st removeLastObject];
-                if ([l.name isEqualToString:@"Root Layer"]) { rootLayer = l; break; }
-                [st addObjectsFromArray:l.sublayers];
-            }
-        }
+        // ---- ① 扫描根（1.0.9-161 · Liquidify mount 同款：全窗口层树）----
+        //   160 真机实证：此机不存在 "Root Layer" 锚点（日志 RootLayer=未命中），且黑底
+        //   curtain/gainmap 在 capsule 子树之外（DI-PILL dump：_SBSystemApertureMagicians
+        //   CurtainView 125x36.67 与 ContainerView 189x52.67 是分离兄弟视图）→ 旧
+        //   「锚点 + capsule 子树」路线全废。v161 以 capsule.window 根层为扫描根。
+        CALayer *scanRoot = win.layer ?: capsule.layer;
         static CFTimeInterval lastRoot = 0.0;
         CFTimeInterval nowR = CACurrentMediaTime();
         if (nowR - lastRoot > 10.0) {
             lastRoot = nowR;
-            ERLogInfo(@"DI-156 锚点 capsule=%@ layer.name=%@ RootLayer=%@ bounds=%@",
+            ERLogInfo(@"DI-V161 扫描根 window=%@ scanRoot=%@ capsule=%@ bounds=%@",
+                      NSStringFromClass(win.class),
+                      NSStringFromClass(object_getClass(scanRoot)),
                       NSStringFromClass(capsule.class),
-                      capsule.layer.name ?: @"(nil)",
-                      rootLayer ? @"命中" : @"未命中(胶囊层保底)",
                       NSStringFromCGRect(capsule.bounds));
         }
-        CALayer *scanRoot = rootLayer ?: capsule.layer;
 
-        // ---- ② 黑底隐藏（Liquidify 0x3295ec：CABackdropLayer/>120 → hidden；对齐黑底家族）----
-        //   层级遍历：a) CABackdropLayer（系统磨砂底，Liquidify 实证隐藏）
-        //            b) GainMap/Curtain/LumaTracking/KeyLine 家族（143 已实证的画黑元凶）
-        //            c) 宽或高 >120 且背景近黑（覆盖未知黑底，绝不误伤普通内容层）
-        //   系统重绘恢复后，下一次 layoutSubviews 同帧再藏 → 没有 2 秒空窗
+        // ---- ② 黑底隐藏（1.0.9-161 · Liquidify 0x3295ec mount：全窗口层树扫描）----
+        //   160 失败实证（真机日志 2026-10-09）：本帧藏层=0 —— 旧扫描只进 capsule 子树，
+        //   而 MagiciansCurtain/GainMap/KeyLine/LumaTracking 黑底是 capsule 的兄弟/外部
+        //   视图，永远扫不到 → 胶囊恒黑，玻璃采到的也是黑底 = "没有任何效果"。
+        //   判定与 Liquidify mount 相同：CABackdropLayer 实例 / 黑底家族类名 / 大尺寸近黑。
+        //   保护：ERDI:: 自家层豁免；capsule 祖先链不藏（防整岛消失）；capsule.layer 本体
+        //   只清背景色；win.layer 自身不入栈（窗口背景不受影响）。
         Class backdropCls = objc_getClass("CABackdropLayer");
-        NSInteger hidCount = 0;
+        NSInteger hidCount = 0, alreadyCount = 0;
+        NSMutableArray<NSString *> *hidNames = [NSMutableArray array];
         {
-            NSMutableArray<CALayer *> *stk = [NSMutableArray arrayWithObject:scanRoot];
+            NSMutableSet *ancestorSet = [NSMutableSet set];
+            for (CALayer *a = capsule.layer.superlayer; a; a = a.superlayer)
+                [ancestorSet addObject:[NSValue valueWithNonretainedObject:a]];
+            NSMutableArray<CALayer *> *stk = [NSMutableArray arrayWithArray:scanRoot.sublayers ?: @[]];
             NSInteger guard2 = 0;
-            while (stk.count && guard2++ < 6000) {
+            while (stk.count && guard2++ < 12000) {
                 CALayer *l = stk.lastObject; [stk removeLastObject];
-                if (l == capsule.layer) { [stk addObjectsFromArray:l.sublayers]; continue; }
-                // 1.0.9-160 · **自家玻璃保护（关键修复）**：ERDI:: 命名的层绝不隐藏。
-                //   下面的判定按类名字符串匹配，"Backdrop" 字样会命中 CABackdropLayer ——
-                //   我们注入的液态玻璃层（CABackdropLayer）若不豁免，会在 0.3 秒后的
-                //   下一个 tick 被当系统黑底杀掉 = 玻璃永远不可见（153"整岛消失"的元凶之一）。
                 if ([l.name hasPrefix:@"ERDI::"]) { [stk addObjectsFromArray:l.sublayers]; continue; }
-                NSString *cn = NSStringFromClass(object_getClass(l));   // 私有类按类名字符串判定（不引符号）
+                if ([ancestorSet containsObject:[NSValue valueWithNonretainedObject:l]]) {
+                    [stk addObjectsFromArray:l.sublayers]; continue;
+                }
+                if (l == capsule.layer) {
+                    // 胶囊本体黑底：清透明（玻璃垫在它 index 0，黑底不透明会盖住玻璃）
+                    [CATransaction begin];
+                    [CATransaction setDisableActions:YES];
+                    if (l.backgroundColor) l.backgroundColor = [UIColor clearColor].CGColor;
+                    [CATransaction commit];
+                    [stk addObjectsFromArray:l.sublayers]; continue;
+                }
+                NSString *cn = NSStringFromClass(object_getClass(l));
                 BOOL isBackdrop = backdropCls && [l isKindOfClass:backdropCls];
                 BOOL knownBlack = [cn containsString:@"GainMap"] ||
                                   [cn containsString:@"Curtain"] ||
@@ -1659,37 +1669,31 @@ static void ERDIEventApply(UIView *capsule) {
                         nearBlack = (a >= 0.90 && r <= 0.13 && g <= 0.13 && b <= 0.13);
                 }
                 BOOL shouldHide = isBackdrop || knownBlack || (big && nearBlack);
-                if (shouldHide && !l.hidden) {
-                    l.hidden = YES;
-                    objc_setAssociatedObject(l, kERDIEventHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    hidCount++;
-                    static CFTimeInterval lastHide = 0.0;
-                    CFTimeInterval nowH = CACurrentMediaTime();
-                    if (nowH - lastHide > 5.0) {
-                        lastHide = nowH;
-                        ERLogInfo(@"DI-156 藏黑底 %@ name=%@ bounds=%@ backdrop=%d black=%d",
-                                  cn, l.name ?: @"(nil)",
-                                  NSStringFromCGRect(l.bounds), isBackdrop ? 1 : 0, nearBlack ? 1 : 0);
+                if (shouldHide) {
+                    if (!l.hidden) {
+                        l.hidden = YES;
+                        objc_setAssociatedObject(l, kERDIEventHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        hidCount++;
+                        if (hidNames.count < 6) [hidNames addObject:cn ?: @"(nil)"];
+                    } else {
+                        alreadyCount++;   // 上个 tick 已藏（幂等稳态证明）
                     }
                 }
                 [stk addObjectsFromArray:l.sublayers];
             }
         }
 
-        // ---- ③ 玻璃同步（宿主 = 胶囊本体；圆角读系统值）----
-        // 1.0.9-160 · **真·液态玻璃（Liquidify 逆向实证配方，deb#1 @0x4058cc 反汇编验证）**：
-        //   CABackdropLayer + 标准 CAFilter 链（gaussianBlur…）。全部是渲染服务器本来就
-        //   认识的标准滤镜类型，不依赖 backboardd 注册任何自定义 filter —— 153 的失败根因：
-        //   LGLiveBackdropView 用自定义类型 echoreborn.liquidglass.dynamicisland，渲染服务
-        //   器不认识，带未知滤镜的层被整层丢弃 → "整岛消失"；而 154-159 回退的 UIVisual
-        //   EffectView 只是静态磨砂，没有实时取景，谈不上"液态"。
-        //   滤镜构建失败/私有 backdrop 不可用 → 回退系统磨砂（Liquidify 同款兜底：
-        //   "Private backdrop unavailable; liquid glass label is running without live backdrop."）。
+        // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
+        //   Liquidify 反汇编实证：filters = [ gaussianBlur{inputRadius=50,
+        //   inputNormalizeEdges, inputAmount=1000} ]，全部是渲染服务器原生认识的标准滤镜。
+        //   GlassKit LGLiveBackdropView.applyFilters 实证私有键（160 缺失，玻璃可能从未
+        //   真正进入渲染服务器采样管线）：layerUsesCoreImageFilters / windowServerAware /
+        //   groupName / groupNamespace / ignoresScreenClip。
         CGFloat sysR = capsule.layer.cornerRadius;
         CGFloat capsuleRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
-        CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 20.0);
+        CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 50.0);
         if (liquidRadius < 0.0) liquidRadius = 0.0;
-        if (liquidRadius > 60.0) liquidRadius = 60.0;
+        if (liquidRadius > 80.0) liquidRadius = 80.0;
 
         // 旧 UIVisualEffectView 磨砂（兜底层，按名字查找）
         UIView *blur = nil;
@@ -1715,13 +1719,18 @@ static void ERDIEventApply(UIView *capsule) {
                 }
                 if (!glassL.superlayer) [capsule.layer insertSublayer:glassL atIndex:0];
                 if (!objc_getAssociatedObject(glassL, kERDIBackdropCfgKey)) {
-                    // 私有开关：实时取景留在渲染服务器空间（liquidass/LGLiveBackdropView 同款）
+                    // 私有开关（LGLiveBackdropView.applyFilters 同款）：
+                    //   实时取景留在渲染服务器空间 + 脱离窗口屏幕裁剪，backdrop 才会真正出画面
                     @try { [glassL setValue:@NO forKey:@"layerUsesCoreImageFilters"]; } @catch (...) {}
+                    @try { [glassL setValue:@NO forKey:@"windowServerAware"]; } @catch (...) {}
+                    @try { [glassL setValue:[NSString stringWithFormat:@"echoreborn.di.%d", (int)getpid()]
+                                     forKey:@"groupName"]; } @catch (...) {}
+                    @try { [glassL setValue:@"echoreborn.liquidglass" forKey:@"groupNamespace"]; } @catch (...) {}
+                    @try { [glassL setValue:@YES forKey:@"ignoresScreenClip"]; } @catch (...) {}
                     objc_setAssociatedObject(glassL, kERDIBackdropCfgKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 }
-                // 标准高斯模糊滤镜（Liquidify 0x4058cc：filter ctor → setValue inputRadius
-                // → NSMutableArray → setValue:forKey:@"filters"；类型是渲染服务器原生认识的
-                // "gaussianBlur"，不再需要任何自定义注册）
+                // 标准高斯模糊滤镜（Liquidify 0x4058cc：filter ctor → setValue inputRadius=50
+                // → inputAmount=1000 → NSMutableArray → setValue:forKey:@"filters"）
                 id gauss = objc_getAssociatedObject(glassL, kERDIFilterKey);
                 if (!gauss || glassL.filters.count == 0) {
                     gauss = ((id (*)(Class, SEL, NSString *))objc_msgSend)(
@@ -1729,6 +1738,7 @@ static void ERDIEventApply(UIView *capsule) {
                     if (gauss) {
                         @try { [gauss setValue:@(liquidRadius) forKey:@"inputRadius"]; } @catch (...) {}
                         @try { [gauss setValue:@YES forKey:@"inputNormalizeEdges"]; } @catch (...) {}
+                        @try { [gauss setValue:@1000.0 forKey:@"inputAmount"]; } @catch (...) {}
                         glassL.filters = @[gauss];
                         objc_setAssociatedObject(glassL, kERDIFilterKey, gauss, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                         objc_setAssociatedObject(glassL, kERDIRadiusKey, @(liquidRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -1741,7 +1751,7 @@ static void ERDIEventApply(UIView *capsule) {
                     }
                 }
                 liquidOK = (gauss != nil && glassL.superlayer != nil);
-            } @catch (NSException *e160) {
+            } @catch (NSException *e161) {
                 liquidOK = NO;
             }
         }
@@ -1749,13 +1759,24 @@ static void ERDIEventApply(UIView *capsule) {
         if (liquidOK) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
-            // 胶囊自身底色清透明：玻璃子层在本层底色之下（不透明黑底会把玻璃完全盖住）
-            if (capsule.layer.backgroundColor) capsule.layer.backgroundColor = [UIColor clearColor].CGColor;
             glassL.frame = capsule.bounds;
             glassL.cornerRadius = capsuleRadius;
             glassL.masksToBounds = YES;
             if (@available(iOS 13.0, *)) glassL.cornerCurve = kCACornerCurveContinuous;
             glassL.hidden = NO;
+            // 玻璃增感子层（liquidass "fill" 同款）：微白匀光，让磨砂有玻璃的通透反光
+            CALayer *tint = objc_getAssociatedObject(glassL, kERDITintKey);
+            if (!tint) {
+                tint = [CALayer layer];
+                tint.name = @"ERDI::tint";
+                tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.10].CGColor;
+                [glassL insertSublayer:tint atIndex:0];
+                objc_setAssociatedObject(glassL, kERDITintKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            tint.frame = glassL.bounds;
+            tint.cornerRadius = capsuleRadius;
+            if (@available(iOS 13.0, *)) tint.cornerCurve = kCACornerCurveContinuous;
+            tint.hidden = NO;
             [CATransaction commit];
             blur.hidden = YES;   // 真玻璃在场，静态磨砂退位
         } else {
@@ -1776,22 +1797,20 @@ static void ERDIEventApply(UIView *capsule) {
         capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-        // ---- ④ 状态日志（5 秒节流）----
-        // 1.0.9-157 · **跨容器残留清理删除**：iOS 16.6 真机 dump 实证同一设备存在
-        //   多个 SBSystemApertureWindow（紧凑/展开各一容器实例），155/156 的
-        //   「藏掉本窗口其他容器玻璃」逻辑把展开容器的玻璃当残留误杀
-        //   （真机 17:35:50 dump：展开容器玻璃 UIVisualEffectView 405x204 alpha=0.55 hidden=1）。
-        //   多实例玻璃共存无害（各自随窗口显隐），关开关还原由 ERDIRestoreOriginalBackground 负责。
+        // ---- ④ 状态日志（5 秒节流 · DI-V161）----
         static CFTimeInterval lastStat = 0.0;
         CFTimeInterval nowS2 = CACurrentMediaTime();
         if (nowS2 - lastStat > 5.0) {
             lastStat = nowS2;
-            ERLogInfo(@"DI-156 玻璃 bounds=%@ 圆角=%.1f(系统%.1f) alpha=%.2f 本帧藏层=%ld",
-                      NSStringFromCGRect(capsule.bounds),
-                      blur.layer.cornerRadius, sysR, blur.alpha, (long)hidCount);
+            ERLogInfo(@"DI-V161 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld [%@]",
+                      liquidOK ? @"CABackdropLayer(液态)" : @"UIVisualEffectView(回退)",
+                      glassL ? (unsigned long)glassL.filters.count : (unsigned long)0,
+                      glassL ? glassL.cornerRadius : (blur ? blur.layer.cornerRadius : 0.0),
+                      sysR, (long)hidCount, (long)alreadyCount,
+                      hidNames.count ? [hidNames componentsJoinedByString:@","] : @"无");
         }
     } @catch (__unused NSException *e) {
-        ERLogError(@"DI-156 异常: %@", e);
+        ERLogError(@"DI-V161 异常: %@", e);
     }
 }
 
