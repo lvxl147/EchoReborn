@@ -70,7 +70,8 @@ NSString *const ERSliderCellClassName = @"ERSliderTrackCell";
 //   图标 29 · 标题 88 · [−] 26 · 滑轨 · [+] 26 · 读数 52
 // 标题列 108 → 88（6 个汉字靠 adjustsFontSizeToFitWidth 缩到 13.6pt 仍放得下），
 // 读数列 56 → 52，列间距 12 → 8，腾出来的宽度正好给两个 26pt 的按钮。
-static CGFloat const kERLeading       = 16.0;   // 内容区左内边距
+// （1.0.9-168 · 原 kERLeading=16 已废除：无图标行文字起点统一用 kERIconLeading=20，
+//   与 PSSwitchCell 对齐；常量删除避免 -Wunused-const-variable 触发 -Werror）
 static CGFloat const kERTrailing      = 16.0;   // 内容区右内边距
 static CGFloat const kERTitleColumn   = 88.0;   // 标题列宽（6 个汉字缩排后刚好放下）
 static CGFloat const kERTitleMinWidth = 52.0;   // 窄屏下的标题列下限
