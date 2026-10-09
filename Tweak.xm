@@ -1839,10 +1839,11 @@ static void ERDIEventApply(UIView *capsule) {
                 if ([ring isKindOfClass:[CAShapeLayer class]]) {
                     CGFloat band = 14.0;   // 折射环带厚度（pt）
                     CGMutablePathRef p = CGPathCreateMutable();
-                    CGPathAddRoundedRect(p, NULL, CGRectMake(0, 0, cw, ch), capsuleRadius);
+                    // CGPathAddRoundedRect 为 5 参签名（rect + cornerWidth + cornerHeight）
+                    CGPathAddRoundedRect(p, NULL, CGRectMake(0, 0, cw, ch), capsuleRadius, capsuleRadius);
                     CGRect inner = CGRectMake(band, band, cw - band * 2, ch - band * 2);
                     if (inner.size.width > 0 && inner.size.height > 0)
-                        CGPathAddRoundedRect(p, NULL, inner, MAX(0.0, capsuleRadius - band));
+                        CGPathAddRoundedRect(p, NULL, inner, MAX(0.0, capsuleRadius - band), MAX(0.0, capsuleRadius - band));
                     ring.path = p;
                     ring.frame = capsule.bounds;
                     CFRelease(p);
