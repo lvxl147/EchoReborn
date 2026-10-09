@@ -1625,8 +1625,11 @@ static NSHashTable *gERDIMorphCapsules = nil;            // 形变中的 capsule
 static CADisplayLink *gERDIMorphLink = nil;              // 形变期逐帧同步驱动
 
 static void ERDIMorphSyncTick(void) {
-    CFTimeInterval now = CACurrentMediaTime();
+    // 1.0.9-169 · 常驻几何跟随：capsule 在玻璃挂载期间始终登记（不再只在形变期），
+    //   每帧把 glass/tint/rim 对齐 presentationLayer —— 形变**起点**也不再有任何
+    //   "apply 未跑到 → 玻璃仍是旧几何"的 1 帧滞后（168 的黑边闪一下即此滞后）。
     if (gERDIMorphCapsules.count) {
+        BOOL morphing = CACurrentMediaTime() < gERDIMorphUntil;
         for (UIView *capsule in gERDIMorphCapsules) {
             CALayer *pres = capsule.layer.presentationLayer;
             if (!pres) continue;
@@ -1639,20 +1642,27 @@ static void ERDIMorphSyncTick(void) {
                 else if ([l.name isEqualToString:@"ERDI::rim"]) rimL = l;
             }
             if (!glassL) continue;
+            // 形变期玻璃外扩 2pt 采样余量（capsule masksToBounds 会裁掉视觉溢出，
+            // 但 backdrop 边缘采样多 2pt 数据，消除运动中的边缘黑晕）
+            CGRect gb = pb;
+            CGFloat gr = pr;
+            if (morphing) {
+                gb = CGRectInset(pb, -2.0, -2.0);
+                gr = pr + 2.0;
+            }
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
-            glassL.frame = pb;
-            glassL.cornerRadius = pr;
+            glassL.frame = gb;
+            glassL.cornerRadius = gr;
             CALayer *tint = objc_getAssociatedObject(glassL, kERDITintKey);
-            if (tint) { tint.frame = glassL.bounds; tint.cornerRadius = pr; }
+            if (tint) { tint.frame = glassL.bounds; tint.cornerRadius = gr; }
             if (rimL) { rimL.frame = pb; rimL.cornerRadius = pr; }
             [CATransaction commit];
         }
     }
-    if (now >= gERDIMorphUntil) {
+    if (!gERDIMorphCapsules.count && gERDIMorphLink) {
         [gERDIMorphLink invalidate];
         gERDIMorphLink = nil;
-        [gERDIMorphCapsules removeAllObjects];
     }
 }
 
@@ -1742,12 +1752,6 @@ static void ERDIEventApply(UIView *capsule) {
         objc_setAssociatedObject(capsule.layer, kERDIPrevRadiusKey, @(capsule.layer.cornerRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (shapeChanged) gERDIMorphUntil = CACurrentMediaTime() + 0.6;   // 全局宽限覆盖动画全程
         BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧处于形变期？
-        // 1.0.9-168 · 形变期不再"回退原生/磨砂"：登记 capsule 并启动 DisplayLink，
-        //   液态玻璃全程显示、逐帧对齐 presentationLayer（见上方 168 注释块）
-        if (morphNative) {
-            [gERDIMorphCapsules addObject:capsule];
-            ERDIMorphEnsureLink();
-        }
         static BOOL gERDINativeLogged = NO;
         if (morphNative && !gERDINativeLogged) {
             ERLogInfo(@"DI-V167 形变开始(磨砂兜底) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
@@ -2023,6 +2027,10 @@ static void ERDIEventApply(UIView *capsule) {
             rim.hidden = NO;   // 1.0.9-168 · rim 纯渐变层无采样，形变期保留（DisplayLink 同步几何）
             [CATransaction commit];
             blur.hidden = YES;   // 1.0.9-168 · 磨砂兜底废除（用户要液态不要磨砂），真玻璃全程在场
+            // 1.0.9-169 · 玻璃挂载即登记常驻几何跟随（weak 表，capsule 释放自动清理）：
+            //   DisplayLink 每帧对齐 presentationLayer，形变起点也无 1 帧滞后黑边
+            [gERDIMorphCapsules addObject:capsule];
+            ERDIMorphEnsureLink();
         } else {
             if (!blur) {
                 blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
@@ -2346,6 +2354,10 @@ static void ERProbeDynamicIslandOnce(void) {
 //   拖完立即生效；layoutSubviews 保留兜底（系统重建按钮后仍能恢复缩进）。
 static void *kERQALSOrigCenterKey = &kERQALSOrigCenterKey;   // 首见时捕获的原始 center
 
+// 1.0.9-169 · 前向声明：ERAllApplicationWindows 在文件后方定义（合并 legacy +
+// connectedScenes 的全量窗口枚举，QACORR/扫描等机制都在用它）
+static NSArray<UIWindow *> *ERAllApplicationWindows(void);
+
 static CGFloat ERQuickActionsLSIndent(void) {
     NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
     if (![d boolForKey:@"soko_quickActionsEnabled"]) return 0.0;   // 开关关 → 回原位
@@ -2392,26 +2404,41 @@ static NSInteger ERQuickActionsReapplyInView(UIView *v) {
     return n;
 }
 
+// 1.0.9-169 · 递归收集类名含 QuickAction 的视图（探针用，最多 12 个）
+static void ERQuickActionsProbeInView(UIView *v, NSMutableArray<NSString *> *out, NSUInteger depth) {
+    if (!v || depth > 14 || out.count >= 12) return;
+    NSString *vn = NSStringFromClass(v.class);
+    if ([vn containsString:@"QuickAction"] && ![vn hasPrefix:@"ER"])
+        [out addObject:[NSString stringWithFormat:@"%@(%@)", vn, NSStringFromCGRect(v.frame)]];
+    for (UIView *sv in v.subviews) ERQuickActionsProbeInView(sv, out, depth + 1);
+}
+
 static void ERQuickActionsReapplyAll(void) {
-    // 1.0.9-168 修复"没效果"的关键：iOS 16 SpringBoard 的
-    // UIApplication.sharedApplication.windows 只回主 scene 的部分窗口（项目 2061 行
-    // 处早有此结论），锁屏按钮所在的 SBCoverSheetWindow 不在其中 → 之前扫描永远
-    // 找不到按钮。必须 connectedScenes + legacy 合并去重后全量扫描。
-    NSMutableArray<UIWindow *> *wins = [NSMutableArray array];
-    for (UIWindow *w in [UIApplication sharedApplication].windows)
-        if (![wins containsObject:w]) [wins addObject:w];
-    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
-        for (UIWindow *w in ((UIWindowScene *)scene).windows)
-            if (![wins containsObject:w]) [wins addObject:w];
-    }
+    // 1.0.9-169 · 改用 ERAllApplicationWindows()（项目统一的全量窗口枚举：legacy +
+    // connectedScenes 合并去重，QACORR 等机制同款），确保覆盖锁屏 SBCoverSheetWindow。
     NSInteger found = 0;
-    for (UIWindow *w in wins) found += ERQuickActionsReapplyInView(w);
+    for (UIWindow *w in ERAllApplicationWindows())
+        found += ERQuickActionsReapplyInView(w);
     static CFTimeInterval lastQALog = 0.0;
     CFTimeInterval nowL = CACurrentMediaTime();
     if (nowL - lastQALog > 5.0) {
         lastQALog = nowL;
-        ERLogInfo(@"QA-APPLY 重贴 windows=%lu 命中=%ld", (unsigned long)wins.count, (long)found);
+        ERLogInfo(@"QA-APPLY 重贴 windows=%lu 命中=%ld", (unsigned long)ERAllApplicationWindows().count, (long)found);
+    }
+    // 1.0.9-169 · 探针：命中=0 时打印所有类名含 QuickAction 的视图（类名/frame），
+    //   用于诊断真实按钮类 —— 下轮日志据此精确校准匹配规则。
+    if (found == 0) {
+        static CFTimeInterval lastProbe = 0.0;
+        if (nowL - lastProbe > 10.0) {
+            lastProbe = nowL;
+            for (UIWindow *w in ERAllApplicationWindows()) {
+                NSMutableArray<NSString *> *hits = [NSMutableArray array];
+                for (UIView *sv in w.subviews) ERQuickActionsProbeInView(sv, hits, 0);
+                if (hits.count)
+                    ERLogInfo(@"QA-PROBE window=%@ QuickAction类视图=%@", NSStringFromClass(w.class),
+                              [hits componentsJoinedByString:@" | "]);
+            }
+        }
     }
 }
 
