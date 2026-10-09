@@ -1591,6 +1591,28 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
 
 // （kERDIEventHiddenKey 已上移至 904 行区域 —— 155 修复：restore 函数在 983 行先用后声明的编译错误）
 
+// ---- 1.0.9-163 · 零断言圆角路径（修 v162 安全模式崩溃）----
+// CGPathAddRoundedRect 内部断言：cornerWidth/Height 不得超过 rect 宽/高的一半。
+// 灵动岛紧凑态外圈 rect 高仅 36.67 而系统 capsuleRadius=26.3 > 18.3 → _CGHandleAssert → abort。
+// 此辅助手动四角 arc 构建圆角矩形，radius 一律 clamp 到 MIN(w,h)*0.5，永不触发断言。
+static void ERDIAddSafeRoundedRect(CGMutablePathRef p, CGRect rect, CGFloat radius) {
+    CGFloat w = rect.size.width, h = rect.size.height;
+    if (w <= 0 || h <= 0) return;
+    CGFloat r = MIN(radius, MIN(w, h) * 0.5);   // 关键 clamp：CGPathAddRoundedRect 断言保护
+    if (r <= 0) { CGPathAddRect(p, NULL, rect); return; }
+    CGFloat x = rect.origin.x, y = rect.origin.y;
+    CGPathMoveToPoint(p, NULL, x + r, y);
+    CGPathAddLineToPoint(p, NULL, x + w - r, y);
+    CGPathAddArc(p, NULL, x + w - r, y + r, r, -M_PI_2, 0, NO);
+    CGPathAddLineToPoint(p, NULL, x + w, y + h - r);
+    CGPathAddArc(p, NULL, x + w - r, y + h - r, r, 0, M_PI_2, NO);
+    CGPathAddLineToPoint(p, NULL, x + r, y + h);
+    CGPathAddArc(p, NULL, x + r, y + h - r, r, M_PI_2, M_PI, NO);
+    CGPathAddLineToPoint(p, NULL, x, y + r);
+    CGPathAddArc(p, NULL, x + r, y + r, r, M_PI, M_PI + M_PI_2, NO);
+    CGPathCloseSubpath(p);
+}
+
 static void ERDIEventApply(UIView *capsule) {
     if (!capsule) return;
     if (!ERDIEnabled()) return;                    // 开关关：不做事（还原走 ERDIRestoreOriginalBackground）
@@ -1839,11 +1861,11 @@ static void ERDIEventApply(UIView *capsule) {
                 if ([ring isKindOfClass:[CAShapeLayer class]]) {
                     CGFloat band = 14.0;   // 折射环带厚度（pt）
                     CGMutablePathRef p = CGPathCreateMutable();
-                    // CGPathAddRoundedRect 为 5 参签名（rect + cornerWidth + cornerHeight）
-                    CGPathAddRoundedRect(p, NULL, CGRectMake(0, 0, cw, ch), capsuleRadius, capsuleRadius);
+                    // 1.0.9-163：CGPathAddRoundedRect 有断言（radius ≤ 边/2），紧凑态必炸 → 换零断言辅助
+                    ERDIAddSafeRoundedRect(p, CGRectMake(0, 0, cw, ch), capsuleRadius);
                     CGRect inner = CGRectMake(band, band, cw - band * 2, ch - band * 2);
                     if (inner.size.width > 0 && inner.size.height > 0)
-                        CGPathAddRoundedRect(p, NULL, inner, MAX(0.0, capsuleRadius - band), MAX(0.0, capsuleRadius - band));
+                        ERDIAddSafeRoundedRect(p, inner, MAX(0.0, capsuleRadius - band));
                     ring.path = p;
                     ring.frame = capsule.bounds;
                     CFRelease(p);
