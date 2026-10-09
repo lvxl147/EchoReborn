@@ -1615,6 +1615,68 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
 static void *kERDIPrevBoundsKey = &kERDIPrevBoundsKey;   // 上一帧 capsule bounds
 static void *kERDIPrevRadiusKey = &kERDIPrevRadiusKey;   // 1.0.9-165 · 上一帧 capsule 圆角
 static CFTimeInterval gERDIMorphUntil = 0.0;             // 全局形变宽限期截止时间
+
+// ---- 1.0.9-168 · 形变期液态玻璃全程显示（CADisplayLink 逐帧同步 presentation）----
+//   167 用户反馈：磨砂兜底不是要的效果（要 Liquidify 同款液态），且黑边仍在。
+//   方案：形变期玻璃/rim 不再退场，改用 CADisplayLink 每帧把 glass/rim 的
+//   frame/圆角对齐到 capsule 的 presentationLayer —— 渲染服务器上玻璃区域与
+//   系统动画逐帧精确重合，消除玻璃滞后露出的黑边；磨砂 blur 全程退场。
+static NSHashTable *gERDIMorphCapsules = nil;            // 形变中的 capsule（weak）
+static CADisplayLink *gERDIMorphLink = nil;              // 形变期逐帧同步驱动
+
+static void ERDIMorphSyncTick(void) {
+    CFTimeInterval now = CACurrentMediaTime();
+    if (gERDIMorphCapsules.count) {
+        for (UIView *capsule in gERDIMorphCapsules) {
+            CALayer *pres = capsule.layer.presentationLayer;
+            if (!pres) continue;
+            CGRect pb = pres.bounds;
+            CGFloat pr = pres.cornerRadius;
+            CALayer *glassL = nil;
+            CALayer *rimL = nil;
+            for (CALayer *l in capsule.layer.sublayers) {
+                if ([l.name isEqualToString:@"ERDI::glass"]) glassL = l;
+                else if ([l.name isEqualToString:@"ERDI::rim"]) rimL = l;
+            }
+            if (!glassL) continue;
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            glassL.frame = pb;
+            glassL.cornerRadius = pr;
+            CALayer *tint = objc_getAssociatedObject(glassL, kERDITintKey);
+            if (tint) { tint.frame = glassL.bounds; tint.cornerRadius = pr; }
+            if (rimL) { rimL.frame = pb; rimL.cornerRadius = pr; }
+            [CATransaction commit];
+        }
+    }
+    if (now >= gERDIMorphUntil) {
+        [gERDIMorphLink invalidate];
+        gERDIMorphLink = nil;
+        [gERDIMorphCapsules removeAllObjects];
+    }
+}
+
+@interface ERDIMorphSyncToken : NSObject
+- (void)tick:(CADisplayLink *)link;
+@end
+@implementation ERDIMorphSyncToken
++ (instancetype)shared {
+    static ERDIMorphSyncToken *t = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ t = [[self alloc] init]; });
+    return t;
+}
+- (void)tick:(CADisplayLink *)__unused link { ERDIMorphSyncTick(); }
+@end
+
+static void ERDIMorphEnsureLink(void) {
+    if (!gERDIMorphCapsules) gERDIMorphCapsules = [NSHashTable weakObjectsHashTable];
+    if (!gERDIMorphLink) {
+        gERDIMorphLink = [CADisplayLink displayLinkWithTarget:ERDIMorphSyncToken.shared
+                                                     selector:@selector(tick:)];
+        [gERDIMorphLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+}
 // （kERDIOrigEventBgKey 声明在 930 行区域 —— 165 修复：restore 函数先用后声明的编译错误）
 
 // ---- 1.0.9-163 · 零断言圆角路径（修 v162 安全模式崩溃）----
@@ -1679,7 +1741,13 @@ static void ERDIEventApply(UIView *capsule) {
         objc_setAssociatedObject(capsule.layer, kERDIPrevBoundsKey, [NSValue valueWithCGRect:capsule.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(capsule.layer, kERDIPrevRadiusKey, @(capsule.layer.cornerRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         if (shapeChanged) gERDIMorphUntil = CACurrentMediaTime() + 0.6;   // 全局宽限覆盖动画全程
-        BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧全局走原生渲染？
+        BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧处于形变期？
+        // 1.0.9-168 · 形变期不再"回退原生/磨砂"：登记 capsule 并启动 DisplayLink，
+        //   液态玻璃全程显示、逐帧对齐 presentationLayer（见上方 168 注释块）
+        if (morphNative) {
+            [gERDIMorphCapsules addObject:capsule];
+            ERDIMorphEnsureLink();
+        }
         static BOOL gERDINativeLogged = NO;
         if (morphNative && !gERDINativeLogged) {
             ERLogInfo(@"DI-V167 形变开始(磨砂兜底) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
@@ -1754,9 +1822,9 @@ static void ERDIEventApply(UIView *capsule) {
                 }
                 BOOL shouldHide = isBackdrop || knownBlack || (big && nearBlack);
                 if (shouldHide) {
-                    // 1.0.9-167 · 删除 165 的"形变期恢复原生"分支 —— 原生胶囊本身就是
-                    //   用户看到的"展开时黑色背景 1 秒"。形变期改为隐藏采样层（玻璃/折射环）、
-                    //   亮出静态磨砂 blur + rim（③ 段），黑底保持隐藏不参与渲染。
+                    // 1.0.9-168 · 形变期渲染已改为"液态玻璃全程显示 + DisplayLink 逐帧同步
+                    //   presentation"（⓪/③ 段），原生黑底 / 磨砂兜底全部废除；
+                    //   此处只保留事件隐藏逻辑本身（黑底层在液态玻璃之下持续隐藏）。
                     if (!l.hidden) {
                         // 1.0.9-162 · 三管齐下：真机实证系统布局会重建/恢复黑底（"一闪一闪"），
                         //   hidden / opacity=0 / 清背景互为冗余，任一被恢复下一帧立即补齐。
@@ -1867,7 +1935,7 @@ static void ERDIEventApply(UIView *capsule) {
             glassL.cornerRadius = capsuleRadius;
             glassL.masksToBounds = YES;
             if (@available(iOS 13.0, *)) glassL.cornerCurve = kCACornerCurveContinuous;
-            glassL.hidden = morphNative;   // 1.0.9-165 · 形变期整体回退原生：玻璃本体也退场（采样黑帧元凶）
+            glassL.hidden = NO;   // 1.0.9-168 · 形变期液态玻璃全程显示（DisplayLink 逐帧同步几何）
             // 玻璃增感子层（liquidass "fill" 同款）：161 用 0.10 偏"毛玻璃"，162 减到 0.06
             //   让折射环和高光主导观感（用户反馈：要液态不要毛玻璃）
             CALayer *tint = objc_getAssociatedObject(glassL, kERDITintKey);
@@ -1952,23 +2020,9 @@ static void ERDIEventApply(UIView *capsule) {
             rim.frame = capsule.bounds;
             rim.cornerRadius = capsuleRadius;
             if (@available(iOS 13.0, *)) rim.cornerCurve = kCACornerCurveContinuous;
-            rim.hidden = NO;   // 1.0.9-167 · rim 是纯渐变层无采样，形变期保留维持"液态"观感
+            rim.hidden = NO;   // 1.0.9-168 · rim 纯渐变层无采样，形变期保留（DisplayLink 同步几何）
             [CATransaction commit];
-            // 1.0.9-167 · 形变期亮静态磨砂兜底（UIVisualEffectView 的几何更新由 UIKit 驱动，
-            //   无 CABackdropLayer 形变采样黑帧问题）—— 替代 165/166 的原生黑胶囊
-            //   （用户反馈：展开时黑色背景 1 秒）。稳定期真玻璃回归，磨砂退位。
-            if (!blur) {
-                blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
-                blur.layer.name = @"ERDI::blur";
-                blur.userInteractionEnabled = NO;
-                [capsule insertSubview:blur atIndex:0];
-            }
-            blur.frame = capsule.bounds;
-            blur.layer.cornerRadius = capsuleRadius;
-            blur.layer.masksToBounds = YES;
-            if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
-            blur.alpha = (cw > 340.0) ? 0.55 : 0.68;
-            blur.hidden = morphNative;
+            blur.hidden = YES;   // 1.0.9-168 · 磨砂兜底废除（用户要液态不要磨砂），真玻璃全程在场
         } else {
             if (!blur) {
                 blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
@@ -2318,25 +2372,75 @@ static void ERQuickActionsApplyButton(UIView *btn) {
     CGPoint oc = [origC CGPointValue];
     CGFloat side = (oc.x <= btn.superview.bounds.size.width / 2.0) ? -1.0 : 1.0;
     btn.transform = CGAffineTransformMakeTranslation(side * indent, 0);
-}
-
-static void ERQuickActionsReapplyInView(UIView *v) {
-    Class qaCls = NSClassFromString(@"CSQuickActionsButton");
-    for (UIView *sv in v.subviews) {
-        if (qaCls && [sv isKindOfClass:qaCls]) ERQuickActionsApplyButton(sv);
-        ERQuickActionsReapplyInView(sv);
+    static CFTimeInterval lastApplyLog = 0.0;
+    CFTimeInterval nowA = CACurrentMediaTime();
+    if (nowA - lastApplyLog > 5.0) {
+        lastApplyLog = nowA;
+        ERLogInfo(@"QA-APPLY 按钮=%@ indent=%.1f side=%.0f 原始中心=(%.1f,%.1f)",
+                  NSStringFromClass(btn.class), indent, side, oc.x, oc.y);
     }
 }
 
+static NSInteger ERQuickActionsReapplyInView(UIView *v) {
+    NSInteger n = 0;
+    Class qaCls = NSClassFromString(@"CSQuickActionsButton");
+    NSString *vn = NSStringFromClass(v.class);
+    BOOL isBtn = (qaCls && [v isKindOfClass:qaCls]) ||
+                 ([v isKindOfClass:[UIControl class]] && [vn containsString:@"QuickActions"]);
+    if (isBtn) { ERQuickActionsApplyButton(v); n++; }
+    for (UIView *sv in v.subviews) n += ERQuickActionsReapplyInView(sv);
+    return n;
+}
+
 static void ERQuickActionsReapplyAll(void) {
+    // 1.0.9-168 修复"没效果"的关键：iOS 16 SpringBoard 的
+    // UIApplication.sharedApplication.windows 只回主 scene 的部分窗口（项目 2061 行
+    // 处早有此结论），锁屏按钮所在的 SBCoverSheetWindow 不在其中 → 之前扫描永远
+    // 找不到按钮。必须 connectedScenes + legacy 合并去重后全量扫描。
+    NSMutableArray<UIWindow *> *wins = [NSMutableArray array];
     for (UIWindow *w in [UIApplication sharedApplication].windows)
-        ERQuickActionsReapplyInView(w);
+        if (![wins containsObject:w]) [wins addObject:w];
+    for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+        if (![scene isKindOfClass:[UIWindowScene class]]) continue;
+        for (UIWindow *w in ((UIWindowScene *)scene).windows)
+            if (![wins containsObject:w]) [wins addObject:w];
+    }
+    NSInteger found = 0;
+    for (UIWindow *w in wins) found += ERQuickActionsReapplyInView(w);
+    static CFTimeInterval lastQALog = 0.0;
+    CFTimeInterval nowL = CACurrentMediaTime();
+    if (nowL - lastQALog > 5.0) {
+        lastQALog = nowL;
+        ERLogInfo(@"QA-APPLY 重贴 windows=%lu 命中=%ld", (unsigned long)wins.count, (long)found);
+    }
 }
 
 %hook CSQuickActionsButton
 - (void)layoutSubviews {
     %orig;
     ERQuickActionsApplyButton((UIView *)self);
+}
+%end
+
+// 1.0.9-168 · 备份 hook：按钮容器 CSQuickActionsView 布局后直接对其内 UIControl
+// 贴缩进 —— 即使 CSQuickActionsButton 的 %hook 未命中（类延迟加载/类名差异），
+// 容器路径也能生效。
+%hook CSQuickActionsView
+- (void)layoutSubviews {
+    %orig;
+    UIView *self_ = (UIView *)self;
+    NSInteger hit = 0;
+    for (UIView *sv in self_.subviews) {
+        if ([sv isKindOfClass:[UIControl class]]) { ERQuickActionsApplyButton(sv); hit++; }
+    }
+    static CFTimeInterval lastQV = 0.0;
+    CFTimeInterval nowV = CACurrentMediaTime();
+    if (nowV - lastQV > 5.0) {
+        lastQV = nowV;
+        ERLogInfo(@"QA-VIEW 容器布局 superview=%@ 直接子视图=%lu 命中=%ld",
+                  self_.superview ? NSStringFromClass(self_.superview.class) : @"(nil)",
+                  (unsigned long)self_.subviews.count, (long)hit);
+    }
 }
 %end
 

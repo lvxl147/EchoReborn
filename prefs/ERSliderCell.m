@@ -554,7 +554,9 @@ static void ERStepHapticFire(void) {
     // 1.0.2：图标不再由我们自己摆到 kERLeading，而是**沿用框架算好的位置** ——
     // PSSwitchCell / PSTitleValueCell 用的是同一套图标布局，沿用它就等于和开关行的
     // 图标逐像素对齐。只有框架没摆（frame 不合理）时才退回固定几何。
-    CGFloat titleX = kERLeading;
+    // 1.0.9-168 · 无图标行的文字起点从 16 改为 20（与 PSSwitchCell 的内容内边距
+    // kERIconLeading 一致）—— 修 Soko 子页"滑块行与开关行的左侧文字没有上下对齐"。
+    CGFloat titleX = kERIconLeading;
     UIView *icon = [self erIconView];
     if (icon) {
         CGRect frame = icon.frame;
