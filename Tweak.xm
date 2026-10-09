@@ -772,6 +772,12 @@ static void *kERDIBackdropCfgKey = &kERDIBackdropCfgKey;   // 私有 backdrop �
 static void *kERDIFilterKey = &kERDIFilterKey;             // 已挂到层上的 gaussianBlur 滤镜
 static void *kERDIRadiusKey = &kERDIRadiusKey;             // 滤镜当前生效的 inputRadius
 static void *kERDITintKey = &kERDITintKey;                 // 1.0.9-161 · 玻璃增感 tint 子层（liquidass "fill" 同款）
+static void *kERDIRefractKey = &kERDIRefractKey;           // 1.0.9-162 · 边缘折射环层（第二 CABackdropLayer）
+static void *kERDIRimKey = &kERDIRimKey;                   // 1.0.9-162 · 方向性高光 rim 层
+static void *kERDIDriverKey = &kERDIDriverKey;             // 1.0.9-162 · display link 强引用的驱动实例
+static void ERDIV162EnsureDisplayLink(void);               // 1.0.9-162 · 逐帧驱动（实现在 ERDIEventApply 之下）
+static void ERDIV162FrameSync(void);                       // 1.0.9-162 · 逐帧同步体
+static void ERDIEventPollTick(void);                       // 1.0.9-162 · 前置声明（逐帧驱动复用其入口）
 
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
@@ -1036,7 +1042,10 @@ static void ERDIRestoreOriginalBackground(NSArray<UIWindow *> *wins) {
             while (lst.count && lguard++ < 6000) {
                 CALayer *l = lst.lastObject; [lst removeLastObject];
                 if (objc_getAssociatedObject(l, kERDIEventHiddenKey)) {
+                    // 1.0.9-162 · 关联键存的是被隐藏前的原 opacity，还原时一并恢复
+                    NSNumber *op = objc_getAssociatedObject(l, kERDIEventHiddenKey);
                     l.hidden = NO;
+                    l.opacity = op ? [op floatValue] : 1.0;
                     objc_setAssociatedObject(l, kERDIEventHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                 }
                 [lst addObjectsFromArray:l.sublayers];
@@ -1615,7 +1624,7 @@ static void ERDIEventApply(UIView *capsule) {
         CFTimeInterval nowR = CACurrentMediaTime();
         if (nowR - lastRoot > 10.0) {
             lastRoot = nowR;
-            ERLogInfo(@"DI-V161 扫描根 window=%@ scanRoot=%@ capsule=%@ bounds=%@",
+            ERLogInfo(@"DI-V162 扫描根 window=%@ scanRoot=%@ capsule=%@ bounds=%@",
                       NSStringFromClass(win.class),
                       NSStringFromClass(object_getClass(scanRoot)),
                       NSStringFromClass(capsule.class),
@@ -1671,12 +1680,22 @@ static void ERDIEventApply(UIView *capsule) {
                 BOOL shouldHide = isBackdrop || knownBlack || (big && nearBlack);
                 if (shouldHide) {
                     if (!l.hidden) {
+                        // 1.0.9-162 · 三管齐下：真机实证系统布局会重建/恢复黑底（"一闪一闪"），
+                        //   hidden / opacity=0 / 清背景互为冗余，任一被恢复下一帧立即补齐。
+                        //   关联键改存原 opacity，关开关还原时恢复。
                         l.hidden = YES;
-                        objc_setAssociatedObject(l, kERDIEventHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        if (l.opacity != 0.0) l.opacity = 0.0;
+                        if (l.backgroundColor) l.backgroundColor = [UIColor clearColor].CGColor;
+                        objc_setAssociatedObject(l, kERDIEventHiddenKey, @(l.opacity), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                         hidCount++;
                         if (hidNames.count < 6) [hidNames addObject:cn ?: @"(nil)"];
+                    } else if (objc_getAssociatedObject(l, kERDIEventHiddenKey)) {
+                        // 已标记但被系统改回来 → 逐帧补齐（防闪烁的真正战场）
+                        if (l.opacity != 0.0) l.opacity = 0.0;
+                        if (l.backgroundColor) l.backgroundColor = [UIColor clearColor].CGColor;
+                        alreadyCount++;
                     } else {
-                        alreadyCount++;   // 上个 tick 已藏（幂等稳态证明）
+                        alreadyCount++;
                     }
                 }
                 [stk addObjectsFromArray:l.sublayers];
@@ -1691,7 +1710,7 @@ static void ERDIEventApply(UIView *capsule) {
         //   groupName / groupNamespace / ignoresScreenClip。
         CGFloat sysR = capsule.layer.cornerRadius;
         CGFloat capsuleRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
-        CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 50.0);
+        CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 25.0);
         if (liquidRadius < 0.0) liquidRadius = 0.0;
         if (liquidRadius > 80.0) liquidRadius = 80.0;
 
@@ -1759,24 +1778,96 @@ static void ERDIEventApply(UIView *capsule) {
         if (liquidOK) {
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
+            capsule.layer.masksToBounds = YES;   // 1.0.9-162 · 裁住折射环放大溢出的部分
             glassL.frame = capsule.bounds;
             glassL.cornerRadius = capsuleRadius;
             glassL.masksToBounds = YES;
             if (@available(iOS 13.0, *)) glassL.cornerCurve = kCACornerCurveContinuous;
             glassL.hidden = NO;
-            // 玻璃增感子层（liquidass "fill" 同款）：微白匀光，让磨砂有玻璃的通透反光
+            // 玻璃增感子层（liquidass "fill" 同款）：161 用 0.10 偏"毛玻璃"，162 减到 0.06
+            //   让折射环和高光主导观感（用户反馈：要液态不要毛玻璃）
             CALayer *tint = objc_getAssociatedObject(glassL, kERDITintKey);
             if (!tint) {
                 tint = [CALayer layer];
                 tint.name = @"ERDI::tint";
-                tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.10].CGColor;
+                tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
                 [glassL insertSublayer:tint atIndex:0];
                 objc_setAssociatedObject(glassL, kERDITintKey, tint, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             }
+            tint.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06].CGColor;
             tint.frame = glassL.bounds;
             tint.cornerRadius = capsuleRadius;
             if (@available(iOS 13.0, *)) tint.cornerCurve = kCACornerCurveContinuous;
             tint.hidden = NO;
+            // ---- 1.0.9-162 · 边缘折射环（"液态"核心）----
+            //   第二个 CABackdropLayer：无模糊（0.5 极微）、中心放大 1.12 采样 → 背景内容
+            //   在边缘被"外推"，再以 evenodd 环带 mask 只露边缘一圈，中心仍透 blur 玻璃
+            //   —— 视觉即 iOS 26 液态玻璃的透镜边缘。Liquidify 用私有 meshTransform 实现
+            //   同类效果（subdivisionSteps 2-3，失败即 rejected）；本层全标准 API，稳定等价。
+            //   放 capsule.layer（与玻璃平级）而非玻璃子树，避免嵌套 backdrop 的采样歧义。
+            CALayer *refract = objc_getAssociatedObject(capsule.layer, kERDIRefractKey);
+            if (!refract || !refract.superlayer) {
+                refract = [[backdropCls3 alloc] init];
+                refract.name = @"ERDI::refract";
+                @try { [refract setValue:@NO forKey:@"layerUsesCoreImageFilters"]; } @catch (...) {}
+                @try { [refract setValue:@NO forKey:@"windowServerAware"]; } @catch (...) {}
+                @try { [refract setValue:@YES forKey:@"ignoresScreenClip"]; } @catch (...) {}
+                @try { [refract setValue:[NSString stringWithFormat:@"echoreborn.di.%d", (int)getpid()]
+                                  forKey:@"groupName"]; } @catch (...) {}
+                @try { [refract setValue:@"echoreborn.liquidglass" forKey:@"groupNamespace"]; } @catch (...) {}
+                id rgauss = ((id (*)(Class, SEL, NSString *))objc_msgSend)(
+                    filterCls3, NSSelectorFromString(@"filterWithType:"), @"gaussianBlur");
+                if (rgauss) {
+                    @try { [rgauss setValue:@(0.5) forKey:@"inputRadius"]; } @catch (...) {}
+                    @try { [rgauss setValue:@YES forKey:@"inputNormalizeEdges"]; } @catch (...) {}
+                    refract.filters = @[rgauss];
+                }
+                CAShapeLayer *ring = [CAShapeLayer layer];
+                ring.fillRule = kCAFillRuleEvenOdd;
+                refract.mask = ring;
+                objc_setAssociatedObject(capsule.layer, kERDIRefractKey, refract, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [capsule.layer insertSublayer:refract atIndex:1];   // 玻璃之上、内容之下
+            }
+            refract.frame = capsule.bounds;
+            refract.cornerRadius = capsuleRadius;
+            refract.masksToBounds = YES;
+            if (@available(iOS 13.0, *)) refract.cornerCurve = kCACornerCurveContinuous;
+            refract.transform = CATransform3DMakeScale(1.12, 1.12, 1);
+            refract.hidden = NO;
+            {
+                CAShapeLayer *ring = (CAShapeLayer *)refract.mask;
+                if ([ring isKindOfClass:[CAShapeLayer class]]) {
+                    CGFloat band = 14.0;   // 折射环带厚度（pt）
+                    CGMutablePathRef p = CGPathCreateMutable();
+                    CGPathAddRoundedRect(p, NULL, CGRectMake(0, 0, cw, ch), capsuleRadius);
+                    CGRect inner = CGRectMake(band, band, cw - band * 2, ch - band * 2);
+                    if (inner.size.width > 0 && inner.size.height > 0)
+                        CGPathAddRoundedRect(p, NULL, inner, MAX(0.0, capsuleRadius - band));
+                    ring.path = p;
+                    ring.frame = capsule.bounds;
+                    CFRelease(p);
+                }
+            }
+            // ---- 1.0.9-162 · 方向性高光 rim（Liquidify rim / liquidass specular 同款）----
+            //   -45° 方向光的白光渐变：左上亮、右下次亮、中部几乎透明 —— 玻璃的"光泽感"来源
+            CAGradientLayer *rim = objc_getAssociatedObject(capsule.layer, kERDIRimKey);
+            if (!rim || !rim.superlayer) {
+                rim = [CAGradientLayer layer];
+                rim.name = @"ERDI::rim";
+                rim.colors = @[(id)[UIColor colorWithWhite:1.0 alpha:0.30].CGColor,
+                               (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
+                               (id)[UIColor colorWithWhite:1.0 alpha:0.02].CGColor,
+                               (id)[UIColor colorWithWhite:1.0 alpha:0.16].CGColor];
+                rim.locations = @[@0.0, @0.35, @0.65, @1.0];
+                rim.startPoint = CGPointMake(0.15, 0.0);
+                rim.endPoint   = CGPointMake(0.85, 1.0);
+                objc_setAssociatedObject(capsule.layer, kERDIRimKey, rim, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                [capsule.layer insertSublayer:rim atIndex:2];
+            }
+            rim.frame = capsule.bounds;
+            rim.cornerRadius = capsuleRadius;
+            if (@available(iOS 13.0, *)) rim.cornerCurve = kCACornerCurveContinuous;
+            rim.hidden = NO;
             [CATransaction commit];
             blur.hidden = YES;   // 真玻璃在场，静态磨砂退位
         } else {
@@ -1797,20 +1888,61 @@ static void ERDIEventApply(UIView *capsule) {
         capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
-        // ---- ④ 状态日志（5 秒节流 · DI-V161）----
+        // ---- ④ 状态日志（5 秒节流 · DI-V162）----
         static CFTimeInterval lastStat = 0.0;
         CFTimeInterval nowS2 = CACurrentMediaTime();
         if (nowS2 - lastStat > 5.0) {
             lastStat = nowS2;
-            ERLogInfo(@"DI-V161 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld [%@]",
+            ERLogInfo(@"DI-V162 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld [%@]",
                       liquidOK ? @"CABackdropLayer(液态)" : @"UIVisualEffectView(回退)",
                       glassL ? (unsigned long)glassL.filters.count : (unsigned long)0,
                       glassL ? glassL.cornerRadius : (blur ? blur.layer.cornerRadius : 0.0),
                       sysR, (long)hidCount, (long)alreadyCount,
                       hidNames.count ? [hidNames componentsJoinedByString:@","] : @"无");
         }
+        ERDIV162EnsureDisplayLink();   // 1.0.9-162 · 首次玻璃成功即启动逐帧驱动
     } @catch (__unused NSException *e) {
-        ERLogError(@"DI-V161 异常: %@", e);
+        ERLogError(@"DI-V162 异常: %@", e);
+    }
+}
+
+// ---- 1.0.9-162 · 逐帧驱动（Liquidify CCSystemApertureBackgroundDriver 同款思路）----
+//   0.3 秒轮询存在空窗，挡不住系统布局对黑底的重建/恢复（真机实证"一闪一闪"），
+//   玻璃/折射环 frame 也跟不上展开收起动画。岛在屏期间 CADisplayLink 每帧执行
+//   ERDIEventPollTick()（幂等：补藏黑底、同步玻璃/折射环几何、filters 在场检查）。
+//   开关关闭时自毁。167 行 dump 实证 aperture 层树仅 ~200 节点，逐帧开销可接受。
+@interface ERDIFrameDriver : NSObject
+@end
+@implementation ERDIFrameDriver
+- (void)erTick:(CADisplayLink *)link {
+    (void)link;
+    @try { ERDIV162FrameSync(); } @catch (__unused NSException *e) {}
+}
+@end
+
+static CADisplayLink *gERDIDisplayLink = nil;
+
+static void ERDIV162FrameSync(void) {
+    if (!ERDIEnabled()) {
+        if (gERDIDisplayLink) { [gERDIDisplayLink invalidate]; gERDIDisplayLink = nil; }
+        return;
+    }
+    ERDIEventPollTick();
+}
+
+static void ERDIV162EnsureDisplayLink(void) {
+    if (gERDIDisplayLink || !ERDIEnabled()) return;
+    Class dlc = objc_getClass("CADisplayLink");
+    if (!dlc) return;
+    @try {
+        ERDIFrameDriver *drv = [[ERDIFrameDriver alloc] init];
+        gERDIDisplayLink = [CADisplayLink displayLinkWithTarget:drv
+                                                       selector:NSSelectorFromString(@"erTick:")];
+        if (!gERDIDisplayLink) return;
+        [gERDIDisplayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        objc_setAssociatedObject(gERDIDisplayLink, kERDIDriverKey, drv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    } @catch (__unused NSException *e) {
+        gERDIDisplayLink = nil;
     }
 }
 

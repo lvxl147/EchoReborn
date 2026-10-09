@@ -186,7 +186,7 @@
 			<key>cell</key>
 			<string>PSSliderCell</string>
 			<key>default</key>
-			<real>50</real>
+			<real>25</real>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
