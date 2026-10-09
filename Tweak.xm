@@ -1607,11 +1607,12 @@ static void ERSafeSwizzleLayout(Class cls, SEL origSel, void (^afterOrig)(UIView
 // 修法：**形变期整体回退系统原生渲染** —— capsule bounds/圆角逐帧变化期间隐藏我们全部
 // 玻璃层（glass/tint/refract/rim）并恢复被藏的系统黑底层（原生胶囊形态，无任何采样伪影），
 // 连续稳定 3 帧（约 50ms）后再隐藏系统层、亮出液态玻璃。形变仅约 0.4s，稳定期才是液态。
-// 多容器并存：任一 capsule 形变即刷新全局宽限期 gERDIMorphUntil（+0.35s），期间全局走原生。
+// 多容器并存：任一 capsule 位移超阈值即刷新全局宽限期 gERDIMorphUntil（+0.6s），期间全局走原生。
+// v166 修正判定：相邻两次 apply 位移 > 1.5pt 才算形变帧（真动画每帧 4-14pt，系统微调 ≤1pt
+// 不触发），废除 stable<3 帧数判定 —— 该判定在多容器并存下同帧多次 apply 会被攒满导致
+// 动画中途误判稳定、开始/结束每 15-30ms 翻转，且空闲 ±0.5pt 微调恰好命中旧阈值 0.5。
 static void *kERDIPrevBoundsKey = &kERDIPrevBoundsKey;   // 上一帧 capsule bounds
 static void *kERDIPrevRadiusKey = &kERDIPrevRadiusKey;   // 1.0.9-165 · 上一帧 capsule 圆角
-static void *kERDIStableCountKey = &kERDIStableCountKey; // bounds/圆角 连续稳定帧数
-static void *kERDIMorphKey = &kERDIMorphKey;             // 上一帧是否处于形变期
 static CFTimeInterval gERDIMorphUntil = 0.0;             // 全局形变宽限期截止时间
 // （kERDIOrigEventBgKey 声明在 930 行区域 —— 165 修复：restore 函数先用后声明的编译错误）
 
@@ -1660,25 +1661,31 @@ static void ERDIEventApply(UIView *capsule) {
             return;
         }
 
-        // ---- ⓪ 形变检测（1.0.9-165 · 形变期整体回退原生渲染）----
+        // ---- ⓪ 形变检测（1.0.9-166 · 相邻帧位移阈值 + 长宽限）----
+        //   v165 恶化根因：stable<3 判定在同帧多次 apply（多容器并存）下被攒满 →
+        //   动画中途误判"稳定"→ 形变开始/结束每 15-30ms 翻转；空闲时系统 ±0.5pt
+        //   微调（阈值 0.5 恰好命中）→ 空闲也周期性回原生（原生=黑色胶囊底）。
+        //   v166：只有相邻两次 apply 位移 > 1.5pt 才算形变帧（真动画每帧 4-14pt，
+        //   微调 ≤1pt 不触发）；命中后全局宽限 0.6s 覆盖 0.42s 动画全程含减速尾。
+        //   → 空闲永不切换，动画期一次切换、全程覆盖。
         NSValue *pvB = objc_getAssociatedObject(capsule.layer, kERDIPrevBoundsKey);
         NSNumber *pvR = objc_getAssociatedObject(capsule.layer, kERDIPrevRadiusKey);
         CGRect prevB = pvB ? [pvB CGRectValue] : capsule.bounds;
-        CGFloat prevR = pvR ? [pvR floatValue] : capsule.layer.cornerRadius;
-        BOOL shapeChanged = fabs(prevB.size.width - cw) > 0.5 ||
-                            fabs(prevB.size.height - ch) > 0.5 ||
-                            fabs(prevR - capsule.layer.cornerRadius) > 0.25;
-        NSInteger stable = shapeChanged ? 0 : ([objc_getAssociatedObject(capsule.layer, kERDIStableCountKey) integerValue] + 1);
+        CGFloat prevR = pvR ? [pvR doubleValue] : capsule.layer.cornerRadius;
+        BOOL shapeChanged = fabs(prevB.size.width - cw) > 1.5 ||
+                            fabs(prevB.size.height - ch) > 1.5 ||
+                            fabs(prevR - capsule.layer.cornerRadius) > 1.5;
         objc_setAssociatedObject(capsule.layer, kERDIPrevBoundsKey, [NSValue valueWithCGRect:capsule.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(capsule.layer, kERDIPrevRadiusKey, @(capsule.layer.cornerRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(capsule.layer, kERDIStableCountKey, @(stable), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        BOOL morphing = stable < 3;
-        BOOL lastMorph = [objc_getAssociatedObject(capsule.layer, kERDIMorphKey) boolValue];
-        if (shapeChanged || morphing) gERDIMorphUntil = CACurrentMediaTime() + 0.35;   // 全局宽限：多容器并存时任一形变都算
+        if (shapeChanged) gERDIMorphUntil = CACurrentMediaTime() + 0.6;   // 全局宽限覆盖动画全程
         BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧全局走原生渲染？
-        if (morphing != lastMorph) {
-            ERLogInfo(@"DI-V165 形变%@ bounds=%.1fx%.1f 圆角=%.1f", morphing ? @"开始(回退原生)" : @"结束(回液态)", cw, ch, capsule.layer.cornerRadius);
-            objc_setAssociatedObject(capsule.layer, kERDIMorphKey, @(morphing), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        static BOOL gERDINativeLogged = NO;
+        if (morphNative && !gERDINativeLogged) {
+            ERLogInfo(@"DI-V166 形变开始(回退原生) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
+            gERDINativeLogged = YES;
+        } else if (!morphNative && gERDINativeLogged) {
+            ERLogInfo(@"DI-V166 形变结束(回液态) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
+            gERDINativeLogged = NO;
         }
 
         // ---- ① 扫描根（1.0.9-161 · Liquidify mount 同款：全窗口层树）----
@@ -1980,7 +1987,7 @@ static void ERDIEventApply(UIView *capsule) {
         CFTimeInterval nowS2 = CACurrentMediaTime();
         if (nowS2 - lastStat > 5.0) {
             lastStat = nowS2;
-            ERLogInfo(@"DI-V165 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld 原生恢复=%ld 形变=%@ [%@]",
+            ERLogInfo(@"DI-V166 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld 原生恢复=%ld 形变=%@ [%@]",
                       liquidOK ? @"CABackdropLayer(液态)" : @"UIVisualEffectView(回退)",
                       glassL ? (unsigned long)glassL.filters.count : (unsigned long)0,
                       glassL ? glassL.cornerRadius : (blur ? blur.layer.cornerRadius : 0.0),
@@ -2267,6 +2274,54 @@ static void ERProbeDynamicIslandOnce(void) {
         }
         injectQuickActionsGlass((UIVisualEffectView *)self_);
     }
+}
+%end
+
+#pragma mark - ①-b 锁屏操作按钮横向缩进（1.0.9-166）
+
+//   锁屏快捷按钮 = CSQuickActionsButton（UIControl，SpringBoard 私有类），左右各一
+//   （手电筒/相机）。Soko「锁屏控制项」子页新增"操作按钮"卡片滑块写
+//   soko_quickActionsIndent（-60~60），此处读取并对两枚按钮整体施加平移：
+//   正值 = 整体向外展开（左钮左移/右钮右移），负值 = 向内收缩，0 = 原位。
+static void *kERQALSOrigCenterKey = &kERQALSOrigCenterKey;   // 首见时捕获的原始 center
+
+static CGFloat ERQuickActionsLSIndent(void) {
+    NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+    CGFloat v = (CGFloat)[d doubleForKey:@"soko_quickActionsIndent"];
+    if (v > 60.0) v = 60.0;
+    if (v < -60.0) v = -60.0;
+    return v;
+}
+
+%hook CSQuickActionsButton
+- (void)layoutSubviews {
+    %orig;
+    UIView *self_ = (UIView *)self;
+    if (!self_.superview) return;
+    CGFloat indent = ERQuickActionsLSIndent();
+    NSValue *origC = objc_getAssociatedObject(self_, kERQALSOrigCenterKey);
+    if (!origC) {
+        // 首见：记录布局系统给出的原始 center（后续全部以它为基准做 transform）
+        objc_setAssociatedObject(self_, kERQALSOrigCenterKey,
+                                 [NSValue valueWithCGPoint:self_.center],
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        if (fabs(indent) >= 0.5) {
+            ERLogInfo(@"QA-INDENT 捕获原始中心 (%.1f,%.1f) indent=%.1f superview=%@",
+                      self_.center.x, self_.center.y, indent, NSStringFromClass(self_.superview.class));
+        }
+        return;
+    }
+    if (fabs(indent) < 0.5) {
+        if (!CGAffineTransformIsIdentity(self_.transform)) {
+            self_.transform = CGAffineTransformIdentity;
+            ERLogInfo(@"QA-INDENT 归零回原位");
+        }
+        return;
+    }
+    // 定侧别：原始中心在父视图中心左侧 → 左按钮（向外 = -x），右侧 → 右按钮（向外 = +x）
+    CGPoint oc = [origC CGPointValue];
+    CGFloat side = (oc.x <= self_.superview.bounds.size.width / 2.0) ? -1.0 : 1.0;
+    self_.transform = CGAffineTransformMakeTranslation(side * indent, 0);
 }
 %end
 

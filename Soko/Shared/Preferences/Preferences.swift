@@ -19,6 +19,8 @@ struct Preferences: Codable {
     var widgetOffset: Double = -18.0
     var notificationsEnabled: Bool = true
     var notificationOffset: Double = 60.0
+    // 1.0.9-166 · 锁屏操作按钮（手电筒/相机）横向缩进：负值向内收缩，正值向外展开。
+    var quickActionsIndent: Double = 0.0
 
     // Flipping a feature off zeroes its displacement so the view snaps back to
     // the stock position, rather than freezing at the last tuned offset.
@@ -58,6 +60,7 @@ public final class TweakPreferences: NSObject {
         preferences.widgetOffset = readDouble("widgetOffset", -18.0)
         preferences.notificationsEnabled = readBool("notificationsEnabled", true)
         preferences.notificationOffset = readDouble("notificationOffset", 60.0)
+        preferences.quickActionsIndent = readDouble("quickActionsIndent", 0.0)
 
         self.preferences = preferences
     }
