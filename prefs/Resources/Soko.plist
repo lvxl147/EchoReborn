@@ -28,13 +28,13 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>锁屏控件</string>
+			<string>锁屏组件</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>label</key>
-			<string>调整锁屏控件位置</string>
+			<string>调整组件位置</string>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
@@ -134,7 +134,7 @@
 			<string>resetNotificationOffset</string>
 		</dict>
 
-		<!-- 1.0.9-166 · 操作按钮（锁屏手电筒/相机）横向缩进 -->
+		<!-- 1.0.9-166/167 · 操作按钮（锁屏手电筒/相机）横向缩进：开关 + 滑块，与通知卡片同构 -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
@@ -142,6 +142,20 @@
 			<string>操作按钮</string>
 			<key>footerText</key>
 			<string>调整锁屏手电筒与相机按钮的横向位置：负值向内收缩，正值向外展开。</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>label</key>
+			<string>调整操作按钮</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>key</key>
+			<string>soko_quickActionsEnabled</string>
+			<key>default</key>
+			<true/>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>
 		<dict>
 			<key>cell</key>

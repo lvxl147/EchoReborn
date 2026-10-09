@@ -96,9 +96,9 @@ static NSString *const kSokoReload = @"com.strive.echoreborn/ReloadPrefs";
     [self erRemoveKeys:@[@"soko_notificationOffset"]];
 }
 
-// 1.0.9-166 · 操作按钮（锁屏手电筒/相机）横向缩进
+// 1.0.9-166/167 · 操作按钮（锁屏手电筒/相机）横向缩进：开关 + 滑块一并回落默认
 - (void)resetQuickActionsIndent {
-    [self erRemoveKeys:@[@"soko_quickActionsIndent"]];
+    [self erRemoveKeys:@[@"soko_quickActionsIndent", @"soko_quickActionsEnabled"]];
 }
 
 - (void)erRemoveKeys:(NSArray<NSString *> *)keys {

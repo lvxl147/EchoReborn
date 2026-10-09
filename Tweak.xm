@@ -1681,10 +1681,10 @@ static void ERDIEventApply(UIView *capsule) {
         BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧全局走原生渲染？
         static BOOL gERDINativeLogged = NO;
         if (morphNative && !gERDINativeLogged) {
-            ERLogInfo(@"DI-V166 形变开始(回退原生) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
+            ERLogInfo(@"DI-V167 形变开始(磨砂兜底) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
             gERDINativeLogged = YES;
         } else if (!morphNative && gERDINativeLogged) {
-            ERLogInfo(@"DI-V166 形变结束(回液态) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
+            ERLogInfo(@"DI-V167 形变结束(回液态) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
             gERDINativeLogged = NO;
         }
 
@@ -1752,20 +1752,10 @@ static void ERDIEventApply(UIView *capsule) {
                         nearBlack = (a >= 0.90 && r <= 0.13 && g <= 0.13 && b <= 0.13);
                 }
                 BOOL shouldHide = isBackdrop || knownBlack || (big && nearBlack);
-                if (shouldHide && morphNative) {
-                    // 1.0.9-165 · 形变期：恢复原生（被我们标记过的层亮回来，原生胶囊接管渲染）
-                    if (objc_getAssociatedObject(l, kERDIEventHiddenKey)) {
-                        NSNumber *op = objc_getAssociatedObject(l, kERDIEventHiddenKey);
-                        UIColor *obg = objc_getAssociatedObject(l, kERDIOrigEventBgKey);
-                        [CATransaction begin];
-                        [CATransaction setDisableActions:YES];
-                        l.hidden = NO;
-                        l.opacity = op ? [op floatValue] : 1.0;
-                        l.backgroundColor = obg ? obg.CGColor : NULL;
-                        [CATransaction commit];
-                        restoreCount++;
-                    }
-                } else if (shouldHide) {
+                if (shouldHide) {
+                    // 1.0.9-167 · 删除 165 的"形变期恢复原生"分支 —— 原生胶囊本身就是
+                    //   用户看到的"展开时黑色背景 1 秒"。形变期改为隐藏采样层（玻璃/折射环）、
+                    //   亮出静态磨砂 blur + rim（③ 段），黑底保持隐藏不参与渲染。
                     if (!l.hidden) {
                         // 1.0.9-162 · 三管齐下：真机实证系统布局会重建/恢复黑底（"一闪一闪"），
                         //   hidden / opacity=0 / 清背景互为冗余，任一被恢复下一帧立即补齐。
@@ -1961,9 +1951,23 @@ static void ERDIEventApply(UIView *capsule) {
             rim.frame = capsule.bounds;
             rim.cornerRadius = capsuleRadius;
             if (@available(iOS 13.0, *)) rim.cornerCurve = kCACornerCurveContinuous;
-            rim.hidden = morphNative;   // 1.0.9-165 · 形变期一并退场，原生形态纯净
+            rim.hidden = NO;   // 1.0.9-167 · rim 是纯渐变层无采样，形变期保留维持"液态"观感
             [CATransaction commit];
-            blur.hidden = YES;   // 真玻璃在场，静态磨砂退位
+            // 1.0.9-167 · 形变期亮静态磨砂兜底（UIVisualEffectView 的几何更新由 UIKit 驱动，
+            //   无 CABackdropLayer 形变采样黑帧问题）—— 替代 165/166 的原生黑胶囊
+            //   （用户反馈：展开时黑色背景 1 秒）。稳定期真玻璃回归，磨砂退位。
+            if (!blur) {
+                blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+                blur.layer.name = @"ERDI::blur";
+                blur.userInteractionEnabled = NO;
+                [capsule insertSubview:blur atIndex:0];
+            }
+            blur.frame = capsule.bounds;
+            blur.layer.cornerRadius = capsuleRadius;
+            blur.layer.masksToBounds = YES;
+            if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
+            blur.alpha = (cw > 340.0) ? 0.55 : 0.68;
+            blur.hidden = morphNative;
         } else {
             if (!blur) {
                 blur = [[UIVisualEffectView alloc] initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
@@ -1987,7 +1991,7 @@ static void ERDIEventApply(UIView *capsule) {
         CFTimeInterval nowS2 = CACurrentMediaTime();
         if (nowS2 - lastStat > 5.0) {
             lastStat = nowS2;
-            ERLogInfo(@"DI-V166 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld 原生恢复=%ld 形变=%@ [%@]",
+            ERLogInfo(@"DI-V167 玻璃=%@ filters=%lu 圆角=%.1f(系统%.1f) 新藏=%ld 已藏=%ld 原生恢复=%ld 形变=%@ [%@]",
                       liquidOK ? @"CABackdropLayer(液态)" : @"UIVisualEffectView(回退)",
                       glassL ? (unsigned long)glassL.filters.count : (unsigned long)0,
                       glassL ? glassL.cornerRadius : (blur ? blur.layer.cornerRadius : 0.0),
@@ -2280,48 +2284,58 @@ static void ERProbeDynamicIslandOnce(void) {
 #pragma mark - ①-b 锁屏操作按钮横向缩进（1.0.9-166）
 
 //   锁屏快捷按钮 = CSQuickActionsButton（UIControl，SpringBoard 私有类），左右各一
-//   （手电筒/相机）。Soko「锁屏控制项」子页新增"操作按钮"卡片滑块写
-//   soko_quickActionsIndent（-60~60），此处读取并对两枚按钮整体施加平移：
-//   正值 = 整体向外展开（左钮左移/右钮右移），负值 = 向内收缩，0 = 原位。
+//   （手电筒/相机）。Soko「锁屏控制项」子页"操作按钮"卡片：开关（soko_quickActionsEnabled，
+//   与通知卡片同构）+ 横向缩进滑块（soko_quickActionsIndent，-60~60）。
+//   1.0.9-167 修复"滑块没效果"：transform 只在 layoutSubviews 里贴，滑块拖完不会触发
+//   布局 → 改为监听 kERReloadNotification（ERQuickActionsReapplyAll 全窗扫描重贴），
+//   拖完立即生效；layoutSubviews 保留兜底（系统重建按钮后仍能恢复缩进）。
 static void *kERQALSOrigCenterKey = &kERQALSOrigCenterKey;   // 首见时捕获的原始 center
 
 static CGFloat ERQuickActionsLSIndent(void) {
     NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+    if (![d boolForKey:@"soko_quickActionsEnabled"]) return 0.0;   // 开关关 → 回原位
     CGFloat v = (CGFloat)[d doubleForKey:@"soko_quickActionsIndent"];
     if (v > 60.0) v = 60.0;
     if (v < -60.0) v = -60.0;
     return v;
 }
 
-%hook CSQuickActionsButton
-- (void)layoutSubviews {
-    %orig;
-    UIView *self_ = (UIView *)self;
-    if (!self_.superview) return;
+static void ERQuickActionsApplyButton(UIView *btn) {
+    if (!btn.superview) return;
     CGFloat indent = ERQuickActionsLSIndent();
-    NSValue *origC = objc_getAssociatedObject(self_, kERQALSOrigCenterKey);
+    NSValue *origC = objc_getAssociatedObject(btn, kERQALSOrigCenterKey);
     if (!origC) {
         // 首见：记录布局系统给出的原始 center（后续全部以它为基准做 transform）
-        objc_setAssociatedObject(self_, kERQALSOrigCenterKey,
-                                 [NSValue valueWithCGPoint:self_.center],
-                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (fabs(indent) >= 0.5) {
-            ERLogInfo(@"QA-INDENT 捕获原始中心 (%.1f,%.1f) indent=%.1f superview=%@",
-                      self_.center.x, self_.center.y, indent, NSStringFromClass(self_.superview.class));
-        }
-        return;
+        origC = [NSValue valueWithCGPoint:btn.center];
+        objc_setAssociatedObject(btn, kERQALSOrigCenterKey, origC, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (fabs(indent) < 0.5) {
-        if (!CGAffineTransformIsIdentity(self_.transform)) {
-            self_.transform = CGAffineTransformIdentity;
-            ERLogInfo(@"QA-INDENT 归零回原位");
-        }
+        if (!CGAffineTransformIsIdentity(btn.transform)) btn.transform = CGAffineTransformIdentity;
         return;
     }
     // 定侧别：原始中心在父视图中心左侧 → 左按钮（向外 = -x），右侧 → 右按钮（向外 = +x）
     CGPoint oc = [origC CGPointValue];
-    CGFloat side = (oc.x <= self_.superview.bounds.size.width / 2.0) ? -1.0 : 1.0;
-    self_.transform = CGAffineTransformMakeTranslation(side * indent, 0);
+    CGFloat side = (oc.x <= btn.superview.bounds.size.width / 2.0) ? -1.0 : 1.0;
+    btn.transform = CGAffineTransformMakeTranslation(side * indent, 0);
+}
+
+static void ERQuickActionsReapplyInView(UIView *v) {
+    Class qaCls = NSClassFromString(@"CSQuickActionsButton");
+    for (UIView *sv in v.subviews) {
+        if (qaCls && [sv isKindOfClass:qaCls]) ERQuickActionsApplyButton(sv);
+        ERQuickActionsReapplyInView(sv);
+    }
+}
+
+static void ERQuickActionsReapplyAll(void) {
+    for (UIWindow *w in [UIApplication sharedApplication].windows)
+        ERQuickActionsReapplyInView(w);
+}
+
+%hook CSQuickActionsButton
+- (void)layoutSubviews {
+    %orig;
+    ERQuickActionsApplyButton((UIView *)self);
 }
 %end
 
@@ -28849,6 +28863,15 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
         }
         %init(_ungrouped);
         ERLogRecord(@"INFO", [NSString stringWithFormat:@"ctor: hooks installed on iOS %.1f", ERSystemVersion()]);
+        // 1.0.9-167 · 操作按钮横向缩进：滑块/开关写入后（ReloadPrefs 通知）即时重贴
+        //   transform —— 此前只靠 layoutSubviews，滑块拖完不触发布局，用户看到"没效果"。
+        {
+            int qaTok = 0;
+            notify_register_dispatch(kERReloadNotification.UTF8String, &qaTok,
+                                     dispatch_get_main_queue(), ^(int t) {
+                dispatch_async(dispatch_get_main_queue(), ^{ ERQuickActionsReapplyAll(); });
+            });
+        }
         // 0.4.0: liquid glass is vendored, not delegated. Register the Control
         // Center material host so the ported MTMaterialView router glasses
         // native module platters / sliders; converted connectivity tiles are
