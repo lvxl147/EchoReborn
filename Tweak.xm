@@ -1763,7 +1763,12 @@ static void ERDIMorphSyncTick(void) {
                         sScreenBlend = ((id (*)(Class, SEL, NSString *))objc_msgSend)(filterClass, sel, @"screenBlendMode");
                 });
                 @try {
-                    id want = morphing ? sScreenBlend : nil;   // 1.0.9-184 · 仅形变期 screenBlend（黑帧恒等）；稳定期普通 alpha 采样壁纸，不发灰不发白
+                    // 1.0.9-186 · 紧凑态恒开 screenBlend：v185 探针实锤紧凑态岛子树无任何
+                    //   黑层（bg=无 contents=无），黑胶囊 = 我们玻璃 backdrop 在紧凑窗口
+                    //   采样到黑（全屏 BXBottomTapShieldView bg 挡住壁纸采样）。screen
+                    //   混合黑色恒等 → 黑采样自动变透明 = 紧凑态透出壁纸。
+                    BOOL compactM = CGRectGetWidth(pb) < 200.0;
+                    id want = (morphing || compactM) ? sScreenBlend : nil;
                     if (glassL.compositingFilter != want) glassL.compositingFilter = want;
                     // 1.0.9-173 · 方案A：tint 层同步。玻璃底下还有一层半透明 tint
                     //   （普通 alpha 合成），黑帧透过玻璃后还会被 tint 再压一层；
@@ -2113,11 +2118,11 @@ static void ERDIEventApply(UIView *capsule) {
                 }
             }
 
-            // ---- 1.0.9-185 · COMPACT-PROBE：紧凑态黑胶囊真身一锤定音 ----
-            //   v184 日志实锤状态机正常（稳定期已藏=14），但录屏显示紧凑态胶囊仍纯黑
-            //   （中心像素 RGB(1,0,2)）—— BLACK-PROBE 两次都跑在展开态，紧凑态子树
-            //   从未被点名。本探针：稳定期 + 紧凑（cw<200）时 dump 岛子树全部可见节点
-            //   （类/转换frame/背景色是否近黑/位图/父类），5s 节流最多 10 行。
+            // ---- 1.0.9-185/186 · COMPACT-PROBE v2：紧凑态黑胶囊真身定点 ----
+            //   v185 结论：紧凑子树无任何黑层（bg=无 contents=无）→ 黑 = 玻璃 backdrop
+            //   在紧凑窗口采样到黑（全屏 BXBottomTapShieldView bg 挡住壁纸采样）。
+            //   v186 探针升级：① 跳过全屏节点（430×932 吃光名额）；② 名额 10→20；
+            //   ③ 新增层树 dump（无视图宿主的纯 CALayer 也点名）。
             {
                 static CFTimeInterval lastCP = 0.0;
                 CFTimeInterval nowCP = CACurrentMediaTime();
@@ -2125,13 +2130,14 @@ static void ERDIEventApply(UIView *capsule) {
                     lastCP = nowCP;
                     NSMutableArray<UIView *> *st4 = [NSMutableArray arrayWithObject:root];
                     NSInteger g4 = 0, cpN = 0;
-                    while (st4.count && g4++ < 8000 && cpN < 10) {
+                    while (st4.count && g4++ < 8000 && cpN < 20) {
                         UIView *vv = st4.lastObject; [st4 removeLastObject];
                         if (!vv) continue;
                         NSString *cn4 = NSStringFromClass(vv.class);
                         if ([cn4 hasPrefix:@"ER"]) { [st4 addObjectsFromArray:vv.subviews]; continue; }
-                        if (!vv.hidden && vv.alpha > 0.05) {
-                            CGRect vf4 = [root convertRect:vv.bounds fromView:vv];
+                        CGRect vf4 = [root convertRect:vv.bounds fromView:vv];
+                        BOOL fullscreen4 = (CGRectGetWidth(vf4) > 400.0 || CGRectGetHeight(vf4) > 300.0);
+                        if (!fullscreen4 && !vv.hidden && vv.alpha > 0.05) {
                             BOOL dark4 = NO;
                             if (vv.layer.backgroundColor) {
                                 UIColor *c4 = [UIColor colorWithCGColor:vv.layer.backgroundColor];
@@ -2139,17 +2145,42 @@ static void ERDIEventApply(UIView *capsule) {
                                 if ([c4 getRed:&r4 green:&g4b blue:&b4 alpha:&a4])
                                     dark4 = (a4 >= 0.85 && r4 <= 0.15 && g4b <= 0.15 && b4 <= 0.15);
                             }
-                            BOOL big4 = (CGRectGetWidth(vf4) > 60.0 || CGRectGetHeight(vf4) > 25.0);
-                            if (big4 || vv.layer.contents) {
-                                cpN++;
-                                ERLogInfo(@"COMPACT-PROBE %@ frame=%@ bg=%@(%@) contents=%@ 父=%@",
-                                          cn4, NSStringFromCGRect(vf4),
-                                          vv.layer.backgroundColor ? @"有" : @"无", dark4 ? @"黑" : @"非黑",
-                                          vv.layer.contents ? @"位图" : @"无",
-                                          vv.superview ? NSStringFromClass(vv.superview.class) : @"(nil)");
-                            }
+                            cpN++;
+                            ERLogInfo(@"COMPACT-PROBE %@ frame=%@ bg=%@(%@) contents=%@ 父=%@",
+                                      cn4, NSStringFromCGRect(vf4),
+                                      vv.layer.backgroundColor ? @"有" : @"无", dark4 ? @"黑" : @"非黑",
+                                      vv.layer.contents ? @"位图" : @"无",
+                                      vv.superview ? NSStringFromClass(vv.superview.class) : @"(nil)");
                         }
                         [st4 addObjectsFromArray:vv.subviews];
+                    }
+                    // 层树 dump：capsule.layer 子树（含无视图宿主的纯 CALayer）
+                    NSInteger lN = 0;
+                    NSMutableArray<CALayer *> *stL = [NSMutableArray arrayWithObject:capsule.layer];
+                    NSInteger gL = 0;
+                    while (stL.count && gL++ < 4000 && lN < 12) {
+                        CALayer *ll = stL.lastObject; [stL removeLastObject];
+                        if (!ll) continue;
+                        NSString *cnL = NSStringFromClass(object_getClass(ll));
+                        if ([ll.name hasPrefix:@"ERDI::"]) { [stL addObjectsFromArray:ll.sublayers]; continue; }
+                        if (!ll.hidden && ll.opacity > 0.05) {
+                            BOOL darkL = NO;
+                            if (ll.backgroundColor) {
+                                UIColor *cL = [UIColor colorWithCGColor:ll.backgroundColor];
+                                CGFloat rL = 0, gL2 = 0, bL = 0, aL = 0;
+                                if ([cL getRed:&rL green:&gL2 blue:&bL alpha:&aL])
+                                    darkL = (aL >= 0.85 && rL <= 0.15 && gL2 <= 0.15 && bL <= 0.15);
+                            }
+                            CGFloat lwL = CGRectGetWidth(ll.frame), lhL = CGRectGetHeight(ll.frame);
+                            if (lwL > 40.0 || lhL > 20.0 || ll.contents) {
+                                lN++;
+                                ERLogInfo(@"LAYER-PROBE %@ name=%@ frame=%.0fx%.0f bg=%@(%@) contents=%@",
+                                          cnL, ll.name ?: @"-", lwL, lhL,
+                                          ll.backgroundColor ? @"有" : @"无", darkL ? @"黑" : @"非黑",
+                                          ll.contents ? @"位图" : @"无");
+                            }
+                        }
+                        [stL addObjectsFromArray:ll.sublayers];
                     }
                 }
             }
