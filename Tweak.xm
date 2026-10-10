@@ -1706,6 +1706,11 @@ static void ERDIMorphSyncTick(void) {
                 @try {
                     id want = morphing ? sScreenBlend : nil;
                     if (glassL.compositingFilter != want) glassL.compositingFilter = want;
+                    // 1.0.9-173 · 方案A：tint 层同步。玻璃底下还有一层半透明 tint
+                    //   （普通 alpha 合成），黑帧透过玻璃后还会被 tint 再压一层；
+                    //   形变期同步 screenBlendMode 保证整条玻璃链黑色恒等。
+                    CALayer *tintSB = objc_getAssociatedObject(glassL, kERDITintKey);
+                    if (tintSB && tintSB.compositingFilter != want) tintSB.compositingFilter = want;
                 } @catch (__unused NSException *e) {}
             }
             [CATransaction begin];
@@ -1966,8 +1971,14 @@ static void ERDIEventApply(UIView *capsule) {
                 if (!objc_getAssociatedObject(glassL, kERDIBackdropCfgKey)) {
                     // 私有开关（LGLiveBackdropView.applyFilters 同款）：
                     //   实时取景留在渲染服务器空间 + 脱离窗口屏幕裁剪，backdrop 才会真正出画面
-                    @try { [glassL setValue:@NO forKey:@"layerUsesCoreImageFilters"]; } @catch (...) {}
-                    @try { [glassL setValue:@NO forKey:@"windowServerAware"]; } @catch (...) {}
+                    // 1.0.9-173 · 方案A：两键改 @YES。v170-172 实证 compositingFilter=
+                    //   screenBlendMode 贴上不生效 —— backdrop 层的 compositingFilter
+                    //   要在渲染服务器空间混合，前提是 windowServerAware=YES（实时取景
+                    //   留在渲染服务器空间）+ layerUsesCoreImageFilters=YES（允许层
+                    //   级滤镜链）。Liquidify 参考实现（4639-4641）即 windowServerAware=YES。
+                    //   副作用自查点：若玻璃出现花屏/错采样，优先回退这两个键。
+                    @try { [glassL setValue:@YES forKey:@"layerUsesCoreImageFilters"]; } @catch (...) {}
+                    @try { [glassL setValue:@YES forKey:@"windowServerAware"]; } @catch (...) {}
                     @try { [glassL setValue:[NSString stringWithFormat:@"echoreborn.di.%d", (int)getpid()]
                                      forKey:@"groupName"]; } @catch (...) {}
                     @try { [glassL setValue:@"echoreborn.liquidglass" forKey:@"groupNamespace"]; } @catch (...) {}
@@ -2455,13 +2466,22 @@ static void ERQuickActionsApplyButton(UIView *btn) {
         objc_setAssociatedObject(btn, kERQALSOrigCenterKey, origC, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (fabs(indent) < 0.5) {
+        // 1.0.9-173 · 回正改 center 直贴（与位移同路径，防系统布局吞 transform 后回不正）
+        CGPoint ocR = [origC CGPointValue];
+        if (!CGPointEqualToPoint(btn.center, ocR)) btn.center = ocR;
         if (!CGAffineTransformIsIdentity(btn.transform)) btn.transform = CGAffineTransformIdentity;
         return;
     }
     // 定侧别：原始中心在父视图中心左侧 → 左按钮（向外 = -x），右侧 → 右按钮（向外 = +x）
     CGPoint oc = [origC CGPointValue];
     CGFloat side = (oc.x <= btn.superview.bounds.size.width / 2.0) ? -1.0 : 1.0;
-    btn.transform = CGAffineTransformMakeTranslation(side * indent, 0);
+    // 1.0.9-173 · 放弃 transform 改 center 直贴。v172 日志实证：按钮对象完全正确
+    //   （window=SBCoverSheetWindow hidden=0 alpha=1.00），transform=translated 已贴
+    //   但 frame 纹丝不动 → 系统（CSQuickActionsView 布局机制）按 frame 摆放并吞掉
+    //   transform 的视觉效果 → 直接改 center（frame.origin 的推导源），系统布局
+    //   再跑也只是把 frame 设回，而 center 会立刻重算回我们的值。
+    CGPoint wantC = CGPointMake(oc.x + side * indent, oc.y);
+    if (!CGPointEqualToPoint(btn.center, wantC)) btn.center = wantC;
     // 1.0.9-172 · v171 日志实证 transform 已贴（indent=60 side=1）却视觉无变化 →
     //   升级日志定位：每按钮独立 2s 节流（原全局 5s 节流会吞掉第二颗按钮），
     //   附 window/hidden/alpha/frame/父视图 —— 若 window=nil 或 hidden=YES 即命中
@@ -2472,9 +2492,9 @@ static void ERQuickActionsApplyButton(UIView *btn) {
         CFTimeInterval nowA = CACurrentMediaTime();
         if (nowA - lastL > 2.0) {
             objc_setAssociatedObject(btn, kERQALastLogKey, @(nowA), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            ERLogInfo(@"QA-APPLY 按钮=%@ indent=%.1f side=%.0f 原始中心=(%.1f,%.1f) transform=%@ window=%@ hidden=%d alpha=%.2f frame=%@ 父=%@",
+            ERLogInfo(@"QA-APPLY 按钮=%@ indent=%.1f side=%.0f 原始中心=(%.1f,%.1f) 新中心=(%.1f,%.1f) 实际中心=(%.1f,%.1f) window=%@ hidden=%d alpha=%.2f frame=%@ 父=%@",
                       NSStringFromClass(btn.class), indent, side, oc.x, oc.y,
-                      CGAffineTransformIsIdentity(btn.transform) ? @"identity" : @"translated",
+                      wantC.x, wantC.y, btn.center.x, btn.center.y,
                       btn.window ? NSStringFromClass(btn.window.class) : @"(nil)",
                       (int)btn.hidden, btn.alpha, NSStringFromCGRect(btn.frame),
                       btn.superview ? NSStringFromClass(btn.superview.class) : @"(nil)");
