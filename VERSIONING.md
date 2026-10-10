@@ -87,3 +87,4 @@ python scripts/er_set_version.py 1.0.6
 2. `prefs/Resources/Info.plist` → `CFBundleShortVersionString` / `CFBundleVersion`
 3. `assets/depiction.json` → 版本展示文本
 4. `Tweak.xm` → 全部 `ver=X.Y.Z` 诊断串
+| 54 | 1.0.9-170 | **操作按钮缩进"没效果"第二根因（开关 key 缺省 = 关）+ 形变期 screenBlendMode 防黑边（泽哥版同款）**（v169 日志 EchoReborn-log-20261010-092021.txt 实证驱动）。**① QA 真根因**：QA-VIEW 命中=2（按钮找得到）却零条 QA-APPLY 按钮 行 = ApplyButton 全走了 indent<0.5 早退 —— soko_quickActionsEnabled 用户从未动过 → key 从未落盘 → boolForKey 对不存在 key 返回 NO → indent 恒 0；修复：key 不存在视为开启（与 plist default true 一致），仅明确写入 false 才回原位；另 origC 首见捕获加 guard（宽>0.5 且 center 非零点才固化，防侧别判死）。**② 黑边**：v169 常驻几何跟随已消形变起点 1 帧滞后，但形变期 glass backdrop 采样黑帧仍直接 alpha 合成显形；采用 island136 泽哥版防黑块核心 screenBlendMode（1-(1-a)(1-b)，黑色恒等）—— 形变期对 glass 层设 compositingFilter=screenBlendMode，黑采样帧合成后透出底下内容，稳定期还原 nil（普通 alpha 合成）；filter 经 objc_msgSend filterWithName: 创建并 dispatch_once 缓存，@try 防护。版本同步 control/prefsInfo 1.0.9-170/1001020。 |

@@ -1650,6 +1650,24 @@ static void ERDIMorphSyncTick(void) {
                 gb = CGRectInset(pb, -2.0, -2.0);
                 gr = pr + 2.0;
             }
+            // 1.0.9-170 · 泽哥版（island136）防黑块同款：screenBlendMode（黑色恒等）。
+            //   形变期 glass 的 backdrop 采样黑帧/黑边是"黑色内容直接 alpha 合成"——
+            //   screen 混合 1-(1-a)(1-b) 下黑色恒等，黑帧合成后=透出底下内容，黑边消失。
+            //   代价：形变期玻璃会略偏亮（screen 提亮），稳定期还原普通 alpha 合成。
+            {
+                static id sScreenBlend = nil;
+                static dispatch_once_t onceSB;
+                dispatch_once(&onceSB, ^{
+                    Class filterClass = NSClassFromString(@"CAFilter");
+                    SEL sel = NSSelectorFromString(@"filterWithName:");
+                    if (filterClass && [filterClass respondsToSelector:sel])
+                        sScreenBlend = ((id (*)(Class, SEL, NSString *))objc_msgSend)(filterClass, sel, @"screenBlendMode");
+                });
+                @try {
+                    id want = morphing ? sScreenBlend : nil;
+                    if (glassL.compositingFilter != want) glassL.compositingFilter = want;
+                } @catch (__unused NSException *e) {}
+            }
             [CATransaction begin];
             [CATransaction setDisableActions:YES];
             glassL.frame = gb;
@@ -2360,7 +2378,11 @@ static NSArray<UIWindow *> *ERAllApplicationWindows(void);
 
 static CGFloat ERQuickActionsLSIndent(void) {
     NSUserDefaults *d = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
-    if (![d boolForKey:@"soko_quickActionsEnabled"]) return 0.0;   // 开关关 → 回原位
+    // 1.0.9-170 · 真根因修复：开关 key 用户从未动过 → 从未落盘 → boolForKey 对
+    //   不存在的 key 返回 NO → indent 恒为 0（v169 日志实证：命中=2 却无 QA-APPLY 按钮
+    //   行 = 全走了 indent<0.5 早退）。改为：key 不存在时视为"开启"（与 plist default 一致）。
+    id en = [d objectForKey:@"soko_quickActionsEnabled"];
+    if (en && ![en boolValue]) return 0.0;   // 明确写了关 → 回原位
     CGFloat v = (CGFloat)[d doubleForKey:@"soko_quickActionsIndent"];
     if (v > 60.0) v = 60.0;
     if (v < -60.0) v = -60.0;
@@ -2372,8 +2394,12 @@ static void ERQuickActionsApplyButton(UIView *btn) {
     CGFloat indent = ERQuickActionsLSIndent();
     NSValue *origC = objc_getAssociatedObject(btn, kERQALSOrigCenterKey);
     if (!origC) {
-        // 首见：记录布局系统给出的原始 center（后续全部以它为基准做 transform）
-        origC = [NSValue valueWithCGPoint:btn.center];
+        // 1.0.9-170 · 首见捕获 guard：按钮尚未完成系统布局时（宽 0 / 中心为零点）
+        //   固化 center 会把侧别判死 —— 等 frame 有效的那次布局再捕获。
+        CGPoint nowC = btn.center;
+        CGFloat nowW = btn.bounds.size.width;
+        if (nowW <= 0.5 || (nowC.x == 0.0 && nowC.y == 0.0)) return;
+        origC = [NSValue valueWithCGPoint:nowC];
         objc_setAssociatedObject(btn, kERQALSOrigCenterKey, origC, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     if (fabs(indent) < 0.5) {
