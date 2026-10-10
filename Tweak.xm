@@ -29216,20 +29216,30 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
             //   v175 实测无效果且日志无 CC-RECORD 行 → iOS26 录屏入口可能不在
             //   SBControlCenterController 上。一次性扫描全部 ObjC 类（仅查方法表，毫秒级），
             //   同时核对开关读值 —— 日志直接点名该挂哪个类。
+            // 1.0.9-177 · **热修安全模式**：v176 用 [(id)c instancesRespondToSelector:] 消息
+            //   方式扫描，碰到非 NSObject 系根类（如老 Object 根类）→ 元类不认识该选择器 →
+            //   ___forwarding___ doesNotRecognizeSelector SIGTRAP → SpringBoard 安全模式循环
+            //   （崩溃日志 SpringBoard-2026-10-10-133536.txt 实锤，寄存器 OBJC_CLASS_$_Object）。
+            //   改用纯 C 运行时函数 class_getInstanceMethod/class_getClassMethod（不经过
+            //   消息转发，任何类都安全），并整体 @try 包裹。
             @autoreleasepool {
-                unsigned int cnt = 0;
-                Class *clsList = objc_copyClassList(&cnt);
-                NSMutableArray<NSString *> *hosts = [NSMutableArray array];
-                for (unsigned int i = 0; i < cnt && hosts.count < 6; i++) {
-                    Class c = clsList[i];
-                    if (c == ccc) continue;
-                    if ([(id)c instancesRespondToSelector:selCD] || [c respondsToSelector:selCD])
-                        [hosts addObject:NSStringFromClass(c)];
+                @try {
+                    unsigned int cnt = 0;
+                    Class *clsList = objc_copyClassList(&cnt);
+                    NSMutableArray<NSString *> *hosts = [NSMutableArray array];
+                    for (unsigned int i = 0; i < cnt && hosts.count < 6; i++) {
+                        Class c = clsList[i];
+                        if (c == ccc) continue;
+                        if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD))
+                            [hosts addObject:NSStringFromClass(c)];
+                    }
+                    free(clsList);
+                    ERLogInfo(@"CC-RECORD 扫描 startRecordingCountdown 宿主=%@（SBControlCenterController=%@）开关读值=%d",
+                              hosts.count ? [hosts componentsJoinedByString:@","] : @"(无其他宿主)",
+                              ccc ? @"在" : @"nil", (int)ERCCRecordNoDelayEnabled());
+                } @catch (NSException *e177) {
+                    ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e177);
                 }
-                free(clsList);
-                ERLogInfo(@"CC-RECORD 扫描 startRecordingCountdown 宿主=%@（SBControlCenterController=%@）开关读值=%d",
-                          hosts.count ? [hosts componentsJoinedByString:@","] : @"(无其他宿主)",
-                          ccc ? @"在" : @"nil", (int)ERCCRecordNoDelayEnabled());
             }
         }
         // The package intentionally has no firmware ceiling so it installs on
