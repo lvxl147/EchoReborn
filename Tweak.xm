@@ -1994,6 +1994,46 @@ static void ERDIEventApply(UIView *capsule) {
                     }
                 }
             }
+
+            // ---- 1.0.9-180 · LA-BITMAP 藏除：黑边+边缘外真身定点清除 ----
+            //   v178 探针实锤：app 自定义 LA 背景位图 UIImageView（426.7×310.7，
+            //   offset -9.7,-135）不在 capsule 子树裁剪链内 → 黑边（位图自身）+
+            //   边缘外（超岛部分）。系统对它无裁剪（原生岛把它当正常背景盖在岛底，
+            //   我们换成透明玻璃后它就露出来了）。修复：岛子树内「UIImageView +
+            //   layer.contents 位图 + 可见 + (任一维超岛 或 伸出岛界且面积>30000)」
+            //   直接 hidden —— 我们自己的玻璃负责背景，不再让 app 底图漏出。
+            //   专辑封面等小图（面积小、尺寸不超岛）不命中，零误伤；hidden 后
+            //   visible 条件不再成立，天然只执行一次。
+            {
+                CGRect islandR = (root == (UIView *)capsule) ? capsule.bounds
+                              : [root convertRect:capsule.bounds fromView:capsule];
+                CGFloat cwI = CGRectGetWidth(islandR), chI = CGRectGetHeight(islandR);
+                if (cwI > 10.0 && chI > 10.0) {
+                    NSMutableArray<UIView *> *st3 = [NSMutableArray arrayWithObject:root];
+                    NSInteger g3 = 0, bmHid = 0;
+                    while (st3.count && g3++ < 8000) {
+                        UIView *vv = st3.lastObject; [st3 removeLastObject];
+                        if (!vv || vv.hidden) continue;
+                        NSString *cn3 = NSStringFromClass(vv.class);
+                        if ([cn3 hasPrefix:@"ER"]) { [st3 addObjectsFromArray:vv.subviews]; continue; }
+                        if ([vv isKindOfClass:[UIImageView class]] && vv.layer.contents
+                            && vv.alpha > 0.05 && vv.superview && !vv.superview.hidden) {
+                            CGRect r3 = [root convertRect:vv.bounds fromView:vv];
+                            BOOL overW = CGRectGetWidth(r3) > cwI + 2.0;
+                            BOOL overH = CGRectGetHeight(r3) > chI + 2.0;
+                            BOOL outside = !CGRectContainsRect(CGRectInset(islandR, -2.0, -2.0), r3);
+                            BOOL bigArea = CGRectGetWidth(r3) * CGRectGetHeight(r3) > 30000.0;
+                            if (overW || overH || (outside && bigArea)) {
+                                vv.hidden = YES;
+                                bmHid++;
+                                ERLogInfo(@"LA-BITMAP 藏除 %@ 转换frame=%@ 岛=%@", cn3, NSStringFromCGRect(r3), NSStringFromCGRect(islandR));
+                            }
+                        }
+                        [st3 addObjectsFromArray:vv.subviews];
+                    }
+                    if (bmHid > 0) ERLogInfo(@"LA-BITMAP 本轮藏除 %ld 个", (long)bmHid);
+                }
+            }
         }
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
