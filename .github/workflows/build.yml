@@ -47,13 +47,66 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Swift-capable Theos
-        uses: waruhachi/theos-action@v2.4.6
+      # 1.0.9-171 · 内联 theos-action v2.4.6 等价步骤。不能再用 composite action：
+      #   其"Update Theos"步骤在缓存命中时执行 $THEOS/bin/update-theos，而该脚本硬编码
+      #   `git reset --hard origin/master`，waruhachi/theos 只有 main 分支 → 缓存命中必挂
+      #   （run 38014441895 三连失败实证；此前 v166-170 均因 theos 上游有新提交、缓存
+      #   key 变化走未命中路径而侥幸通过）。这里用 origin/main 修复 update 步骤，
+      #   其余（cache key 格式 / brew 依赖 / checkout 结构）与 v2.4.6 逐项对齐。
+      - name: Theos environment
+        run: echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
+
+      - name: Theos cache key
+        id: theoskey
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          theos_sha=$(gh api -H 'Accept: application/vnd.github.sha' /repos/waruhachi/theos/commits/main)
+          sdks_sha=$(gh api -H 'Accept: application/vnd.github.sha' /repos/waruhachi/sdks/commits/main)
+          echo "key=waruhachi/theos-main-${theos_sha}|waruhachi/sdks-main-${sdks_sha}|MrGcGamer/LibGcUniversalDocumentation-master-none|opa334/AltList-main-none" >> "$GITHUB_OUTPUT"
+
+      - name: Theos cache
+        id: theoscache
+        uses: actions/cache@v4
         with:
-          theos-src: 'waruhachi/theos'
-          theos-branch: 'main'
-          sdks-src: 'waruhachi/sdks'
-          sdks-branch: 'main'
+          path: ${{ github.workspace }}/theos
+          key: ${{ steps.theoskey.outputs.key }}
+
+      - name: Install Theos dependencies
+        run: |
+          set -euo pipefail
+          brew install make ldid
+          echo "$(brew --prefix make)/libexec/gnubin" >> $GITHUB_PATH
+
+      - name: Checkout Theos (cache miss)
+        if: steps.theoscache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: waruhachi/theos
+          ref: main
+          submodules: recursive
+          path: theos
+
+      - name: Checkout SDKs (cache miss)
+        if: steps.theoscache.outputs.cache-hit != 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: waruhachi/sdks
+          ref: main
+          submodules: recursive
+          path: theos/sdks
+
+      - name: Update Theos (cache hit, main-branch safe)
+        if: steps.theoscache.outputs.cache-hit == 'true'
+        run: |
+          set -euo pipefail
+          cd "$THEOS"
+          git config submodule.fetchJobs 4
+          git fetch origin
+          git reset --hard origin/main
+          git submodule update --init --recursive --force
+          if [ -x bin/post-update ]; then bin/post-update; fi
 
       # Fail loudly and early if the runner image ever moves to a Swift 6.x
       # compiler, instead of burning a whole build and dying deep inside
