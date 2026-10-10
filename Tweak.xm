@@ -779,6 +779,7 @@ static void *kERDIDriverKey = &kERDIDriverKey;             // 1.0.9-162 · displ
 static void ERDIV162EnsureDisplayLink(void);               // 1.0.9-162 · 逐帧驱动（实现在 ERDIEventApply 之下）
 static void ERDIV162FrameSync(void);                       // 1.0.9-162 · 逐帧同步体
 static void ERDIEventPollTick(void);                       // 1.0.9-162 · 前置声明（逐帧驱动复用其入口）
+static void ERDIRestoreSuppressedLayers(UIWindow *win);    // 1.0.9-181 · 形变期原生恢复前置声明
 
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
@@ -1664,6 +1665,9 @@ static NSInteger ERDIV172SweepViews(UIView *v, NSInteger *hid, NSInteger *alread
     if (ERDIV172ViewIsBlack(v)) {
         if (!v.hidden) {
             if (names.count < 6) [names addObject:NSStringFromClass(v.class)];
+            // 1.0.9-181 · 打标记（原 alpha/bg），形变期 ERDIRestoreSuppressedLayers 可恢复
+            objc_setAssociatedObject(v, kERDIEventHiddenKey, @(v.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            if (v.backgroundColor) objc_setAssociatedObject(v, kERDIOrigEventBgKey, v.backgroundColor, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             v.hidden = YES;
             if (v.alpha != 0.0) v.alpha = 0.0;
             if (v.backgroundColor) v.backgroundColor = [UIColor clearColor];
@@ -1698,6 +1702,23 @@ static void ERDIMorphSyncTick(void) {
                 else if ([l.name isEqualToString:@"ERDI::rim"]) rimL = l;
             }
             if (!glassL) continue;
+            // 1.0.9-181 · 每帧维持接管状态机（apply 可能整帧不跑，display link 兜底）：
+            //   形变期 = 恢复原生层 + 玻璃链 opacity 0；稳定期 = 玻璃链 opacity 1。
+            if (morphing) {
+                UIWindow *wM = capsule.window;
+                if (wM) ERDIRestoreSuppressedLayers(wM);
+                if (glassL.opacity != 0.0) glassL.opacity = 0.0;
+                CALayer *tintM = objc_getAssociatedObject(glassL, kERDITintKey);
+                if (tintM && tintM.opacity != 0.0) tintM.opacity = 0.0;
+                CALayer *rimM = objc_getAssociatedObject(capsule.layer, kERDIRimKey);
+                if (rimM && rimM.opacity != 0.0) rimM.opacity = 0.0;
+            } else {
+                if (glassL.opacity != 1.0) glassL.opacity = 1.0;
+                CALayer *tintM = objc_getAssociatedObject(glassL, kERDITintKey);
+                if (tintM && tintM.opacity != 1.0) tintM.opacity = 1.0;
+                CALayer *rimM = objc_getAssociatedObject(capsule.layer, kERDIRimKey);
+                if (rimM && rimM.opacity != 1.0) rimM.opacity = 1.0;
+            }
             // 1.0.9-174 · **废除形变期 2pt 外扩**：外扩让玻璃越出系统岛轮廓（v173 截图
             //   蓝箭头"边缘外"），用户要求完全按照系统岛大小。采样余量由 screenBlend
             //   黑色恒等兜底，无需外扩。
@@ -1787,6 +1808,56 @@ static void ERDIAddSafeRoundedRect(CGMutablePathRef p, CGRect rect, CGFloat radi
     CGPathCloseSubpath(p);
 }
 
+// ---- 1.0.9-181 · 形变期原生恢复（LiquidAss LGIslandGlassDriver.restoreStockEdges 同款）----
+//   解剖实证：LiquidAss 岛"黑边免疫"的关键 = 动画期完全交给系统原生渲染
+//   （restoreStockEdges：按 key 找回 _lightBkgKeyLineView/_darkBkgKeyLineView/
+//   _shadowView 恢复原 hidden），稳定 N 帧后才 suppress 接管。我们 v172 起是
+//   逐帧全时压制+清底+自绘，原生层轮番露馅（幕帘/KeyLine/LA 位图）。v181 改
+//   同款状态机：morphNative 期间恢复所有被 kERDIEventHiddenKey 标记的层
+//   （v155/v165 的还原逻辑复用，幂等），玻璃链 opacity→0；稳定后照常接管。
+static void ERDIRestoreSuppressedLayers(UIWindow *win) {
+    if (!win) return;
+    @try {
+        NSMutableArray<CALayer *> *lst = [NSMutableArray arrayWithObject:win.layer];
+        NSInteger guard = 0;
+        while (lst.count && guard++ < 12000) {
+            CALayer *l = lst.lastObject; [lst removeLastObject];
+            if (objc_getAssociatedObject(l, kERDIEventHiddenKey)) {
+                NSNumber *op = objc_getAssociatedObject(l, kERDIEventHiddenKey);
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                l.hidden = NO;
+                l.opacity = op ? [op floatValue] : 1.0;
+                UIColor *obg = objc_getAssociatedObject(l, kERDIOrigEventBgKey);
+                if (obg) l.backgroundColor = obg.CGColor;
+                [CATransaction commit];
+                objc_setAssociatedObject(l, kERDIOrigEventBgKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(l, kERDIEventHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            [lst addObjectsFromArray:l.sublayers];
+        }
+        // 1.0.9-181 · 视图级标记（ERDIV172SweepViews 打的）同样恢复
+        NSMutableArray<UIView *> *st = [NSMutableArray arrayWithObject:win];
+        NSInteger vguard = 0;
+        while (st.count && vguard++ < 12000) {
+            UIView *v = st.lastObject; [st removeLastObject];
+            if (objc_getAssociatedObject(v, kERDIEventHiddenKey)) {
+                NSNumber *op = objc_getAssociatedObject(v, kERDIEventHiddenKey);
+                [CATransaction begin];
+                [CATransaction setDisableActions:YES];
+                v.hidden = NO;
+                v.alpha = op ? [op floatValue] : 1.0;
+                UIColor *obg = objc_getAssociatedObject(v, kERDIOrigEventBgKey);
+                if (obg) v.backgroundColor = obg;
+                [CATransaction commit];
+                objc_setAssociatedObject(v, kERDIOrigEventBgKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                objc_setAssociatedObject(v, kERDIEventHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            }
+            [st addObjectsFromArray:v.subviews];
+        }
+    } @catch (__unused NSException *e) {}
+}
+
 static void ERDIEventApply(UIView *capsule) {
     if (!capsule) return;
     if (!ERDIEnabled()) return;                    // 开关关：不做事（还原走 ERDIRestoreOriginalBackground）
@@ -1830,12 +1901,14 @@ static void ERDIEventApply(UIView *capsule) {
         BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧处于形变期？
         static BOOL gERDINativeLogged = NO;
         if (morphNative && !gERDINativeLogged) {
-            ERLogInfo(@"DI-V167 形变开始(磨砂兜底) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
+            ERLogInfo(@"DI-V181 形变开始(原生接管) bounds=%.1fx%.1f 圆角=%.1f —— 恢复原生层+玻璃退场", cw, ch, capsule.layer.cornerRadius);
             gERDINativeLogged = YES;
         } else if (!morphNative && gERDINativeLogged) {
-            ERLogInfo(@"DI-V167 形变结束(回液态) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
+            ERLogInfo(@"DI-V181 形变结束(玻璃接管) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
             gERDINativeLogged = NO;
         }
+        // 1.0.9-181 · 形变期第一步：恢复全部被压制的原生层（幂等），玻璃链随后退场
+        if (morphNative) ERDIRestoreSuppressedLayers(win);
 
         // ---- ① 扫描根（1.0.9-161 · Liquidify mount 同款：全窗口层树）----
         //   160 真机实证：此机不存在 "Root Layer" 锚点（日志 RootLayer=未命中），且黑底
@@ -1864,6 +1937,10 @@ static void ERDIEventApply(UIView *capsule) {
         Class backdropCls = objc_getClass("CABackdropLayer");
         NSInteger hidCount = 0, alreadyCount = 0, restoreCount = 0;
         NSMutableArray<NSString *> *hidNames = [NSMutableArray array];
+        // 1.0.9-181 · 全部压制/清底/探针只在稳定期执行（LiquidAss suppressStockEdges 同款：
+        //   动画期 restore + 交还系统原生，稳定后才 suppress 接管）—— 形变期跳过，
+        //   原生动画本来就没有黑边，我们不再逐帧和系统抢画面。
+        if (!morphNative) {
         {
             NSMutableSet *ancestorSet = [NSMutableSet set];
             for (CALayer *a = capsule.layer.superlayer; a; a = a.superlayer)
@@ -2024,6 +2101,8 @@ static void ERDIEventApply(UIView *capsule) {
                             BOOL outside = !CGRectContainsRect(CGRectInset(islandR, -2.0, -2.0), r3);
                             BOOL bigArea = CGRectGetWidth(r3) * CGRectGetHeight(r3) > 30000.0;
                             if (overW || overH || (outside && bigArea)) {
+                                // 1.0.9-181 · 打标记：形变期随原生层一起恢复（app 原生背景动画期正常显示）
+                                objc_setAssociatedObject(vv, kERDIEventHiddenKey, @(vv.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                                 vv.hidden = YES;
                                 bmHid++;
                                 ERLogInfo(@"LA-BITMAP 藏除 %@ 转换frame=%@ 岛=%@", cn3, NSStringFromCGRect(r3), NSStringFromCGRect(islandR));
@@ -2035,6 +2114,7 @@ static void ERDIEventApply(UIView *capsule) {
                 }
             }
         }
+        } // end if (!morphNative) —— v181 压制门控
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
         //   Liquidify 反汇编实证：filters = [ gaussianBlur{inputRadius=50,
@@ -2174,6 +2254,16 @@ static void ERDIEventApply(UIView *capsule) {
             if (@available(iOS 13.0, *)) refract.cornerCurve = kCACornerCurveContinuous;
             refract.transform = CATransform3DMakeScale(1.12, 1.12, 1);
             refract.hidden = morphNative;   // 1.0.9-165 · 随玻璃本体整体退场（形变期走原生）
+            // 1.0.9-181 · 形变期玻璃链整体退场（restoreStockEdges 同款）：玻璃 opacity→0，
+            //   原生岛完整显示（系统动画原生无黑边）；稳定期恢复 opacity=1 接管。
+            {
+                CGFloat wantOp = morphNative ? 0.0 : 1.0;
+                if (glassL.opacity != wantOp) glassL.opacity = wantOp;
+                CALayer *tintG = objc_getAssociatedObject(glassL, kERDITintKey);
+                if (tintG && tintG.opacity != wantOp) tintG.opacity = wantOp;
+                CALayer *rimG = objc_getAssociatedObject(capsule.layer, kERDIRimKey);
+                if (rimG && rimG.opacity != wantOp) rimG.opacity = wantOp;
+            }
             {
                 CAShapeLayer *ring = (CAShapeLayer *)refract.mask;
                 if ([ring isKindOfClass:[CAShapeLayer class]]) {
@@ -2223,13 +2313,13 @@ static void ERDIEventApply(UIView *capsule) {
                 [capsule insertSubview:blur atIndex:0];
             }
             blur.frame = capsule.bounds;
-            blur.hidden = NO;
+            blur.hidden = morphNative;   // 1.0.9-181 · 回退模式同样形变期退场走原生
             blur.alpha = (cw > 340.0) ? 0.55 : 0.68;     // 展开淡、紧凑浓（沿用 140/143 实测值）
             blur.layer.cornerRadius = capsuleRadius;
             blur.layer.masksToBounds = YES;
             if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
         }
-        capsule.layer.borderWidth = 1.5;
+        capsule.layer.borderWidth = morphNative ? 0.0 : 1.5;   // 1.0.9-181 · 形变期边框同步退场
         capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
