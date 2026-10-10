@@ -1624,6 +1624,46 @@ static CFTimeInterval gERDIMorphUntil = 0.0;             // 全局形变宽限�
 static NSHashTable *gERDIMorphCapsules = nil;            // 形变中的 capsule（weak）
 static CADisplayLink *gERDIMorphLink = nil;              // 形变期逐帧同步驱动
 
+// ---- 1.0.9-172 · 视图级黑底清理（泽哥版 island136"逐深度 cleared view.bg"同款）----
+//   ② 段图层扫描按**图层类名**匹配 —— 但 MagiciansCurtainView（系统画的深色岛底
+//   "幕帘"）的图层是普通 CALayer，类名永远匹配不上 → 视图长期漏网，形变期被系统
+//   亮出 = 黑边（v171 日志 DI-STATUS found=_SBSystemApertureMagiciansCurtainView 实锤）。
+//   本函数按**视图类名**递归全窗，命中即三管齐下，与图层扫描互补。
+static BOOL ERDIV172ViewIsBlack(UIView *v) {
+    if (!v || [v.layer.name hasPrefix:@"ERDI::"]) return NO;
+    NSString *cn = NSStringFromClass(v.class);
+    if ([cn hasPrefix:@"ER"]) return NO;   // 自家视图豁免
+    return [cn containsString:@"Curtain"] ||
+           [cn containsString:@"MTMaterial"] ||
+           [cn containsString:@"GainMap"] ||
+           [cn containsString:@"Backdrop"] ||
+           [cn containsString:@"LumaTracking"] ||
+           [cn containsString:@"KeyLine"];
+}
+
+static NSInteger ERDIV172SweepViews(UIView *v, NSInteger *hid, NSInteger *already, NSMutableArray<NSString *> *names, NSInteger *guard) {
+    if (!v || *guard > 12000) return 0;
+    (*guard)++;
+    NSInteger n = 0;
+    if (ERDIV172ViewIsBlack(v)) {
+        if (!v.hidden) {
+            if (names.count < 6) [names addObject:NSStringFromClass(v.class)];
+            v.hidden = YES;
+            if (v.alpha != 0.0) v.alpha = 0.0;
+            if (v.backgroundColor) v.backgroundColor = [UIColor clearColor];
+            (*hid)++;
+            n++;
+        } else {
+            // 已标记但被系统翻回来 → 逐帧补齐
+            if (v.alpha != 0.0) v.alpha = 0.0;
+            if (v.backgroundColor) v.backgroundColor = [UIColor clearColor];
+            (*already)++;
+        }
+    }
+    for (UIView *sv in v.subviews) n += ERDIV172SweepViews(sv, hid, already, names, guard);
+    return n;
+}
+
 static void ERDIMorphSyncTick(void) {
     // 1.0.9-169 · 常驻几何跟随：capsule 在玻璃挂载期间始终登记（不再只在形变期），
     //   每帧把 glass/tint/rim 对齐 presentationLayer —— 形变**起点**也不再有任何
@@ -1878,6 +1918,14 @@ static void ERDIEventApply(UIView *capsule) {
                 }
                 [stk addObjectsFromArray:l.sublayers];
             }
+        }
+
+        // 1.0.9-172 · 视图级黑底清理（补图层扫描的类名盲区，见 ERDIV172SweepViews 注释）
+        {
+            UIView *root = capsule.window ?: capsule;
+            NSInteger vHid = 0, vAlready = 0, vGuard = 0;
+            NSInteger vN = ERDIV172SweepViews(root, &vHid, &vAlready, hidNames, &vGuard);
+            hidCount += vHid; alreadyCount += vAlready;
         }
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
@@ -2414,12 +2462,23 @@ static void ERQuickActionsApplyButton(UIView *btn) {
     CGPoint oc = [origC CGPointValue];
     CGFloat side = (oc.x <= btn.superview.bounds.size.width / 2.0) ? -1.0 : 1.0;
     btn.transform = CGAffineTransformMakeTranslation(side * indent, 0);
-    static CFTimeInterval lastApplyLog = 0.0;
-    CFTimeInterval nowA = CACurrentMediaTime();
-    if (nowA - lastApplyLog > 5.0) {
-        lastApplyLog = nowA;
-        ERLogInfo(@"QA-APPLY 按钮=%@ indent=%.1f side=%.0f 原始中心=(%.1f,%.1f)",
-                  NSStringFromClass(btn.class), indent, side, oc.x, oc.y);
+    // 1.0.9-172 · v171 日志实证 transform 已贴（indent=60 side=1）却视觉无变化 →
+    //   升级日志定位：每按钮独立 2s 节流（原全局 5s 节流会吞掉第二颗按钮），
+    //   附 window/hidden/alpha/frame/父视图 —— 若 window=nil 或 hidden=YES 即命中
+    //   的是不可见实例，若 transform 存在 frame 未变即系统在别处覆盖。
+    {
+        static void *kERQALastLogKey = &kERQALastLogKey;
+        CFTimeInterval lastL = [(id)objc_getAssociatedObject(btn, kERQALastLogKey) doubleValue];
+        CFTimeInterval nowA = CACurrentMediaTime();
+        if (nowA - lastL > 2.0) {
+            objc_setAssociatedObject(btn, kERQALastLogKey, @(nowA), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ERLogInfo(@"QA-APPLY 按钮=%@ indent=%.1f side=%.0f 原始中心=(%.1f,%.1f) transform=%@ window=%@ hidden=%d alpha=%.2f frame=%@ 父=%@",
+                      NSStringFromClass(btn.class), indent, side, oc.x, oc.y,
+                      CGAffineTransformIsIdentity(btn.transform) ? @"identity" : @"translated",
+                      btn.window ? NSStringFromClass(btn.window.class) : @"(nil)",
+                      (int)btn.hidden, btn.alpha, NSStringFromCGRect(btn.frame),
+                      btn.superview ? NSStringFromClass(btn.superview.class) : @"(nil)");
+        }
     }
 }
 
