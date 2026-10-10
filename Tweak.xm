@@ -1828,11 +1828,15 @@ static void ERDIEventApply(UIView *capsule) {
                 }
                 NSString *cn = NSStringFromClass(object_getClass(l));
                 BOOL isBackdrop = backdropCls && [l isKindOfClass:backdropCls];
+                // 1.0.9-171 · 泽哥版（island136）同款补漏：v170 日志实证形变期系统重建
+                //   MTMaterialLayer（材质底层，bg 由渲染服务器绘，不满足"纯黑大层"）
+                //   → 漏网成黑边。把 MTMaterial 系（Layer/View/ShadowView）纳入强制清理。
                 BOOL knownBlack = [cn containsString:@"GainMap"] ||
                                   [cn containsString:@"Curtain"] ||
                                   [cn containsString:@"LumaTracking"] ||
                                   [cn containsString:@"KeyLine"] ||
-                                  [cn containsString:@"Backdrop"];
+                                  [cn containsString:@"Backdrop"] ||
+                                  [cn containsString:@"MTMaterial"];
                 CGFloat lw = CGRectGetWidth(l.bounds), lh = CGRectGetHeight(l.bounds);
                 BOOL big = (lw > 120.0 || lh > 120.0);
                 BOOL nearBlack = NO;
