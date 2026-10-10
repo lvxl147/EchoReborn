@@ -1972,13 +1972,23 @@ static void ERDIEventApply(UIView *capsule) {
                         id ct = vv.layer.contents;
                         CGRect vf = vv.frame;
                         if (ct && vf.size.width * vf.size.height > 30000.0 && !vv.hidden && vv.alpha > 0.05) hasContents = YES;
-                        if (dark || hasContents) {
+                        // 1.0.9-179 · 已藏的暗底节点不再占报告名额（它们不可见、非真凶），
+                        //   名额留给可见的暗底/位图节点 —— v178 的 426×310 位图就是这样挤进来的
+                        if ((dark && !vv.hidden) || hasContents) {
                             bpN++;
-                            ERLogInfo(@"BLACK-PROBE %@ frame=%@ bg=%@ contents=%@ alpha=%.2f hidden=%d 父=%@",
+                            // 1.0.9-179 · 补窗口归属与位图尺寸：v178 抓到 426×310 位图
+                            //   UIImageView 超出岛界（-9.7,-135 偏移）—— 极疑似黑边+边缘外
+                            //   的真身（app 自定义 LA 背景图），补窗归属/image 尺寸定点
+                            CGSize imgSz = CGSizeZero;
+                            if ([vv isKindOfClass:[UIImageView class]])
+                                imgSz = ((UIImageView *)vv).image ? ((UIImageView *)vv).image.size : CGSizeZero;
+                            ERLogInfo(@"BLACK-PROBE %@ frame=%@ bg=%@ contents=%@ img=%.0fx%.0f alpha=%.2f hidden=%d 父=%@ 窗=%@",
                                       cn2, NSStringFromCGRect(vf),
                                       bc ? @"有" : @"无", ct ? @"位图" : @"无",
+                                      imgSz.width, imgSz.height,
                                       vv.alpha, (int)vv.hidden,
-                                      vv.superview ? NSStringFromClass(vv.superview.class) : @"(nil)");
+                                      vv.superview ? NSStringFromClass(vv.superview.class) : @"(nil)",
+                                      vv.window ? NSStringFromClass(vv.window.class) : @"(nil)");
                         }
                         [st2 addObjectsFromArray:vv.subviews];
                     }
@@ -29100,14 +29110,29 @@ static BOOL ERCCRecordNoDelayEnabled(void) {
     } @catch (...) { return NO; }
 }
 
-static IMP gOrigStartRecordingCountdown = NULL;
+// 1.0.9-179 · 多宿主 orig 映射：扫描可能发现多个实现 startRecordingCountdown 的类，
+//   每类各自的 orig 存表，替换函数按 self 的实际类回查（查不到沿父类链回退）。
+#define ERCCREC_MAX_HOSTS 8
+static Class gERCCRecHostCls[ERCCREC_MAX_HOSTS];
+static IMP  gERCCRecHostOrig[ERCCREC_MAX_HOSTS];
+static NSInteger gERCCRecHostCnt = 0;
+
+static IMP ERCCRecOrigFor(id self) {
+    Class c = object_getClass(self);
+    for (NSInteger i = 0; i < gERCCRecHostCnt; i++) {
+        if (c == gERCCRecHostCls[i] || [c isSubclassOfClass:gERCCRecHostCls[i]])
+            return gERCCRecHostOrig[i];
+    }
+    return NULL;
+}
 
 static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
-    if (!ERCCRecordNoDelayEnabled() || !gOrigStartRecordingCountdown) {
-        if (gOrigStartRecordingCountdown) ((void (*)(id, SEL))gOrigStartRecordingCountdown)(self, _cmd);
+    IMP orig = ERCCRecOrigFor(self);
+    if (!ERCCRecordNoDelayEnabled() || !orig) {
+        if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
         return;
     }
-    ERLogInfo(@"CC-RECORD 无延迟开录：跳过倒计时");
+    ERLogInfo(@"CC-RECORD 无延迟开录：跳过倒计时（宿主=%@）", NSStringFromClass(object_getClass(self)));
     @try {
         // 跳过 3 秒倒计时，直接走系统开始录屏路径（带 handler 的原签名，granted 回调空实现）
         if ([self respondsToSelector:@selector(startRecordingWithHandler:)]) {
@@ -29115,7 +29140,7 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
         } else if ([self respondsToSelector:@selector(startRecord)]) {
             ((void (*)(id, SEL))objc_msgSend)(self, @selector(startRecord));
         } else {
-            ((void (*)(id, SEL))gOrigStartRecordingCountdown)(self, _cmd);
+            ((void (*)(id, SEL))orig)(self, _cmd);
             return;
         }
         // 自动收起控制中心：0.25s 后 dismissAnimated:YES（保留系统默认动画，非瞬间关闭）
@@ -29130,7 +29155,7 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
         });
     } @catch (__unused NSException *e) {
         // 兜底：任何异常回退原生倒计时路径
-        if (gOrigStartRecordingCountdown) ((void (*)(id, SEL))gOrigStartRecordingCountdown)(self, _cmd);
+        if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
     }
 }
 
@@ -29204,49 +29229,60 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
         {
             Class ccc = objc_getClass("SBControlCenterController");
             SEL selCD = NSSelectorFromString(@"startRecordingCountdown");
-            if (ccc && [ccc instancesRespondToSelector:selCD]) {
-                MSHookMessageEx(ccc, selCD, (IMP)ERCCRecordStartNoDelay, &gOrigStartRecordingCountdown);
+            if (ccc && [ccc instancesRespondToSelector:selCD] && gERCCRecHostCnt < ERCCREC_MAX_HOSTS) {
+                gERCCRecHostCls[gERCCRecHostCnt] = ccc;
+                MSHookMessageEx(ccc, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
+                gERCCRecHostCnt++;
                 ERLogInfo(@"CC-RECORD hook 已挂载 SBControlCenterController startRecordingCountdown");
             } else {
                 ERLogInfo(@"CC-RECORD 类或方法缺失（class=%@ has=%d），录屏无延迟不可用",
                           ccc ? NSStringFromClass(ccc) : @"(nil)",
                           (int)(ccc && [ccc instancesRespondToSelector:selCD]));
             }
-            // 1.0.9-176 · 全类扫描：startRecordingCountdown 的真正宿主是谁？
-            //   v175 实测无效果且日志无 CC-RECORD 行 → iOS26 录屏入口可能不在
-            //   SBControlCenterController 上。一次性扫描全部 ObjC 类（仅查方法表，毫秒级），
-            //   同时核对开关读值 —— 日志直接点名该挂哪个类。
-            // 1.0.9-177 · 热修：[(id)c instancesRespondToSelector:] 消息方式碰非 NSObject
-            //   根类（老 Object）→ forwarding SIGTRAP → 改 class_getInstanceMethod C 函数。
-            // 1.0.9-178 · **热修 2**：ctor 期（dyld 初始化阶段）对任意类调
-            //   class_getInstanceMethod 会强制实现懒加载类 → +[INUISearchFoundationImageAdapter
-            //   initialize] 在 dyld init 上下文里 dispatch_once → std::terminate SIGABRT
-            //   （第二份崩溃日志 SpringBoard-2026-10-10-135339.txt 实锤：img2+431416 →
-            //   resolveMethod_locked → CALLING_SOME_+initialize_METHOD → abort）。
-            //   @try 拦不住 abort。修复：**扫描整体推迟到启动完成后 3 秒**（懒加载类届时
-            //   正常实现，dispatch_once 可跑），ctor 只保留 SBControlCenterController 挂载。
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
-                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-                @autoreleasepool {
-                    @try {
-                        unsigned int cnt = 0;
-                        Class *clsList = objc_copyClassList(&cnt);
-                        NSMutableArray<NSString *> *hosts = [NSMutableArray array];
-                        for (unsigned int i = 0; i < cnt && hosts.count < 6; i++) {
-                            Class c = clsList[i];
-                            if (c == ccc) continue;
-                            if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD))
-                                [hosts addObject:NSStringFromClass(c)];
+            // 1.0.9-179 · **周期自配置扫描**：v176-178 证明 ctor 期扫描会崩（消息转发/懒加载类），
+            //   且一次性扫描的日志总赶不上日志轮转抓不到。改为启动后 5s 起每 60s 扫一遍
+            //   （后台队列 + @try）：发现新宿主类直接自动挂 hook（自配置），日志每轮都输出，
+            //   任何时刻抓日志都能看到扫描结果与开关读值。
+            dispatch_source_t scanTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+            if (scanTimer) {
+                dispatch_source_set_timer(scanTimer,
+                                          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
+                                          (uint64_t)(60.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
+                __block dispatch_source_t keepScan = scanTimer;
+                dispatch_source_set_event_handler(scanTimer, ^{
+                    @autoreleasepool {
+                        @try {
+                            unsigned int cnt = 0;
+                            Class *clsList = objc_copyClassList(&cnt);
+                            NSMutableArray<NSString *> *hosts = [NSMutableArray array];
+                            for (unsigned int i = 0; i < cnt; i++) {
+                                Class c = clsList[i];
+                                if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD)) {
+                                    BOOL hooked = NO;
+                                    for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hooked = YES;
+                                    if (hooked) { [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(已挂)"]]; continue; }
+                                    if (gERCCRecHostCnt < ERCCREC_MAX_HOSTS) {
+                                        gERCCRecHostCls[gERCCRecHostCnt] = c;
+                                        MSHookMessageEx(c, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
+                                        gERCCRecHostCnt++;
+                                        [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(新挂)"]];
+                                        ERLogInfo(@"CC-RECORD 扫描发现新宿主并挂载：%@", NSStringFromClass(c));
+                                    } else {
+                                        [hosts addObject:NSStringFromClass(c)];
+                                    }
+                                }
+                            }
+                            free(clsList);
+                            ERLogInfo(@"CC-RECORD 扫描宿主=%@ 开关读值=%d（每 60s 复扫）",
+                                      hosts.count ? [hosts componentsJoinedByString:@","] : @"(无)", (int)ERCCRecordNoDelayEnabled());
+                        } @catch (NSException *e179) {
+                            ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e179);
                         }
-                        free(clsList);
-                        ERLogInfo(@"CC-RECORD 扫描 startRecordingCountdown 宿主=%@（SBControlCenterController=%@）开关读值=%d",
-                                  hosts.count ? [hosts componentsJoinedByString:@","] : @"(无其他宿主)",
-                                  ccc ? @"在" : @"nil", (int)ERCCRecordNoDelayEnabled());
-                    } @catch (NSException *e178) {
-                        ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e178);
                     }
-                }
-            });
+                });
+                dispatch_resume(scanTimer);
+            }
         }
         // The package intentionally has no firmware ceiling so it installs on
         // anything from iOS 16 up.  iOS 18, however, rebuilt Control Center on
