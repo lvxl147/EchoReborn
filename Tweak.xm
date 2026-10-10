@@ -2248,7 +2248,8 @@ static void ERDIEventApply(UIView *capsule) {
         //   展开态/形变期恢复（app 内容照常显示）。
         {
             BOOL compactNow = (cw < 200.0 && ch < 120.0);
-            NSMutableArray<UIView *> *st5 = [NSMutableArray arrayWithObject:root];
+            UIView *rootSA = capsule.window ?: capsule;   // 1.0.9-187 · 本块在 root 作用域外，自取窗口根
+            NSMutableArray<UIView *> *st5 = [NSMutableArray arrayWithObject:rootSA];
             NSInteger g5 = 0;
             while (st5.count && g5++ < 8000) {
                 UIView *vv = st5.lastObject; [st5 removeLastObject];
@@ -2267,7 +2268,7 @@ static void ERDIEventApply(UIView *capsule) {
                             if (vv.alpha != 0.0) vv.alpha = 0.0;
                             [CATransaction commit];
                             ERLogInfo(@"SAUI-PORTAL 藏除 %@ frame=%@", cn5,
-                                      NSStringFromCGRect([root convertRect:vv.bounds fromView:vv]));
+                                      NSStringFromCGRect([rootSA convertRect:vv.bounds fromView:vv]));
                         }
                     } else {
                         if (objc_getAssociatedObject(vv, kERDIEventHiddenKey)) {
