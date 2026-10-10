@@ -2240,6 +2240,50 @@ static void ERDIEventApply(UIView *capsule) {
                 }
             }
         }
+        // ---- 1.0.9-187 · SAUI-PORTAL 藏除/恢复：紧凑黑胶囊真身定点 ----
+        //   v186 探针定论：紧凑态黑胶囊不在任何图层里（子树/层树全 bg=无）——
+        //   它是 CallAssist 跳进程远程渲染内容（_SAUIPortalView 门户，另一进程
+        //   画好合成进来）的自绘黑底图。图层隐藏打不中它，但门户容器
+        //   本身看得见 → 紧凑稳定态藏整个 portal（岛内只剩玻璃），
+        //   展开态/形变期恢复（app 内容照常显示）。
+        {
+            BOOL compactNow = (cw < 200.0 && ch < 120.0);
+            NSMutableArray<UIView *> *st5 = [NSMutableArray arrayWithObject:root];
+            NSInteger g5 = 0;
+            while (st5.count && g5++ < 8000) {
+                UIView *vv = st5.lastObject; [st5 removeLastObject];
+                if (!vv) continue;
+                NSString *cn5 = NSStringFromClass(vv.class);
+                if ([cn5 hasPrefix:@"ER"]) { [st5 addObjectsFromArray:vv.subviews]; continue; }
+                BOOL portal = [cn5 containsString:@"_SAUIPortalView"] ||
+                              [cn5 isEqualToString:@"_SAUIProvidedViewContainerView"];
+                if (portal) {
+                    if (compactNow) {
+                        if (!vv.hidden) {
+                            objc_setAssociatedObject(vv, kERDIEventHiddenKey, @(vv.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            [CATransaction begin];
+                            [CATransaction setDisableActions:YES];
+                            vv.hidden = YES;
+                            if (vv.alpha != 0.0) vv.alpha = 0.0;
+                            [CATransaction commit];
+                            ERLogInfo(@"SAUI-PORTAL 藏除 %@ frame=%@", cn5,
+                                      NSStringFromCGRect([root convertRect:vv.bounds fromView:vv]));
+                        }
+                    } else {
+                        if (objc_getAssociatedObject(vv, kERDIEventHiddenKey)) {
+                            objc_setAssociatedObject(vv, kERDIEventHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            [CATransaction begin];
+                            [CATransaction setDisableActions:YES];
+                            vv.hidden = NO;
+                            vv.alpha = 1.0;
+                            [CATransaction commit];
+                            ERLogInfo(@"SAUI-PORTAL 恢复 %@", cn5);
+                        }
+                    }
+                }
+                [st5 addObjectsFromArray:vv.subviews];
+            }
+        }
         } // end stable takeover —— 1.0.9-184 稳定期压制门控
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
