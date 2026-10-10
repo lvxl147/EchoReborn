@@ -1689,7 +1689,7 @@ static void ERDIMorphSyncTick(void) {
     //   每帧把 glass/tint/rim 对齐 presentationLayer —— 形变**起点**也不再有任何
     //   "apply 未跑到 → 玻璃仍是旧几何"的 1 帧滞后（168 的黑边闪一下即此滞后）。
     if (gERDIMorphCapsules.count) {
-        BOOL morphing = CACurrentMediaTime() < gERDIMorphUntil;
+        BOOL morphing = NO;   // 1.0.9-183 · A 模式：玻璃常驻，无原生/玻璃切换
         for (UIView *capsule in gERDIMorphCapsules) {
             CALayer *pres = capsule.layer.presentationLayer;
             if (!pres) continue;
@@ -1754,7 +1754,7 @@ static void ERDIMorphSyncTick(void) {
                         sScreenBlend = ((id (*)(Class, SEL, NSString *))objc_msgSend)(filterClass, sel, @"screenBlendMode");
                 });
                 @try {
-                    id want = morphing ? sScreenBlend : nil;
+                    id want = sScreenBlend;   // 1.0.9-183 · 恒开（A 模式加法渲染）
                     if (glassL.compositingFilter != want) glassL.compositingFilter = want;
                     // 1.0.9-173 · 方案A：tint 层同步。玻璃底下还有一层半透明 tint
                     //   （普通 alpha 合成），黑帧透过玻璃后还会被 tint 再压一层；
@@ -1919,15 +1919,13 @@ static void ERDIEventApply(UIView *capsule) {
         if (shapeChanged) gERDIMorphUntil = CACurrentMediaTime() + 0.2;   // 全局宽限：末次形变帧 +0.2s
         BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧处于形变期？
         static BOOL gERDINativeLogged = NO;
-        if (morphNative && !gERDINativeLogged) {
-            ERLogInfo(@"DI-V181 形变开始(原生接管) bounds=%.1fx%.1f 圆角=%.1f —— 恢复原生层+玻璃退场", cw, ch, capsule.layer.cornerRadius);
-            gERDINativeLogged = YES;
-        } else if (!morphNative && gERDINativeLogged) {
-            ERLogInfo(@"DI-V181 形变结束(玻璃接管) bounds=%.1fx%.1f 圆角=%.1f", cw, ch, capsule.layer.cornerRadius);
-            gERDINativeLogged = NO;
-        }
-        // 1.0.9-181 · 形变期第一步：恢复全部被压制的原生层（幂等），玻璃链随后退场
-        if (morphNative) ERDIRestoreSuppressedLayers(win);
+        (void)gERDINativeLogged;
+        // 1.0.9-183 · A 模式（LiquidAss 同款）：原生层永不压制、永不恢复切换。
+        //   参考插件 banana44 changelog 原文 "No ... activity background clearing" ——
+        //   它的岛正常正因为从不碰原生背景/自绘内容，只叠加玻璃高光。日志里的
+        //   形变开始/结束（含触摸缩放 422↔407 振荡）不再触发任何玻璃退场/原生恢复。
+
+        // 1.0.9-181(已废) · 形变期恢复调用 —— A 模式下无压制即无恢复
 
         // ---- ① 扫描根（1.0.9-161 · Liquidify mount 同款：全窗口层树）----
         //   160 真机实证：此机不存在 "Root Layer" 锚点（日志 RootLayer=未命中），且黑底
@@ -1956,10 +1954,10 @@ static void ERDIEventApply(UIView *capsule) {
         Class backdropCls = objc_getClass("CABackdropLayer");
         NSInteger hidCount = 0, alreadyCount = 0, restoreCount = 0;
         NSMutableArray<NSString *> *hidNames = [NSMutableArray array];
-        // 1.0.9-181 · 全部压制/清底/探针只在稳定期执行（LiquidAss suppressStockEdges 同款：
-        //   动画期 restore + 交还系统原生，稳定后才 suppress 接管）—— 形变期跳过，
-        //   原生动画本来就没有黑边，我们不再逐帧和系统抢画面。
-        if (!morphNative) {
+        // 1.0.9-183 · A 模式：压制/清底/探针全部停用（代码保留备查，条件恒假）。
+        //   原生幕帘/KeyLine/黑底/app 自绘内容一律不动 —— 参考插件"不出错"正是因为
+        //   从不碰这些层（banana44 changelog: "No ... activity background clearing"）。
+        if (NO) { // dormant since 1.0.9-183
         {
             NSMutableSet *ancestorSet = [NSMutableSet set];
             for (CALayer *a = capsule.layer.superlayer; a; a = a.superlayer)
@@ -2146,7 +2144,7 @@ static void ERDIEventApply(UIView *capsule) {
                 }
             }
         }
-        } // end if (!morphNative) —— v181 压制门控
+        } // end dormant —— 1.0.9-183 A 模式压制门控
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
         //   Liquidify 反汇编实证：filters = [ gaussianBlur{inputRadius=50,
@@ -2156,14 +2154,11 @@ static void ERDIEventApply(UIView *capsule) {
         //   groupName / groupNamespace / ignoresScreenClip。
         CGFloat sysR = capsule.layer.cornerRadius;
         CGFloat capsuleRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
-        // 1.0.9-182 · 稳定期胶囊硬裁剪：岛内所有内容（含 app 自定义 LA 背景位图）
-        //   一律物理裁到岛轮廓 —— 蓝箭头"边缘外"的最终兜底（原生岛本就如此裁剪）。
-        //   形变期不动（系统自管裁剪）。
-        if (!morphNative) {
-            if (!capsule.layer.masksToBounds) capsule.layer.masksToBounds = YES;
-            if (fabs(capsule.layer.cornerRadius - capsuleRadius) > 0.5)
-                capsule.layer.cornerRadius = capsuleRadius;
-        }
+        // 1.0.9-182/183 · 胶囊硬裁剪（无条件）：岛内内容一律物理裁到岛轮廓
+        //   （原生岛本就如此裁剪，A 模式下同样适用）。
+        if (!capsule.layer.masksToBounds) capsule.layer.masksToBounds = YES;
+        if (fabs(capsule.layer.cornerRadius - capsuleRadius) > 0.5)
+            capsule.layer.cornerRadius = capsuleRadius;
         CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 25.0);
         if (liquidRadius < 0.0) liquidRadius = 0.0;
         if (liquidRadius > 80.0) liquidRadius = 80.0;
@@ -2293,11 +2288,10 @@ static void ERDIEventApply(UIView *capsule) {
             refract.masksToBounds = YES;
             if (@available(iOS 13.0, *)) refract.cornerCurve = kCACornerCurveContinuous;
             refract.transform = CATransform3DMakeScale(1.12, 1.12, 1);
-            refract.hidden = morphNative;   // 1.0.9-165 · 随玻璃本体整体退场（形变期走原生）
-            // 1.0.9-181 · 形变期玻璃链整体退场（restoreStockEdges 同款）：玻璃 opacity→0，
-            //   原生岛完整显示（系统动画原生无黑边）；稳定期恢复 opacity=1 接管。
+            refract.hidden = NO;   // 1.0.9-183 · A 模式玻璃链常驻
+            // 1.0.9-183 · A 模式：玻璃链 opacity 恒 1（加法渲染，无退场/回归切换）
             {
-                CGFloat wantOp = morphNative ? 0.0 : 1.0;
+                CGFloat wantOp = 1.0;
                 if (glassL.opacity != wantOp) glassL.opacity = wantOp;
                 CALayer *tintG = objc_getAssociatedObject(glassL, kERDITintKey);
                 if (tintG && tintG.opacity != wantOp) tintG.opacity = wantOp;
@@ -2353,13 +2347,13 @@ static void ERDIEventApply(UIView *capsule) {
                 [capsule insertSubview:blur atIndex:0];
             }
             blur.frame = capsule.bounds;
-            blur.hidden = morphNative;   // 1.0.9-181 · 回退模式同样形变期退场走原生
+            blur.hidden = NO;   // 1.0.9-183 · A 模式常驻
             blur.alpha = (cw > 340.0) ? 0.55 : 0.68;     // 展开淡、紧凑浓（沿用 140/143 实测值）
             blur.layer.cornerRadius = capsuleRadius;
             blur.layer.masksToBounds = YES;
             if (@available(iOS 13.0, *)) blur.layer.cornerCurve = kCACornerCurveContinuous;
         }
-        capsule.layer.borderWidth = morphNative ? 0.0 : 1.5;   // 1.0.9-181 · 形变期边框同步退场
+        capsule.layer.borderWidth = 1.5;   // 1.0.9-183 · A 模式常驻
         capsule.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.40].CGColor;
         objc_setAssociatedObject(capsule, kERDIGlassMarkKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
@@ -2373,7 +2367,7 @@ static void ERDIEventApply(UIView *capsule) {
                       glassL ? (unsigned long)glassL.filters.count : (unsigned long)0,
                       glassL ? glassL.cornerRadius : (blur ? blur.layer.cornerRadius : 0.0),
                       sysR, (long)hidCount, (long)alreadyCount, (long)restoreCount,
-                      morphNative ? @"原生" : @"液态",
+                      @"A模式(原生+加法玻璃)",
                       hidNames.count ? [hidNames componentsJoinedByString:@","] : @"无");
         }
         ERDIV162EnsureDisplayLink();   // 1.0.9-162 · 首次玻璃成功即启动逐帧驱动
