@@ -29216,31 +29216,37 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
             //   v175 实测无效果且日志无 CC-RECORD 行 → iOS26 录屏入口可能不在
             //   SBControlCenterController 上。一次性扫描全部 ObjC 类（仅查方法表，毫秒级），
             //   同时核对开关读值 —— 日志直接点名该挂哪个类。
-            // 1.0.9-177 · **热修安全模式**：v176 用 [(id)c instancesRespondToSelector:] 消息
-            //   方式扫描，碰到非 NSObject 系根类（如老 Object 根类）→ 元类不认识该选择器 →
-            //   ___forwarding___ doesNotRecognizeSelector SIGTRAP → SpringBoard 安全模式循环
-            //   （崩溃日志 SpringBoard-2026-10-10-133536.txt 实锤，寄存器 OBJC_CLASS_$_Object）。
-            //   改用纯 C 运行时函数 class_getInstanceMethod/class_getClassMethod（不经过
-            //   消息转发，任何类都安全），并整体 @try 包裹。
-            @autoreleasepool {
-                @try {
-                    unsigned int cnt = 0;
-                    Class *clsList = objc_copyClassList(&cnt);
-                    NSMutableArray<NSString *> *hosts = [NSMutableArray array];
-                    for (unsigned int i = 0; i < cnt && hosts.count < 6; i++) {
-                        Class c = clsList[i];
-                        if (c == ccc) continue;
-                        if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD))
-                            [hosts addObject:NSStringFromClass(c)];
+            // 1.0.9-177 · 热修：[(id)c instancesRespondToSelector:] 消息方式碰非 NSObject
+            //   根类（老 Object）→ forwarding SIGTRAP → 改 class_getInstanceMethod C 函数。
+            // 1.0.9-178 · **热修 2**：ctor 期（dyld 初始化阶段）对任意类调
+            //   class_getInstanceMethod 会强制实现懒加载类 → +[INUISearchFoundationImageAdapter
+            //   initialize] 在 dyld init 上下文里 dispatch_once → std::terminate SIGABRT
+            //   （第二份崩溃日志 SpringBoard-2026-10-10-135339.txt 实锤：img2+431416 →
+            //   resolveMethod_locked → CALLING_SOME_+initialize_METHOD → abort）。
+            //   @try 拦不住 abort。修复：**扫描整体推迟到启动完成后 3 秒**（懒加载类届时
+            //   正常实现，dispatch_once 可跑），ctor 只保留 SBControlCenterController 挂载。
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+                @autoreleasepool {
+                    @try {
+                        unsigned int cnt = 0;
+                        Class *clsList = objc_copyClassList(&cnt);
+                        NSMutableArray<NSString *> *hosts = [NSMutableArray array];
+                        for (unsigned int i = 0; i < cnt && hosts.count < 6; i++) {
+                            Class c = clsList[i];
+                            if (c == ccc) continue;
+                            if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD))
+                                [hosts addObject:NSStringFromClass(c)];
+                        }
+                        free(clsList);
+                        ERLogInfo(@"CC-RECORD 扫描 startRecordingCountdown 宿主=%@（SBControlCenterController=%@）开关读值=%d",
+                                  hosts.count ? [hosts componentsJoinedByString:@","] : @"(无其他宿主)",
+                                  ccc ? @"在" : @"nil", (int)ERCCRecordNoDelayEnabled());
+                    } @catch (NSException *e178) {
+                        ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e178);
                     }
-                    free(clsList);
-                    ERLogInfo(@"CC-RECORD 扫描 startRecordingCountdown 宿主=%@（SBControlCenterController=%@）开关读值=%d",
-                              hosts.count ? [hosts componentsJoinedByString:@","] : @"(无其他宿主)",
-                              ccc ? @"在" : @"nil", (int)ERCCRecordNoDelayEnabled());
-                } @catch (NSException *e177) {
-                    ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e177);
                 }
-            }
+            });
         }
         // The package intentionally has no firmware ceiling so it installs on
         // anything from iOS 16 up.  iOS 18, however, rebuilt Control Center on
