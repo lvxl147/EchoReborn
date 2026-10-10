@@ -970,23 +970,36 @@ static void ERDIStripOriginalBackground(NSArray<UIWindow *> *wins) {
             if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
         } else if ([cn isEqualToString:@"_UILumaTrackingBackdropView"] ||
                    [cn isEqualToString:@"_SBAdaptiveKeyLineBackdropView"]) {
-            // 1.0.9-135 · **KeyLine 描边是绘制内容**（cap_20 真屏取证：岛轮廓外扩几 pt
-            //   有一圈黑色描边，形状与 AdaptiveKeyLineBackdrop 吻合）。岛尺寸的一律整体隐藏。
-            CGRect b = v.bounds;
-            CGFloat bw = CGRectGetWidth(b), bh = CGRectGetHeight(b);
-            if (bw >= 120.0 && bw <= 340.0 && bh >= 30.0 && bh <= 90.0) {
-                if (!v.hidden) v.hidden = YES;
-                if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
-            }
+            // 1.0.9-174 · **去尺寸门槛**：KeyLine 描边是绘制内容（cap_20 真屏取证：岛轮廓
+            //   外扩几 pt 一圈黑描边）。旧窗口 120~340×30~90 只覆盖紧凑胶囊态 —— 展开/大岛
+            //   尺寸超窗 → 永不命中 → 高光边缘外的黑圈（v173 截图蓝箭头实锤）。按类名即隐藏。
+            if (!v.hidden) v.hidden = YES;
+            if (v.layer.opacity != 0.0) v.layer.opacity = 0.0;
         } else {
             CGColorRef bgc = v.layer.backgroundColor;
             if (bgc) {
                 UIColor *c = [UIColor colorWithCGColor:bgc];
                 CGFloat r = 0, g = 0, b = 0, a = 0;
                 [c getRed:&r green:&g blue:&b alpha:&a];
-                if (a >= 0.90 && r <= 0.13 && g <= 0.13 && b <= 0.13) {
-                    if (!objc_getAssociatedObject(v, kERDIOrigBGKey))
+                // 1.0.9-174 · **放宽暗底阈值**（红箭头黑边主修）：旧规则 a>=0.90 && rgb<=0.13
+                //   只认纯黑 —— 实时活动原生黑底实测带透明度/偏灰（深灰胶囊），全部漏网。
+                //   放宽到 a>=0.60 && rgb<=0.28：深色不透明底一律清透明（玻璃是唯一背景）；
+                //   浅色底/半透明材质不动（内容不受影响）。
+                if (a >= 0.60 && r <= 0.28 && g <= 0.28 && b <= 0.28) {
+                    if (!objc_getAssociatedObject(v, kERDIOrigBGKey)) {
                         objc_setAssociatedObject(v, kERDIOrigBGKey, c, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        // 1.0.9-174 · 诊断日志（0.5s 节流）：清了谁的底、frame 多大 ——
+                        //   若红箭头黑边仍在，此日志能直接指认真凶类名/来源
+                        static CFTimeInterval lastBGLog = 0.0;
+                        CFTimeInterval nowB = CACurrentMediaTime();
+                        if (nowB - lastBGLog > 0.5) {
+                            lastBGLog = nowB;
+                            ERLogInfo(@"LA-BG 清底 类=%@ frame=%@ 窗口=%@ 颜色a=%.2f rgb=(%.2f,%.2f,%.2f)",
+                                      NSStringFromClass(v.class), NSStringFromCGRect(v.frame),
+                                      v.window ? NSStringFromClass(v.window.class) : @"(nil)",
+                                      a, r, g, b);
+                        }
+                    }
                     v.layer.backgroundColor = [UIColor clearColor].CGColor;
                 }
             }
@@ -1367,7 +1380,10 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     // 1.0.9-146 · 展开态玻璃**外扩 4pt**：系统在实时活动外缘画的黑描边 (~2pt) 与
     //   玻璃之间有 ~4pt 缝隙（用户截图：状态栏从缝隙透出）→ 4pt 外扩盖住描边与缝隙。
     // 1.0.9-148 · 外扩回退 4pt→2.5pt（146 实测更糟：超出岛且黑线更重），量准坐标后再定
-    blur.frame = diExpanded ? CGRectInset(gb, -2.5, -2.5) : gb;
+    // 1.0.9-174 · **废除展开态 2.5pt 外扩**（用户指令：完全按照系统灵动岛展开的大小）；
+    //   146 引入 4pt / 148 回退 2.5pt 的"盖描边与缝隙"方案作废 —— KeyLine 已按类名全量
+    //   隐藏，无需玻璃越界去盖。
+    blur.frame = gb;
     blur.hidden = NO;   // 1.0.9-134 · 宿主的玻璃在此显示（清理循环可能刚隐藏过）
     blur.alpha = diExpanded ? 0.55 : 0.68;  // 1.0.9-140 · 液态玻璃强度（用户反馈 0.45 太透不明显）
     blur.layer.cornerRadius = radius; blur.layer.masksToBounds = YES;
@@ -1682,14 +1698,11 @@ static void ERDIMorphSyncTick(void) {
                 else if ([l.name isEqualToString:@"ERDI::rim"]) rimL = l;
             }
             if (!glassL) continue;
-            // 形变期玻璃外扩 2pt 采样余量（capsule masksToBounds 会裁掉视觉溢出，
-            // 但 backdrop 边缘采样多 2pt 数据，消除运动中的边缘黑晕）
+            // 1.0.9-174 · **废除形变期 2pt 外扩**：外扩让玻璃越出系统岛轮廓（v173 截图
+            //   蓝箭头"边缘外"），用户要求完全按照系统岛大小。采样余量由 screenBlend
+            //   黑色恒等兜底，无需外扩。
             CGRect gb = pb;
             CGFloat gr = pr;
-            if (morphing) {
-                gb = CGRectInset(pb, -2.0, -2.0);
-                gr = pr + 2.0;
-            }
             // 1.0.9-170 · 泽哥版（island136）防黑块同款：screenBlendMode（黑色恒等）。
             //   形变期 glass 的 backdrop 采样黑帧/黑边是"黑色内容直接 alpha 合成"——
             //   screen 混合 1-(1-a)(1-b) 下黑色恒等，黑帧合成后=透出底下内容，黑边消失。
