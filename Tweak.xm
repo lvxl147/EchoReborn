@@ -29038,6 +29038,62 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
 }
 %end
 
+// ---- 1.0.9-175 · 录屏无延迟（参考 CCRecordNoDelay 0.1.0 还原实现）----
+//   参考插件（CCRecordNoDelay.dylib，filter=com.apple.springboard）字符串还原：
+//   hook SBControlCenterController，startRecordingCountdown（3 秒倒计时）替换为
+//   startRecordingWithHandler:/startRecord 直接开录；随后 performSelector:
+//   withObject:afterDelay:inModes: 延时调 dismissAnimated:（YES = 保留系统收起动画）。
+//   开关：CCRecord.NoDelay（SystemEnhance.plist 录屏设置卡片，默认关）。
+static BOOL ERCCRecordNoDelayEnabled(void) {
+    @try {
+        CFStringRef domain = CFSTR("com.strive.echoreborn.preferences");
+        CFPreferencesAppSynchronize(domain);
+        Boolean ok = NO;
+        CFIndex v = CFPreferencesGetAppIntegerValue(CFSTR("CCRecord.NoDelay"), domain, &ok);
+        if (!ok) {
+            // key 不存在（默认关）：兼容 bool 存法再查一次
+            CFBooleanRef b = (CFBooleanRef)CFPreferencesCopyAppValue(CFSTR("CCRecord.NoDelay"), domain);
+            if (b) { BOOL r = (b == kCFBooleanTrue); CFRelease(b); return r; }
+            return NO;
+        }
+        return v != 0;
+    } @catch (...) { return NO; }
+}
+
+static IMP gOrigStartRecordingCountdown = NULL;
+
+static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
+    if (!ERCCRecordNoDelayEnabled() || !gOrigStartRecordingCountdown) {
+        if (gOrigStartRecordingCountdown) ((void (*)(id, SEL))gOrigStartRecordingCountdown)(self, _cmd);
+        return;
+    }
+    ERLogInfo(@"CC-RECORD 无延迟开录：跳过倒计时");
+    @try {
+        // 跳过 3 秒倒计时，直接走系统开始录屏路径（带 handler 的原签名，granted 回调空实现）
+        if ([self respondsToSelector:@selector(startRecordingWithHandler:)]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(startRecordingWithHandler:), ^(BOOL granted){});
+        } else if ([self respondsToSelector:@selector(startRecord)]) {
+            ((void (*)(id, SEL))objc_msgSend)(self, @selector(startRecord));
+        } else {
+            ((void (*)(id, SEL))gOrigStartRecordingCountdown)(self, _cmd);
+            return;
+        }
+        // 自动收起控制中心：0.25s 后 dismissAnimated:YES（保留系统默认动画，非瞬间关闭）
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            @try {
+                if ([self respondsToSelector:@selector(dismissAnimated:)]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(dismissAnimated:), @YES);
+                    ERLogInfo(@"CC-RECORD 控制中心已自动收起（动画）");
+                }
+            } @catch (__unused NSException *e) {}
+        });
+    } @catch (__unused NSException *e) {
+        // 兜底：任何异常回退原生倒计时路径
+        if (gOrigStartRecordingCountdown) ((void (*)(id, SEL))gOrigStartRecordingCountdown)(self, _cmd);
+    }
+}
+
 %ctor {
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
@@ -29102,6 +29158,20 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
         if (!gEnabled) {
             ERLogRecord(@"WARN", @"ctor: EchoReborn disabled, no hooks installed");
             return;
+        }
+        // 1.0.9-175 · 录屏无延迟：运行时探测 SBControlCenterController 的 startRecordingCountdown
+        //   （方法在才挂，参考 CCRecordNoDelay 同类名同选择器；方法不在时零副作用）
+        {
+            Class ccc = objc_getClass("SBControlCenterController");
+            SEL selCD = NSSelectorFromString(@"startRecordingCountdown");
+            if (ccc && [ccc instancesRespondToSelector:selCD]) {
+                MSHookMessageEx(ccc, selCD, (IMP)ERCCRecordStartNoDelay, &gOrigStartRecordingCountdown);
+                ERLogInfo(@"CC-RECORD hook 已挂载 SBControlCenterController startRecordingCountdown");
+            } else {
+                ERLogInfo(@"CC-RECORD 类或方法缺失（class=%@ has=%d），录屏无延迟不可用",
+                          ccc ? NSStringFromClass(ccc) : @"(nil)",
+                          (int)(ccc && [ccc instancesRespondToSelector:selCD]));
+            }
         }
         // The package intentionally has no firmware ceiling so it installs on
         // anything from iOS 16 up.  iOS 18, however, rebuilt Control Center on

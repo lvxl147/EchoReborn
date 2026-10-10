@@ -132,6 +132,40 @@
 			<key>label</key>
 			<string>隐藏系统锁屏音乐</string>
 		</dict>
+
+		<!-- 1.0.9-175 · 录屏设置：无延迟开始录屏（跳过 3 秒倒计时）+ 自动收起控制中心 -->
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>开启后，从控制中心点录屏按钮会跳过默认的 3 秒倒计时，直接开始录屏；开始录屏的同时控制中心自动收起（保留系统默认收起动画）。参考 CCRecordNoDelay 的实现思路。</string>
+			<key>label</key>
+			<string>录屏设置</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>erIcon</key>
+			<string>record.circle</string>
+			<key>erIconColor</key>
+			<string>red</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>record.circle</string>
+				<string>record.circle.fill</string>
+				<string>timer</string>
+			</array>
+			<key>key</key>
+			<string>CCRecord.NoDelay</string>
+			<key>label</key>
+			<string>录屏无延迟</string>
+		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
