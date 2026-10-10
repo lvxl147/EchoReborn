@@ -2046,8 +2046,10 @@ static void ERDIEventApply(UIView *capsule) {
                         if (l.opacity != 0.0) l.opacity = 0.0;
                         if (l.backgroundColor) l.backgroundColor = [UIColor clearColor].CGColor;
                         alreadyCount++;
+                        if (hidNames.count < 8) [hidNames addObject:cn ?: @"(nil)"];
                     } else {
                         alreadyCount++;
+                        if (hidNames.count < 8) [hidNames addObject:cn ?: @"(nil)"];
                     }
                 }
                 [stk addObjectsFromArray:l.sublayers];
@@ -2107,6 +2109,47 @@ static void ERDIEventApply(UIView *capsule) {
                                       vv.window ? NSStringFromClass(vv.window.class) : @"(nil)");
                         }
                         [st2 addObjectsFromArray:vv.subviews];
+                    }
+                }
+            }
+
+            // ---- 1.0.9-185 · COMPACT-PROBE：紧凑态黑胶囊真身一锤定音 ----
+            //   v184 日志实锤状态机正常（稳定期已藏=14），但录屏显示紧凑态胶囊仍纯黑
+            //   （中心像素 RGB(1,0,2)）—— BLACK-PROBE 两次都跑在展开态，紧凑态子树
+            //   从未被点名。本探针：稳定期 + 紧凑（cw<200）时 dump 岛子树全部可见节点
+            //   （类/转换frame/背景色是否近黑/位图/父类），5s 节流最多 10 行。
+            {
+                static CFTimeInterval lastCP = 0.0;
+                CFTimeInterval nowCP = CACurrentMediaTime();
+                if (nowCP - lastCP > 5.0 && cw < 200.0 && ch < 120.0) {
+                    lastCP = nowCP;
+                    NSMutableArray<UIView *> *st4 = [NSMutableArray arrayWithObject:root];
+                    NSInteger g4 = 0, cpN = 0;
+                    while (st4.count && g4++ < 8000 && cpN < 10) {
+                        UIView *vv = st4.lastObject; [st4 removeLastObject];
+                        if (!vv) continue;
+                        NSString *cn4 = NSStringFromClass(vv.class);
+                        if ([cn4 hasPrefix:@"ER"]) { [st4 addObjectsFromArray:vv.subviews]; continue; }
+                        if (!vv.hidden && vv.alpha > 0.05) {
+                            CGRect vf4 = [root convertRect:vv.bounds fromView:vv];
+                            BOOL dark4 = NO;
+                            if (vv.layer.backgroundColor) {
+                                UIColor *c4 = [UIColor colorWithCGColor:vv.layer.backgroundColor];
+                                CGFloat r4 = 0, g4b = 0, b4 = 0, a4 = 0;
+                                if ([c4 getRed:&r4 green:&g4b blue:&b4 alpha:&a4])
+                                    dark4 = (a4 >= 0.85 && r4 <= 0.15 && g4b <= 0.15 && b4 <= 0.15);
+                            }
+                            BOOL big4 = (CGRectGetWidth(vf4) > 60.0 || CGRectGetHeight(vf4) > 25.0);
+                            if (big4 || vv.layer.contents) {
+                                cpN++;
+                                ERLogInfo(@"COMPACT-PROBE %@ frame=%@ bg=%@(%@) contents=%@ 父=%@",
+                                          cn4, NSStringFromCGRect(vf4),
+                                          vv.layer.backgroundColor ? @"有" : @"无", dark4 ? @"黑" : @"非黑",
+                                          vv.layer.contents ? @"位图" : @"无",
+                                          vv.superview ? NSStringFromClass(vv.superview.class) : @"(nil)");
+                            }
+                        }
+                        [st4 addObjectsFromArray:vv.subviews];
                     }
                 }
             }
