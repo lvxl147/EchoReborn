@@ -1713,11 +1713,27 @@ static void ERDIMorphSyncTick(void) {
                 CALayer *rimM = objc_getAssociatedObject(capsule.layer, kERDIRimKey);
                 if (rimM && rimM.opacity != 0.0) rimM.opacity = 0.0;
             } else {
-                if (glassL.opacity != 1.0) glassL.opacity = 1.0;
+                // 1.0.9-182 · 玻璃回归用 0.18s 淡入（允许隐式动画），不再瞬间闪现
+                if (glassL.opacity != 1.0) {
+                    [CATransaction begin];
+                    [CATransaction setAnimationDuration:0.18];
+                    glassL.opacity = 1.0;
+                    [CATransaction commit];
+                }
                 CALayer *tintM = objc_getAssociatedObject(glassL, kERDITintKey);
-                if (tintM && tintM.opacity != 1.0) tintM.opacity = 1.0;
+                if (tintM && tintM.opacity != 1.0) {
+                    [CATransaction begin];
+                    [CATransaction setAnimationDuration:0.18];
+                    tintM.opacity = 1.0;
+                    [CATransaction commit];
+                }
                 CALayer *rimM = objc_getAssociatedObject(capsule.layer, kERDIRimKey);
-                if (rimM && rimM.opacity != 1.0) rimM.opacity = 1.0;
+                if (rimM && rimM.opacity != 1.0) {
+                    [CATransaction begin];
+                    [CATransaction setAnimationDuration:0.18];
+                    rimM.opacity = 1.0;
+                    [CATransaction commit];
+                }
             }
             // 1.0.9-174 · **废除形变期 2pt 外扩**：外扩让玻璃越出系统岛轮廓（v173 截图
             //   蓝箭头"边缘外"），用户要求完全按照系统岛大小。采样余量由 screenBlend
@@ -1897,7 +1913,10 @@ static void ERDIEventApply(UIView *capsule) {
                             fabs(prevR - capsule.layer.cornerRadius) > 1.5;
         objc_setAssociatedObject(capsule.layer, kERDIPrevBoundsKey, [NSValue valueWithCGRect:capsule.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(capsule.layer, kERDIPrevRadiusKey, @(capsule.layer.cornerRadius), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        if (shapeChanged) gERDIMorphUntil = CACurrentMediaTime() + 0.6;   // 全局宽限覆盖动画全程
+        // 1.0.9-182 · 宽限 0.6→0.2s：v181 真机反馈"展开先黑 1 秒才玻璃"——0.6s 宽限
+        //   叠加动画尾 = 1s 全黑。改为末次形变帧后 0.2s 即回玻璃（display link 每帧
+        //   对齐 presentationLayer，减速尾的微小位移由几何跟随吸收，不会露原生层）。
+        if (shapeChanged) gERDIMorphUntil = CACurrentMediaTime() + 0.2;   // 全局宽限：末次形变帧 +0.2s
         BOOL morphNative = CACurrentMediaTime() < gERDIMorphUntil;   // 本帧处于形变期？
         static BOOL gERDINativeLogged = NO;
         if (morphNative && !gERDINativeLogged) {
@@ -2072,29 +2091,27 @@ static void ERDIEventApply(UIView *capsule) {
                 }
             }
 
-            // ---- 1.0.9-180 · LA-BITMAP 藏除：黑边+边缘外真身定点清除 ----
+            // ---- 1.0.9-180/182 · LA-BITMAP 藏除+裁剪兜底：黑边+边缘外真身定点清除 ----
             //   v178 探针实锤：app 自定义 LA 背景位图 UIImageView（426.7×310.7，
             //   offset -9.7,-135）不在 capsule 子树裁剪链内 → 黑边（位图自身）+
-            //   边缘外（超岛部分）。系统对它无裁剪（原生岛把它当正常背景盖在岛底，
-            //   我们换成透明玻璃后它就露出来了）。修复：岛子树内「UIImageView +
-            //   layer.contents 位图 + 可见 + (任一维超岛 或 伸出岛界且面积>30000)」
-            //   直接 hidden —— 我们自己的玻璃负责背景，不再让 app 底图漏出。
-            //   专辑封面等小图（面积小、尺寸不超岛）不命中，零误伤；hidden 后
-            //   visible 条件不再成立，天然只执行一次。
+            //   边缘外（超岛部分）。v181 真机反馈仍未消失 → ① 命中面从 UIImageView
+            //   扩大到「任意带 layer.contents 的视图」；② 新增裁剪兜底：对命中节点的
+            //   superview 链逐级 masksToBounds + 岛圆角，直到祖先矩形被岛界包含 ——
+            //   即使位图本体没藏掉，超岛部分也被物理裁掉（蓝箭头必消）。
             {
                 CGRect islandR = (root == (UIView *)capsule) ? capsule.bounds
                               : [root convertRect:capsule.bounds fromView:capsule];
                 CGFloat cwI = CGRectGetWidth(islandR), chI = CGRectGetHeight(islandR);
+                CGFloat rI = MIN(cwI, chI) * 0.5;
                 if (cwI > 10.0 && chI > 10.0) {
                     NSMutableArray<UIView *> *st3 = [NSMutableArray arrayWithObject:root];
-                    NSInteger g3 = 0, bmHid = 0;
+                    NSInteger g3 = 0, bmHid = 0, clipN = 0;
                     while (st3.count && g3++ < 8000) {
                         UIView *vv = st3.lastObject; [st3 removeLastObject];
                         if (!vv || vv.hidden) continue;
                         NSString *cn3 = NSStringFromClass(vv.class);
                         if ([cn3 hasPrefix:@"ER"]) { [st3 addObjectsFromArray:vv.subviews]; continue; }
-                        if ([vv isKindOfClass:[UIImageView class]] && vv.layer.contents
-                            && vv.alpha > 0.05 && vv.superview && !vv.superview.hidden) {
+                        if (vv.layer.contents && vv.alpha > 0.05 && vv.superview && !vv.superview.hidden) {
                             CGRect r3 = [root convertRect:vv.bounds fromView:vv];
                             BOOL overW = CGRectGetWidth(r3) > cwI + 2.0;
                             BOOL overH = CGRectGetHeight(r3) > chI + 2.0;
@@ -2106,11 +2123,26 @@ static void ERDIEventApply(UIView *capsule) {
                                 vv.hidden = YES;
                                 bmHid++;
                                 ERLogInfo(@"LA-BITMAP 藏除 %@ 转换frame=%@ 岛=%@", cn3, NSStringFromCGRect(r3), NSStringFromCGRect(islandR));
+                                // 1.0.9-182 · 裁剪兜底：superview 链逐级裁到岛界（防同容器内
+                                //   其他超界兄弟/位图本体恢复后仍超界），裁到被岛界包含为止
+                                for (UIView *anc = vv.superview; anc && anc != root; anc = anc.superview) {
+                                    CGRect ar = [root convertRect:anc.bounds fromView:anc];
+                                    if (CGRectContainsRect(CGRectInset(islandR, -2.0, -2.0), ar)) break;
+                                    if (!anc.layer.masksToBounds) {
+                                        [CATransaction begin];
+                                        [CATransaction setDisableActions:YES];
+                                        anc.layer.masksToBounds = YES;
+                                        anc.layer.cornerRadius = rI;
+                                        [CATransaction commit];
+                                        clipN++;
+                                        ERLogInfo(@"LA-BITMAP 裁剪 %@ frame=%@ 圆角=%.1f", NSStringFromClass(anc.class), NSStringFromCGRect(ar), rI);
+                                    }
+                                }
                             }
                         }
                         [st3 addObjectsFromArray:vv.subviews];
                     }
-                    if (bmHid > 0) ERLogInfo(@"LA-BITMAP 本轮藏除 %ld 个", (long)bmHid);
+                    if (bmHid > 0) ERLogInfo(@"LA-BITMAP 本轮藏除 %ld 个 裁剪 %ld 层", (long)bmHid, (long)clipN);
                 }
             }
         }
@@ -2124,6 +2156,14 @@ static void ERDIEventApply(UIView *capsule) {
         //   groupName / groupNamespace / ignoresScreenClip。
         CGFloat sysR = capsule.layer.cornerRadius;
         CGFloat capsuleRadius = (sysR > 1.0) ? sysR : (ch * 0.5);   // 修 143 展开态 高/2 圆角过大
+        // 1.0.9-182 · 稳定期胶囊硬裁剪：岛内所有内容（含 app 自定义 LA 背景位图）
+        //   一律物理裁到岛轮廓 —— 蓝箭头"边缘外"的最终兜底（原生岛本就如此裁剪）。
+        //   形变期不动（系统自管裁剪）。
+        if (!morphNative) {
+            if (!capsule.layer.masksToBounds) capsule.layer.masksToBounds = YES;
+            if (fabs(capsule.layer.cornerRadius - capsuleRadius) > 0.5)
+                capsule.layer.cornerRadius = capsuleRadius;
+        }
         CGFloat liquidRadius = ERPreferenceFloatFor(@"LiquidifyDynamicIslandBlurRadius", 25.0);
         if (liquidRadius < 0.0) liquidRadius = 0.0;
         if (liquidRadius > 80.0) liquidRadius = 80.0;
