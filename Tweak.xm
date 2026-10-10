@@ -930,6 +930,8 @@ static BOOL gERDIHasContent = NO;                      // 1.0.9-150 · 本 tick 
 //   原色记在关联对象里，关开关时按原样还原。
 static void *kERDIOrigBGKey = &kERDIOrigBGKey;
 static void *kERDIEventHiddenKey = &kERDIEventHiddenKey;   // 1.0.9-155 · 被 155 事件逻辑隐藏的层（关开关还原用；restore/ERDIEventApply 共用）
+static void *kERDIBitmapKey = &kERDIBitmapKey;             // 1.0.9-189 · LA-BITMAP 藏除标记（展开态定向恢复，与 portal 标记隔离）
+static void *kERDIClipKey = &kERDIClipKey;                 // 1.0.9-189 · LA-BITMAP 裁剪标记（展开态撤销 masksToBounds 裁剪）
 static void *kERDIOrigEventBgKey = &kERDIOrigEventBgKey;   // 1.0.9-165 · 事件隐藏前原背景色（形变期恢复原生/关开关还原用；须在 restore 前声明）
 static void *kERDIOrigShadowKey = &kERDIOrigShadowKey;
 static void *kERDILaBackdropKey = &kERDILaBackdropKey;
@@ -2186,16 +2188,20 @@ static void ERDIEventApply(UIView *capsule) {
             // ---- 1.0.9-180/182 · LA-BITMAP 藏除+裁剪兜底：黑边+边缘外真身定点清除 ----
             //   v178 探针实锤：app 自定义 LA 背景位图 UIImageView（426.7×310.7，
             //   offset -9.7,-135）不在 capsule 子树裁剪链内 → 黑边（位图自身）+
-            //   边缘外（超岛部分）。v181 真机反馈仍未消失 → ① 命中面从 UIImageView
-            //   扩大到「任意带 layer.contents 的视图」；② 新增裁剪兜底：对命中节点的
-            //   superview 链逐级 masksToBounds + 岛圆角，直到祖先矩形被岛界包含 ——
-            //   即使位图本体没藏掉，超岛部分也被物理裁掉（蓝箭头必消）。
+            //   边缘外（超岛部分）。
+            //   1.0.9-189 · v188 真机实锤：本块全程跑会在展开态误伤——
+            //   藏 _UIReplicantView(407x224 系统快照) + 展开 app 内容 UILabel，
+            //   裁剪 SAUIElementViewContentView（= "画面部分被遮挡"）。
+            //   → 仅紧凑态执行藏除/裁剪；展开态反向恢复全部 LA-BITMAP 标记
+            //     （v188 废除了状态机恢复调用，恢复必须在这里自己做）。
+            //   外扩本身已由 v187 SAUI-PORTAL 视图藏除根治，本块降级为紧凑兜底。
             {
+                BOOL compactB = (cw < 200.0 && ch < 120.0);
                 CGRect islandR = (root == (UIView *)capsule) ? capsule.bounds
                               : [root convertRect:capsule.bounds fromView:capsule];
                 CGFloat cwI = CGRectGetWidth(islandR), chI = CGRectGetHeight(islandR);
                 CGFloat rI = MIN(cwI, chI) * 0.5;
-                if (cwI > 10.0 && chI > 10.0) {
+                if (compactB && cwI > 10.0 && chI > 10.0) {
                     NSMutableArray<UIView *> *st3 = [NSMutableArray arrayWithObject:root];
                     NSInteger g3 = 0, bmHid = 0, clipN = 0;
                     while (st3.count && g3++ < 8000) {
@@ -2203,6 +2209,11 @@ static void ERDIEventApply(UIView *capsule) {
                         if (!vv || vv.hidden) continue;
                         NSString *cn3 = NSStringFromClass(vv.class);
                         if ([cn3 hasPrefix:@"ER"]) { [st3 addObjectsFromArray:vv.subviews]; continue; }
+                        // 1.0.9-189 · 白名单：系统快照/复刻层绝不动（展开态内容载体）
+                        if ([cn3 containsString:@"_UIReplicantView"] ||
+                            [cn3 containsString:@"_UIReplicantLayer"]) {
+                            [st3 addObjectsFromArray:vv.subviews]; continue;
+                        }
                         if (vv.layer.contents && vv.alpha > 0.05 && vv.superview && !vv.superview.hidden) {
                             CGRect r3 = [root convertRect:vv.bounds fromView:vv];
                             BOOL overW = CGRectGetWidth(r3) > cwI + 2.0;
@@ -2210,8 +2221,9 @@ static void ERDIEventApply(UIView *capsule) {
                             BOOL outside = !CGRectContainsRect(CGRectInset(islandR, -2.0, -2.0), r3);
                             BOOL bigArea = CGRectGetWidth(r3) * CGRectGetHeight(r3) > 30000.0;
                             if (overW || overH || (outside && bigArea)) {
-                                // 1.0.9-181 · 打标记：形变期随原生层一起恢复（app 原生背景动画期正常显示）
-                                objc_setAssociatedObject(vv, kERDIEventHiddenKey, @(vv.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                                // 1.0.9-189 · 专用标记（不再混用 kERDIEventHiddenKey，
+                                //   避免 portal 恢复逻辑互相踩）
+                                objc_setAssociatedObject(vv, kERDIBitmapKey, @(vv.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                                 vv.hidden = YES;
                                 bmHid++;
                                 ERLogInfo(@"LA-BITMAP 藏除 %@ 转换frame=%@ 岛=%@", cn3, NSStringFromCGRect(r3), NSStringFromCGRect(islandR));
@@ -2225,6 +2237,7 @@ static void ERDIEventApply(UIView *capsule) {
                                         [CATransaction setDisableActions:YES];
                                         anc.layer.masksToBounds = YES;
                                         anc.layer.cornerRadius = rI;
+                                        objc_setAssociatedObject(anc, kERDIClipKey, @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                                         [CATransaction commit];
                                         clipN++;
                                         ERLogInfo(@"LA-BITMAP 裁剪 %@ frame=%@ 圆角=%.1f", NSStringFromClass(anc.class), NSStringFromCGRect(ar), rI);
@@ -2235,6 +2248,40 @@ static void ERDIEventApply(UIView *capsule) {
                         [st3 addObjectsFromArray:vv.subviews];
                     }
                     if (bmHid > 0) ERLogInfo(@"LA-BITMAP 本轮藏除 %ld 个 裁剪 %ld 层", (long)bmHid, (long)clipN);
+                } else if (!compactB) {
+                    // 1.0.9-189 · 展开态：恢复全部 LA-BITMAP 藏除/裁剪（v188 黑遮挡根治）
+                    NSInteger bR = 0, cR = 0;
+                    NSMutableArray<UIView *> *st3r = [NSMutableArray arrayWithObject:root];
+                    NSInteger g3r = 0;
+                    while (st3r.count && g3r++ < 8000) {
+                        UIView *vv = st3r.lastObject; [st3r removeLastObject];
+                        if (!vv) continue;
+                        NSString *cn3r = NSStringFromClass(vv.class);
+                        if ([cn3r hasPrefix:@"ER"]) { [st3r addObjectsFromArray:vv.subviews]; continue; }
+                        NSNumber *bmMark = objc_getAssociatedObject(vv, kERDIBitmapKey);
+                        if (bmMark) {
+                            [CATransaction begin];
+                            [CATransaction setDisableActions:YES];
+                            vv.hidden = NO;
+                            vv.alpha = bmMark.doubleValue > 0 ? bmMark.doubleValue : 1.0;
+                            [CATransaction commit];
+                            objc_setAssociatedObject(vv, kERDIBitmapKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            bR++;
+                            ERLogInfo(@"LA-BITMAP 恢复 %@", cn3r);
+                        }
+                        NSNumber *clMark = objc_getAssociatedObject(vv, kERDIClipKey);
+                        if (clMark) {
+                            [CATransaction begin];
+                            [CATransaction setDisableActions:YES];
+                            vv.layer.masksToBounds = NO;
+                            vv.layer.cornerRadius = 0.0;
+                            [CATransaction commit];
+                            objc_setAssociatedObject(vv, kERDIClipKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            cR++;
+                        }
+                        [st3r addObjectsFromArray:vv.subviews];
+                    }
+                    if (bR > 0 || cR > 0) ERLogInfo(@"LA-BITMAP 展开恢复 藏除 %ld 裁剪 %ld", (long)bR, (long)cR);
                 }
             }
         }
@@ -2257,7 +2304,12 @@ static void ERDIEventApply(UIView *capsule) {
                 BOOL portal = [cn5 containsString:@"_SAUIPortalView"] ||
                               [cn5 isEqualToString:@"_SAUIProvidedViewContainerView"];
                 if (portal) {
-                    if (compactNow) {
+                    // 1.0.9-189 · 双保险：capsule 已收缩但 portal 布局还没跟上时
+                    //  （v188 日志：展开 387x204 也被藏），portal 自身 frame 宽
+                    //  ≥220 说明它已在展开布局 → 不藏（防展开瞬间闪黑）
+                    CGFloat pw5 = CGRectGetWidth([rootSA convertRect:vv.bounds fromView:vv]);
+                    BOOL portalCompact = compactNow && pw5 < 220.0;
+                    if (portalCompact) {
                         if (!vv.hidden) {
                             objc_setAssociatedObject(vv, kERDIEventHiddenKey, @(vv.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                             [CATransaction begin];
@@ -2287,13 +2339,14 @@ static void ERDIEventApply(UIView *capsule) {
             //   黑边最后的藏身处。紧凑态藏（打层标记，随状态机恢复路径兼容），展开态恢复。
             {
                 NSMutableArray<CALayer *> *stL5 = [NSMutableArray arrayWithObject:rootSA.layer];
-                NSInteger gL5 = 0;
+                NSInteger gL5 = 0, hitL5 = 0;
                 while (stL5.count && gL5++ < 8000) {
                     CALayer *ll = stL5.lastObject; [stL5 removeLastObject];
                     if (!ll) continue;
                     NSString *cnL5 = NSStringFromClass(object_getClass(ll));
                     if ([ll.name hasPrefix:@"ERDI::"]) { [stL5 addObjectsFromArray:ll.sublayers]; continue; }
                     if ([cnL5 containsString:@"CAPortalLayer"]) {
+                        hitL5++;
                         if (compactNow) {
                             if (!ll.hidden) {
                                 objc_setAssociatedObject(ll, kERDIEventHiddenKey, @(ll.opacity), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -2320,6 +2373,16 @@ static void ERDIEventApply(UIView *capsule) {
                         }
                     }
                     [stL5 addObjectsFromArray:ll.sublayers];
+                }
+                // 1.0.9-189 · 诊断：v188 日志零命中 SAUI-PORTAL(L)，无法确认
+                //   CAPortalLayer 是否可达。每 10s 输出一次命中计数（含 0），
+                //   若恒为 0 → 层不在 window 层树内（跨进程 CAContext 宿主），
+                //   黑边定性需换路（zPosition 覆盖或 backboardd 管线）。
+                static CFTimeInterval lastPortalL = 0.0;
+                CFTimeInterval nowPL = CACurrentMediaTime();
+                if (nowPL - lastPortalL > 10.0) {
+                    lastPortalL = nowPL;
+                    ERLogInfo(@"SAUI-PORTAL(L) 扫描 命中=%ld compact=%d", (long)hitL5, compactNow ? 1 : 0);
                 }
             }
         }
