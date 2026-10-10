@@ -1944,6 +1944,46 @@ static void ERDIEventApply(UIView *capsule) {
             NSInteger vHid = 0, vAlready = 0, vGuard = 0;
             NSInteger vN = ERDIV172SweepViews(root, &vHid, &vAlready, hidNames, &vGuard);
             hidCount += vHid; alreadyCount += vAlready;
+
+            // ---- 1.0.9-176 · BLACK-PROBE：黑底真身一锤定音 ----
+            //   v174 放宽清底阈值后仍零条 LA-BG → 原生黑底不是 backgroundColor 形式。
+            //   探针：全子树里「深色不透明底」或「contents 位图大块」的节点全部上报
+            //   （类/frame/bg RGBA/contents/alpha/hidden），5s 节流最多 8 行 ——
+            //   黑边/多余圈到底是谁画的，真机日志直接点名。
+            {
+                static CFTimeInterval lastBP = 0.0;
+                CFTimeInterval nowBP = CACurrentMediaTime();
+                if (nowBP - lastBP > 5.0) {
+                    lastBP = nowBP;
+                    NSMutableArray<UIView *> *st2 = [NSMutableArray arrayWithObject:root];
+                    NSInteger g2 = 0, bpN = 0;
+                    while (st2.count && g2++ < 8000 && bpN < 8) {
+                        UIView *vv = st2.lastObject; [st2 removeLastObject];
+                        if (!vv) continue;
+                        NSString *cn2 = NSStringFromClass(vv.class);
+                        if ([cn2 hasPrefix:@"ER"]) { [st2 addObjectsFromArray:vv.subviews]; continue; }
+                        BOOL dark = NO, hasContents = NO;
+                        CGColorRef bc = vv.layer.backgroundColor;
+                        if (bc) {
+                            UIColor *uc = [UIColor colorWithCGColor:bc];
+                            CGFloat rr=0, gg=0, bb=0, aa=0;
+                            if ([uc getRed:&rr green:&gg blue:&bb alpha:&aa] && aa >= 0.3 && rr <= 0.35 && gg <= 0.35 && bb <= 0.35) dark = YES;
+                        }
+                        id ct = vv.layer.contents;
+                        CGRect vf = vv.frame;
+                        if (ct && vf.size.width * vf.size.height > 30000.0 && !vv.hidden && vv.alpha > 0.05) hasContents = YES;
+                        if (dark || hasContents) {
+                            bpN++;
+                            ERLogInfo(@"BLACK-PROBE %@ frame=%@ bg=%@ contents=%@ alpha=%.2f hidden=%d 父=%@",
+                                      cn2, NSStringFromCGRect(vf),
+                                      bc ? @"有" : @"无", ct ? @"位图" : @"无",
+                                      vv.alpha, (int)vv.hidden,
+                                      vv.superview ? NSStringFromClass(vv.superview.class) : @"(nil)");
+                        }
+                        [st2 addObjectsFromArray:vv.subviews];
+                    }
+                }
+            }
         }
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
@@ -29171,6 +29211,25 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                 ERLogInfo(@"CC-RECORD 类或方法缺失（class=%@ has=%d），录屏无延迟不可用",
                           ccc ? NSStringFromClass(ccc) : @"(nil)",
                           (int)(ccc && [ccc instancesRespondToSelector:selCD]));
+            }
+            // 1.0.9-176 · 全类扫描：startRecordingCountdown 的真正宿主是谁？
+            //   v175 实测无效果且日志无 CC-RECORD 行 → iOS26 录屏入口可能不在
+            //   SBControlCenterController 上。一次性扫描全部 ObjC 类（仅查方法表，毫秒级），
+            //   同时核对开关读值 —— 日志直接点名该挂哪个类。
+            @autoreleasepool {
+                unsigned int cnt = 0;
+                Class *clsList = objc_copyClassList(&cnt);
+                NSMutableArray<NSString *> *hosts = [NSMutableArray array];
+                for (unsigned int i = 0; i < cnt && hosts.count < 6; i++) {
+                    Class c = clsList[i];
+                    if (c == ccc) continue;
+                    if ([(id)c instancesRespondToSelector:selCD] || [c respondsToSelector:selCD])
+                        [hosts addObject:NSStringFromClass(c)];
+                }
+                free(clsList);
+                ERLogInfo(@"CC-RECORD 扫描 startRecordingCountdown 宿主=%@（SBControlCenterController=%@）开关读值=%d",
+                          hosts.count ? [hosts componentsJoinedByString:@","] : @"(无其他宿主)",
+                          ccc ? @"在" : @"nil", (int)ERCCRecordNoDelayEnabled());
             }
         }
         // The package intentionally has no firmware ceiling so it installs on
