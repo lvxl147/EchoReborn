@@ -2414,6 +2414,106 @@ static void ERDIEventApply(UIView *capsule) {
                 }
             }
         }
+
+        // ---- 1.0.9-191 · 战争免疫双杀：内容层 screen 混合（黑恒等）+ 内层硬裁剪（外扩几何根除）----
+        //   v190 日志定论：系统每 ~1.3s 重建/翻回 SAUI 内容（67 藏/32 恢复无限拉锯），
+        //   藏除战争机制上不可能赢。改用系统夺不走的两条确定性属性：
+        //   ① compositingFilter=screenBlendMode——内容层纯黑像素合成恒等（黑=全透明），
+        //     壁纸玻璃直透，白字/图标正常发光；系统爱重建多少次都无所谓，逐帧幂等补设。
+        //     紧凑/展开全程生效，顺带根治"黑1秒/灰玻璃"全部历史问题。
+        //   ② 内层 SBSystemApertureContainerView masksToBounds+圆角——v190 日志实锤
+        //     紧凑态内容层物理尺寸 387×203 而裁剪链祖先 bounds 全是 407×224（展开布局），
+        //     旧裁剪按祖先 bounds 裁=没裁；现按内容实际所在的 132×41 内层容器裁=几何根除。
+        {
+            static id sV191Blend = nil;
+            static dispatch_once_t onceV191;
+            dispatch_once(&onceV191, ^{
+                Class fc191 = NSClassFromString(@"CAFilter");
+                SEL sel191 = NSSelectorFromString(@"filterWithName:");
+                if (fc191 && [fc191 respondsToSelector:sel191])
+                    sV191Blend = ((id (*)(Class, SEL, NSString *))objc_msgSend)(fc191, sel191, @"screenBlendMode");
+            });
+            UIView *rootV = capsule.window ?: capsule;
+            NSInteger blendN = 0, clip191 = 0;
+            NSMutableArray<UIView *> *stV = [NSMutableArray arrayWithObject:rootV];
+            NSInteger gV = 0;
+            while (stV.count && gV++ < 8000) {
+                UIView *vv = stV.lastObject; [stV removeLastObject];
+                if (!vv) continue;
+                NSString *cnV = NSStringFromClass(vv.class);
+                if ([cnV hasPrefix:@"ER"]) { [stV addObjectsFromArray:vv.subviews]; continue; }
+                BOOL contentHost = [cnV containsString:@"_SAUI"] ||
+                                   [cnV containsString:@"RyXJUEciWgwTQYHF"] ||
+                                   [cnV containsString:@"_UIReplicantView"];
+                if (contentHost && sV191Blend) {
+                    @try {
+                        if (vv.layer.compositingFilter != sV191Blend) {
+                            [CATransaction begin];
+                            [CATransaction setDisableActions:YES];
+                            vv.layer.compositingFilter = sV191Blend;
+                            [CATransaction commit];
+                            blendN++;
+                            ERLogInfo(@"V191 混合挂载 %@", cnV);
+                        }
+                    } @catch (__unused NSException *e) {}
+                }
+                // 内层硬裁剪：只裁 SBSystemApertureContainerView 实例
+                //   （紧凑 <250pt 的内层用全圆角；已标记的实例长大后跟随展开比例）
+                if ([cnV isEqualToString:@"SBSystemApertureContainerView"] && vv.window) {
+                    CGFloat wV = CGRectGetWidth(vv.bounds), hV = CGRectGetHeight(vv.bounds);
+                    if (wV > 10.0 && hV > 10.0) {
+                        BOOL marked191 = objc_getAssociatedObject(vv, kERDIClipKey) != nil;
+                        BOOL smallV = (wV < 250.0);
+                        CGFloat rV = smallV ? (MIN(wV, hV) * 0.5) : (hV * 0.1953);
+                        BOOL needClip = smallV || marked191;
+                        if (needClip && (!vv.layer.masksToBounds ||
+                                         fabs(vv.layer.cornerRadius - rV) > 0.5)) {
+                            [CATransaction begin];
+                            [CATransaction setDisableActions:YES];
+                            vv.layer.masksToBounds = YES;
+                            vv.layer.cornerRadius = rV;
+                            [CATransaction commit];
+                            if (!marked191)
+                                objc_setAssociatedObject(vv, kERDIClipKey, @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            clip191++;
+                            ERLogInfo(@"V191 硬裁剪 %@ bounds=%@ 圆角=%.1f", cnV, NSStringFromCGRect(vv.bounds), rV);
+                        }
+                    }
+                }
+                [stV addObjectsFromArray:vv.subviews];
+            }
+            // 纯层（无视图宿主）也要 screen 混合：CAPortalLayer / _UIReplicantLayer
+            {
+                NSMutableArray<CALayer *> *stLV = [NSMutableArray arrayWithObject:rootV.layer];
+                NSInteger gLV = 0;
+                while (stLV.count && gLV++ < 8000) {
+                    CALayer *ll = stLV.lastObject; [stLV removeLastObject];
+                    if (!ll) continue;
+                    NSString *cnLV = NSStringFromClass(object_getClass(ll));
+                    if ([ll.name hasPrefix:@"ERDI::"]) { [stLV addObjectsFromArray:ll.sublayers]; continue; }
+                    if (sV191Blend && ([cnLV containsString:@"CAPortalLayer"] ||
+                                       [cnLV containsString:@"_UIReplicantLayer"])) {
+                        @try {
+                            if (ll.compositingFilter != sV191Blend) {
+                                [CATransaction begin];
+                                [CATransaction setDisableActions:YES];
+                                ll.compositingFilter = sV191Blend;
+                                [CATransaction commit];
+                                blendN++;
+                                ERLogInfo(@"V191 混合挂载(层) %@", cnLV);
+                            }
+                        } @catch (__unused NSException *e) {}
+                    }
+                    [stLV addObjectsFromArray:ll.sublayers];
+                }
+            }
+            static CFTimeInterval lastV191 = 0.0;
+            CFTimeInterval nowV = CACurrentMediaTime();
+            if (nowV - lastV191 > 10.0) {
+                lastV191 = nowV;
+                ERLogInfo(@"V191 本轮 混合 %ld 裁剪 %ld", (long)blendN, (long)clip191);
+            }
+        }
         } // end stable takeover —— 1.0.9-184 稳定期压制门控
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
