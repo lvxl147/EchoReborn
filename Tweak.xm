@@ -2415,12 +2415,15 @@ static void ERDIEventApply(UIView *capsule) {
             }
         }
 
-        // ---- 1.0.9-192 · 穿透层决战：CAPortalLayer 摘除 + 紧凑门控（v191 展开遮挡回归修复）----
-        //   v191 定论：混合(97次)/裁剪(67次)全部挂住且未被翻回，但黑块/外扩纹丝不动
-        //   —— CAPortalLayer 是跨进程穿透层，SpringBoard 侧层属性（滤镜/裁剪）物理上
-        //   作用不到它的像素。最后一个本地手段：直接从层树摘除（removeFromSuperlayer
-        //   比 hidden 难翻回——系统要重建整个子树才能恢复）；系统 SAUI 每 ~1.3s 重建
-        //   时新实例会被我们逐帧再摘。混合/裁剪仅紧凑态执行（v191 展开态遮挡回归修复）。
+        // ---- 1.0.9-191 · 战争免疫双杀：内容层 screen 混合（黑恒等）+ 内层硬裁剪（外扩几何根除）----
+        //   v190 日志定论：系统每 ~1.3s 重建/翻回 SAUI 内容（67 藏/32 恢复无限拉锯），
+        //   藏除战争机制上不可能赢。改用系统夺不走的两条确定性属性：
+        //   ① compositingFilter=screenBlendMode——内容层纯黑像素合成恒等（黑=全透明），
+        //     壁纸玻璃直透，白字/图标正常发光；系统爱重建多少次都无所谓，逐帧幂等补设。
+        //     紧凑/展开全程生效，顺带根治"黑1秒/灰玻璃"全部历史问题。
+        //   ② 内层 SBSystemApertureContainerView masksToBounds+圆角——v190 日志实锤
+        //     紧凑态内容层物理尺寸 387×203 而裁剪链祖先 bounds 全是 407×224（展开布局），
+        //     旧裁剪按祖先 bounds 裁=没裁；现按内容实际所在的 132×41 内层容器裁=几何根除。
         {
             static id sV191Blend = nil;
             static dispatch_once_t onceV191;
@@ -2430,9 +2433,8 @@ static void ERDIEventApply(UIView *capsule) {
                 if (fc191 && [fc191 respondsToSelector:sel191])
                     sV191Blend = ((id (*)(Class, SEL, NSString *))objc_msgSend)(fc191, sel191, @"screenBlendMode");
             });
-            BOOL gCompact192 = ERDIGlobalCompact((cw < 200.0 && ch < 120.0), capsule);
             UIView *rootV = capsule.window ?: capsule;
-            NSInteger blendN = 0, clip191 = 0, rmN = 0;
+            NSInteger blendN = 0, clip191 = 0;
             NSMutableArray<UIView *> *stV = [NSMutableArray arrayWithObject:rootV];
             NSInteger gV = 0;
             while (stV.count && gV++ < 8000) {
@@ -2445,55 +2447,42 @@ static void ERDIEventApply(UIView *capsule) {
                                    [cnV containsString:@"_UIReplicantView"];
                 if (contentHost && sV191Blend) {
                     @try {
-                        BOOL hasBlend = (vv.layer.compositingFilter == sV191Blend);
-                        if (gCompact192 && !hasBlend) {
+                        if (vv.layer.compositingFilter != sV191Blend) {
                             [CATransaction begin];
                             [CATransaction setDisableActions:YES];
                             vv.layer.compositingFilter = sV191Blend;
                             [CATransaction commit];
                             blendN++;
-                            ERLogInfo(@"V192 混合挂载 %@", cnV);
-                        } else if (!gCompact192 && hasBlend) {
-                            // 展开态清除混合（v191 展开内容观感异常修复）
-                            [CATransaction begin];
-                            [CATransaction setDisableActions:YES];
-                            vv.layer.compositingFilter = nil;
-                            [CATransaction commit];
+                            ERLogInfo(@"V191 混合挂载 %@", cnV);
                         }
                     } @catch (__unused NSException *e) {}
                 }
+                // 内层硬裁剪：只裁 SBSystemApertureContainerView 实例
+                //   （紧凑 <250pt 的内层用全圆角；已标记的实例长大后跟随展开比例）
                 if ([cnV isEqualToString:@"SBSystemApertureContainerView"] && vv.window) {
                     CGFloat wV = CGRectGetWidth(vv.bounds), hV = CGRectGetHeight(vv.bounds);
                     if (wV > 10.0 && hV > 10.0) {
                         BOOL marked191 = objc_getAssociatedObject(vv, kERDIClipKey) != nil;
                         BOOL smallV = (wV < 250.0);
-                        if (gCompact192 && smallV) {
-                            CGFloat rV = MIN(wV, hV) * 0.5;
-                            if (!vv.layer.masksToBounds || fabs(vv.layer.cornerRadius - rV) > 0.5) {
-                                [CATransaction begin];
-                                [CATransaction setDisableActions:YES];
-                                vv.layer.masksToBounds = YES;
-                                vv.layer.cornerRadius = rV;
-                                [CATransaction commit];
-                                if (!marked191)
-                                    objc_setAssociatedObject(vv, kERDIClipKey, @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                                clip191++;
-                                ERLogInfo(@"V192 硬裁剪 %@ bounds=%@ 圆角=%.1f", cnV, NSStringFromCGRect(vv.bounds), rV);
-                            }
-                        } else if (!smallV && marked191) {
-                            // 展开态撤销（v191 标记的容器长大后恢复系统原样）
+                        CGFloat rV = smallV ? (MIN(wV, hV) * 0.5) : (hV * 0.1953);
+                        BOOL needClip = smallV || marked191;
+                        if (needClip && (!vv.layer.masksToBounds ||
+                                         fabs(vv.layer.cornerRadius - rV) > 0.5)) {
                             [CATransaction begin];
                             [CATransaction setDisableActions:YES];
-                            vv.layer.masksToBounds = NO;
-                            vv.layer.cornerRadius = 0.0;
+                            vv.layer.masksToBounds = YES;
+                            vv.layer.cornerRadius = rV;
                             [CATransaction commit];
-                            objc_setAssociatedObject(vv, kERDIClipKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            if (!marked191)
+                                objc_setAssociatedObject(vv, kERDIClipKey, @(YES), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                            clip191++;
+                            ERLogInfo(@"V191 硬裁剪 %@ bounds=%@ 圆角=%.1f", cnV, NSStringFromCGRect(vv.bounds), rV);
                         }
                     }
                 }
                 [stV addObjectsFromArray:vv.subviews];
             }
-            // 纯层级：CAPortalLayer 直接摘除（穿透层唯一剩余本地手段）
+            // 纯层（无视图宿主）也要 screen 混合：CAPortalLayer / _UIReplicantLayer
             {
                 NSMutableArray<CALayer *> *stLV = [NSMutableArray arrayWithObject:rootV.layer];
                 NSInteger gLV = 0;
@@ -2502,16 +2491,16 @@ static void ERDIEventApply(UIView *capsule) {
                     if (!ll) continue;
                     NSString *cnLV = NSStringFromClass(object_getClass(ll));
                     if ([ll.name hasPrefix:@"ERDI::"]) { [stLV addObjectsFromArray:ll.sublayers]; continue; }
-                    if ([cnLV containsString:@"CAPortalLayer"] && gCompact192) {
+                    if (sV191Blend && ([cnLV containsString:@"CAPortalLayer"] ||
+                                       [cnLV containsString:@"_UIReplicantLayer"])) {
                         @try {
-                            if (ll.superlayer) {
+                            if (ll.compositingFilter != sV191Blend) {
                                 [CATransaction begin];
                                 [CATransaction setDisableActions:YES];
-                                ll.frame = CGRectZero;
-                                [ll removeFromSuperlayer];
+                                ll.compositingFilter = sV191Blend;
                                 [CATransaction commit];
-                                rmN++;
-                                ERLogInfo(@"V192 摘除 CAPortalLayer");
+                                blendN++;
+                                ERLogInfo(@"V191 混合挂载(层) %@", cnLV);
                             }
                         } @catch (__unused NSException *e) {}
                     }
@@ -2522,11 +2511,10 @@ static void ERDIEventApply(UIView *capsule) {
             CFTimeInterval nowV = CACurrentMediaTime();
             if (nowV - lastV191 > 10.0) {
                 lastV191 = nowV;
-                ERLogInfo(@"V192 本轮 混合 %ld 裁剪 %ld 摘除 %ld compact=%d",
-                          (long)blendN, (long)clip191, (long)rmN, gCompact192 ? 1 : 0);
+                ERLogInfo(@"V191 本轮 混合 %ld 裁剪 %ld", (long)blendN, (long)clip191);
             }
         }
-} // end stable takeover —— 1.0.9-184 稳定期压制门控
+        } // end stable takeover —— 1.0.9-184 稳定期压制门控
 
         // ---- ③ 玻璃同步（1.0.9-161 · Liquidify 0x4058cc 滤镜链 + LGLiveBackdropView 私有键）----
         //   Liquidify 反汇编实证：filters = [ gaussianBlur{inputRadius=50,
