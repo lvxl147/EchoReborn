@@ -932,6 +932,32 @@ static void *kERDIOrigBGKey = &kERDIOrigBGKey;
 static void *kERDIEventHiddenKey = &kERDIEventHiddenKey;   // 1.0.9-155 · 被 155 事件逻辑隐藏的层（关开关还原用；restore/ERDIEventApply 共用）
 static void *kERDIBitmapKey = &kERDIBitmapKey;             // 1.0.9-189 · LA-BITMAP 藏除标记（展开态定向恢复，与 portal 标记隔离）
 static void *kERDIClipKey = &kERDIClipKey;                 // 1.0.9-189 · LA-BITMAP 裁剪标记（展开态撤销 masksToBounds 裁剪）
+static void *kERDICompactKey = &kERDICompactKey;           // 1.0.9-190 · 每 capsule 实例的 compact 判定
+
+// 1.0.9-190 · 全局 compact 表决（拉锯战根治）：
+//   岛有两层嵌套 SBSystemApertureContainerView——外层恒 407×223（展开布局
+//   容器，从不收缩），内层才是真实岛（紧凑 132×41，展开时长大）。v188/189
+//   每实例各自判 compactNow：外层恒报"展开"→ 每帧把内层藏掉的内容恢复 =
+//   藏/恢复拉锯（v189 日志实锤 130ms 一轮，黑边+外扩被"恢复"回来）。
+//   规则：任一**在屏**实例报 compact → 全局 compact（内层小岛只在紧凑态
+//   收缩；展开态内层同步长大 → 全体报展开 → 全局展开）。不在屏/无 window
+//   的死实例不投票，防"compact 永真"卡死恢复。
+static BOOL ERDIGlobalCompact(BOOL selfCompact, UIView *capsule) {
+    static NSHashTable<UIView *> *tbl = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ tbl = [NSHashTable weakObjectsHashTable]; });
+    if (capsule) {
+        objc_setAssociatedObject(capsule, &kERDICompactKey, @(selfCompact), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        [tbl addObject:capsule];
+    }
+    BOOL any = NO;
+    for (UIView *c in [tbl allObjects]) {
+        if (!c.window || c.hidden || c.alpha < 0.05) continue;
+        NSNumber *v = objc_getAssociatedObject(c, &kERDICompactKey);
+        if (v && v.boolValue) { any = YES; break; }
+    }
+    return any;
+}
 static void *kERDIOrigEventBgKey = &kERDIOrigEventBgKey;   // 1.0.9-165 · 事件隐藏前原背景色（形变期恢复原生/关开关还原用；须在 restore 前声明）
 static void *kERDIOrigShadowKey = &kERDIOrigShadowKey;
 static void *kERDILaBackdropKey = &kERDILaBackdropKey;
@@ -2196,7 +2222,8 @@ static void ERDIEventApply(UIView *capsule) {
             //     （v188 废除了状态机恢复调用，恢复必须在这里自己做）。
             //   外扩本身已由 v187 SAUI-PORTAL 视图藏除根治，本块降级为紧凑兜底。
             {
-                BOOL compactB = (cw < 200.0 && ch < 120.0);
+                // 1.0.9-190 · 全局 compact 表决（外层展开容器恒报展开的拉锯战根治）
+                BOOL compactB = ERDIGlobalCompact((cw < 200.0 && ch < 120.0), capsule);
                 CGRect islandR = (root == (UIView *)capsule) ? capsule.bounds
                               : [root convertRect:capsule.bounds fromView:capsule];
                 CGFloat cwI = CGRectGetWidth(islandR), chI = CGRectGetHeight(islandR);
@@ -2292,7 +2319,11 @@ static void ERDIEventApply(UIView *capsule) {
         //   本身看得见 → 紧凑稳定态藏整个 portal（岛内只剩玻璃），
         //   展开态/形变期恢复（app 内容照常显示）。
         {
-            BOOL compactNow = (cw < 200.0 && ch < 120.0);
+            // 1.0.9-190 · 全局 compact 表决：COMPACT-PROBE 实锤紧凑态里 portal
+            //   frame 就是 387×203（远程内容自带展开布局，靠岛裁剪显示）——
+            //   v189 的"portal 宽≥220 不藏"守卫基于错误假设，把 v187 的外扩
+            //   治本手段废了。撤销守卫，改用全局表决后外层实例不再误判。
+            BOOL compactNow = ERDIGlobalCompact((cw < 200.0 && ch < 120.0), capsule);
             UIView *rootSA = capsule.window ?: capsule;   // 1.0.9-187 · 本块在 root 作用域外，自取窗口根
             NSMutableArray<UIView *> *st5 = [NSMutableArray arrayWithObject:rootSA];
             NSInteger g5 = 0;
@@ -2304,12 +2335,9 @@ static void ERDIEventApply(UIView *capsule) {
                 BOOL portal = [cn5 containsString:@"_SAUIPortalView"] ||
                               [cn5 isEqualToString:@"_SAUIProvidedViewContainerView"];
                 if (portal) {
-                    // 1.0.9-189 · 双保险：capsule 已收缩但 portal 布局还没跟上时
-                    //  （v188 日志：展开 387x204 也被藏），portal 自身 frame 宽
-                    //  ≥220 说明它已在展开布局 → 不藏（防展开瞬间闪黑）
-                    CGFloat pw5 = CGRectGetWidth([rootSA convertRect:vv.bounds fromView:vv]);
-                    BOOL portalCompact = compactNow && pw5 < 220.0;
-                    if (portalCompact) {
+                    // 1.0.9-190 · v189 的 frame≥220 守卫撤销（紧凑态 portal 本身
+                    //   就是 387×203，守卫导致外扩回归）；全局表决已防展开误藏
+                    if (compactNow) {
                         if (!vv.hidden) {
                             objc_setAssociatedObject(vv, kERDIEventHiddenKey, @(vv.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                             [CATransaction begin];
