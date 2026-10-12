@@ -298,14 +298,19 @@ static BOOL ERSrcShouldLog(NSString *key) {
                  name, ERSrcBundleID(), [[NSProcessInfo processInfo] processIdentifier]);
         ERSrcScanClasses();
 
-        if (ERSrcIsKnownSystemProcess(name)) {
-            ERSrcLog(@"ERSRC-LOAD 系统进程白名单，探针与层捕获不启动");
-            return;
-        }
-
-        // v196 · 层级黑底捕获：非白名单进程全部挂上（含 widget 扩展）
+        // v197 · 层捕获挂全量（含白名单进程）：v196 真机复盘——最可疑的
+        // 渲染者 BatteriesAvocadoWidgetExtension 是 v195 时代启动的幸存进程，
+        // 体内只有旧 UIView 探针（对 SwiftUI 盲），没等到 v196 的层 hook；
+        // 白名单进程（SpringBoard/Sileo 等）也未挂。任何进程都可能漏网。
+        // 层捕获有三闸门降噪（近黑不透明/≥100x40 位图/30s 去重），全量挂
+        // 无性能之忧；探针/计时器仍只跑非白名单。
         %init(ERSrcLayerHooks);
         ERSrcLog(@"ERSRC-HOOKS CALayer 黑底/位图捕获已挂载");
+
+        if (ERSrcIsKnownSystemProcess(name)) {
+            ERSrcLog(@"ERSRC-LOAD 系统进程白名单，探针不启动");
+            return;
+        }
 
         // 每 10s 一轮探针；主线程串行，遍历有 3000 节点上限，最坏 ~1ms 量级
         dispatch_async(dispatch_get_main_queue(), ^{
