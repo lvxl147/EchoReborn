@@ -33,6 +33,7 @@
 #import <UIKit/UIKit.h>
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
 
 // ---------------------------------------------------------------------------
