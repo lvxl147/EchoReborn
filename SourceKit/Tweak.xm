@@ -43,6 +43,10 @@
 static NSString *const kERSrcLogPath = @"/var/mobile/Documents/EchoReborn-src.log";
 static NSInteger const kERSrcLogMaxBytes = 512 * 1024;
 
+// v196 · 每行日志带进程标签：v195 真机日志多进程交错写同一文件，
+// 没有 [进程] 标签无法归因（心跳行到底是 Spotlight 还是 Batteries？）
+static NSString *gERSrcProcTag = @"";
+
 static void ERSrcLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
 static void ERSrcLog(NSString *format, ...) {
     va_list args;
@@ -56,7 +60,8 @@ static void ERSrcLog(NSString *format, ...) {
         fmt = [[NSDateFormatter alloc] init];
         fmt.dateFormat = @"yyyy-MM-dd HH:mm:ss.SSS";
     });
-    NSString *line = [NSString stringWithFormat:@"%@ [SRC] %@", [fmt stringFromDate:[NSDate date]], msg];
+    NSString *line = [NSString stringWithFormat:@"%@ [SRC][%@] %@",
+                      [fmt stringFromDate:[NSDate date]], gERSrcProcTag, msg];
 
     // 追加一行；失败静默（诊断代码绝不拖垮宿主进程）
     @try {
@@ -212,17 +217,92 @@ static void ERSrcProbe(void) {
 @end
 
 // ---------------------------------------------------------------------------
+// v196 · CALayer 层级黑底捕获（武器升级）
+//
+// v195 真机日志定性：岛内容由 widget 扩展进程渲染（BatteriesAvocadoWidget-
+// Extension 在每次岛触发时刻恰好加载），而组件扩展是 SwiftUI 渲染——没有
+// UIApplication、没有 UIKit 窗口，UIView 窗口树探针在它体内永远打空
+// （日志实锤"无UIApplication 心跳 窗口0"）。
+//
+// 换武器：hook CALayer 的 setBackgroundColor:/setContents:。这是所有渲染
+// 路径（UIKit/SwiftUI/CoreAnimation）设置像素的必经点，层树里"黑底"无处
+// 可逃。降噪三闸门：① 只报近黑不透明背景 / ≥100x40 位图内容；② 层 bounds
+// ≥50x20（岛内容尺度）；③ 同一 (类名,尺寸) 键 30s 去重。
+// ---------------------------------------------------------------------------
+static BOOL ERSrcShouldLog(NSString *key) {
+    static NSMutableDictionary<NSString *, NSDate *> *seen;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ seen = [NSMutableDictionary dictionary]; });
+    @synchronized (seen) {
+        NSDate *now = [NSDate date];
+        NSDate *last = seen[key];
+        if (last && [now timeIntervalSinceDate:last] < 30.0) return NO;
+        seen[key] = now;
+        return YES;
+    }
+}
+
+%group ERSrcLayerHooks
+
+%hook CALayer
+- (void)setBackgroundColor:(CGColorRef)color {
+    %orig;
+    @try {
+        if (!ERSrcNearBlackLayer(color)) return;
+        CGRect b = self.bounds;
+        if (b.size.width < 50.0 || b.size.height < 20.0) return;
+        NSString *cls = [self.delegate class] ? NSStringFromClass([self.delegate class]) : NSStringFromClass([self class]);
+        NSString *key = [NSString stringWithFormat:@"BG|%@|%.0fx%.0f", cls, b.size.width, b.size.height];
+        if (ERSrcShouldLog(key)) {
+            ERSrcLog(@"ERSRC-LAYER 黑底 委托=%@ layer=%@ bounds=%@",
+                     cls, NSStringFromClass([self class]), NSStringFromCGRect(b));
+        }
+    } @catch (__unused NSException *e) {
+        // 诊断绝不拖垮宿主
+    }
+}
+
+- (void)setContents:(id)contents {
+    %orig;
+    @try {
+        if (!contents) return;
+        if (CFGetTypeRef((__bridge CFTypeRef)contents) != CGImageGetTypeID()) return;
+        CGRect b = self.bounds;
+        if (b.size.width < 50.0 || b.size.height < 20.0) return;
+        CGImageRef img = (__bridge CGImageRef)contents;
+        CGFloat iw = (CGFloat)CGImageGetWidth(img), ih = (CGFloat)CGImageGetHeight(img);
+        if (iw < 100.0 || ih < 40.0) return;
+        NSString *cls = [self.delegate class] ? NSStringFromClass([self.delegate class]) : NSStringFromClass([self class]);
+        NSString *key = [NSString stringWithFormat:@"IMG|%@|%.0fx%.0f", cls, iw, ih];
+        if (ERSrcShouldLog(key)) {
+            ERSrcLog(@"ERSRC-LAYER 位图 委托=%@ layer=%@ bounds=%@ img=%.0fx%.0f",
+                     cls, NSStringFromClass([self class]), NSStringFromCGRect(b), iw, ih);
+        }
+    } @catch (__unused NSException *e) {
+        // 诊断绝不拖垮宿主
+    }
+}
+%end
+
+%end
+
+// ---------------------------------------------------------------------------
 %ctor {
     @autoreleasepool {
         NSString *name = [[NSProcessInfo processInfo] processName] ?: @"(unknown)";
+        gERSrcProcTag = name;
         ERSrcLog(@"ERSRC-LOAD 进程=%@ bundle=%@ pid=%d",
                  name, ERSrcBundleID(), [[NSProcessInfo processInfo] processIdentifier]);
         ERSrcScanClasses();
 
         if (ERSrcIsKnownSystemProcess(name)) {
-            ERSrcLog(@"ERSRC-LOAD 系统进程白名单，探针不启动");
+            ERSrcLog(@"ERSRC-LOAD 系统进程白名单，探针与层捕获不启动");
             return;
         }
+
+        // v196 · 层级黑底捕获：非白名单进程全部挂上（含 widget 扩展）
+        %init(ERSrcLayerHooks);
+        ERSrcLog(@"ERSRC-HOOKS CALayer 黑底/位图捕获已挂载");
 
         // 每 10s 一轮探针；主线程串行，遍历有 3000 节点上限，最坏 ~1ms 量级
         dispatch_async(dispatch_get_main_queue(), ^{
