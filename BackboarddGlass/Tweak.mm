@@ -2109,6 +2109,96 @@ static bool registerCustomFilter(void) {
     return true;
 }
 
+
+// ============================================================================
+// 1.0.9-198 · C-1 诊断：backboardd 侧 CAContext 捕获
+//
+// v194-v197 定性：岛黑底内容不经过任何被注入进程的 ObjC CALayer 路径
+// （源进程拦截四版零命中）。跨进程穿透层的最终合成在 backboardd（渲染
+// 服务）完成，跨进程表面在 backboardd 里是 CAContext 对象（CALayer 子类）。
+// 本诊断 swizzle -[CAContext setBounds:]：岛出现/形变时其上下文 bounds
+// 必然变化 —— 抓到岛上下文对象（紧凑 132x41 / 内容 387x203 / 容器 407x223
+// 尺寸特征），v199 就能直接在渲染服务器侧给它的根层挂 screenBlend 滤镜
+// （黑像素在合成管线上数学恒等于全透明，SpringBoard 侧怎么打都打不中
+// 的像素，在合成者手里一个滤镜就够）。
+//
+// 独立日志 /var/mobile/Library/Accessibility/echoreborn-cactx.log：
+// backboardd 对 /var/mobile/Library/Accessibility 有既有写权限
+// （LiquidAss 日志同目录先例），不走 lglog（那受 Debug.Logging.Enabled
+// 开关门控，诊断必须恒开）。
+// ============================================================================
+#import <objc/runtime.h>
+#import <objc/message.h>
+#include <map>
+#include <string>
+#include <mutex>
+
+static const char *kERCtxLogPath = "/var/mobile/Library/Accessibility/echoreborn-cactx.log";
+
+static void erctxlog(const char *fmt, ...) {
+    va_list ap; va_start(ap, fmt);
+    char msg[512]; vsnprintf(msg, sizeof(msg), fmt, ap); va_end(ap);
+    FILE *f = fopen(kERCtxLogPath, "a");
+    if (!f) return;
+    time_t t = time(NULL); struct tm tmv; localtime_r(&t, &tmv);
+    fprintf(f, "%04d-%02d-%02d %02d:%02d:%02d [CTX] %s\n",
+            tmv.tm_year + 1900, tmv.tm_mon + 1, tmv.tm_mday,
+            tmv.tm_hour, tmv.tm_min, tmv.tm_sec, msg);
+    fclose(f);
+}
+
+static void *g_erctxOrigSetBounds = nullptr;
+
+static void erctx_setBoundsIMP(id self, SEL _cmd, CGRect bounds) {
+    using SetBoundsFn = void (*)(id, SEL, CGRect);
+    reinterpret_cast<SetBoundsFn>(g_erctxOrigSetBounds)(self, _cmd, bounds);
+    try {
+        double w = bounds.size.width, h = bounds.size.height;
+        // 岛内容尺度起步 50x20；太小的不关心（降噪）
+        if (w < 50.0 || h < 20.0) return;
+        // 同一对象 + 同一（取整）尺寸只记一次
+        static std::mutex s_mu;
+        static std::map<void *, std::string> s_last;
+        char sizeKey[64];
+        snprintf(sizeKey, sizeof(sizeKey), "%.0fx%.0f", w, h);
+        bool hit;
+        {
+            std::lock_guard<std::mutex> lk(s_mu);
+            auto it = s_last.find((__bridge void *)self);
+            hit = (it != s_last.end() && it->second == sizeKey);
+            if (!hit) s_last[(__bridge void *)self] = sizeKey;
+        }
+        if (hit) return;
+        id layer = nil;
+        if ([self respondsToSelector:@selector(layer)]) {
+            layer = [self performSelector:@selector(layer)];
+        }
+        const char *lcls = layer ? class_getName(object_getClass(layer)) : "(无layer)";
+        const char *cls = class_getName(object_getClass(self));
+        erctxlog("CAContext %p bounds=%.1fx%.1f 自身类=%s 根层=%s",
+                 (__bridge void *)self, w, h, cls, lcls);
+    } catch (...) {
+        // 诊断绝不拖垮 backboardd
+    }
+}
+
+static void erctxInstallHook(void) {
+    Class ctxClass = objc_getClass("CAContext");
+    if (!ctxClass) {
+        erctxlog("CAContext 类不存在（QuartzCore 未加载？）");
+        return;
+    }
+    Method m = class_getInstanceMethod(ctxClass, @selector(setBounds:));
+    if (!m) {
+        erctxlog("CAContext setBounds: 方法未找到");
+        return;
+    }
+    g_erctxOrigSetBounds = (void *)method_getImplementation(m);
+    method_setImplementation(m, (IMP)erctx_setBoundsIMP);
+    erctxlog("CAContext setBounds: 已挂钩 原实现=%p 类=%s",
+             g_erctxOrigSetBounds, class_getName(ctxClass));
+}
+
 __attribute__((constructor))
 static void tweakInit(void) {
     @autoreleasepool {
@@ -2185,6 +2275,8 @@ static void tweakInit(void) {
     g_renderPipelines =
         new std::unordered_map<NSUInteger, id<MTLRenderPipelineState>>();
     registerCustomFilter();
+
+    erctxInstallHook();
 
     lglog("ready");
     }
