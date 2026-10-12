@@ -118,7 +118,8 @@ static void ERSrcScanClasses(void) {
     unsigned int count = 0;
     Class *classes = objc_copyClassList(&count);
     if (!classes) return;
-    NSArray<NSString *> *keys = @[@"CallAssist", @"SAUI", @"Island", @"LiveActivity", @"LiveActivityKit"];
+    NSArray<NSString *> *keys = @[@"CallAssist", @"SAUI", @"Island", @"LiveActivity",
+                                  @"LiveActivityKit", @"Portal", @"Widget"];
     NSMutableArray<NSString *> *hits = [NSMutableArray array];
     for (unsigned int i = 0; i < count && hits.count < 24; i++) {
         NSString *cn = NSStringFromClass(classes[i]);
@@ -151,42 +152,58 @@ static NSInteger ERSrcNearBlackLayer(CGColorRef c) {
 }
 
 static void ERSrcProbe(void) {
-    NSArray<UIScene *> *scenes = nil;
-    NSArray<UIWindow *> *windows = nil;
-    if (@available(iOS 13.0, *)) {
-        scenes = [UIApplication sharedApplication].connectedScenes.allObjects;
-        NSMutableArray<UIWindow *> *ws = [NSMutableArray array];
-        for (UIScene *s in scenes) {
-            if ([s isKindOfClass:[UIWindowScene class]]) {
-                [ws addObjectsFromArray:((UIWindowScene *)s).windows];
+    // v195 · 1.0.9-195 修复：任何路径都必须出心跳行。v194 的实现里
+    // "UIApplication 取不到 → windows 空 → 提前 return" 是静默的，异常也被
+    // @catch 静默吞掉 —— 真机上 Spotlight 进程加载后一行心跳都没有，无法
+    // 区分"没窗口"还是"探针没跑"。现在：心跳恒输出，异常带原因输出。
+    @try {
+        NSArray<UIWindow *> *windows = nil;
+        UIApplication *app = [UIApplication sharedApplication];
+        if (app) {
+            NSMutableArray<UIWindow *> *ws = [NSMutableArray array];
+            if (@available(iOS 13.0, *)) {
+                for (UIScene *s in app.connectedScenes) {
+                    if ([s isKindOfClass:[UIWindowScene class]]) {
+                        [ws addObjectsFromArray:((UIWindowScene *)s).windows];
+                    }
+                }
+            } else {
+                [ws addObjectsFromArray:app.windows];
             }
+            windows = ws;
+        } else {
+            windows = @[];
         }
-        windows = ws;
-    } else {
-        windows = [UIApplication sharedApplication].windows;
-    }
-    if (!windows.count) return;
 
-    NSInteger black = 0, walked = 0, logged = 0;
-    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:windows];
-    while (stack.count && walked < 3000) {
-        UIView *vv = stack.lastObject;
-        [stack removeLastObject];
-        if (!vv) continue;
-        walked++;
-        if (ERSrcNearBlackLayer(vv.layer.backgroundColor)) {
-            black++;
-            if (logged < 12) {
-                logged++;
-                ERSrcLog(@"ERSRC-PROBE 黑底层 类=%@ frame=%@ window=%@",
-                         NSStringFromClass(vv.class), NSStringFromCGRect(vv.frame),
-                         NSStringFromClass(vv.window.class));
+        NSInteger black = 0, walked = 0, logged = 0;
+        NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithArray:windows];
+        while (stack.count && walked < 3000) {
+            UIView *vv = stack.lastObject;
+            [stack removeLastObject];
+            if (!vv) continue;
+            walked++;
+            if (ERSrcNearBlackLayer(vv.layer.backgroundColor)) {
+                black++;
+                if (logged < 12) {
+                    logged++;
+                    ERSrcLog(@"ERSRC-PROBE 黑底层 类=%@ frame=%@ window=%@",
+                             NSStringFromClass(vv.class), NSStringFromCGRect(vv.frame),
+                             NSStringFromClass(vv.window.class));
+                }
             }
+            [stack addObjectsFromArray:vv.subviews];
         }
-        [stack addObjectsFromArray:vv.subviews];
+        // 无黑底也要报心跳（哪个进程在岛出现时始终干净，同样是排除证据）
+        if (!app && walked == 0) {
+            ERSrcLog(@"ERSRC-PROBE 无UIApplication 心跳 窗口0");
+        } else {
+            ERSrcLog(@"ERSRC-PROBE 心跳 窗口 %lu 遍历 %ld 黑底 %ld",
+                     (unsigned long)windows.count, (long)walked, (long)black);
+        }
+    } @catch (NSException *e) {
+        // v195 · 异常不再静默：带原因出日志，方便定位探针自身的环境问题
+        ERSrcLog(@"ERSRC-PROBE 异常 %@ 原因=%@", e.name, e.reason ?: @"(空)");
     }
-    // 无黑底也要报心跳（哪个进程在岛出现时始终干净，同样是排除证据）
-    ERSrcLog(@"ERSRC-PROBE 窗口 %lu 遍历 %ld 黑底 %ld", (unsigned long)windows.count, (long)walked, (long)black);
 }
 
 // NSTimer target 用类对象，避免持有实例循环
@@ -209,6 +226,8 @@ static void ERSrcProbe(void) {
 
         // 每 10s 一轮探针；主线程串行，遍历有 3000 节点上限，最坏 ~1ms 量级
         dispatch_async(dispatch_get_main_queue(), ^{
+            // v195 · 计时器落地确认：主 runloop 上是否真的跑起来，一眼可查
+            ERSrcLog(@"ERSRC-TIMER 主队列块已执行，计时器启动");
             [NSTimer scheduledTimerWithTimeInterval:10.0
                                              target:[ERSrcProbeTarget class]
                                            selector:@selector(tick)
