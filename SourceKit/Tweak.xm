@@ -267,7 +267,9 @@ static BOOL ERSrcShouldLog(NSString *key) {
     %orig;
     @try {
         if (!contents) return;
-        if (CFGetTypeRef((__bridge CFTypeRef)contents) != CGImageGetTypeID()) return;
+        // v196b · CFGetTypeRef 在 Theos 16.5 SDK 的模块展开下不可见（CI 两次
+        // 实锤），改用 runtime 类名判断 —— CGImage 的 ObjC 类名就是 "CGImage"
+        if (strcmp(object_getClassName(contents), "CGImage") != 0) return;
         CGRect b = self.bounds;
         if (b.size.width < 50.0 || b.size.height < 20.0) return;
         CGImageRef img = (__bridge CGImageRef)contents;
