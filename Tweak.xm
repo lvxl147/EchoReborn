@@ -617,113 +617,6 @@ static BOOL ERGlassSwitchEnabled(NSString *key) {
 - (void)_setContinuousCornerRadius:(double)radius;
 @end
 
-#pragma mark - ① 锁屏快捷按钮（手电筒 / 相机）
-
-static void *kQAGlassKey = &kQAGlassKey;
-static void *kQABackdropKey = &kQABackdropKey;
-static void *kQABackdropAlphaKey = &kQABackdropAlphaKey;
-static NSHashTable<UIVisualEffectView *> *sQuickActionHosts;
-static void removeQuickActionsGlass(UIVisualEffectView *fx);
-
-static UIView *qaBackdropView(UIView *effectView) {
-    for (UIView *sub in effectView.subviews) {
-        if ([sub isKindOfClass:[LGLiveBackdropView class]]) continue;
-        if ([NSStringFromClass(sub.class) containsString:@"Backdrop"]) return sub;
-        for (UIView *inner in sub.subviews) {
-            if ([inner isKindOfClass:[LGLiveBackdropView class]]) continue;
-            if ([NSStringFromClass(inner.class) containsString:@"Backdrop"]) return inner;
-        }
-    }
-    return nil;
-}
-
-static void qaSetBackdropHidden(UIVisualEffectView *effectView) {
-    // 1.0.9-53 · **不再把原生 backdrop 的 alpha 置 0**。
-    //
-    // 你的反馈：装完后「锁屏按钮透明」（= 按钮看不见）。原因就是这里：上游把系统材质
-    // 隐藏掉，让玻璃层取而代之 —— 但如果玻璃渲染没有生效（需要主开关 + 注销），
-    // 玻璃层就是空的，净效果变成"完全透明"。
-    //
-    // 现在改为**保留系统材质**，玻璃层叠在它上面：
-    //   · 玻璃生效 → 呈现玻璃效果（覆盖系统材质）
-    //   · 玻璃未生效 → 至少还是原来的样子，不会变成一片透明
-    // 只记录原始 alpha（供将来需要恢复隐藏行为时使用），不做修改。
-    UIView *backdrop = qaBackdropView(effectView);
-    if (!backdrop) return;
-    if (!objc_getAssociatedObject(effectView, kQABackdropAlphaKey)) {
-        objc_setAssociatedObject(effectView, kQABackdropKey, backdrop, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(effectView, kQABackdropAlphaKey, @(backdrop.alpha), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    // 刻意不修改 backdrop.alpha
-}
-
-static BOOL isQuickActionsHost(UIView *view) {
-    if (![view isKindOfClass:[UIVisualEffectView class]] || !view.window) return NO;
-    if (view.window.safeAreaInsets.bottom <= 0.0) return NO;
-    Class qaCls = NSClassFromString(@"CSQuickActionsButton");
-    for (UIView *a = view.superview; a; a = a.superview) {
-        if (qaCls && [a isKindOfClass:qaCls]) return YES;
-        if ([a isKindOfClass:[UIVisualEffectView class]]) return NO;
-    }
-    return NO;
-}
-
-static void injectQuickActionsGlass(UIVisualEffectView *fx) {
-    if (!ERGlassSwitchEnabled(@"QuickActions.Enabled")) {
-        removeQuickActionsGlass(fx);
-        return;
-    }
-    UIView *container = fx.contentView;
-    if (CGRectGetWidth(container.bounds) < 4.0 || CGRectGetHeight(container.bounds) < 4.0) return;
-    qaSetBackdropHidden(fx);
-    if (@available(iOS 13.0, *)) {
-        fx.overrideUserInterfaceStyle        = UIUserInterfaceStyleLight;
-        container.overrideUserInterfaceStyle = UIUserInterfaceStyleLight;
-    }
-    LGLiveBackdropView *glass = objc_getAssociatedObject(fx, kQAGlassKey);
-    if (!glass) {
-        glass = LGCreateRegisteredGlass(container.bounds, nil, @"QuickActions");
-        if (!glass) return;
-        glass.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-        [container insertSubview:glass atIndex:0];
-        objc_setAssociatedObject(fx, kQAGlassKey, glass, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    if (glass.superview != container) [container insertSubview:glass atIndex:0];
-    glass.frame               = container.bounds;
-    glass.layer.cornerRadius  = fmin(CGRectGetWidth(container.bounds), CGRectGetHeight(container.bounds)) * 0.5;
-    glass.layer.cornerCurve   = kCACornerCurveContinuous;
-    glass.layer.masksToBounds = YES;
-    [glass applyFilters];
-    if (!sQuickActionHosts) sQuickActionHosts = [NSHashTable weakObjectsHashTable];
-    [sQuickActionHosts addObject:fx];
-    lgTrackGlass(glass, @"QuickActions", nil);
-}
-
-static void removeQuickActionsGlass(UIVisualEffectView *fx) {
-    LGLiveBackdropView *glass = objc_getAssociatedObject(fx, kQAGlassKey);
-    if (@available(iOS 13.0, *)) {
-        fx.overrideUserInterfaceStyle             = UIUserInterfaceStyleUnspecified;
-        fx.contentView.overrideUserInterfaceStyle = UIUserInterfaceStyleUnspecified;
-    }
-    UIView *backdrop = objc_getAssociatedObject(fx, kQABackdropKey);
-    NSNumber *alpha = objc_getAssociatedObject(fx, kQABackdropAlphaKey);
-    if (backdrop && alpha) backdrop.alpha = alpha.doubleValue;
-    objc_setAssociatedObject(fx, kQABackdropKey, nil, OBJC_ASSOCIATION_ASSIGN);
-    objc_setAssociatedObject(fx, kQABackdropAlphaKey, nil, OBJC_ASSOCIATION_ASSIGN);
-    if (glass) {
-        [glass removeFromSuperview];
-        objc_setAssociatedObject(fx, kQAGlassKey, nil, OBJC_ASSOCIATION_ASSIGN);
-    }
-    [sQuickActionHosts removeObject:fx];
-}
-
-static void LGReconcileQuickActionHosts(void) {
-    for (UIVisualEffectView *host in sQuickActionHosts.allObjects) {
-        if (ERGlassSwitchEnabled(@"QuickActions.Enabled")) injectQuickActionsGlass(host);
-        else removeQuickActionsGlass(host);
-    }
-}
-
 
 #pragma mark - ③ 灵动岛（Liquidify 复刻）—— 目标类取自上游字符串表
 
@@ -731,18 +624,6 @@ static void LGReconcileQuickActionHosts(void) {
 @interface SBSystemApertureWindow : UIWindow
 @end
 
-// 读字符串偏好（Liquidify 渐变色等；域与 GlassKit 一致）
-static NSString *ERPreferenceStringFor(NSString *key) {
-    if (!key.length) return nil;
-    CFPropertyListRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
-                                                    CFSTR("com.strive.echoreborn.preferences"));
-    NSString *out = nil;
-    if (v) {
-        if (CFGetTypeID(v) == CFStringGetTypeID()) out = [(__bridge NSString *)v copy];
-        CFRelease(v);
-    }
-    return out;
-}
 
 // 1.0.9-160 · 数字偏好读取（兼容 number/string 两种存法；PSSliderCell 写 number）
 static CGFloat ERPreferenceFloatFor(NSString *key, CGFloat fallback) {
@@ -761,8 +642,6 @@ static CGFloat ERPreferenceFloatFor(NSString *key, CGFloat fallback) {
 // 上游特征：SBSystemApertureWindow 是灵动岛所在窗口；_SBUISystemApertureCAPackageView
 // 是主视图。我们对**窗口**做 layoutSubviews 钩子，在其子树里找"最外层的圆角容器"加玻璃，
 // 这样不依赖具体子类在 iOS 17 是否还在（窗口类稳定得多）。
-// 渐变：按上游的 5 色渐变（LiquidifyApertureGradientColor1..5）做一层 CAGradientLayer 叠加；
-//       字体颜色模式 native/gradient/solid 影响文字层（后续批），本批先做玻璃+渐变+隐藏。
 
 static void *kERDIGlassKey = &kERDIGlassKey;
 static void *kERDIGradientKey = &kERDIGradientKey;
@@ -869,45 +748,6 @@ static BOOL ERDIisIdle(UIWindow *win) {
     return NO; // 控制器不可用 → 保守：视为使用中，绝不误隐藏
 }
 
-static NSArray<UIColor *> *ERDIGradientColors(void) {
-    NSMutableArray<UIColor *> *colors = [NSMutableArray array];
-    for (NSUInteger i = 1; i <= 5; i++) {
-        NSString *hex = ERPreferenceStringFor([NSString stringWithFormat:@"LiquidifyApertureGradientColor%lu", (unsigned long)i]);
-        if (!hex.length) continue;
-        NSString *h = [hex stringByReplacingOccurrencesOfString:@"#" withString:@""];
-        if (h.length != 6) continue;
-        unsigned v = 0;
-        [[NSScanner scannerWithString:h] scanHexInt:&v];
-        [colors addObject:[UIColor colorWithRed:((v >> 16) & 0xFF) / 255.0
-                                          green:((v >> 8) & 0xFF) / 255.0
-                                           blue:(v & 0xFF) / 255.0
-                                          alpha:1.0]];
-    }
-    return colors;
-}
-
-// 1.0.9-112 · UIColor 数组 -> CGColor 数组。
-//   之前用 [colors valueForKey:@"CGColor"]，但本机 UIColor 的 CGColor 方法
-//   **不参与 KVC** → 抛 NSUnknownKeyException → 渐变从未被赋色（层全透明）。
-//   这就是「装了很多版都完全没效果」的真正根因之一。
-// 1.0.9-116 · 在渐变色列上按 t∈[0,1] 取色（线性插值）—— 给「文字渐变」用
-static UIColor *ERColorAtStop(NSArray<UIColor *> *cols, CGFloat t) {
-    if (!cols.count) return [UIColor whiteColor];
-    if (cols.count == 1) return cols.firstObject;
-    if (t <= 0) return cols.firstObject;
-    if (t >= 1) return cols.lastObject;
-    CGFloat seg = 1.0 / (CGFloat)(cols.count - 1);
-    NSUInteger i = (NSUInteger)(t / seg);
-    if (i >= cols.count - 1) return cols.lastObject;
-    CGFloat f = (t - (CGFloat)i * seg) / seg;
-    CGFloat r0 = 0, g0 = 0, b0 = 0, a0 = 0, r1 = 0, g1 = 0, b1 = 0, a1 = 0;
-    [cols[i] getRed:&r0 green:&g0 blue:&b0 alpha:&a0];
-    [cols[i + 1] getRed:&r1 green:&g1 blue:&b1 alpha:&a1];
-    return [UIColor colorWithRed:(r0 + (r1 - r0) * f)
-                           green:(g0 + (g1 - g0) * f)
-                            blue:(b0 + (b1 - b0) * f)
-                           alpha:(a0 + (a1 - a0) * f)];
-}
 
 static NSArray *ERCGColorArray(NSArray<UIColor *> *colors) {
     NSMutableArray *out_ = [NSMutableArray arrayWithCapacity:colors.count];
@@ -1290,20 +1130,6 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     }
 
     // 1.0.9-116 · **观感重做**（照参考插件的真实语义）：
-    //   · LiquidifyApertureGradientColor1..5 / TextColorMode = **灵动岛文字**的渐变色
-    //     （Liquidify.dylib 字符串表实证：setTextColor: + LiquidifyApertureTextColorMode）
-    //   · 背景 = 岛本身变成「深色玻璃」：近黑渐变 + 顶部高光 + 发丝描边；
-    //     不再叠彩色胶囊（用户反馈"好像一个胶囊放在上面"就是这个错）。
-    //   · 展开态：沿父链找胶囊形祖先，玻璃盖满整条岛。
-    NSArray<UIColor *> *cols = ERDIGradientColors();
-    if (cols.count < 2) {
-        cols = @[[UIColor colorWithRed:0.40 green:0.78 blue:1.00 alpha:1.0],
-                 [UIColor colorWithRed:0.65 green:0.60 blue:1.00 alpha:1.0],
-                 [UIColor colorWithRed:1.00 green:0.55 blue:0.85 alpha:1.0],
-                 [UIColor colorWithRed:1.00 green:0.85 blue:0.60 alpha:1.0],
-                 [UIColor colorWithRed:0.55 green:1.00 blue:0.85 alpha:1.0]];
-    }
-
     // ---- 1.0.9-121 · **展开态正解**：宿主改用 `SBSystemApertureContainerView` ----
     //   设备实拍（用户反馈"上面有一个单独的灵动岛"）：展开时 curtain/gainmap 仍停在
     //   空闲位置 125×36.67 —— 我们的玻璃铺在 gainmap 上，就成了浮在展开岛上方的小胶囊。
@@ -1498,39 +1324,6 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   空闲（容器与 gainmap 同尺寸）→ 显示 gainmap 那块（它压在 curtain 黑底之上，已实测可见）
     //   展开（容器明显更宽）        → 只显示 ContainerView 那块，收掉 gainmap 上的"多余胶囊"
     // （1.0.9-134 · 非）当前宿主的玻璃清理已上移到扫描器：容器一离开岛位置就全部隐藏）
-
-    // 1.0.9-142 · **渐变阴影**（完全对标 Liquidify GlowEnabled）：
-    //   玻璃之下垫 5 色渐变发光层（双层：内圈贴边 + 外圈扩散），颜色 = GradientColor1..5。
-    //   阴影团从岛边缘向外柔化扩散 —— Liquidify 用独立 shadowView + 高斯模糊实现，
-    //   我们用双层渐变模拟（公开 API）。
-    if (ERGlassSwitchEnabled(@"LiquidifyApertureGlowEnabled")) {
-        CAGradientLayer *glowIn = nil, *glowOut = nil;
-        for (CALayer *l in cl.sublayers) {
-            if ([l.name isEqualToString:@"ERDI::glowIn"]) glowIn = (CAGradientLayer *)l;
-            else if ([l.name isEqualToString:@"ERDI::glowOut"]) glowOut = (CAGradientLayer *)l;
-        }
-        if (!glowIn) {
-            glowIn = [CAGradientLayer layer]; glowIn.name = @"ERDI::glowIn";
-            glowIn.startPoint = CGPointMake(0.0, 0.0); glowIn.endPoint = CGPointMake(1.0, 1.0);
-            [cl insertSublayer:glowIn atIndex:0];   // 置底（磨砂之下）
-        }
-        if (!glowOut) {
-            glowOut = [CAGradientLayer layer]; glowOut.name = @"ERDI::glowOut";
-            glowOut.startPoint = CGPointMake(0.0, 0.0); glowOut.endPoint = CGPointMake(1.0, 1.0);
-            [cl insertSublayer:glowOut atIndex:0];
-        }
-        CGRect gIn = CGRectInset(gb, -4, -4);
-        CGRect gOut = CGRectInset(gb, -14, -14);
-        glowIn.frame = gIn;  glowIn.cornerRadius = CGRectGetHeight(gIn) * 0.5;
-        glowIn.colors = (id)ERCGColorArray(cols);  glowIn.opacity = 0.50;  glowIn.hidden = NO;
-        glowOut.frame = gOut; glowOut.cornerRadius = CGRectGetHeight(gOut) * 0.5;
-        glowOut.colors = (id)ERCGColorArray(cols); glowOut.opacity = 0.22;  glowOut.hidden = NO;
-    } else {
-        for (CALayer *l in cl.sublayers) {
-            if ([l.name isEqualToString:@"ERDI::glowIn"] || [l.name isEqualToString:@"ERDI::glowOut"])
-                l.hidden = YES;
-        }
-    }
 
     static CFTimeInterval lastG116 = 0.0;
     CFTimeInterval nowG116 = CACurrentMediaTime();
@@ -2891,40 +2684,6 @@ static void ERProbeDynamicIslandOnce(void) {
 // ===========================================================================
 
 
-
-%hook UIVisualEffectView
-- (void)didMoveToWindow {
-    %orig;
-    UIView *self_ = (UIView *)self;
-    if (!self_.window) { removeQuickActionsGlass((UIVisualEffectView *)self_); return; }
-    if (isQuickActionsHost(self_)) {
-        static CFTimeInterval lastQA = 0.0;
-        CFTimeInterval now = CACurrentMediaTime();
-        if (now - lastQA > 2.0) {
-            lastQA = now;
-            ERLogInfo(@"LIQUIDASS-HIT 快捷按钮宿主命中 parent=%@", NSStringFromClass(self_.superview.class));
-        }
-        injectQuickActionsGlass((UIVisualEffectView *)self_);
-    }
-}
-- (void)layoutSubviews {
-    %orig;
-    UIView *self_ = (UIView *)self;
-    if (isQuickActionsHost(self_)) {
-        static CFTimeInterval lastQAL = 0.0;
-        CFTimeInterval nowL = CACurrentMediaTime();
-        if (nowL - lastQAL > 2.0) {
-            lastQAL = nowL;
-            ERLogInfo(@"LIQUIDASS-HIT 快捷按钮宿主命中(layout) parent=%@", NSStringFromClass(self_.superview.class));
-        }
-        injectQuickActionsGlass((UIVisualEffectView *)self_);
-    }
-}
-%end
-
-#pragma mark - ①-b 锁屏操作按钮横向缩进（1.0.9-166）
-
-//   锁屏快捷按钮 = CSQuickActionsButton（UIControl，SpringBoard 私有类），左右各一
 //   （手电筒/相机）。Soko「锁屏控制项」子页"操作按钮"卡片：开关（soko_quickActionsEnabled，
 //   与通知卡片同构）+ 横向缩进滑块（soko_quickActionsIndent，-60~60）。
 //   1.0.9-167 修复"滑块没效果"：transform 只在 layoutSubviews 里贴，滑块拖完不会触发
