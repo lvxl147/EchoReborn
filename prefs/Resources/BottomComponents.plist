@@ -45,6 +45,10 @@
 			<false/>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
+			<key>erIcon</key>
+			<string>arrow.left.arrow.right</string>
+			<key>erIconColor</key>
+			<string>teal</string>
 			<key>key</key>
 			<string>MusicCapsule.SwipeEnabled</string>
 			<key>label</key>

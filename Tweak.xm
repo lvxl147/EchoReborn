@@ -28244,9 +28244,13 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
 }
 
 // 胶囊空白处不拦截触摸，透传给下层锁屏
+// 1.1.8-2 · 滑动切歌开启时改为胶囊自身接收触摸 —— 否则手势收不到触摸（1.1.8-1 手势无反应根因）
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *view = [super hitTest:point withEvent:event];
-    if (view == self) { return nil; }
+    if (view == self) {
+        if (self.swipeEnabled) return self;   // 供滑动手势识别
+        return nil;
+    }
     return view;
 }
 
@@ -28722,6 +28726,18 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
         ERMusic_MRGetNowPlayingInfo(dispatch_get_main_queue(), ^(NSDictionary *info) {
             dispatch_async(dispatch_get_main_queue(), ^{ apply(info); });
         });
+        // 1.1.8-2 · 切歌后系统重建媒体卡（新 cell hidden=NO）→ 延时两次再断言隐藏
+        __block typeof(self) blockSelf = self;
+        void (^rehide)(void) = ^{
+            @try {
+                UIView *root = blockSelf.coverSheetController.view;
+                if (root) [blockSelf applySystemNowPlayingHiddenInRoot:root];
+            } @catch (__unused NSException *e) {}
+        };
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), rehide);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), rehide);
         return;
     }
 
