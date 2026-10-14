@@ -28251,13 +28251,18 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
 - (void)erMusicApplyBackgroundStyle {
     if (self.liquidGlassEnabled) {
         if (!self.glassView) {
-            LGLiveBackdropView *g = LGCreateRegisteredGlass(CGRectZero, nil, @"MusicCapsule");
+            LGLiveBackdropView *g = LGCreateRegisteredGlass(self.clipView.bounds, nil, @"MusicCapsule");
             if (!g) return;
             g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             g.userInteractionEnabled = NO;
+            g.layer.cornerRadius = self.clipView.layer.cornerRadius;
+            if (@available(iOS 13.0, *)) g.layer.cornerCurve = self.clipView.layer.cornerCurve;
+            g.layer.masksToBounds = YES;
             [self.clipView insertSubview:g atIndex:0];
             self.glassView = g;
-            lgTrackGlass(g, @"MusicCapsule", nil);
+            // 1.1.8-4 · 材质视图必须传（VolumeHUD 同款）；传 nil 玻璃不渲染
+            lgTrackGlass(g, @"MusicCapsule", self);
+            ERLogInfo(@"MUSICCAPSULE 玻璃视图已创建");
         }
         self.glassView.frame = self.clipView.bounds;
         self.glassView.hidden = NO;
