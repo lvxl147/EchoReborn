@@ -49,19 +49,42 @@ static void ERWFKitProbeOnce(void) {
         void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
         ERShortcutLog(@"WFPROBE dlopen=%d", handle ? 1 : 0);
         if (!handle) return;
-        Class dbClass = NSClassFromString(@"WFDatabase");
-        ERShortcutLog(@"WFPROBE WFDatabase=%d", dbClass ? 1 : 0);
-        if (!dbClass) return;
-        id db = nil;
-        if ([dbClass respondsToSelector:@selector(sharedDatabase)]) {
-            db = ((id (*)(id, SEL))objc_msgSend)(dbClass, @selector(sharedDatabase));
-            ERShortcutLog(@"WFPROBE sharedDatabase=%@ (%@)", db ? @"有" : @"nil", NSStringFromClass([db class]));
-        } else {
-            ERShortcutLog(@"WFPROBE 无 sharedDatabase 类方法");
+        // 1.1.8-9 · 深挖：列出 WFDatabase / WFClient 的类方法与实例方法
+        for (NSString *cn in @[@"WFDatabase", @"WFClient"]) {
+            Class c = NSClassFromString(cn);
+            if (!c) { ERShortcutLog(@"WFPROBE %@ 不存在", cn); continue; }
+            Class meta = object_getClass(c);
+            // 类方法
+            unsigned int cmCnt = 0;
+            Method *cmLst = class_copyMethodList(meta, &cmCnt);
+            NSMutableArray<NSString *> *cmNames = [NSMutableArray array];
+            for (unsigned int i2 = 0; i2 < cmCnt; i2++) {
+                NSString *sn = NSStringFromSelector(method_getName(cmLst[i2]));
+                [cmNames addObject:sn];
+            }
+            if (cmLst) free(cmLst);
+            ERShortcutLog(@"WFPROBE %@ 类方法(%lu)=%@", cn, (unsigned long)cmCnt, cmNames);
+            // 实例方法
+            unsigned int mCnt = 0;
+            Method *mLst = class_copyMethodList(c, &mCnt);
+            NSMutableArray<NSString *> *mNames = [NSMutableArray array];
+            for (unsigned int i2 = 0; i2 < mCnt; i2++) {
+                NSString *sn = NSStringFromSelector(method_getName(mLst[i2]));
+                if (mNames.count < 60) [mNames addObject:sn];
+            }
+            if (mLst) free(mLst);
+            ERShortcutLog(@"WFPROBE %@ 实例方法(%lu)前60=%@", cn, (unsigned long)mCnt, mNames);
         }
+        // 尝试 WFDatabase alloc+init 实例，再试 sortedVisibleWorkflowsByName
+        Class dbClass = NSClassFromString(@"WFDatabase");
+        if (!dbClass) return;
+        id db = ((id (*)(id, SEL))objc_msgSend)(dbClass, @selector(alloc));
+        db = ((id (*)(id, SEL))objc_msgSend)(db, @selector(init));
+        ERShortcutLog(@"WFPROBE alloc+init db=%@ (%@)", db ?: @"nil", db ? NSStringFromClass([db class]) : @"-");
+        if (!db) return;
         SEL sortSel = NSSelectorFromString(@"sortedVisibleWorkflowsByName");
-        if (!db || ![db respondsToSelector:sortSel]) {
-            ERShortcutLog(@"WFPROBE sortedVisibleWorkflowsByName 不可用");
+        if (![db respondsToSelector:sortSel]) {
+            ERShortcutLog(@"WFPROBE 实例上 sortedVisibleWorkflowsByName 仍不可用");
             return;
         }
         @try {
@@ -72,22 +95,23 @@ static void ERWFKitProbeOnce(void) {
             unsigned int pCnt = 0;
             objc_property_t *props = class_copyPropertyList(object_getClass(wf), &pCnt);
             NSMutableArray<NSString *> *names = [NSMutableArray array];
-            for (unsigned int i = 0; i < pCnt; i++) {
-                [names addObject:[NSString stringWithFormat:@"%s (%s)",
-                                  property_getName(props[i]),
-                                  property_getAttributes(props[i])]];
+            for (unsigned int i2 = 0; i2 < pCnt; i2++) {
+                [names addObject:[NSString stringWithFormat:@"%s(%s)",
+                                  property_getName(props[i2]),
+                                  property_getAttributes(props[i2])]];
             }
             free(props);
             ERShortcutLog(@"WFPROBE 首对象 %@ 属性(%lu)=%@",
                           NSStringFromClass([wf class]), (unsigned long)pCnt, names);
-            // 常见图标相关选择器响应探测
             for (NSString *selName in @[@"icon", @"iconImage", @"image", @"shortcutIcon",
-                                        @"iconImageData", @"glyph", @"color", @"workflowIcon"]) {
+                                        @"iconImageData", @"glyph", @"color", @"workflowIcon",
+                                        @"iconType"]) {
                 SEL s = NSSelectorFromString(selName);
                 if ([wf respondsToSelector:s]) {
                     @try {
                         id v = ((id (*)(id, SEL))objc_msgSend)(wf, s);
-                        ERShortcutLog(@"WFPROBE %@ → %@ (%@)", selName, v ?: @"nil", NSStringFromClass([v class]) ?: @"-");
+                        ERShortcutLog(@"WFPROBE %@ → %@ (%@)", selName, v ?: @"nil",
+                                      v ? NSStringFromClass([v class]) : @"-");
                     } @catch (__unused NSException *e) {
                         ERShortcutLog(@"WFPROBE %@ 调用异常", selName);
                     }
@@ -98,7 +122,6 @@ static void ERWFKitProbeOnce(void) {
         }
     });
 }
-
 static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     UIColor *background = ERShortcutCellColorFromValue([shortcut[@"color"] longLongValue]);
