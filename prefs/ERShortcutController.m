@@ -27,8 +27,12 @@ static NSInteger const kERSectionVisible = 0;
 // ERShortcutSymbolNameForGlyph 完全一致（后者来自 WorkflowKit 的私有函数，
 // 用 dlopen 取；Settings 进程同样能加载）。
 static UIColor *ERShortcutCellColorFromValue(long long value) {
-    if (value <= 0 || value > 0xFFFFFFFFLL) return nil;
-    uint32_t rgba = (uint32_t)value;
+    // 1.1.8-9 · 数据库里颜色是 0xRRGGBBAA 的无符号 32 位，高位会被读成负数
+    // （例如 0xA9A9A9FF = -1448498689）。旧判断 value <= 0 把这些行判成「无颜色」，
+    // 于是一律退回默认蓝 —— 用户截图里「车门解锁/开灯」显示蓝色就是这个原因。
+    if (value == 0) return nil;
+    uint32_t rgba = (uint32_t)((unsigned long long)value & 0xFFFFFFFFULL);
+    if (rgba == 0) return nil;
     CGFloat red = ((rgba >> 24) & 0xFF) / 255.0;
     CGFloat green = ((rgba >> 16) & 0xFF) / 255.0;
     CGFloat blue = ((rgba >> 8) & 0xFF) / 255.0;
