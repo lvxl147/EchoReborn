@@ -1,6 +1,7 @@
 #import "ERModuleSettingsController.h"
 #import "ERUIHelpers.h"
 #import "ERUtilitySwitchCell.h"
+#import "ERModuleIconSwitchCell.h"
 #import <Preferences/PSSpecifier.h>
 #import <objc/message.h>
 
@@ -221,6 +222,11 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
         [spec setProperty:symbol forKey:@"erIcon"];
         [spec setProperty:(module[@"color"] ?: @"gray") forKey:@"erIconColor"];
     }
+    // 1.1.8-7 · 每行改用 ERModuleIconSwitchCell：图标左 + 开关右（原生 PSSwitchCell
+    //   在 iOS 17.2 不渲染 iconImage —— 模块管理图标消失的根因）。注册失败时按名字
+    //   解析不到，框架落回 PSSwitchCell 原生布局，功能不受影响。
+    Class iconCellClass = NSClassFromString(ERModuleIconSwitchCellClassName);
+    if (iconCellClass) [spec setProperty:iconCellClass forKey:@"cellClass"];
     return spec;
 }
 

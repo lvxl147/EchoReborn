@@ -50,6 +50,23 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
         NSString *symbolName = mapper ? mapper((unsigned short)[shortcut[@"glyph"] unsignedShortValue]) : nil;
         if (!symbolName.length) symbolName = @"sparkles";
         glyph = [UIImage systemImageNamed:symbolName];
+        // 1.1.8-7 · 映射出的 SF 名在本机不存在时（新系统符号/未知字符）→ 兜底 sparkles，
+        //   此前这里会留白（素色方块）。再不行最后用 glyph 字符本身画一个文本字形。
+        if (!glyph) {
+            unsigned short ch = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
+            if (ch >= 0x20 && ch != 0xFFFD) {
+                UIGraphicsImageRenderer *textRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(28.0, 28.0)];
+                glyph = [textRenderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+                    NSString *chStr = [NSString stringWithFormat:@"%C", (unichar)ch];
+                    NSDictionary *attrs = @{NSFontAttributeName: [UIFont systemFontOfSize:20.0 weight:UIFontWeightMedium],
+                                            NSForegroundColorAttributeName: [UIColor whiteColor]};
+                    CGSize ts = [chStr sizeWithAttributes:attrs];
+                    [chStr drawAtPoint:CGPointMake((28.0 - ts.width) * 0.5, (28.0 - ts.height) * 0.5)
+                        withAttributes:attrs];
+                }];
+            }
+            if (!glyph) glyph = [UIImage systemImageNamed:@"sparkles"];
+        }
     }
     CGSize size = CGSizeMake(40.0, 40.0);
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
