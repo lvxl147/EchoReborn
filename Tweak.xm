@@ -27922,6 +27922,7 @@ static NSString *const kERMusicCapsuleOffsetKey  = @"MusicCapsule.OffsetY";
 static NSString *const kERMusicCapsuleHeightKey  = @"MusicCapsule.Height";
 static NSString *const kERMusicCapsuleHideSystemKey = @"MusicCapsule.HideSystemNowPlaying";
 static NSString *const kERMusicCapsuleSwipeKey     = @"MusicCapsule.SwipeEnabled";   // 1.1.8-1
+static NSString *const kERMusicCapsuleGlassKey     = @"MusicCapsule.LiquidGlassEnabled"; // 1.1.8-3
 
 #pragma mark - 音乐胶囊 · MediaRemote（运行时解析）
 
@@ -27976,6 +27977,8 @@ static void ERMusicResolveMediaRemote(void) {
 @property (nonatomic, assign) BOOL               swipeEnabled;          // 1.1.8-1
 @property (nonatomic, strong) UISwipeGestureRecognizer *swipeLeftGesture;
 @property (nonatomic, strong) UISwipeGestureRecognizer *swipeRightGesture;
+@property (nonatomic, assign) BOOL               liquidGlassEnabled;    // 1.1.8-3
+@property (nonatomic, strong) LGLiveBackdropView *glassView;
 @property (nonatomic, assign) CGFloat            capsuleHeight;
 - (void)setTitleText:(NSString *)title
           artistText:(NSString *)artist
@@ -28044,7 +28047,8 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     [self addSubview:clip];
     self.clipView = clip;
 
-    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    // 1.1.8-3 · 去浅色态：固定深色材质（原 Regular 随系统深浅自动切换）
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
     UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:effect];
     blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     blur.frame = clip.bounds;
@@ -28243,7 +28247,34 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     [generator impactOccurred];
 }
 
+// 1.1.8-3 · 背景样式应用：液态玻璃（控制中心同款 LGLiveBackdropView）⇄ 深色原始态
+- (void)erMusicApplyBackgroundStyle {
+    if (self.liquidGlassEnabled) {
+        if (!self.glassView) {
+            LGLiveBackdropView *g = LGCreateRegisteredGlass(CGRectZero, nil, @"MusicCapsule");
+            if (!g) return;
+            g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            g.userInteractionEnabled = NO;
+            [self.clipView insertSubview:g atIndex:0];
+            self.glassView = g;
+            lgTrackGlass(g, @"MusicCapsule", nil);
+        }
+        self.glassView.frame = self.clipView.bounds;
+        self.glassView.hidden = NO;
+        [self.glassView applyFilters];
+        self.blurView.hidden = YES;
+        self.tintView.hidden = YES;
+        ERLogInfo(@"MUSICCAPSULE 背景已切液态玻璃");
+    } else {
+        self.glassView.hidden = YES;
+        self.blurView.hidden = NO;
+        self.tintView.hidden = NO;
+    }
+}
+
 // 胶囊空白处不拦截触摸，透传给下层锁屏
+// 胶囊空白处不拦截触摸，透传给下层锁屏
+
 // 1.1.8-2 · 滑动切歌开启时改为胶囊自身接收触摸 —— 否则手势收不到触摸（1.1.8-1 手势无反应根因）
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *view = [super hitTest:point withEvent:event];
@@ -28336,6 +28367,10 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     self.capsule.swipeEnabled = swipeOn;
     self.capsule.swipeLeftGesture.enabled  = swipeOn;
     self.capsule.swipeRightGesture.enabled = swipeOn;
+    // 1.1.8-3 · 液态玻璃背景开关
+    BOOL glassOn = ERPreferenceBool(kERMusicCapsuleGlassKey, NO);
+    self.capsule.liquidGlassEnabled = glassOn;
+    [self.capsule erMusicApplyBackgroundStyle];
     _prefsLoadedAt = CACurrentMediaTime();
 }
 

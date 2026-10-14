@@ -15,3 +15,4 @@
 | 105 | 1.1.7-7 | 隐藏锁屏音乐正式修复（iOS 17.2 实锤规则）：系统音乐卡 = NCNotificationListView 内顶部 Live Activity 卡（402×167@y571），识别特征 CSActivityItemContentView（宽>380/高120-220）+ 子树含 _UIScenePresentationView → 隐藏其所在 NCNotificationListCell，开关关闭自动恢复。版本 1.1.7-7/1001055。 |
 | 106 | 1.1.8-1 | 音乐胶囊左/右滑动切歌：开关 MusicCapsule.SwipeEnabled（底部组件页音乐胶囊卡片内、启用下方，默认关）；胶囊视图挂左/右滑动手势（默认禁用，开关控制启停），手势触发 MRMediaRemoteSendCommand NextTrack=4/PreviousTrack=5（与播放暂停同通道，SBMediaController 兜底）；手势只在胶囊视图上（hitTest 天然限制范围）。版本 1.1.8-1/1001056。 |
 | 107 | 1.1.8-2 | 三修：① 手势无反应根因 = 胶囊 hitTest 对空白处返回 nil 透传，swipeEnabled 时改返回胶囊自身（触摸可达手势）；② 隐藏失效根因 = 切歌后系统重建媒体卡（新 cell 可见），refresh 收到 MR 变更后 0.6s/1.6s 两次再断言隐藏；③ 滑动开关行加 SF Symbol 图标 arrow.left.arrow.right。版本 1.1.8-2/1001057。 |
+| 108 | 1.1.8-3 | 音乐胶囊液态玻璃背景：液态玻璃页新增“底部控件”开关（MusicCapsule.LiquidGlassEnabled 默认关）；开 = 胶囊背景 LGLiveBackdropView（控制中心同款渲染，lgTrackGlass 注册）；关 = 深色原始态；去浅色：UIBlurEffectStyle Regular→SystemUltraThinMaterialDark 固定深色。版本 1.1.8-3/1001058。 |
