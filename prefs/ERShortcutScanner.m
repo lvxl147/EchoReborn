@@ -137,6 +137,67 @@ static ER_sqlite3 *EROpenStoreCopy(NSString *path) {
     return db;
 }
 
+// 1.1.8-8 · 诊断：把 ZSHORTCUTICON 的真实列结构写进日志。1.1.8-7 的现象是
+// 「glyph = 0xF000 的行只有素色方块」，怀疑这些行的图标其实存在 ZSYMBOLNAME
+// / ZEMOJI 一类的列里（iOS 17 的图标选择器改成「符号名 + 颜色」为主）。
+static void ERDumpIconSchema(ER_sqlite3 *database) {
+    if (!database) return;
+    ER_sqlite3_stmt *stmt = NULL;
+    NSMutableArray<NSString *> *tables = [NSMutableArray array];
+    if (ERPrepareV2(database, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%ICON%'",
+                    -1, &stmt, NULL) == 0 && stmt) {
+        while (ERStep(stmt) == 100) {
+            const unsigned char *t = ERColumnText(stmt, 0);
+            if (t) [tables addObject:[NSString stringWithUTF8String:(const char *)t]];
+        }
+        ERFinalize(stmt);
+    }
+    ERShortcutLog(@"schema: ICON tables=%@", tables);
+
+    stmt = NULL;
+    if (ERPrepareV2(database, "PRAGMA table_info(ZSHORTCUTICON)", -1, &stmt, NULL) == 0 && stmt) {
+        NSMutableArray<NSString *> *cols = [NSMutableArray array];
+        while (ERStep(stmt) == 100) {
+            const unsigned char *n = ERColumnText(stmt, 1);
+            const unsigned char *ty = ERColumnText(stmt, 2);
+            if (n) {
+                [cols addObject:[NSString stringWithFormat:@"%s:%s",
+                                 (const char *)n, ty ? (const char *)ty : "?"]];
+            }
+        }
+        ERFinalize(stmt);
+        ERShortcutLog(@"schema: ZSHORTCUTICON 列=%@", cols);
+    }
+
+    stmt = NULL;
+    if (ERPrepareV2(database, "SELECT * FROM ZSHORTCUTICON LIMIT 3", -1, &stmt, NULL) == 0 && stmt) {
+        int row = 0;
+        while (ERStep(stmt) == 100 && row < 3) {
+            NSMutableArray<NSString *> *vals = [NSMutableArray array];
+            int columns = ERColumnCount(stmt);
+            for (int index = 0; index < columns; index++) {
+                const char *rawName = ERColumnName(stmt, index);
+                if (!rawName) continue;
+                NSString *name = [NSString stringWithUTF8String:rawName];
+                int type = ERColumnType(stmt, index);
+                if (type == 1) {
+                    [vals addObject:[NSString stringWithFormat:@"%@=%lld", name, ERColumnInt64(stmt, index)]];
+                } else if (type == 3) {
+                    const unsigned char *t = ERColumnText(stmt, index);
+                    [vals addObject:[NSString stringWithFormat:@"%@=\"%s\"", name, t ? (const char *)t : ""]];
+                } else if (type == 4) {
+                    [vals addObject:[NSString stringWithFormat:@"%@=<blob %d>", name, ERColumnBytes(stmt, index)]];
+                } else {
+                    [vals addObject:[NSString stringWithFormat:@"%@=<type %d>", name, type]];
+                }
+            }
+            ERShortcutLog(@"schema: ZSHORTCUTICON row%d %@", row, [vals componentsJoinedByString:@" "]);
+            row++;
+        }
+        ERFinalize(stmt);
+    }
+}
+
 // Reads one icon row (ZSHORTCUTICON) by primary key, mapping columns by name.
 static NSDictionary *ERReadIconRow(ER_sqlite3 *database, long long iconPK) {
     if (!database || iconPK <= 0) return nil;
@@ -151,6 +212,7 @@ static NSDictionary *ERReadIconRow(ER_sqlite3 *database, long long iconPK) {
             if (!rawName) continue;
             NSString *name = [[NSString stringWithUTF8String:rawName] uppercaseString];
             int type = ERColumnType(stmt, index);
+            BOOL isText = (type == 3 && ERColumnText(stmt, index) != NULL);
             if ([name containsString:@"GLYPH"] && type == 1 /* INTEGER */) {
                 icon[@"glyph"] = @(ERColumnInt64(stmt, index));
             } else if ([name containsString:@"COLOR"] && type == 1) {
@@ -159,11 +221,61 @@ static NSDictionary *ERReadIconRow(ER_sqlite3 *database, long long iconPK) {
                 const void *blob = ERColumnBlob(stmt, index);
                 int bytes = ERColumnBytes(stmt, index);
                 if (blob && bytes > 0) icon[@"imageData"] = [NSData dataWithBytes:blob length:(NSUInteger)bytes];
+            } else if (isText && [name containsString:@"SYMBOL"]) {
+                // 1.1.8-8 · iOS 17 的图标选择器把「符号」存成 SF Symbol 名字，
+                // 这种图标没有 glyph（glyph 恒为 0xF000），只有名字。
+                NSString *value = [[NSString alloc] initWithUTF8String:(const char *)ERColumnText(stmt, index)];
+                if (value.length) icon[@"symbolName"] = value;
+            } else if (isText && [name containsString:@"EMOJI"]) {
+                NSString *value = [[NSString alloc] initWithUTF8String:(const char *)ERColumnText(stmt, index)];
+                if (value.length) icon[@"emoji"] = value;
             }
         }
     }
     ERFinalize(stmt);
+    if (icon.count) ERShortcutLog(@"icon: pk=%lld -> symbol=%@ glyph=%@ color=%@ image=%lub",
+                                  iconPK, icon[@"symbolName"] ?: @"-", icon[@"glyph"] ?: @"-",
+                                  icon[@"color"] ?: @"-", (unsigned long)[icon[@"imageData"] length]);
     return icon.count ? icon : nil;
+}
+
+// 1.1.8-8 · 自定义图片图标落到磁盘：快照 plist 里放不下几 MB 的图片，所以
+// 每条改成写一个文件，设置页按 uuid 去取。
+static NSString *ERShortcutIconDirectory(void) {
+    return [kERShortcutSnapshotDirectory stringByAppendingPathComponent:@"shortcut-icons"];
+}
+
+static NSString *ERWriteShortcutIconFile(NSString *uuid, NSData *data) {
+    if (!uuid.length || !data.length) return nil;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSString *dir = ERShortcutIconDirectory();
+    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *name = [uuid stringByAppendingPathExtension:@"png"];
+    NSString *path = [dir stringByAppendingPathComponent:name];
+    // 统一转成 PNG，设置页直接 imageWithContentsOfFile:。
+    UIImage *image = [UIImage imageWithData:data];
+    NSData *png = image ? UIImagePNGRepresentation(image) : data;
+    if ([png writeToFile:path atomically:YES]) return name;
+    return nil;
+}
+
+// 1.1.8-8 · 把设备上这篇数据库复制到日志目录，方便拉回本地用 sqlite 直接看。
+static void ERCopyStoreForDiagnostics(NSString *path) {
+    if (!path.length) return;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *suffix in @[@"", @"-wal", @"-shm"]) {
+        NSString *src = [path stringByAppendingString:suffix];
+        if (![fm fileExistsAtPath:src]) continue;
+        NSString *dst = [kERShortcutSnapshotDirectory
+                         stringByAppendingPathComponent:[@"Shortcuts.sqlite" stringByAppendingString:suffix]];
+        [fm removeItemAtPath:dst error:nil];
+        NSError *error = nil;
+        if ([fm copyItemAtPath:src toPath:dst error:&error]) {
+            ERShortcutLog(@"dbcopy: ok %@", dst);
+        } else {
+            ERShortcutLog(@"dbcopy: fail %@ (%@)", suffix, error.localizedDescription);
+        }
+    }
 }
 
 void ERShortcutScanAndPublish(void) {
@@ -200,6 +312,7 @@ void ERShortcutScanAndPublish(void) {
             status = @"query-failed";
             ERShortcutLog(@"scan: failed to open store copy at %@", databasePath);
         } else {
+            ERDumpIconSchema(database);
             ER_sqlite3_stmt *statement = NULL;
             if (ERPrepareV2(database, "SELECT * FROM ZSHORTCUT", -1, &statement, NULL) == 0 && statement) {
                 while (ERStep(statement) == 100 /* SQLITE_ROW */) {
@@ -251,7 +364,13 @@ void ERShortcutScanAndPublish(void) {
                     NSDictionary *icon = ERReadIconRow(database, iconPK);
                     if (icon[@"glyph"]) record[@"glyph"] = icon[@"glyph"];
                     if (icon[@"color"]) record[@"color"] = icon[@"color"];
-                    if (icon[@"imageData"]) record[@"imageData"] = icon[@"imageData"];
+                    if (icon[@"symbolName"]) record[@"symbolName"] = icon[@"symbolName"];
+                    if (icon[@"emoji"]) record[@"emoji"] = icon[@"emoji"];
+                    if (icon[@"imageData"]) {
+                        record[@"imageData"] = icon[@"imageData"];
+                        NSString *file = ERWriteShortcutIconFile(uuid, icon[@"imageData"]);
+                        if (file) record[@"iconFile"] = file;
+                    }
                     [records addObject:record];
                     kept++;
                 }
@@ -271,6 +390,21 @@ void ERShortcutScanAndPublish(void) {
         return [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
     }];
 
+    // 1.1.8-8 · 图标来源命中统计（诊断用）：符号名 / emoji / 图片 / 只剩 glyph。
+    NSUInteger withSymbol = 0, withEmoji = 0, withImage = 0, glyphOnly = 0, noIcon = 0;
+    for (NSDictionary *record in records) {
+        if (record[@"iconFile"]) withImage++;
+        else if (record[@"symbolName"]) withSymbol++;
+        else if (record[@"emoji"]) withEmoji++;
+        else if ([record[@"glyph"] longLongValue] > 0 &&
+                 [record[@"glyph"] longLongValue] != 0xF000) glyphOnly++;
+        else noIcon++;
+    }
+    ERShortcutLog(@"scan: 图标来源 symbol=%lu emoji=%lu image=%lu glyph=%lu none=%lu",
+                  (unsigned long)withSymbol, (unsigned long)withEmoji, (unsigned long)withImage,
+                  (unsigned long)glyphOnly, (unsigned long)noIcon);
+    ERCopyStoreForDiagnostics(databasePath);
+
     // Publish the FULL catalog (including imageData) to the shared prefs domain
     // so SpringBoard can render native icons without touching the sandboxed store.
     CFPreferencesSetAppValue((__bridge CFStringRef)kERShortcutCatalogKey,
@@ -286,6 +420,10 @@ void ERShortcutScanAndPublish(void) {
         entry[@"name"] = [record[@"name"] isKindOfClass:[NSString class]] ? record[@"name"] : record[@"uuid"];
         if ([record[@"color"] isKindOfClass:[NSNumber class]]) entry[@"color"] = record[@"color"];
         if ([record[@"glyph"] isKindOfClass:[NSNumber class]]) entry[@"glyph"] = record[@"glyph"];
+        // 1.1.8-8 · 这三样才是 iOS 17 真正的图标来源，快照必须带上。
+        if ([record[@"symbolName"] isKindOfClass:[NSString class]]) entry[@"symbolName"] = record[@"symbolName"];
+        if ([record[@"emoji"] isKindOfClass:[NSString class]]) entry[@"emoji"] = record[@"emoji"];
+        if ([record[@"iconFile"] isKindOfClass:[NSString class]]) entry[@"iconFile"] = record[@"iconFile"];
         [entries addObject:entry];
     }
     NSMutableDictionary *payload = [NSMutableDictionary dictionary];

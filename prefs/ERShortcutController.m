@@ -38,9 +38,29 @@ static UIColor *ERShortcutCellColorFromValue(long long value) {
 }
 
 
-// 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra 的用法（WFDatabase
-// sortedVisibleWorkflowsByName），反射列出 workflow 对象的全部属性名与
-// 常见图标选择器响应情况 —— 确定真实图标属性的读取路径。
+// 1.1.8-8 · 扫描器把自定义图片图标写成文件放在这里。
+static NSString *ERShortcutIconDirectory(void) {
+    return [kERShortcutSnapshotDirectory stringByAppendingPathComponent:@"shortcut-icons"];
+}
+
+// 把一段文本（emoji / 字符）画成白色前景图。
+static UIImage *ERShortcutTextGlyph(NSString *text) {
+    if (!text.length) return nil;
+    CGSize canvas = CGSizeMake(28.0, 28.0);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvas];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        NSDictionary *attrs = @{NSFontAttributeName: [UIFont systemFontOfSize:22.0 weight:UIFontWeightMedium],
+                                NSForegroundColorAttributeName: [UIColor whiteColor]};
+        CGSize ts = [text sizeWithAttributes:attrs];
+        [text drawAtPoint:CGPointMake((canvas.width - ts.width) * 0.5,
+                                      (canvas.height - ts.height) * 0.5)
+           withAttributes:attrs];
+    }];
+}
+
+// 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra（它用 WorkflowKit 的
+// WFDatabase + attributionIconWithSize:scale:rounded:/symbolName），把
+// WorkflowKit 里所有 Icon 相关类的方法面列出来，确认符号名的官方来源。
 static void ERShortcutLog(NSString *format, ...);
 
 static void ERWFKitProbeOnce(void) {
@@ -49,112 +69,139 @@ static void ERWFKitProbeOnce(void) {
         void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
         ERShortcutLog(@"WFPROBE dlopen=%d", handle ? 1 : 0);
         if (!handle) return;
-        // 1.1.8-9 · 深挖：列出 WFDatabase / WFClient 的类方法与实例方法
-        for (NSString *cn in @[@"WFDatabase", @"WFClient"]) {
-            Class c = NSClassFromString(cn);
-            if (!c) { ERShortcutLog(@"WFPROBE %@ 不存在", cn); continue; }
-            Class meta = object_getClass(c);
-            // 类方法
-            unsigned int cmCnt = 0;
-            Method *cmLst = class_copyMethodList(meta, &cmCnt);
-            NSMutableArray<NSString *> *cmNames = [NSMutableArray array];
-            for (unsigned int i2 = 0; i2 < cmCnt; i2++) {
-                NSString *sn = NSStringFromSelector(method_getName(cmLst[i2]));
-                [cmNames addObject:sn];
-            }
-            if (cmLst) free(cmLst);
-            ERShortcutLog(@"WFPROBE %@ 类方法(%lu)=%@", cn, (unsigned long)cmCnt, cmNames);
-            // 实例方法
-            unsigned int mCnt = 0;
-            Method *mLst = class_copyMethodList(c, &mCnt);
-            NSMutableArray<NSString *> *mNames = [NSMutableArray array];
-            for (unsigned int i2 = 0; i2 < mCnt; i2++) {
-                NSString *sn = NSStringFromSelector(method_getName(mLst[i2]));
-                if (mNames.count < 60) [mNames addObject:sn];
-            }
-            if (mLst) free(mLst);
-            ERShortcutLog(@"WFPROBE %@ 实例方法(%lu)前60=%@", cn, (unsigned long)mCnt, mNames);
-        }
-        // 尝试 WFDatabase alloc+init 实例，再试 sortedVisibleWorkflowsByName
-        Class dbClass = NSClassFromString(@"WFDatabase");
-        if (!dbClass) return;
-        id db = ((id (*)(id, SEL))objc_msgSend)(dbClass, @selector(alloc));
-        db = ((id (*)(id, SEL))objc_msgSend)(db, @selector(init));
-        ERShortcutLog(@"WFPROBE alloc+init db=%@ (%@)", db ?: @"nil", db ? NSStringFromClass([db class]) : @"-");
-        if (!db) return;
-        SEL sortSel = NSSelectorFromString(@"sortedVisibleWorkflowsByName");
-        if (![db respondsToSelector:sortSel]) {
-            ERShortcutLog(@"WFPROBE 实例上 sortedVisibleWorkflowsByName 仍不可用");
-            return;
-        }
-        @try {
-            NSArray *workflows = ((NSArray *(*)(id, SEL))objc_msgSend)(db, sortSel);
-            ERShortcutLog(@"WFPROBE workflows=%lu", (unsigned long)workflows.count);
-            if (!workflows.count) return;
-            id wf = workflows.firstObject;
-            unsigned int pCnt = 0;
-            objc_property_t *props = class_copyPropertyList(object_getClass(wf), &pCnt);
-            NSMutableArray<NSString *> *names = [NSMutableArray array];
-            for (unsigned int i2 = 0; i2 < pCnt; i2++) {
-                [names addObject:[NSString stringWithFormat:@"%s(%s)",
-                                  property_getName(props[i2]),
-                                  property_getAttributes(props[i2])]];
-            }
-            free(props);
-            ERShortcutLog(@"WFPROBE 首对象 %@ 属性(%lu)=%@",
-                          NSStringFromClass([wf class]), (unsigned long)pCnt, names);
-            for (NSString *selName in @[@"icon", @"iconImage", @"image", @"shortcutIcon",
-                                        @"iconImageData", @"glyph", @"color", @"workflowIcon",
-                                        @"iconType"]) {
-                SEL s = NSSelectorFromString(selName);
-                if ([wf respondsToSelector:s]) {
-                    @try {
-                        id v = ((id (*)(id, SEL))objc_msgSend)(wf, s);
-                        ERShortcutLog(@"WFPROBE %@ → %@ (%@)", selName, v ?: @"nil",
-                                      v ? NSStringFromClass([v class]) : @"-");
-                    } @catch (__unused NSException *e) {
-                        ERShortcutLog(@"WFPROBE %@ 调用异常", selName);
-                    }
+
+        // 1) WorkflowKit 镜像里所有跟 Icon / Workflow 有关的类
+        unsigned int total = 0;
+        Class *all = objc_copyClassList(&total);
+        NSMutableArray<NSString *> *wfClasses = [NSMutableArray array];
+        if (all) {
+            for (unsigned int index = 0; index < total; index++) {
+                const char *image = class_getImageName(all[index]);
+                if (!image) continue;
+                NSString *imagePath = [NSString stringWithUTF8String:image];
+                if ([imagePath rangeOfString:@"WorkflowKit"].location == NSNotFound) continue;
+                NSString *className = NSStringFromClass(all[index]);
+                if (!className.length) continue;
+                if (([className rangeOfString:@"Icon"].location != NSNotFound ||
+                     [className rangeOfString:@"Workflow"].location != NSNotFound) &&
+                    wfClasses.count < 160) {
+                    [wfClasses addObject:className];
                 }
             }
-        } @catch (NSException *ex) {
-            ERShortcutLog(@"WFPROBE 异常: %@", ex);
+            free(all);
+        }
+        ERShortcutLog(@"WFPROBE WorkflowKit 类(%lu)=%@", (unsigned long)wfClasses.count, wfClasses);
+
+        // 2) 逐个 Icon 类列出方法面（类方法 + 实例方法各前 25 条）
+        for (NSString *className in wfClasses) {
+            if ([className rangeOfString:@"Icon"].location == NSNotFound) continue;
+            Class cls = NSClassFromString(className);
+            if (!cls) continue;
+            unsigned int classCount = 0;
+            Method *classMethods = class_copyMethodList(object_getClass(cls), &classCount);
+            NSMutableArray<NSString *> *classNames = [NSMutableArray array];
+            for (unsigned int index = 0; index < classCount && index < 25; index++) {
+                [classNames addObject:NSStringFromSelector(method_getName(classMethods[index]))];
+            }
+            if (classMethods) free(classMethods);
+            unsigned int instCount = 0;
+            Method *instMethods = class_copyMethodList(cls, &instCount);
+            NSMutableArray<NSString *> *instNames = [NSMutableArray array];
+            for (unsigned int index = 0; index < instCount && index < 25; index++) {
+                [instNames addObject:NSStringFromSelector(method_getName(instMethods[index]))];
+            }
+            if (instMethods) free(instMethods);
+            ERShortcutLog(@"WFPROBE [%@] +(%u)=%@ -(%u)=%@",
+                          className, classCount, classNames, instCount, instNames);
+        }
+
+        // 3) WFDatabase 的方法面（Actra 就是从这里取 workflow 的）
+        Class dbClass = NSClassFromString(@"WFDatabase");
+        if (dbClass) {
+            unsigned int classCount = 0;
+            Method *classMethods = class_copyMethodList(object_getClass(dbClass), &classCount);
+            NSMutableArray<NSString *> *classNames = [NSMutableArray array];
+            for (unsigned int index = 0; index < classCount && index < 40; index++) {
+                [classNames addObject:NSStringFromSelector(method_getName(classMethods[index]))];
+            }
+            if (classMethods) free(classMethods);
+            ERShortcutLog(@"WFPROBE WFDatabase +(%u)=%@", classCount, classNames);
+
+            unsigned int instCount = 0;
+            Method *instMethods = class_copyMethodList(dbClass, &instCount);
+            NSMutableArray<NSString *> *instNames = [NSMutableArray array];
+            for (unsigned int index = 0; index < instCount && index < 60; index++) {
+                [instNames addObject:NSStringFromSelector(method_getName(instMethods[index]))];
+            }
+            if (instMethods) free(instMethods);
+            ERShortcutLog(@"WFPROBE WFDatabase -(%u)前60=%@", instCount, instNames);
+        }
+
+        // 4) 直接验证 glyph → 符号名映射（0xF000 就是那条画不出来的默认值）
+        NSString *(*mapper)(unsigned short) =
+            (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter");
+        ERShortcutLog(@"WFPROBE mapper=%d", mapper ? 1 : 0);
+        if (mapper) {
+            for (NSNumber *glyph in @[@(0xF000), @(0xE82D), @(0xE877), @(0xF086), @(0xE80D)]) {
+                unsigned short code = (unsigned short)glyph.unsignedShortValue;
+                NSString *name = mapper(code);
+                ERShortcutLog(@"WFPROBE glyph 0x%04X -> %@ (image=%d)", (unsigned)code,
+                              name ?: @"nil", name.length ? ([UIImage systemImageNamed:name] ? 1 : 0) : -1);
+            }
         }
     });
 }
 static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     UIColor *background = ERShortcutCellColorFromValue([shortcut[@"color"] longLongValue]);
-    NSData *imageData = [shortcut[@"imageData"] isKindOfClass:[NSData class]] ? shortcut[@"imageData"] : nil;
-    UIImage *glyph = imageData.length ? [UIImage imageWithData:imageData] : nil;
-    if (!glyph) {
+
+    // 1.1.8-8 · 图标来源优先级（对齐「快捷指令」App 自己的画法）：
+    //   自定义图片 > 符号名(ZSYMBOLNAME) > emoji > glyph 字符映射 > 兜底。
+    //   1.1.8-7 的素色方块：这些行的 glyph 恒为 0xF000，映射不出来，
+    //   而旧的兜底会去「画 glyph 字符本身」——0xE000~0xF8FF 是私有区，
+    //   画出来是一张全透明图，于是盖掉了最后的 sparkles 兜底。
+    UIImage *customImage = nil;
+    UIImage *glyph = nil;
+
+    NSString *iconFile = [shortcut[@"iconFile"] isKindOfClass:[NSString class]] ? shortcut[@"iconFile"] : nil;
+    if (iconFile.length) {
+        customImage = [UIImage imageWithContentsOfFile:
+                       [ERShortcutIconDirectory() stringByAppendingPathComponent:iconFile]];
+    }
+
+    if (!customImage) {
         static NSString *(*mapper)(unsigned short);
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
             void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+            if (!handle) {
+                handle = dlopen("/System/Library/Frameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+            }
             if (handle) mapper = (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter");
         });
-        NSString *symbolName = mapper ? mapper((unsigned short)[shortcut[@"glyph"] unsignedShortValue]) : nil;
-        if (!symbolName.length) symbolName = @"sparkles";
-        glyph = [UIImage systemImageNamed:symbolName];
-        // 1.1.8-7 · 映射出的 SF 名在本机不存在时（新系统符号/未知字符）→ 兜底 sparkles，
-        //   此前这里会留白（素色方块）。再不行最后用 glyph 字符本身画一个文本字形。
-        if (!glyph) {
+
+        NSString *symbolName = [shortcut[@"symbolName"] isKindOfClass:[NSString class]] ? shortcut[@"symbolName"] : nil;
+        if (!symbolName.length) {
             unsigned short ch = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
-            if (ch >= 0x20 && ch != 0xFFFD) {
-                UIGraphicsImageRenderer *textRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(28.0, 28.0)];
-                glyph = [textRenderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-                    NSString *chStr = [NSString stringWithFormat:@"%C", (unichar)ch];
-                    NSDictionary *attrs = @{NSFontAttributeName: [UIFont systemFontOfSize:20.0 weight:UIFontWeightMedium],
-                                            NSForegroundColorAttributeName: [UIColor whiteColor]};
-                    CGSize ts = [chStr sizeWithAttributes:attrs];
-                    [chStr drawAtPoint:CGPointMake((28.0 - ts.width) * 0.5, (28.0 - ts.height) * 0.5)
-                        withAttributes:attrs];
-                }];
+            if (mapper && ch) {
+                NSString *mapped = mapper(ch);
+                if ([mapped isKindOfClass:[NSString class]] && mapped.length) symbolName = mapped;
             }
-            if (!glyph) glyph = [UIImage systemImageNamed:@"sparkles"];
         }
+        if (symbolName.length) glyph = [UIImage systemImageNamed:symbolName];
+
+        if (!glyph) {
+            NSString *emoji = [shortcut[@"emoji"] isKindOfClass:[NSString class]] ? shortcut[@"emoji"] : nil;
+            if (!emoji.length) {
+                unsigned short ch = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
+                // 只对普通可读字符做文本兜底；私有区字符画出来是全透明的。
+                if (ch >= 0x20 && ch < 0xE000) emoji = [NSString stringWithFormat:@"%C", (unichar)ch];
+            }
+            if (emoji.length) glyph = ERShortcutTextGlyph(emoji);
+        }
+        if (!glyph) glyph = [UIImage systemImageNamed:@"sparkles"];
     }
+
     CGSize size = CGSizeMake(40.0, 40.0);
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
     return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
@@ -162,7 +209,10 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
         UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectInset(rect, 1.0, 1.0) cornerRadius:9.0];
         [(background ?: [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0]) setFill];
         [path fill];
-        if (glyph) {
+        if (customImage) {
+            [path addClip];
+            [customImage drawInRect:CGRectInset(rect, 1.0, 1.0)];
+        } else if (glyph) {
             CGFloat side = MIN(CGRectGetWidth(path.bounds), CGRectGetHeight(path.bounds)) * 0.55;
             CGFloat scale = glyph.size.width > 1.0 ? MIN(side / glyph.size.width, side / glyph.size.height) : 1.0;
             CGSize drawn = CGSizeMake(glyph.size.width * scale, glyph.size.height * scale);
