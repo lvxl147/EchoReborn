@@ -28681,17 +28681,16 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         erMCHitLogged = YES;
         ERLogInfo(@"MC-HIT coverSheet viewDidAppear gEnabled=%d", gEnabled ? 1 : 0);
     }
-    // 1.1.7-3 · MC-FULLDUMP 一次性全量 dump：锁屏出现 8 秒后，全窗口全视图
-    //   （无关键词/无尺寸过滤，类名+帧+窗口，上限 400 行）—— 抓 iOS 17.2 系统音乐卡片的真实类名。
-    // 1.1.7-5 · 改写独立文件（主日志轮转会吞掉大 dump；独立文件 fopen "w" 每次 respring 覆盖）。
-    static BOOL erMCFullDumpDone = NO;
-    if (!erMCFullDumpDone) {
-        erMCFullDumpDone = YES;
+    // 1.1.7-6 · dump 可重试 3 次（每次锁屏 viewDidAppear 都排一个，8s 后执行）；
+    //   文件追加模式累积（"a"），解锁态的无效 dump 不会覆盖锁屏态的有效 dump。
+    static NSInteger erMCFullDumpCount = 0;
+    if (erMCFullDumpCount < 3) {
+        erMCFullDumpCount++;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             @try {
-                FILE *df = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "w");
-                if (!df) df = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "w");
+                FILE *df = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+                if (!df) df = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
                 if (!df) return;
                 fprintf(df, "MC-FULLDUMP begin\n");
                 for (UIWindow *w in ERAllApplicationWindows()) {
