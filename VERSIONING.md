@@ -12,3 +12,4 @@
 | 102 | 1.1.7-4 | 录屏收起时序实现（用户需求：点录屏→先收起 CC→收起后开录，不录到 CC 画面）：① 立即 SBCC sharedInstance dismissAnimated:YES 收起（1.1.7-3 探测实锤的落点）② 0.4s 后才 startRecordingWithHandler/startRecord 开录。MC-FULLDUMP 保留（等用户锁屏音乐状态抓卡片真名）。版本 1.1.7-4/1001052。 |
 | 103 | 1.1.7-5 | MC-FULLDUMP 改写独立文件 /var/mobile/Library/Accessibility/echoreborn-mcful.log（主日志轮转吞掉大 dump 的教训；fopen "w" 每 respring 覆盖；上限提至 1200 行、尺寸门 40x10）。版本 1.1.7-5/1001053。 |
 | 104 | 1.1.7-6 | MC-FULLDUMP 可重试 3 次（每次锁屏触发，8s 后执行；文件改追加累积，解锁态 dump 不覆盖锁屏态）。1.1.7-5 实测：dump 落在解锁态（SBCoverSheetWindow HID）。版本 1.1.7-6/1001054。 |
+| 105 | 1.1.7-7 | 隐藏锁屏音乐正式修复（iOS 17.2 实锤规则）：系统音乐卡 = NCNotificationListView 内顶部 Live Activity 卡（402×167@y571），识别特征 CSActivityItemContentView（宽>380/高120-220）+ 子树含 _UIScenePresentationView → 隐藏其所在 NCNotificationListCell，开关关闭自动恢复。版本 1.1.7-7/1001055。 |

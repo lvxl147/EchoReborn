@@ -28472,6 +28472,43 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
             if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
         }
     }
+    // 1.1.7-7 · 【iOS 17.2 实锤规则】系统音乐卡 = NCNotificationListView 内顶部的
+    //   Live Activity 卡片（MC-FULLDUMP 实测：402×167 @ y=571）。识别特征：
+    //   CSActivityItemContentView（宽>380、高 120~220）且子树含 _UIScenePresentationView
+    //   （Live Activity 的 SwiftUI 场景，普通通知没有）→ 隐藏其所在 NCNotificationListCell。
+    {
+        NSMutableArray<UIView *> *q2 = [NSMutableArray arrayWithObject:root];
+        NSInteger g2 = 0;
+        while (q2.count && g2++ < 6000) {
+            UIView *v = q2.firstObject;
+            [q2 removeObjectAtIndex:0];
+            if ([NSStringFromClass(v.class) isEqualToString:@"CSActivityItemContentView"]) {
+                CGFloat w = CGRectGetWidth(v.frame), h = CGRectGetHeight(v.frame);
+                if (w > 380.0 && h > 120.0 && h < 220.0) {
+                    NSMutableArray<UIView *> *q3 = [NSMutableArray arrayWithObject:v];
+                    NSInteger g3 = 0;
+                    BOOL hasScene = NO;
+                    while (q3.count && g3++ < 1200) {
+                        UIView *x = q3.firstObject;
+                        [q3 removeObjectAtIndex:0];
+                        if ([NSStringFromClass(x.class) isEqualToString:@"_UIScenePresentationView"]) { hasScene = YES; break; }
+                        [q3 addObjectsFromArray:x.subviews];
+                    }
+                    if (hasScene) {
+                        UIView *cell = v.superview;
+                        while (cell && ![NSStringFromClass(cell.class) isEqualToString:@"NCNotificationListCell"]) cell = cell.superview;
+                        if (cell && ![candidates containsObject:cell]) {
+                            [candidates addObject:cell];
+                            ERLogInfo(@"MUSICCAPSULE 命中 iOS17.2 媒体卡（CSActivityItemContentView %dx%d）",
+                                      (int)w, (int)h);
+                        }
+                        continue;
+                    }
+                }
+            }
+            [q2 addObjectsFromArray:v.subviews];
+        }
+    }
     return candidates;
 }
 
