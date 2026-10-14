@@ -28681,6 +28681,37 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         erMCHitLogged = YES;
         ERLogInfo(@"MC-HIT coverSheet viewDidAppear gEnabled=%d", gEnabled ? 1 : 0);
     }
+    // 1.1.7-3 · MC-FULLDUMP 一次性全量 dump：锁屏出现 8 秒后，全窗口全视图
+    //   （无关键词/无尺寸过滤，类名+帧+窗口，上限 260 行）—— 抓 iOS 17.2 系统音乐卡片的真实类名。
+    static BOOL erMCFullDumpDone = NO;
+    if (!erMCFullDumpDone) {
+        erMCFullDumpDone = YES;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            @try {
+                ERLogInfo(@"MC-FULLDUMP begin（全窗口全视图，iOS 17.2 锁屏音乐卡片定位）");
+                for (UIWindow *w in ERAllApplicationWindows()) {
+                    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
+                    NSInteger guardF = 0, loggedF = 0;
+                    while (stack.count && guardF++ < 20000 && loggedF < 260) {
+                        UIView *v = stack.lastObject;
+                        [stack removeLastObject];
+                        if ([v isKindOfClass:[ERMusicCapsuleView class]]) continue;
+                        NSString *cn = NSStringFromClass(v.class);
+                        CGRect r = [v convertRect:v.bounds toView:w];
+                        if (r.size.width >= 60.0 && r.size.height >= 12.0) {
+                            ERLogInfo(@"MC-FULL [%@] %@ frame=%@%@",
+                                      NSStringFromClass(w.class) ?: @"?", cn,
+                                      NSStringFromCGRect(r), v.hidden ? @" HID" : @"");
+                            loggedF++;
+                        }
+                        [stack addObjectsFromArray:v.subviews];
+                    }
+                }
+                ERLogInfo(@"MC-FULLDUMP end");
+            } @catch (__unused NSException *e) {}
+        });
+    }
     if (!gEnabled) return;
     ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
     manager.coverSheetController = self;
@@ -29589,6 +29620,43 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                     free(cLst2);
                 }
                 ERLogInfo(@"CC-PROBE2 录屏候选类方法=%@", probe2);
+            }
+            // 1.1.7-3 · CC 收起方案探测：参考插件用 dismissAnimated: 收控制中心。
+            //   RPControlCenterClient 实测不响应 dismissAnimated:（1.1.7-2 自动收起无效原因），
+            //   列出 RPControlCenterClient / SBControlCenterController 全部含 ismiss 的方法
+            //   并探测 sharedInstance 入口 —— 确定收起调用应落在哪个对象上。
+            {
+                for (NSString *cn in (@[@"RPControlCenterClient", @"SBControlCenterController"])) {
+                    Class c = objc_getClass(cn.UTF8String);
+                    if (!c) { ERLogInfo(@"CC-PROBE3 %@ 不存在", cn); continue; }
+                    unsigned int mCnt3 = 0;
+                    Method *mLst3 = class_copyMethodList(c, &mCnt3);
+                    NSMutableArray<NSString *> *dis = [NSMutableArray array];
+                    NSMutableArray<NSString *> *shr = [NSMutableArray array];
+                    if (mLst3) {
+                        for (unsigned int i = 0; i < mCnt3; i++) {
+                            NSString *sn = NSStringFromSelector(method_getName(mLst3[i]));
+                            if ([sn rangeOfString:@"ismiss"].location != NSNotFound && dis.count < 12) [dis addObject:sn];
+                            if ([sn rangeOfString:@"hared"].location != NSNotFound && shr.count < 6) [shr addObject:sn];
+                        }
+                        free(mLst3);
+                    }
+                    // 类方法（+sharedInstance 等在类侧，copyMethodList 只列实例方法）
+                    Class meta = object_getClass(c);
+                    unsigned int cmCnt = 0;
+                    Method *cmLst = class_copyMethodList(meta, &cmCnt);
+                    if (cmLst) {
+                        for (unsigned int i = 0; i < cmCnt; i++) {
+                            NSString *sn = NSStringFromSelector(method_getName(cmLst[i]));
+                            if ([sn rangeOfString:@"hared"].location != NSNotFound && shr.count < 6) [shr addObject:[@"+" stringByAppendingString:sn]];
+                            if ([sn rangeOfString:@"ismiss"].location != NSNotFound && dis.count < 12) [dis addObject:[@"+" stringByAppendingString:sn]];
+                        }
+                        free(cmLst);
+                    }
+                    ERLogInfo(@"CC-PROBE3 %@ dismiss方法=%@ shared类方法=%@ respDismissAnimated=%d",
+                              cn, dis, shr,
+                              (int)([(id)c respondsToSelector:@selector(sharedInstance)]));
+                }
             }
             // 1.1.4 · RCPScreenRecorder 日志钩子（时间线定位倒计时）+ CC 录屏按钮 target 探测
             {

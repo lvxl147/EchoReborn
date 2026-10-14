@@ -8,3 +8,4 @@
 | 98 | 1.1.7 | 稳定版：彻底删除 60s 后台全类扫描（三连崩溃元凶：后台线程触碰懒加载类触发 +initialize 的 UIKit/CA 副作用 → QuartzCore 后台断言 abort，崩溃栈三版一致）。RCP 安全日志钩子保留。版本 1.1.7/1001048。 |
 | 99 | 1.1.7-1 | 探测版：QABTN 定时器内嵌 CC-BTN-PROBE（控制中心打开时扫描 SBControlCenterWindow 的 UIControl，打印类名/target/Action 含 ecord|Record 的控件）——定位 iOS 17.2 录屏按钮的事件接收者。版本 1.1.7-1/1001049。 |
 | 100 | 1.1.7-2 | 录屏无延迟正式适配：对照 CCRecordNoDelay 0.1.0 逆向实锤，iOS 17.2 宿主 = RPControlCenterClient（RPControlCenter 家族，1.1.5 日志截断的 RPControlCen 即它）。ctor 主线程挂 RPControlCenterClient + SBControlCenterController 双宿主，3s 主队列延迟重试兜底懒加载；无延迟路径 startRecordingWithHandler:/startRecord 与参考插件一致。版本 1.1.7-2/1001050。 |
+| 101 | 1.1.7-3 | 双探测：① MC-FULLDUMP 锁屏 8s 后全窗口全视图无过滤 dump（抓 iOS 17.2 系统音乐卡片真名——关键词表全落空）；② CC-PROBE3 列 RPControlCenterClient/SBControlCenterController 的 dismiss 方法与 sharedInstance 入口（参考插件用 dismissAnimated: 收起，实测 RPCC 不响应，找正确落点）。版本 1.1.7-3/1001051。 |
