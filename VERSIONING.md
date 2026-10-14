@@ -5,3 +5,4 @@
 | 95 | 1.1.4 | 录屏新钩点时间线：RCPScreenRecorder（start/stopRecording）日志钩子（msgSendSuper 透传），定位按钮按下→倒计时→startRecording 的时间间隔；扫描心跳确认无任何类再有老方法。版本 1.1.4/1001045。 |
 | 96 | 1.1.5 | 修复 1.1.4 崩溃循环：RCP 钩子从 objc_msgSendSuper 转发（父类无实现 → unrecognized selector → SpringBoard 崩溃循环进安全模式）改为标准 MSHookMessageEx orig 捕获透传，行为零改动仅日志。版本 1.1.5/1001046。 |
 | 97 | 1.1.6 | 崩溃循环真凶修复：1.1.4/1.1.5 的崩溃并非 RCP msgSendSuper（背锅），而是 60s 扫描器在后台线程对懒加载新类 RPControlCenter* 自动 MSHookMessageEx，与主线程使用竞态崩溃。扫描器降级为只记录候选类名+方法清单（绝不自动挂钩）。版本 1.1.6/1001047。 |
+| 98 | 1.1.7 | 稳定版：彻底删除 60s 后台全类扫描（三连崩溃元凶：后台线程触碰懒加载类触发 +initialize 的 UIKit/CA 副作用 → QuartzCore 后台断言 abort，崩溃栈三版一致）。RCP 安全日志钩子保留。版本 1.1.7/1001048。 |

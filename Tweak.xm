@@ -29458,66 +29458,13 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                           ccc ? NSStringFromClass(ccc) : @"(nil)",
                           (int)(ccc && [ccc instancesRespondToSelector:selCD]));
             }
-            // 1.0.9-179 · **周期自配置扫描**：v176-178 证明 ctor 期扫描会崩（消息转发/懒加载类），
-            //   且一次性扫描的日志总赶不上日志轮转抓不到。改为启动后 5s 起每 60s 扫一遍
-            //   （后台队列 + @try）：发现新宿主类直接自动挂 hook（自配置），日志每轮都输出，
-            //   任何时刻抓日志都能看到扫描结果与开关读值。
-            // 1.1.2 · 扫描定时器改静态持有（此前 __block 局部持有实测 60s 扫描零日志，
-            //   疑似 source 被提前释放），handler 首行加心跳。
-            static dispatch_source_t sERCCRecScanTimer = nil;
-            if (!sERCCRecScanTimer) {
-                sERCCRecScanTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-                dispatch_source_set_timer(sERCCRecScanTimer,
-                                          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
-                                          (uint64_t)(60.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
-                dispatch_source_set_event_handler(sERCCRecScanTimer, ^{
-                    @autoreleasepool {
-                        @try {
-                            ERLogInfo(@"CC-RECORD scan tick hosts=%ld", (long)gERCCRecHostCnt);
-                            unsigned int cnt = 0;
-                            Class *clsList = objc_copyClassList(&cnt);
-                            NSMutableArray<NSString *> *hosts = [NSMutableArray array];
-                            for (unsigned int i = 0; i < cnt; i++) {
-                                Class c = clsList[i];
-                                if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD)) {
-                                    BOOL hooked = NO;
-                                    for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hooked = YES;
-                                    if (hooked) { [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(已挂)"]]; continue; }
-                                    // 1.1.6 · 【安全修复】不再自动挂钩！1.1.4/1.1.5 的事故根因：
-                                    //   后台线程对新类 MSHookMessageEx，与主线程使用该类竞态 → 崩溃循环。
-                                    //   改为只记录类名 + 该类含 ecord/ountdown/tart 的方法清单，人工研判后再决定。
-                                    unsigned int mCntP = 0;
-                                    Method *mLstP = class_copyMethodList(c, &mCntP);
-                                    NSMutableArray<NSString *> *sels = [NSMutableArray array];
-                                    if (mLstP) {
-                                        for (unsigned int k = 0; k < mCntP && sels.count < 16; k++) {
-                                            NSString *sn = NSStringFromSelector(method_getName(mLstP[k]));
-                                            if ([sn rangeOfString:@"ecord"].location != NSNotFound ||
-                                                [sn rangeOfString:@"ountdown"].location != NSNotFound ||
-                                                [sn rangeOfString:@"tart"].location != NSNotFound) {
-                                                [sels addObject:sn];
-                                            }
-                                        }
-                                        free(mLstP);
-                                    }
-                                    [hosts addObject:[NSString stringWithFormat:@"%@(候选未挂) 方法=%@",
-                                                      NSStringFromClass(c),
-                                                      sels.count ? [sels componentsJoinedByString:@","] : @"(无)"]];
-                                    ERLogInfo(@"CC-RECORD 发现候选宿主（仅记录不挂钩）：%@", NSStringFromClass(c));
-                                }
-                            }
-                            free(clsList);
-                            ERLogInfo(@"CC-RECORD 扫描宿主=%@ 开关读值=%d（每 60s 复扫）",
-                                      hosts.count ? [hosts componentsJoinedByString:@","] : @"(无)", (int)ERCCRecordNoDelayEnabled());
-                        } @catch (NSException *e179) {
-                            ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e179);
-                        }
-                    }
-                });
-                dispatch_resume(sERCCRecScanTimer);
-                ERLogInfo(@"ctor: CC-RECORD scan timer started");
-            }
+            // 1.1.7 · 【60s 后台全类扫描已删除】
+            //   三连崩溃（1.1.4/1.1.5/1.1.6 崩溃栈一致：SIGABRT <- QuartzCore <-
+            //   UIKitCore <- NotificationCenter <- objc +initialize <- 本插件后台队列）实证：
+            //   后台线程首次触碰懒加载类（NTK*ColorPalette/REMAuxiliary* 等）触发其
+            //   +initialize 的 UIKit/CA 副作用 -> 后台线程断言 abort，主线程同时卡死。
+            //   扫描使命已结束（RPControlCenter* 候选已发现），后续探测一律主队列一次性执行。
+            ERLogInfo(@"ctor: CC-RECORD init done (background scan removed in 1.1.7)");
             // 1.1.2 · iOS 27 录屏新钩点探测：老方法 startRecordingCountdown 已不存在（has=0 实锤），
             //   列出 SBControlCenterController 全部含 ecord 的方法 + 全类表中含 Recording 的类，
             //   下一轮日志即可确定新钩点。
