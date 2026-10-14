@@ -13,3 +13,4 @@
 | 103 | 1.1.7-5 | MC-FULLDUMP 改写独立文件 /var/mobile/Library/Accessibility/echoreborn-mcful.log（主日志轮转吞掉大 dump 的教训；fopen "w" 每 respring 覆盖；上限提至 1200 行、尺寸门 40x10）。版本 1.1.7-5/1001053。 |
 | 104 | 1.1.7-6 | MC-FULLDUMP 可重试 3 次（每次锁屏触发，8s 后执行；文件改追加累积，解锁态 dump 不覆盖锁屏态）。1.1.7-5 实测：dump 落在解锁态（SBCoverSheetWindow HID）。版本 1.1.7-6/1001054。 |
 | 105 | 1.1.7-7 | 隐藏锁屏音乐正式修复（iOS 17.2 实锤规则）：系统音乐卡 = NCNotificationListView 内顶部 Live Activity 卡（402×167@y571），识别特征 CSActivityItemContentView（宽>380/高120-220）+ 子树含 _UIScenePresentationView → 隐藏其所在 NCNotificationListCell，开关关闭自动恢复。版本 1.1.7-7/1001055。 |
+| 106 | 1.1.8-1 | 音乐胶囊左/右滑动切歌：开关 MusicCapsule.SwipeEnabled（底部组件页音乐胶囊卡片内、启用下方，默认关）；胶囊视图挂左/右滑动手势（默认禁用，开关控制启停），手势触发 MRMediaRemoteSendCommand NextTrack=4/PreviousTrack=5（与播放暂停同通道，SBMediaController 兜底）；手势只在胶囊视图上（hitTest 天然限制范围）。版本 1.1.8-1/1001056。 |

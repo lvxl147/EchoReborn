@@ -27921,6 +27921,7 @@ static NSString *const kERMusicCapsuleInsetKey   = @"MusicCapsule.WidthInset";
 static NSString *const kERMusicCapsuleOffsetKey  = @"MusicCapsule.OffsetY";
 static NSString *const kERMusicCapsuleHeightKey  = @"MusicCapsule.Height";
 static NSString *const kERMusicCapsuleHideSystemKey = @"MusicCapsule.HideSystemNowPlaying";
+static NSString *const kERMusicCapsuleSwipeKey     = @"MusicCapsule.SwipeEnabled";   // 1.1.8-1
 
 #pragma mark - 音乐胶囊 · MediaRemote（运行时解析）
 
@@ -27932,6 +27933,9 @@ static void  (*ERMusic_MRRegisterForNowPlayingNotifications)(dispatch_queue_t) =
 
 // MRMediaRemoteCommand：TogglePlayPause == 2
 static const int kERMusicCommandTogglePlayPause = 2;
+// 1.1.8-1 · 滑动切歌命令（MPRemoteCommand 枚举：NextTrack=4 / PreviousTrack=5）
+static const int kERMusicCommandNextTrack     = 4;
+static const int kERMusicCommandPreviousTrack = 5;
 
 static NSString *const kERMusicMRTitle       = @"kMRMediaRemoteNowPlayingInfoTitle";
 static NSString *const kERMusicMRArtist      = @"kMRMediaRemoteNowPlayingInfoArtist";
@@ -27969,6 +27973,9 @@ static void ERMusicResolveMediaRemote(void) {
 @property (nonatomic, strong) UILabel            *artistLabel;
 @property (nonatomic, strong) UIButton           *playPauseButton;
 @property (nonatomic, assign) BOOL               playing;
+@property (nonatomic, assign) BOOL               swipeEnabled;          // 1.1.8-1
+@property (nonatomic, strong) UISwipeGestureRecognizer *swipeLeftGesture;
+@property (nonatomic, strong) UISwipeGestureRecognizer *swipeRightGesture;
 @property (nonatomic, assign) CGFloat            capsuleHeight;
 - (void)setTitleText:(NSString *)title
           artistText:(NSString *)artist
@@ -28105,7 +28112,50 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     [self addSubview:button];
     self.playPauseButton = button;
 
+    // 1.1.8-1 · 左/右滑动切歌手势（默认禁用，由 MusicCapsule.SwipeEnabled 开关控制）
+    UISwipeGestureRecognizer *swL = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(erMusicSwipePrev:)];
+    swL.direction = UISwipeGestureRecognizerDirectionLeft;
+    swL.enabled = NO;
+    [self addGestureRecognizer:swL];
+    self.swipeLeftGesture = swL;
+    UISwipeGestureRecognizer *swR = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(erMusicSwipeNext:)];
+    swR.direction = UISwipeGestureRecognizerDirectionRight;
+    swR.enabled = NO;
+    [self addGestureRecognizer:swR];
+    self.swipeRightGesture = swR;
+
     return self;
+}
+
+// 1.1.8-1 · 切歌命令发送（与播放/暂停同通道：MediaRemote MRMediaRemoteSendCommand）
+- (void)erMusicSendTrackCommand:(int)cmd {
+    ERMusicResolveMediaRemote();
+    if (ERMusic_MRSendCommand) {
+        ERMusic_MRSendCommand(cmd, nil, nil);
+    } else {
+        Class mediaControllerClass = NSClassFromString(@"SBMediaController");
+        if ([mediaControllerClass respondsToSelector:@selector(sharedInstance)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            id mediaController = [mediaControllerClass performSelector:@selector(sharedInstance)];
+            SEL trackSel = (cmd == kERMusicCommandNextTrack) ? @selector(nextTrack) : @selector(previousTrack);
+            if ([mediaController respondsToSelector:trackSel]) {
+                [mediaController performSelector:trackSel];
+            }
+#pragma clang diagnostic pop
+        }
+    }
+    UIImpactFeedbackGenerator *generator =
+        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [generator impactOccurred];
+}
+
+- (void)erMusicSwipeNext:(id)sender {
+    [self erMusicSendTrackCommand:kERMusicCommandNextTrack];
+}
+
+- (void)erMusicSwipePrev:(id)sender {
+    [self erMusicSendTrackCommand:kERMusicCommandPreviousTrack];
 }
 
 - (void)layoutSubviews {
@@ -28277,6 +28327,11 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     self.offsetY = ERPreferenceDouble(kERMusicCapsuleOffsetKey, 0.0);
     self.capsuleHeight = ERPreferenceDouble(kERMusicCapsuleHeightKey, 56.0);
     self.hideSystemNowPlaying = ERPreferenceBool(kERMusicCapsuleHideSystemKey, YES);
+    // 1.1.8-1 · 滑动切歌开关 → 手势启停（作用于胶囊视图）
+    BOOL swipeOn = ERPreferenceBool(kERMusicCapsuleSwipeKey, NO);
+    self.capsule.swipeEnabled = swipeOn;
+    self.capsule.swipeLeftGesture.enabled  = swipeOn;
+    self.capsule.swipeRightGesture.enabled = swipeOn;
     _prefsLoadedAt = CACurrentMediaTime();
 }
 
