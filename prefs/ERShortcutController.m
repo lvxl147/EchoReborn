@@ -3,6 +3,8 @@
 #import <UIKit/UIKit.h>
 #import <stdarg.h>
 #import <dlfcn.h>
+#import <objc/message.h>
+#import <objc/runtime.h>
 
 // Must match Tweak.xm.
 static NSString *const kERShortcutPrefsDomain = @"com.strive.echoreborn.preferences";
@@ -33,6 +35,66 @@ static UIColor *ERShortcutCellColorFromValue(long long value) {
     CGFloat alpha = (rgba & 0xFF) / 255.0;
     if (alpha < 0.01) alpha = 1.0;
     return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
+}
+
+
+// 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra 的用法（WFDatabase
+// sortedVisibleWorkflowsByName），反射列出 workflow 对象的全部属性名与
+// 常见图标选择器响应情况 —— 确定真实图标属性的读取路径。
+static void ERWFKitProbeOnce(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+        ERShortcutLog(@"WFPROBE dlopen=%d", handle ? 1 : 0);
+        if (!handle) return;
+        Class dbClass = NSClassFromString(@"WFDatabase");
+        ERShortcutLog(@"WFPROBE WFDatabase=%d", dbClass ? 1 : 0);
+        if (!dbClass) return;
+        id db = nil;
+        if ([dbClass respondsToSelector:@selector(sharedDatabase)]) {
+            db = ((id (*)(id, SEL))objc_msgSend)(dbClass, @selector(sharedDatabase));
+            ERShortcutLog(@"WFPROBE sharedDatabase=%@ (%@)", db ? @"有" : @"nil", NSStringFromClass(db.class));
+        } else {
+            ERShortcutLog(@"WFPROBE 无 sharedDatabase 类方法");
+        }
+        SEL sortSel = NSSelectorFromString(@"sortedVisibleWorkflowsByName");
+        if (!db || ![db respondsToSelector:sortSel]) {
+            ERShortcutLog(@"WFPROBE sortedVisibleWorkflowsByName 不可用");
+            return;
+        }
+        @try {
+            NSArray *workflows = ((NSArray *(*)(id, SEL))objc_msgSend)(db, sortSel);
+            ERShortcutLog(@"WFPROBE workflows=%lu", (unsigned long)workflows.count);
+            if (!workflows.count) return;
+            id wf = workflows.firstObject;
+            unsigned int pCnt = 0;
+            objc_property_t *props = class_copyPropertyList(object_getClass(wf), &pCnt);
+            NSMutableArray<NSString *> *names = [NSMutableArray array];
+            for (unsigned int i = 0; i < pCnt; i++) {
+                [names addObject:[NSString stringWithFormat:@"%s (%s)",
+                                  property_getName(props[i]),
+                                  property_getAttributes(props[i])]];
+            }
+            free(props);
+            ERShortcutLog(@"WFPROBE 首对象 %@ 属性(%lu)=%@",
+                          NSStringFromClass(wf.class), (unsigned long)pCnt, names);
+            // 常见图标相关选择器响应探测
+            for (NSString *selName in @[@"icon", @"iconImage", @"image", @"shortcutIcon",
+                                        @"iconImageData", @"glyph", @"color", @"workflowIcon"]) {
+                SEL s = NSSelectorFromString(selName);
+                if ([wf respondsToSelector:s]) {
+                    @try {
+                        id v = ((id (*)(id, SEL))objc_msgSend)(wf, s);
+                        ERLogInfo(@"WFPROBE %@ → %@ (%@)", selName, v ?: @"nil", NSStringFromClass(v.class) ?: @"-");
+                    } @catch (__unused NSException *e) {
+                        ERShortcutLog(@"WFPROBE %@ 调用异常", selName);
+                    }
+                }
+            }
+        } @catch (NSException *ex) {
+            ERShortcutLog(@"WFPROBE 异常: %@", ex);
+        }
+    });
 }
 
 static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
@@ -312,6 +374,7 @@ static void ERShortcutLog(NSString *format, ...) {
 }
 
 - (void)viewDidLoad {
+    ERWFKitProbeOnce();
     [super viewDidLoad];
     self.title = @"快捷指令";
     // 0.4.7: the scan now runs here, inside Preferences, which can read the
