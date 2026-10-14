@@ -29518,6 +29518,39 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                 if (cLst) free(cLst);
                 ERLogInfo(@"CC-PROBE 含 Recording 的类(%lu/%u)=%@", (unsigned long)cHits.count, cCnt, cHits);
             }
+            // 1.1.3 · 第二轮探测：对录屏相关候选类枚举方法（含 ecord/ountdown 的选择器）
+            {
+                unsigned int cCnt2 = 0;
+                Class *cLst2 = objc_copyClassList(&cCnt2);
+                NSMutableArray<NSString *> *probe2 = [NSMutableArray array];
+                if (cLst2) {
+                    for (unsigned int i = 0; i < cCnt2 && probe2.count < 60; i++) {
+                        NSString *n = NSStringFromClass(cLst2[i]);
+                        BOOL rec = [n rangeOfString:@"Recording"].location != NSNotFound ||
+                                   [n rangeOfString:@"ScreenRecord"].location != NSNotFound;
+                        if (!rec) continue;
+                        unsigned int mCnt2 = 0;
+                        Method *mLst2 = class_copyMethodList(cLst2[i], &mCnt2);
+                        NSMutableArray<NSString *> *sels = [NSMutableArray array];
+                        for (unsigned int k = 0; k < mCnt2; k++) {
+                            NSString *sn = NSStringFromSelector(method_getName(mLst2[k]));
+                            if ([sn rangeOfString:@"ecord"].location != NSNotFound ||
+                                [sn rangeOfString:@"ountdown"].location != NSNotFound ||
+                                [sn rangeOfString:@"tart"].location != NSNotFound) {
+                                if (sels.count < 14) [sels addObject:sn];
+                            }
+                        }
+                        if (mLst2) free(mLst2);
+                        if (sels.count) {
+                            [probe2 addObject:[NSString stringWithFormat:@"%@ => %@",
+                                               n, [sels componentsJoinedByString:@", "]]];
+                            if (probe2.count >= 12) break;
+                        }
+                    }
+                    free(cLst2);
+                }
+                ERLogInfo(@"CC-PROBE2 录屏候选类方法=%@", probe2);
+            }
         }
         // The package intentionally has no firmware ceiling so it installs on
         // anything from iOS 16 up.  iOS 18, however, rebuilt Control Center on
