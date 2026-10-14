@@ -262,246 +262,6 @@ static NSString *ERWriteShortcutIconImage(NSString *uuid, UIImage *image) {
 }
 
 // ---------------------------------------------------------------------------
-// 1.1.8-13 · 让 WorkflowKit 自己把图标画出来（与 Actra 同一条链路）
-//
-// 之前是靠读 sqlite 的 ZGLYPHNUMBER 再把它翻译成 SF Symbol 名字：
-// 字形表给的名字（app.2.stack.3d）在这台设备的 CoreGlyphs 里根本不存在，
-// 于是只能一条一条地打补丁 —— 0xF000 补一个、下一条又补一个，永远补不完。
-//
-// 正确的做法是**不猜**：直接问 WorkflowKit 要它自己渲染好的图。
-//   WFDatabase -initWithStoreDescription:runMigrationsIfNecessary:useLockFile:error:
-//             -sortedVisibleWorkflowsByName
-//   每条 workflow：-attributionIcon / -symbolName / -bundleIdentifier
-//   attributionIcon -attributionIconWithSize:scale:rounded:
-// 「快捷指令」App 画什么，我们就拿到什么 —— 系统符号、关联 App 图标、
-// 还是字形表里某个叫不出名字的符号，一律自动识别，不需要为任何一条适配。
-// ---------------------------------------------------------------------------
-static NSString *const kERWorkflowKitStorePath = @"/var/mobile/Library/Shortcuts/Shortcuts.sqlite";
-
-static id ERWorkflowKitValue(id object, NSString *key) {
-    if (!object) return nil;
-    @try { return [object valueForKey:key]; } @catch (__unused NSException *exception) { return nil; }
-}
-
-static NSString *ERWorkflowKitText(id value) {
-    if ([value isKindOfClass:[NSString class]] && [value length]) return (NSString *)value;
-    if ([value respondsToSelector:@selector(UUIDString)]) {
-        @try {
-            id text = ((id (*)(id, SEL))objc_msgSend)(value, @selector(UUIDString));
-            if ([text isKindOfClass:[NSString class]] && [text length]) return (NSString *)text;
-        } @catch (__unused NSException *exception) {}
-    }
-    return nil;
-}
-
-// rounded=YES → 裁成圆角方块的完整图标；rounded=NO → 只有前景符号（透明底）。
-static UIImage *ERWorkflowKitAttributionIcon(id target, CGSize size, BOOL rounded) {
-    if (!target) return nil;
-    SEL selector = NSSelectorFromString(@"attributionIconWithSize:scale:rounded:");
-    if (![target respondsToSelector:selector]) return nil;
-    NSMethodSignature *signature = [target methodSignatureForSelector:selector];
-    if (!signature) return nil;
-    @try {
-        NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
-        invocation.selector = selector;
-        invocation.target = target;
-        CGFloat scale = [UIScreen mainScreen].scale;
-        if (scale < 1.0) scale = 3.0;
-        BOOL flag = rounded;
-        [invocation setArgument:&size atIndex:2];
-        [invocation setArgument:&scale atIndex:3];
-        [invocation setArgument:&flag atIndex:4];
-        [invocation invoke];
-        __unsafe_unretained id result = nil;
-        [invocation getReturnValue:&result];
-        if ([result isKindOfClass:[UIImage class]]) return (UIImage *)result;
-    } @catch (__unused NSException *exception) {}
-    return nil;
-}
-
-// 分辨 WorkflowKit 给的是「完整圆角图标」还是「透明底的前景符号」：
-// 四角透明 + 四条边中点不透明 + 中心不透明 = 圆角方块（完整图标）；
-// 四角透明 + 边中点也透明 + 中心不透明   = 只画了符号（前景）。
-static BOOL ERIconImageIsFullTile(UIImage *image) {
-    CGImageRef cgImage = image.CGImage;
-    if (!cgImage) return NO;
-    size_t width = CGImageGetWidth(cgImage);
-    size_t height = CGImageGetHeight(cgImage);
-    if (width < 12 || height < 12) return NO;
-    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
-    if (!space) return NO;
-    unsigned char *buffer = (unsigned char *)calloc(width * height * 4, 1);
-    if (!buffer) { CGColorSpaceRelease(space); return NO; }
-    CGContextRef context = CGBitmapContextCreate(buffer, width, height, 8, width * 4, space,
-                                                 kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
-    BOOL full = NO;
-    if (context) {
-        CGContextDrawImage(context, CGRectMake(0.0, 0.0, (CGFloat)width, (CGFloat)height), cgImage);
-        size_t inset = 2;
-        // 中心不透明才是一张有用的图
-        size_t centerIndex = ((height / 2) * width + (width / 2)) * 4 + 3;
-        BOOL centerOpaque = buffer[centerIndex] > 32;
-        // 四条边的中点
-        size_t edgeSamples[4] = {
-            (inset * width + (width / 2)) * 4 + 3,               // 上
-            ((height - 1 - inset) * width + (width / 2)) * 4 + 3, // 下
-            ((height / 2) * width + inset) * 4 + 3,               // 左
-            ((height / 2) * width + (width - 1 - inset)) * 4 + 3  // 右
-        };
-        NSUInteger opaqueEdges = 0;
-        for (int index = 0; index < 4; index++) {
-            if (buffer[edgeSamples[index]] > 32) opaqueEdges++;
-        }
-        full = centerOpaque && opaqueEdges >= 3;
-        CGContextRelease(context);
-    }
-    free(buffer);
-    CGColorSpaceRelease(space);
-    return full;
-}
-
-// uuid → @{@"icon": UIImage, @"full": @(BOOL), @"symbolName": NSString, @"bundleId": NSString}
-static NSDictionary<NSString *, NSDictionary *> *ERWorkflowKitIcons(void) {
-    static NSDictionary *table = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        NSMutableDictionary *built = [NSMutableDictionary dictionary];
-        table = built;
-
-        // CoreData 提供 NSPersistentStoreDescription，WorkflowKit 提供 WFDatabase。
-        dlopen("/System/Library/Frameworks/CoreData.framework/CoreData", RTLD_LAZY);
-        void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
-        if (!handle) { ERShortcutLog(@"wfkit: WorkflowKit unavailable"); return; }
-        Class databaseClass = NSClassFromString(@"WFDatabase");
-        if (!databaseClass) { ERShortcutLog(@"wfkit: WFDatabase unavailable"); return; }
-
-        id database = nil;
-        @try {
-            id description = nil;
-            Class descriptionClass = NSClassFromString(@"NSPersistentStoreDescription");
-            if (descriptionClass) {
-                NSURL *url = [NSURL fileURLWithPath:kERWorkflowKitStorePath];
-                description = ((id (*)(id, SEL, id))objc_msgSend)(
-                    [descriptionClass alloc], NSSelectorFromString(@"initWithURL:"), url);
-            }
-            SEL initSelector = NSSelectorFromString(@"initWithStoreDescription:runMigrationsIfNecessary:useLockFile:error:");
-            if (description && [[databaseClass alloc] respondsToSelector:initSelector]) {
-                NSError *error = nil;
-                // runMigrations / useLockFile 一律 NO：只是读，绝不改动用户的数据库。
-                database = ((id (*)(id, SEL, id, BOOL, BOOL, NSError **))objc_msgSend)(
-                    [databaseClass alloc], initSelector, description, NO, NO, &error);
-                if (!database && error) {
-                    ERShortcutLog(@"wfkit: open error %@", error.localizedDescription);
-                }
-            }
-        } @catch (NSException *exception) {
-            ERShortcutLog(@"wfkit: open exception %@", exception.reason);
-        }
-        if (!database) {
-            // 显式建库失败（比如没有权限创建 CoreData 栈）时退到类方法入口。
-            for (NSString *selectorName in @[@"defaultDatabase", @"shortcutsDatabase",
-                                             @"sharedDatabase", @"standardDatabase"]) {
-                SEL selector = NSSelectorFromString(selectorName);
-                if (![databaseClass respondsToSelector:selector]) continue;
-                @try {
-                    id candidate = ((id (*)(id, SEL))objc_msgSend)(databaseClass, selector);
-                    if (candidate) {
-                        database = candidate;
-                        ERShortcutLog(@"wfkit: using +%@", selectorName);
-                        break;
-                    }
-                } @catch (__unused NSException *exception) {}
-            }
-        }
-        if (!database) { ERShortcutLog(@"wfkit: database API unavailable"); return; }
-
-        NSArray *workflows = nil;
-        @try {
-            if ([database respondsToSelector:NSSelectorFromString(@"sortedVisibleWorkflowsByName")]) {
-                workflows = ((NSArray *(*)(id, SEL))objc_msgSend)(
-                    database, NSSelectorFromString(@"sortedVisibleWorkflowsByName"));
-            }
-        } @catch (NSException *exception) {
-            ERShortcutLog(@"wfkit: list exception %@", exception.reason);
-        }
-        if (![workflows isKindOfClass:[NSArray class]]) {
-            ERShortcutLog(@"wfkit: shortcut API unavailable");
-            return;
-        }
-        ERShortcutLog(@"wfkit: %lu workflow(s)", (unsigned long)workflows.count);
-
-        CGSize size = CGSizeMake(120.0, 120.0);
-        NSUInteger withIcon = 0, withSymbol = 0, withBundle = 0, fullTiles = 0;
-        NSUInteger index = 0;
-        for (id workflow in workflows) {
-            NSString *uuid = ERWorkflowKitText(ERWorkflowKitValue(workflow, @"workflowID"));
-            if (!uuid.length) uuid = ERWorkflowKitText(ERWorkflowKitValue(workflow, @"identifier"));
-            NSString *name = ERWorkflowKitText(ERWorkflowKitValue(workflow, @"name"));
-            NSString *symbolName = ERWorkflowKitText(ERWorkflowKitValue(workflow, @"symbolName"));
-            NSString *bundleId = ERWorkflowKitText(ERWorkflowKitValue(workflow, @"bundleIdentifier"));
-
-            // attributionIcon 可能是一个 icon 对象，也可能 workflow 自己就实现这个方法。
-            id iconObject = ERWorkflowKitValue(workflow, @"attributionIcon");
-            UIImage *full = ERWorkflowKitAttributionIcon(workflow, size, YES);
-            if (!full && iconObject && iconObject != workflow) {
-                full = ERWorkflowKitAttributionIcon(iconObject, size, YES);
-            }
-            UIImage *foreground = ERWorkflowKitAttributionIcon(workflow, size, NO);
-            if (!foreground && iconObject && iconObject != workflow) {
-                foreground = ERWorkflowKitAttributionIcon(iconObject, size, NO);
-            }
-            if (!full && !foreground) {
-                for (NSString *key in @[@"icon", @"workflowIcon"]) {
-                    id candidate = ERWorkflowKitValue(workflow, key);
-                    if (!candidate || candidate == workflow) continue;
-                    if (!full) full = ERWorkflowKitAttributionIcon(candidate, size, YES);
-                    if (!foreground) foreground = ERWorkflowKitAttributionIcon(candidate, size, NO);
-                    if (full || foreground) break;
-                }
-            }
-
-            NSMutableDictionary *item = [NSMutableDictionary dictionary];
-            UIImage *icon = nil;
-            BOOL isFull = NO;
-            if (full && ERIconImageIsFullTile(full)) {
-                icon = full;
-                isFull = YES;
-            } else if (foreground) {
-                icon = foreground;
-                isFull = ERIconImageIsFullTile(foreground);
-            } else if (full) {
-                icon = full;
-                isFull = YES;
-            }
-            if (icon) {
-                item[@"icon"] = icon;
-                item[@"full"] = @(isFull);
-                withIcon++;
-                if (isFull) fullTiles++;
-                // 落盘一份原图，方便拉回本地直接看 WorkflowKit 到底画了什么。
-                ERWriteShortcutIconImage([NSString stringWithFormat:@"wf%lu", (unsigned long)index], icon);
-            }
-            if (symbolName.length) { item[@"symbolName"] = symbolName; withSymbol++; }
-            if (bundleId.length) { item[@"bundleId"] = bundleId; withBundle++; }
-            if (name.length) item[@"name"] = name;
-
-            NSString *key = uuid.length ? uuid : (name.length ? name : @"");
-            if (key.length) [built setObject:item forKey:key];
-            if (index < 8) {
-                ERShortcutLog(@"wfkit[%lu] %@ | uuid=%@ | symbol=%@ | bundle=%@ | icon=%d(full=%d)",
-                              (unsigned long)index, name ?: @"-", uuid ?: @"-", symbolName ?: @"-",
-                              bundleId ?: @"-", icon ? 1 : 0, isFull);
-            }
-            index++;
-        }
-        ERShortcutLog(@"wfkit: 图标 %lu/%lu（完整方块 %lu）| symbolName=%lu | bundleId=%lu",
-                      (unsigned long)withIcon, (unsigned long)workflows.count,
-                      (unsigned long)fullTiles, (unsigned long)withSymbol, (unsigned long)withBundle);
-    });
-    return table;
-}
-
-// ---------------------------------------------------------------------------
 // 1.1.8-15 · 图标解析（全插件唯一的一处）
 //
 // 之前的教训：把「glyph 是几」当成分支条件，就会变成一条快捷指令一个补丁 ——
@@ -626,30 +386,22 @@ static UIImage *ERAppIconImage(NSString *bundleId) {
     return result;
 }
 
-static UIImage *ERResolveShortcutIcon(NSString *uuid, NSString *bundleId, NSNumber *glyphNumber,
+static UIImage *ERResolveShortcutIcon(NSString *bundleId, NSNumber *glyphNumber,
                                       NSString *symbolName, NSData *customData, BOOL *outFull) {
     CGSize size = CGSizeMake(120.0, 120.0);
     if (outFull) *outFull = YES;
 
-    // ① WorkflowKit 自己渲染的结果（识别到就用它，这是最准的一条）
-    NSDictionary *workflowKitIcon = ERWorkflowKitIcons()[uuid];
-    UIImage *rendered = workflowKitIcon[@"icon"];
-    if ([rendered isKindOfClass:[UIImage class]]) {
-        if (outFull) *outFull = [workflowKitIcon[@"full"] boolValue];
-        return rendered;
-    }
-
-    // ② 用户自己设的图片
+    // ① 用户自己设的图片
     if (customData.length) {
         UIImage *image = [UIImage imageWithData:customData];
         if (image) return image;
     }
 
-    // ③ 绑定了 App 的快捷指令 → 用那个 App 的图标
+    // ② 绑定了 App 的快捷指令 → 用那个 App 的图标
     UIImage *appIcon = ERAppIconImage(bundleId);
     if (appIcon) return appIcon;
 
-    // ④ 字形 → 系统符号（有关联 App 的已经在 ③ 返回了）
+    // ③ 字形 → 系统符号（有关联 App 的已经在 ② 返回了）
     unsigned short glyphCode = (unsigned short)glyphNumber.unsignedShortValue;
     NSString *mapped = symbolName.length ? symbolName : ERShortcutSymbolNameForGlyph(glyphCode);
     UIImage *symbol = ERShortcutSymbolImage(mapped, 64.0);
@@ -658,7 +410,7 @@ static UIImage *ERResolveShortcutIcon(NSString *uuid, NSString *bundleId, NSNumb
         return ERShortcutForegroundImage(symbol, size);
     }
 
-    // ⑤ 兜底
+    // ④ 兜底
     if (outFull) *outFull = NO;
     UIImage *fallback = ERShortcutSymbolImage(@"wand.and.stars", 64.0);
     return ERShortcutForegroundImage(fallback ?: [UIImage systemImageNamed:@"sparkles"], size);
@@ -784,9 +536,15 @@ void ERShortcutScanAndPublish(void) {
                     // 1.1.8-15 · 图标只在这里解析一次（全插件唯一的一处），
                     // 控制中心与设置页都只管把结果画出来。
                     BOOL iconFull = YES;
-                    UIImage *resolved = ERResolveShortcutIcon(uuid, bundleId, icon[@"glyph"],
-                                                              record[@"symbolName"], icon[@"imageData"],
-                                                              &iconFull);
+                    UIImage *resolved = nil;
+                    @try {
+                        resolved = ERResolveShortcutIcon(bundleId, icon[@"glyph"],
+                                                         record[@"symbolName"], icon[@"imageData"],
+                                                         &iconFull);
+                    } @catch (NSException *exception) {
+                        ERShortcutLog(@"iconresolve: %@ 解析异常 %@", name, exception.reason);
+                        resolved = nil;
+                    }
                     if (resolved) {
                         // 设置页读文件，控制中心（SpringBoard）读不到文件、只能读 plist，
                         // 所以两种载体都发布同一张图。
