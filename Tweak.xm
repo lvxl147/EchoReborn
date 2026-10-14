@@ -29379,24 +29379,34 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
     }
     ERLogInfo(@"CC-RECORD 无延迟开录：跳过倒计时（宿主=%@）", NSStringFromClass(object_getClass(self)));
     @try {
-        // 跳过 3 秒倒计时，直接走系统开始录屏路径（带 handler 的原签名，granted 回调空实现）
-        if ([self respondsToSelector:@selector(startRecordingWithHandler:)]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(startRecordingWithHandler:), ^(BOOL granted){});
-        } else if ([self respondsToSelector:@selector(startRecord)]) {
-            ((void (*)(id, SEL))objc_msgSend)(self, @selector(startRecord));
+        // 1.1.7-4 · 用户需求时序：点录屏 → 【先收起 CC】→ 收起后才开始录屏（不录到 CC 画面）。
+        //   ① 立即收起控制中心：SBControlCenterController sharedInstance dismissAnimated:YES
+        //     （1.1.7-3 探测实锤：RPControlCenterClient 不响应 dismissAnimated:，
+        //      SBControlCenterController 有 +sharedInstance + -dismissAnimated:）
+        Class sbcc = objc_getClass("SBControlCenterController");
+        id inst = sbcc ? ((id (*)(id, SEL))objc_msgSend)(sbcc, @selector(sharedInstance)) : nil;
+        if (inst && [(id)inst respondsToSelector:@selector(dismissAnimated:)]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(inst, @selector(dismissAnimated:), YES);
+            ERLogInfo(@"CC-RECORD 控制中心已发起收起（SBCC sharedInstance）");
         } else {
-            ((void (*)(id, SEL))orig)(self, _cmd);
-            return;
+            ERLogInfo(@"CC-RECORD SBCC sharedInstance/dismissAnimated 不可用，跳过收起");
         }
-        // 自动收起控制中心：0.25s 后 dismissAnimated:YES（保留系统默认动画，非瞬间关闭）
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+        // ② 收起动画走 0.4s 后再开录 —— 录屏从收起后的画面开始
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             @try {
-                if ([self respondsToSelector:@selector(dismissAnimated:)]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(dismissAnimated:), @YES);
-                    ERLogInfo(@"CC-RECORD 控制中心已自动收起（动画）");
+                if ([self respondsToSelector:@selector(startRecordingWithHandler:)]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(startRecordingWithHandler:), ^(BOOL granted){});
+                    ERLogInfo(@"CC-RECORD 已开录（CC 收起后）");
+                } else if ([self respondsToSelector:@selector(startRecord)]) {
+                    ((void (*)(id, SEL))objc_msgSend)(self, @selector(startRecord));
+                    ERLogInfo(@"CC-RECORD 已开录（startRecord 路径）");
+                } else if (orig) {
+                    ((void (*)(id, SEL))orig)(self, _cmd);
                 }
-            } @catch (__unused NSException *e) {}
+            } @catch (__unused NSException *e173) {
+                if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
+            }
         });
     } @catch (__unused NSException *e) {
         // 兜底：任何异常回退原生倒计时路径
