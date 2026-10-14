@@ -28682,33 +28682,40 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         ERLogInfo(@"MC-HIT coverSheet viewDidAppear gEnabled=%d", gEnabled ? 1 : 0);
     }
     // 1.1.7-3 · MC-FULLDUMP 一次性全量 dump：锁屏出现 8 秒后，全窗口全视图
-    //   （无关键词/无尺寸过滤，类名+帧+窗口，上限 260 行）—— 抓 iOS 17.2 系统音乐卡片的真实类名。
+    //   （无关键词/无尺寸过滤，类名+帧+窗口，上限 400 行）—— 抓 iOS 17.2 系统音乐卡片的真实类名。
+    // 1.1.7-5 · 改写独立文件（主日志轮转会吞掉大 dump；独立文件 fopen "w" 每次 respring 覆盖）。
     static BOOL erMCFullDumpDone = NO;
     if (!erMCFullDumpDone) {
         erMCFullDumpDone = YES;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             @try {
-                ERLogInfo(@"MC-FULLDUMP begin（全窗口全视图，iOS 17.2 锁屏音乐卡片定位）");
+                FILE *df = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "w");
+                if (!df) df = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "w");
+                if (!df) return;
+                fprintf(df, "MC-FULLDUMP begin\n");
                 for (UIWindow *w in ERAllApplicationWindows()) {
                     NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
                     NSInteger guardF = 0, loggedF = 0;
-                    while (stack.count && guardF++ < 20000 && loggedF < 260) {
+                    while (stack.count && guardF++ < 40000 && loggedF < 1200) {
                         UIView *v = stack.lastObject;
                         [stack removeLastObject];
                         if ([v isKindOfClass:[ERMusicCapsuleView class]]) continue;
                         NSString *cn = NSStringFromClass(v.class);
                         CGRect r = [v convertRect:v.bounds toView:w];
-                        if (r.size.width >= 60.0 && r.size.height >= 12.0) {
-                            ERLogInfo(@"MC-FULL [%@] %@ frame=%@%@",
-                                      NSStringFromClass(w.class) ?: @"?", cn,
-                                      NSStringFromCGRect(r), v.hidden ? @" HID" : @"");
+                        if (r.size.width >= 40.0 && r.size.height >= 10.0) {
+                            fprintf(df, "[%s] %s frame=%s%s\n",
+                                    NSStringFromClass(w.class).UTF8String ?: "?",
+                                    cn.UTF8String ?: "?",
+                                    NSStringFromCGRect(r).UTF8String ?: "?",
+                                    v.hidden ? " HID" : "");
                             loggedF++;
                         }
                         [stack addObjectsFromArray:v.subviews];
                     }
                 }
-                ERLogInfo(@"MC-FULLDUMP end");
+                fprintf(df, "MC-FULLDUMP end\n");
+                fclose(df);
             } @catch (__unused NSException *e) {}
         });
     }
