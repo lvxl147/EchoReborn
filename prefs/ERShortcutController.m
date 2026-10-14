@@ -131,6 +131,49 @@ static UIImage *ERShortcutAppIcon(NSString *bundleId) {
     return result;
 }
 
+// 1.1.8-12 · 与 Tweak.xm 里的同名函数保持一致。
+// WorkflowKit 的字形表在这套系统上把 0xF000（「快捷指令」图标选择器「符号」分组的
+// 第一个图标）映射成 app.2.stack.3d，而设备的 CoreGlyphs.bundle 里没有这个名字 ——
+// SF Symbols 已把这族符号改名，name_aliases.strings 里写着
+// square.2.stack.3d -> square.2.layers.3d。于是 systemImageNamed: 返回 nil，
+// 这些行就只剩一块底色。这里按候选链逐个试，谁先出图就用谁。
+static NSArray<NSString *> *ERShortcutSymbolCandidates(NSString *mapped, unsigned short glyph) {
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    void (^add)(NSString *) = ^(NSString *name) {
+        if (name.length && ![candidates containsObject:name]) [candidates addObject:name];
+    };
+    if (mapped.length) {
+        add(mapped);
+        if ([mapped rangeOfString:@".stack.3d"].location != NSNotFound) {
+            add([mapped stringByReplacingOccurrencesOfString:@".stack.3d" withString:@".layers.3d"]);
+        }
+        if ([mapped hasPrefix:@"app."]) {
+            NSString *tail = [mapped substringFromIndex:4];
+            add([@"square." stringByAppendingString:tail]);
+            if ([tail rangeOfString:@".stack.3d"].location != NSNotFound) {
+                add([@"square." stringByAppendingString:
+                     [tail stringByReplacingOccurrencesOfString:@".stack.3d"
+                                                     withString:@".layers.3d"]]);
+            }
+        }
+    }
+    if (glyph == 0xF000) add(@"square.2.layers.3d");
+    return candidates;
+}
+
+static UIImage *ERShortcutSymbolImage(NSString *mapped, unsigned short glyph, NSString **outName) {
+    for (NSString *name in ERShortcutSymbolCandidates(mapped, glyph)) {
+        UIImage *image = [UIImage systemImageNamed:name];
+        if (image) {
+            if (outName) *outName = name;
+            return image;
+        }
+    }
+    return nil;
+}
+
+static UIImage *ERShortcutCellIcon(NSDictionary *shortcut);
+
 // 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra（它用 WorkflowKit 的
 // WFDatabase + attributionIconWithSize:scale:rounded:/symbolName），把
 // WorkflowKit 里所有 Icon 相关类的方法面列出来，确认符号名的官方来源。
@@ -228,13 +271,16 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     UIColor *background = ERShortcutCellColorFromValue([shortcut[@"color"] longLongValue]);
 
-    // 1.1.8-8 · 图标来源优先级（对齐「快捷指令」App 自己的画法）：
-    //   自定义图片 > 符号名(ZSYMBOLNAME) > emoji > glyph 字符映射 > 兜底。
-    //   1.1.8-7 的素色方块：这些行的 glyph 恒为 0xF000，映射不出来，
-    //   而旧的兜底会去「画 glyph 字符本身」——0xE000~0xF8FF 是私有区，
-    //   画出来是一张全透明图，于是盖掉了最后的 sparkles 兜底。
+    // 1.1.8-12 · 图标来源优先级（对齐「快捷指令」App 自己的画法）：
+    //   自定义图片 > 符号名(ZSYMBOLNAME)/glyph→SF Symbol > emoji 字符 >
+    //   关联 App 图标（仅占位字形 0xF000）> 「两层叠放」默认系统符号 > sparkles。
+    //   0xF000 是占位字形：绑定 App 的快捷指令用它（图标取 App），
+    //   从 iCloud 链接导入、没有绑定 App 的也用它（图标就是选择器「符号」分组
+    //   的第一个图标 square.2.layers.3d）。旧兜底去画私有区 glyph 字符本身，
+    //   画出来是一张全透明图，于是盖掉了最后的 sparkles。
     UIImage *customImage = nil;
     UIImage *glyph = nil;
+    NSString *resolvedName = nil;
 
     NSString *iconFile = [shortcut[@"iconFile"] isKindOfClass:[NSString class]] ? shortcut[@"iconFile"] : nil;
     if (iconFile.length) {
@@ -253,27 +299,26 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
             if (handle) mapper = (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter");
         });
 
+        unsigned short ch = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
+        BOOL placeholderGlyph = (ch == 0xF000);
         NSString *symbolName = [shortcut[@"symbolName"] isKindOfClass:[NSString class]] ? shortcut[@"symbolName"] : nil;
-        if (!symbolName.length) {
-            unsigned short ch = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
-            if (mapper && ch) {
-                NSString *mapped = mapper(ch);
-                if ([mapped isKindOfClass:[NSString class]] && mapped.length) symbolName = mapped;
-            }
+        if (!symbolName.length && mapper && ch) {
+            NSString *mapped = mapper(ch);
+            if ([mapped isKindOfClass:[NSString class]] && mapped.length) symbolName = mapped;
         }
-        if (symbolName.length) glyph = [UIImage systemImageNamed:symbolName];
 
-        if (!glyph) {
+        if (!placeholderGlyph && symbolName.length) {
+            glyph = ERShortcutSymbolImage(symbolName, ch, &resolvedName);
+        }
+
+        if (!glyph && !placeholderGlyph) {
             NSString *emoji = [shortcut[@"emoji"] isKindOfClass:[NSString class]] ? shortcut[@"emoji"] : nil;
-            if (!emoji.length) {
-                unsigned short ch = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
-                // 只对普通可读字符做文本兜底；私有区字符画出来是全透明的。
-                if (ch >= 0x20 && ch < 0xE000) emoji = [NSString stringWithFormat:@"%C", (unichar)ch];
-            }
+            // 只对普通可读字符做文本兜底；私有区字符画出来是全透明的。
+            if (!emoji.length && ch >= 0x20 && ch < 0xE000) emoji = [NSString stringWithFormat:@"%C", (unichar)ch];
             if (emoji.length) glyph = ERShortcutTextGlyph(emoji);
         }
-        // 1.1.8-10 · glyph 映射不出可用符号（典型：0xF000 → app.2.stack.3d，
-        //   该系统上不存在）时，用关联 App 的图标 —— 这才是「快捷指令」App 显示的图案。
+
+        // 占位字形 / 上面都没画出来 → 关联 App 的图标（米家 / 比亚迪 / Crane…）。
         if (!glyph) {
             NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
             UIImage *appIcon = ERShortcutAppIcon(bundleId);
@@ -282,9 +327,16 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
                 glyph = nil;
             }
         }
-        // Actra / Shortcuts 的通用兜底符号。
+
         if (!glyph && !customImage) {
-            glyph = [UIImage systemImageNamed:@"wand.and.stars"] ?: [UIImage systemImageNamed:@"sparkles"];
+            if (placeholderGlyph) {
+                // 就是「快捷指令」图标选择器「符号」分组的第一个图标。
+                glyph = ERShortcutSymbolImage(nil, ch, &resolvedName);
+            }
+            // Actra / Shortcuts 的通用兜底符号。
+            if (!glyph) {
+                glyph = [UIImage systemImageNamed:@"wand.and.stars"] ?: [UIImage systemImageNamed:@"sparkles"];
+            }
         }
     }
 
@@ -295,11 +347,12 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
     NSString *logKey = [shortcut[@"uuid"] isKindOfClass:[NSString class]] ? shortcut[@"uuid"] : @"";
     if (logKey.length && ![loggedKeys containsObject:logKey]) {
         [loggedKeys addObject:logKey];
-        ERShortcutLog(@"iconrow: %@ | glyph=0x%04X | bundle=%@ | src=%@",
+        ERShortcutLog(@"iconrow: %@ | glyph=0x%04X | bundle=%@ | src=%@ | sym=%@",
                       [shortcut[@"name"] description],
                       (unsigned)[shortcut[@"glyph"] unsignedShortValue],
                       [shortcut[@"bundleId"] description] ?: @"-",
-                      customImage ? @"app/custom" : (glyph ? @"symbol" : @"fallback"));
+                      customImage ? @"app/custom" : (glyph ? @"symbol" : @"fallback"),
+                      resolvedName ?: @"-");
     }
 
     CGSize size = CGSizeMake(40.0, 40.0);
@@ -324,6 +377,72 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
 }
 
 static NSInteger const kERSectionHidden = 1;
+
+// 1.1.8-12 · 一次性可视化自检：把 glyph→符号 的候选链渲染成 PNG，并把每一行
+// 最终画出来的图标也落盘，这样「哪一条还没对」可以直接看图确认，不用靠猜。
+static void ERShortcutIconDumpOnce(void) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        NSString *dir = ERShortcutIconDirectory();
+        [[NSFileManager defaultManager] createDirectoryAtPath:dir
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
+
+        // 1) 0xF000 的候选链：WorkflowKit 给的名字在本机 CoreGlyphs 里不存在，
+        //    把真实映射值和候选逐个标注可用性，谁能出图一目了然。
+        void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+        NSString *(*mapper)(unsigned short) = handle
+            ? (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter") : NULL;
+        NSString *mapped = mapper ? mapper(0xF000) : nil;
+        NSArray<NSString *> *candidates = ERShortcutSymbolCandidates(mapped, 0xF000);
+        ERShortcutLog(@"symchain: glyph=0xF000 mapped=%@ 候选 %lu 个 = %@",
+                      mapped ?: @"nil", (unsigned long)candidates.count, candidates);
+        NSMutableArray<NSString *> *available = [NSMutableArray array];
+        NSUInteger index = 0;
+        for (NSString *name in candidates) {
+            UIImage *image = [UIImage systemImageNamed:name];
+            ERShortcutLog(@"symcand[%lu] %@ avail=%d", (unsigned long)index, name, image ? 1 : 0);
+            if (image) {
+                [available addObject:name];
+                CGSize canvas = CGSizeMake(128.0, 128.0);
+                UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:canvas];
+                UIImage *swatch = [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+                    [[UIColor colorWithWhite:0.16 alpha:1.0] setFill];
+                    UIRectFill(CGRectMake(0, 0, canvas.width, canvas.height));
+                    UIImage *white = [image imageWithTintColor:UIColor.whiteColor
+                                                 renderingMode:UIImageRenderingModeAlwaysOriginal] ?: image;
+                    [white drawInRect:CGRectInset(CGRectMake(0, 0, canvas.width, canvas.height), 16.0, 16.0)];
+                }];
+                NSString *path = [dir stringByAppendingPathComponent:
+                                  [NSString stringWithFormat:@"_cand%lu.png", (unsigned long)index]];
+                [UIImagePNGRepresentation(swatch) writeToFile:path atomically:NO];
+            }
+            index++;
+        }
+        ERShortcutLog(@"symchain: 可用 %lu 个 = %@", (unsigned long)available.count, available);
+
+        // 2) 每一行的最终图标（含隐藏区），按顺序编号，日志里有编号→名字的对照。
+        NSDictionary *payload =
+            [NSDictionary dictionaryWithContentsOfFile:
+             [kERShortcutSnapshotDirectory stringByAppendingPathComponent:kERShortcutSnapshotFileName]];
+        NSArray *shortcuts = [payload isKindOfClass:[NSDictionary class]] ? payload[@"shortcuts"] : nil;
+        if (![shortcuts isKindOfClass:[NSArray class]]) return;
+        NSUInteger row = 0;
+        for (NSDictionary *shortcut in shortcuts) {
+            if (![shortcut isKindOfClass:[NSDictionary class]]) continue;
+            UIImage *icon = ERShortcutCellIcon(shortcut);
+            if (!icon) continue;
+            NSString *file = [NSString stringWithFormat:@"_row%02lu.png", (unsigned long)row];
+            [UIImagePNGRepresentation(icon)
+                writeToFile:[dir stringByAppendingPathComponent:file] atomically:NO];
+            ERShortcutLog(@"rowshot: %@ -> %@ | glyph=0x%04X | bundle=%@",
+                          file, [shortcut[@"name"] description],
+                          (unsigned)[shortcut[@"glyph"] unsignedShortValue],
+                          [shortcut[@"bundleId"] description] ?: @"-");
+            row++;
+        }
+        ERShortcutLog(@"rowshot: 共 %lu 张", (unsigned long)row);
+    });
+}
 
 static void ERShortcutLog(NSString *format, ...) {
     va_list args;
@@ -560,6 +679,8 @@ static void ERShortcutLog(NSString *format, ...) {
     // Seeded before the first data-source pass so the pane never renders in an
     // unloaded state.
     [self loadSnapshot];
+    // 1.1.8-12 · 快照读完之后再做图标自检（它要用到每一行的数据）。
+    ERShortcutIconDumpOnce();
 
     UIBarButtonItem *rescan = [[UIBarButtonItem alloc] initWithTitle:@"重新扫描"
                                                              style:UIBarButtonItemStylePlain

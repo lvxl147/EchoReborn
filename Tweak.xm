@@ -6840,6 +6840,50 @@ static NSString *ERShortcutSymbolNameForGlyph(unsigned short glyph) {
     @try { return mapper(glyph); } @catch (__unused NSException *exception) { return nil; }
 }
 
+// 1.1.8-12 · 字形表给出的符号名不一定在本机的 CoreGlyphs 里存在。
+// WorkflowKit 这套系统把 0xF000（「快捷指令」图标选择器「符号」分组的第一个图标）
+// 映射成 app.2.stack.3d，而设备的 CoreGlyphs.bundle 里根本没有这个名字：
+// SF Symbols 已经把这族符号改名了，name_aliases.strings 里就写着
+// square.2.stack.3d -> square.2.layers.3d。systemImageNamed: 于是返回 nil，
+// 这些磁贴/行就只剩一块底色。这里按候选链逐个试，谁先出图就用谁。
+static NSArray<NSString *> *ERShortcutSymbolCandidates(NSString *mapped, unsigned short glyph) {
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    void (^add)(NSString *) = ^(NSString *name) {
+        if (name.length && ![candidates containsObject:name]) [candidates addObject:name];
+    };
+    if (mapped.length) {
+        add(mapped);
+        if ([mapped rangeOfString:@".stack.3d"].location != NSNotFound) {
+            add([mapped stringByReplacingOccurrencesOfString:@".stack.3d" withString:@".layers.3d"]);
+        }
+        if ([mapped hasPrefix:@"app."]) {
+            NSString *tail = [mapped substringFromIndex:4];
+            add([@"square." stringByAppendingString:tail]);
+            if ([tail rangeOfString:@".stack.3d"].location != NSNotFound) {
+                add([@"square." stringByAppendingString:
+                     [tail stringByReplacingOccurrencesOfString:@".stack.3d"
+                                                     withString:@".layers.3d"]]);
+            }
+        }
+    }
+    if (glyph == 0xF000) add(@"square.2.layers.3d");
+    return candidates;
+}
+
+// 逐个试候选名，返回第一张画得出来的图；outName 回报真正生效的名字（便于日志确认）。
+static UIImage *ERShortcutSymbolImage(NSString *mapped, unsigned short glyph,
+                                      UIImageSymbolConfiguration *configuration, NSString **outName) {
+    for (NSString *name in ERShortcutSymbolCandidates(mapped, glyph)) {
+        UIImage *image = configuration ? [UIImage systemImageNamed:name withConfiguration:configuration]
+                                       : [UIImage systemImageNamed:name];
+        if (image) {
+            if (outName) *outName = name;
+            return image;
+        }
+    }
+    return nil;
+}
+
 static UIColor *ERShortcutColorFromValue(long long value) {
     // 1.1.8-9 · 数据库里颜色是 0xRRGGBBAA 的无符号 32 位，高位会被存成负数
     // （例如 0xA9A9A9FF = -1448498689）。旧判断 value <= 0 直接判成「没颜色」，
@@ -7255,27 +7299,37 @@ static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     } else if (customImage) {
         glyphImage = customImage;
     } else {
-        // 1.1.8-10 · 取图次序对齐「快捷指令」App：
-        //   符号名(ZSYMBOLNAME) → glyph 映射 → 关联 App 图标 → wand.and.stars 兜底。
-        //   glyph 恒为 0xF000 的那批映射出 app.2.stack.3d 但该系统上取不到图，
-        //   真图标是关联 App 自己的图标（米家 / 比亚迪 / Crane…）。
+        // 1.1.8-12 · 取图次序对齐「快捷指令」App：
+        //   glyph=0xF000 是「占位字形」（关联 App 的快捷指令、以及从 iCloud 链接
+        //   导入的快捷指令都用它），有绑定 App 就取 App 图标，没有就画默认的
+        //   「两层叠放」系统符号；其余字形走 glyph → SF Symbol。
+        unsigned short glyphCode = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
         NSString *symbolName = [shortcut[@"symbolName"] isKindOfClass:[NSString class]] ? shortcut[@"symbolName"] : nil;
-        if (!symbolName.length) {
-            symbolName = ERShortcutSymbolNameForGlyph((unsigned short)[shortcut[@"glyph"] unsignedShortValue]);
-        }
-        if (!symbolName.length) symbolName = @"wand.and.stars";
+        BOOL placeholderGlyph = (glyphCode == 0xF000);
         UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:64.0 weight:UIImageSymbolWeightMedium];
-        glyphImage = [UIImage systemImageNamed:symbolName withConfiguration:configuration];
-        if (!glyphImage) {
+        if (placeholderGlyph) {
             NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
             UIImage *appIcon = ERShortcutAppIconImage(bundleId);
             if (appIcon) {
                 fullBleedImage = YES;
                 glyphImage = appIcon;
+            } else {
+                glyphImage = ERShortcutSymbolImage(nil, glyphCode, configuration, NULL);
+            }
+        } else {
+            if (!symbolName.length) symbolName = ERShortcutSymbolNameForGlyph(glyphCode);
+            glyphImage = ERShortcutSymbolImage(symbolName, glyphCode, configuration, NULL);
+            if (!glyphImage) {
+                NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
+                UIImage *appIcon = ERShortcutAppIconImage(bundleId);
+                if (appIcon) {
+                    fullBleedImage = YES;
+                    glyphImage = appIcon;
+                }
             }
         }
         if (!glyphImage) {
-            glyphImage = [UIImage systemImageNamed:@"wand.and.stars" withConfiguration:configuration]
+            glyphImage = ERShortcutSymbolImage(@"wand.and.stars", 0, configuration, NULL)
                          ?: [UIImage systemImageNamed:@"sparkles"];
         }
     }
