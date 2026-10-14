@@ -62,6 +62,46 @@ static UIImage *ERShortcutTextGlyph(NSString *text) {
     }];
 }
 
+// 1.1.8-10 · 关联 App 的图标。来自 App 的快捷指令（米家/比亚迪/Crane 等）
+// glyph 恒为 0xF000，映射出的 app.2.stack.3d 在 iOS 17.2 上根本取不到图，
+// 真图标是关联 App 自己的图标 —— Actra 也是通过 bundleIdentifier 拿的。
+static UIImage *ERShortcutAppIcon(NSString *bundleId) {
+    if (!bundleId.length) return nil;
+    Class uiImageClass = [UIImage class];
+    SEL iconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if ([uiImageClass respondsToSelector:iconSel]) {
+        @try {
+            UIImage *(*fn)(id, SEL, id, int, CGFloat) =
+                (UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend;
+            CGFloat scale = [UIScreen mainScreen].scale;
+            for (int format = 1; format <= 3; format++) {
+                UIImage *image = fn(uiImageClass, iconSel, bundleId, format, scale);
+                if (image) return image;
+            }
+            UIImage *image = fn(uiImageClass, iconSel, bundleId, 0, scale);
+            if (image) return image;
+        } @catch (__unused NSException *exception) {}
+    }
+    Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+    if (proxyClass) {
+        @try {
+            id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass,
+                                                          @selector(applicationProxyForIdentifier:),
+                                                          bundleId);
+            NSData *data = nil;
+            if (proxy && [proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
+                data = ((NSData *(*)(id, SEL, int))objc_msgSend)(proxy,
+                        NSSelectorFromString(@"iconDataForVariant:"), 2);
+            }
+            if (data.length) {
+                UIImage *image = [UIImage imageWithData:data];
+                if (image) return image;
+            }
+        } @catch (__unused NSException *exception) {}
+    }
+    return nil;
+}
+
 // 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra（它用 WorkflowKit 的
 // WFDatabase + attributionIconWithSize:scale:rounded:/symbolName），把
 // WorkflowKit 里所有 Icon 相关类的方法面列出来，确认符号名的官方来源。
@@ -203,7 +243,20 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
             }
             if (emoji.length) glyph = ERShortcutTextGlyph(emoji);
         }
-        if (!glyph) glyph = [UIImage systemImageNamed:@"sparkles"];
+        // 1.1.8-10 · glyph 映射不出可用符号（典型：0xF000 → app.2.stack.3d，
+        //   该系统上不存在）时，用关联 App 的图标 —— 这才是「快捷指令」App 显示的图案。
+        if (!glyph) {
+            NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
+            UIImage *appIcon = ERShortcutAppIcon(bundleId);
+            if (appIcon) {
+                customImage = appIcon;
+                glyph = nil;
+            }
+        }
+        // Actra / Shortcuts 的通用兜底符号。
+        if (!glyph && !customImage) {
+            glyph = [UIImage systemImageNamed:@"wand.and.stars"] ?: [UIImage systemImageNamed:@"sparkles"];
+        }
     }
 
     CGSize size = CGSizeMake(40.0, 40.0);

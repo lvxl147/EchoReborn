@@ -7193,14 +7193,54 @@ static NSDictionary *ERShortcutForIdentifier(NSString *identifier) {
 // Renders the shortcut's native look: its own background colour rounded
 // square plus its glyph (SF Symbol via WorkflowKit's own mapping, or the
 // custom image when the shortcut uses one).
+// 1.1.8-10 · 关联 App 的图标：来自 App 的快捷指令 glyph 恒为 0xF000，映射出的
+// app.2.stack.3d 在这套系统上取不到图，真图标是关联 App 自己的图标。
+static UIImage *ERShortcutAppIconImage(NSString *bundleId) {
+    if (!bundleId.length) return nil;
+    Class uiImageClass = [UIImage class];
+    SEL iconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if ([uiImageClass respondsToSelector:iconSel]) {
+        @try {
+            UIImage *(*fn)(id, SEL, id, int, CGFloat) =
+                (UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend;
+            CGFloat scale = [UIScreen mainScreen].scale;
+            for (int format = 1; format <= 3; format++) {
+                UIImage *image = fn(uiImageClass, iconSel, bundleId, format, scale);
+                if (image) return image;
+            }
+            UIImage *image = fn(uiImageClass, iconSel, bundleId, 0, scale);
+            if (image) return image;
+        } @catch (__unused NSException *exception) {}
+    }
+    Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+    if (proxyClass) {
+        @try {
+            id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass,
+                                                          @selector(applicationProxyForIdentifier:),
+                                                          bundleId);
+            NSData *data = nil;
+            if (proxy && [proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
+                data = ((NSData *(*)(id, SEL, int))objc_msgSend)(proxy,
+                        NSSelectorFromString(@"iconDataForVariant:"), 2);
+            }
+            if (data.length) {
+                UIImage *image = [UIImage imageWithData:data];
+                if (image) return image;
+            }
+        } @catch (__unused NSException *exception) {}
+    }
+    return nil;
+}
+
 static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     static NSMutableDictionary<NSString *, UIImage *> *cache;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
-    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu",
+    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu|%@",
                           shortcut[@"uuid"] ?: @"", (long long)[shortcut[@"color"] longLongValue],
-                          (unsigned long)[shortcut[@"glyph"] unsignedIntegerValue]];
+                          (unsigned long)[shortcut[@"glyph"] unsignedIntegerValue],
+                          shortcut[@"bundleId"] ?: @""];
     UIImage *cached = cache[cacheKey];
     if (cached) return cached;
     NSData *imageData = [shortcut[@"imageData"] isKindOfClass:[NSData class]] ? shortcut[@"imageData"] : nil;
@@ -7215,15 +7255,29 @@ static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     } else if (customImage) {
         glyphImage = customImage;
     } else {
-        // 1.1.8-9 · 取图次序对齐「快捷指令」App：符号名(ZSYMBOLNAME) → glyph 映射。
-        //   glyph 恒为 0xF000 的那批只有符号名可用，旧写法映射不出来就只剩底色。
+        // 1.1.8-10 · 取图次序对齐「快捷指令」App：
+        //   符号名(ZSYMBOLNAME) → glyph 映射 → 关联 App 图标 → wand.and.stars 兜底。
+        //   glyph 恒为 0xF000 的那批映射出 app.2.stack.3d 但该系统上取不到图，
+        //   真图标是关联 App 自己的图标（米家 / 比亚迪 / Crane…）。
         NSString *symbolName = [shortcut[@"symbolName"] isKindOfClass:[NSString class]] ? shortcut[@"symbolName"] : nil;
         if (!symbolName.length) {
             symbolName = ERShortcutSymbolNameForGlyph((unsigned short)[shortcut[@"glyph"] unsignedShortValue]);
         }
-        if (!symbolName.length) symbolName = @"sparkles";
+        if (!symbolName.length) symbolName = @"wand.and.stars";
         UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:64.0 weight:UIImageSymbolWeightMedium];
-        glyphImage = [UIImage systemImageNamed:symbolName withConfiguration:configuration] ?: [UIImage systemImageNamed:@"sparkles"];
+        glyphImage = [UIImage systemImageNamed:symbolName withConfiguration:configuration];
+        if (!glyphImage) {
+            NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
+            UIImage *appIcon = ERShortcutAppIconImage(bundleId);
+            if (appIcon) {
+                fullBleedImage = YES;
+                glyphImage = appIcon;
+            }
+        }
+        if (!glyphImage) {
+            glyphImage = [UIImage systemImageNamed:@"wand.and.stars" withConfiguration:configuration]
+                         ?: [UIImage systemImageNamed:@"sparkles"];
+        }
     }
     CGSize size = CGSizeMake(120.0, 120.0);
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];

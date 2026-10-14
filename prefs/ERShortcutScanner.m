@@ -318,6 +318,7 @@ void ERShortcutScanAndPublish(void) {
                 while (ERStep(statement) == 100 /* SQLITE_ROW */) {
                     NSString *name = nil;
                     NSString *uuid = nil;
+                    NSString *bundleId = nil;
                     long long iconPK = 0;
                     long long pk = 0;
                     BOOL tombstoned = NO;
@@ -348,6 +349,12 @@ void ERShortcutScanAndPublish(void) {
                             tombstoned = ERColumnInt64(statement, index) != 0;
                         } else if ([upper isEqualToString:@"ZHIDDENFROMLIBRARYANDSYNC"] && type == 1) {
                             hidden = ERColumnInt64(statement, index) != 0;
+                        } else if ([upper isEqualToString:@"ZASSOCIATEDAPPBUNDLEIDENTIFIER"] && readableAsText) {
+                            // 1.1.8-10 · 来自 App 的快捷指令：glyph 恒为 0xF000
+                            // （映射出的 app.2.stack.3d 在 iOS 17.2 上取不到图），
+                            // 真图标是关联 App 的图标 —— Actra 也是这么取的。
+                            const unsigned char *text = ERColumnText(statement, index);
+                            if (text) bundleId = [NSString stringWithUTF8String:(const char *)text];
                         }
                     }
                     rowsSeen++;
@@ -361,6 +368,7 @@ void ERShortcutScanAndPublish(void) {
                     NSMutableDictionary *record = [NSMutableDictionary dictionary];
                     record[@"name"] = name;
                     record[@"uuid"] = uuid;
+                    if (bundleId.length) record[@"bundleId"] = bundleId;
                     NSDictionary *icon = ERReadIconRow(database, iconPK);
                     if (icon[@"glyph"]) record[@"glyph"] = icon[@"glyph"];
                     if (icon[@"color"]) record[@"color"] = icon[@"color"];
@@ -391,8 +399,9 @@ void ERShortcutScanAndPublish(void) {
     }];
 
     // 1.1.8-8 · 图标来源命中统计（诊断用）：符号名 / emoji / 图片 / 只剩 glyph。
-    NSUInteger withSymbol = 0, withEmoji = 0, withImage = 0, glyphOnly = 0, noIcon = 0;
+    NSUInteger withSymbol = 0, withEmoji = 0, withImage = 0, glyphOnly = 0, noIcon = 0, withBundle = 0;
     for (NSDictionary *record in records) {
+        if (record[@"bundleId"]) withBundle++;
         if (record[@"iconFile"]) withImage++;
         else if (record[@"symbolName"]) withSymbol++;
         else if (record[@"emoji"]) withEmoji++;
@@ -400,9 +409,9 @@ void ERShortcutScanAndPublish(void) {
                  [record[@"glyph"] longLongValue] != 0xF000) glyphOnly++;
         else noIcon++;
     }
-    ERShortcutLog(@"scan: 图标来源 symbol=%lu emoji=%lu image=%lu glyph=%lu none=%lu",
+    ERShortcutLog(@"scan: 图标来源 symbol=%lu emoji=%lu image=%lu glyph=%lu none=%lu bundleId=%lu",
                   (unsigned long)withSymbol, (unsigned long)withEmoji, (unsigned long)withImage,
-                  (unsigned long)glyphOnly, (unsigned long)noIcon);
+                  (unsigned long)glyphOnly, (unsigned long)noIcon, (unsigned long)withBundle);
     ERCopyStoreForDiagnostics(databasePath);
 
     // Publish the FULL catalog (including imageData) to the shared prefs domain
@@ -424,6 +433,7 @@ void ERShortcutScanAndPublish(void) {
         if ([record[@"symbolName"] isKindOfClass:[NSString class]]) entry[@"symbolName"] = record[@"symbolName"];
         if ([record[@"emoji"] isKindOfClass:[NSString class]]) entry[@"emoji"] = record[@"emoji"];
         if ([record[@"iconFile"] isKindOfClass:[NSString class]]) entry[@"iconFile"] = record[@"iconFile"];
+        if ([record[@"bundleId"] isKindOfClass:[NSString class]]) entry[@"bundleId"] = record[@"bundleId"];
         [entries addObject:entry];
     }
     NSMutableDictionary *payload = [NSMutableDictionary dictionary];
