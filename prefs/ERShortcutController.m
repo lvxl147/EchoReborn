@@ -62,44 +62,73 @@ static UIImage *ERShortcutTextGlyph(NSString *text) {
     }];
 }
 
+static void ERShortcutLog(NSString *format, ...);
+
 // 1.1.8-10 · 关联 App 的图标。来自 App 的快捷指令（米家/比亚迪/Crane 等）
 // glyph 恒为 0xF000，映射出的 app.2.stack.3d 在 iOS 17.2 上根本取不到图，
 // 真图标是关联 App 自己的图标 —— Actra 也是通过 bundleIdentifier 拿的。
 static UIImage *ERShortcutAppIcon(NSString *bundleId) {
     if (!bundleId.length) return nil;
+    static NSMutableDictionary<NSString *, UIImage *> *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
+    UIImage *cached = cache[bundleId];
+    if (cached) return (cached == (UIImage *)[NSNull null]) ? nil : cached;
+
+    UIImage *result = nil;
+    NSString *how = @"none";
     Class uiImageClass = [UIImage class];
     SEL iconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
-    if ([uiImageClass respondsToSelector:iconSel]) {
+    if (!result && [uiImageClass respondsToSelector:iconSel]) {
         @try {
             UIImage *(*fn)(id, SEL, id, int, CGFloat) =
                 (UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend;
             CGFloat scale = [UIScreen mainScreen].scale;
-            for (int format = 1; format <= 3; format++) {
-                UIImage *image = fn(uiImageClass, iconSel, bundleId, format, scale);
-                if (image) return image;
+            for (int format = 0; format <= 12 && !result; format++) {
+                result = fn(uiImageClass, iconSel, bundleId, format, scale);
+                if (result) how = [NSString stringWithFormat:@"UIImage format=%d", format];
             }
-            UIImage *image = fn(uiImageClass, iconSel, bundleId, 0, scale);
-            if (image) return image;
         } @catch (__unused NSException *exception) {}
     }
     Class proxyClass = NSClassFromString(@"LSApplicationProxy");
-    if (proxyClass) {
+    if (!result && proxyClass) {
         @try {
             id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass,
                                                           @selector(applicationProxyForIdentifier:),
                                                           bundleId);
-            NSData *data = nil;
-            if (proxy && [proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
-                data = ((NSData *(*)(id, SEL, int))objc_msgSend)(proxy,
-                        NSSelectorFromString(@"iconDataForVariant:"), 2);
-            }
-            if (data.length) {
-                UIImage *image = [UIImage imageWithData:data];
-                if (image) return image;
+            SEL variantSel = NSSelectorFromString(@"iconDataForVariant:");
+            if (proxy && [proxy respondsToSelector:variantSel]) {
+                for (int variant = 0; variant <= 4 && !result; variant++) {
+                    NSData *data = ((NSData *(*)(id, SEL, int))objc_msgSend)(proxy, variantSel, variant);
+                    UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+                    if (image) {
+                        result = image;
+                        how = [NSString stringWithFormat:@"iconDataForVariant=%d", variant];
+                    }
+                }
             }
         } @catch (__unused NSException *exception) {}
     }
-    return nil;
+    if (!result && proxyClass && [proxyClass respondsToSelector:NSSelectorFromString(@"applicationProxyForIdentifier:")]) {
+        @try {
+            id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass,
+                                                          @selector(applicationProxyForIdentifier:),
+                                                          bundleId);
+            for (NSString *key in @[@"icon", @"iconImage", @"primaryIconData"]) {
+                id value = nil;
+                @try { value = [proxy valueForKey:key]; } @catch (__unused NSException *e) {}
+                if ([value isKindOfClass:[NSData class]] && [(NSData *)value length]) {
+                    UIImage *image = [UIImage imageWithData:(NSData *)value];
+                    if (image) { result = image; how = [@"kvo:" stringByAppendingString:key]; break; }
+                } else if ([value isKindOfClass:[UIImage class]]) {
+                    result = (UIImage *)value; how = [@"kvo:" stringByAppendingString:key]; break;
+                }
+            }
+        } @catch (__unused NSException *exception) {}
+    }
+    ERShortcutLog(@"iconapp: %@ -> %@ (%@)", bundleId, result ? @"OK" : @"FAIL", how);
+    cache[bundleId] = result ?: (UIImage *)[NSNull null];
+    return result;
 }
 
 // 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra（它用 WorkflowKit 的
@@ -257,6 +286,20 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
         if (!glyph && !customImage) {
             glyph = [UIImage systemImageNamed:@"wand.and.stars"] ?: [UIImage systemImageNamed:@"sparkles"];
         }
+    }
+
+    // 1.1.8-11 · 逐条记录解析结果（每个 uuid 只记一次），用来确认还有哪些没落地。
+    static NSMutableSet<NSString *> *loggedKeys;
+    static dispatch_once_t logOnce;
+    dispatch_once(&logOnce, ^{ loggedKeys = [NSMutableSet set]; });
+    NSString *logKey = [shortcut[@"uuid"] isKindOfClass:[NSString class]] ? shortcut[@"uuid"] : @"";
+    if (logKey.length && ![loggedKeys containsObject:logKey]) {
+        [loggedKeys addObject:logKey];
+        ERShortcutLog(@"iconrow: %@ | glyph=0x%04X | bundle=%@ | src=%@",
+                      [shortcut[@"name"] description],
+                      (unsigned)[shortcut[@"glyph"] unsignedShortValue],
+                      [shortcut[@"bundleId"] description] ?: @"-",
+                      customImage ? @"app/custom" : (glyph ? @"symbol" : @"fallback"));
     }
 
     CGSize size = CGSizeMake(40.0, 40.0);
