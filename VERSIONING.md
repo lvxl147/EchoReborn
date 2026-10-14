@@ -6,3 +6,5 @@
 | 96 | 1.1.5 | 修复 1.1.4 崩溃循环：RCP 钩子从 objc_msgSendSuper 转发（父类无实现 → unrecognized selector → SpringBoard 崩溃循环进安全模式）改为标准 MSHookMessageEx orig 捕获透传，行为零改动仅日志。版本 1.1.5/1001046。 |
 | 97 | 1.1.6 | 崩溃循环真凶修复：1.1.4/1.1.5 的崩溃并非 RCP msgSendSuper（背锅），而是 60s 扫描器在后台线程对懒加载新类 RPControlCenter* 自动 MSHookMessageEx，与主线程使用竞态崩溃。扫描器降级为只记录候选类名+方法清单（绝不自动挂钩）。版本 1.1.6/1001047。 |
 | 98 | 1.1.7 | 稳定版：彻底删除 60s 后台全类扫描（三连崩溃元凶：后台线程触碰懒加载类触发 +initialize 的 UIKit/CA 副作用 → QuartzCore 后台断言 abort，崩溃栈三版一致）。RCP 安全日志钩子保留。版本 1.1.7/1001048。 |
+| 99 | 1.1.7-1 | 探测版：QABTN 定时器内嵌 CC-BTN-PROBE（控制中心打开时扫描 SBControlCenterWindow 的 UIControl，打印类名/target/Action 含 ecord|Record 的控件）——定位 iOS 17.2 录屏按钮的事件接收者。版本 1.1.7-1/1001049。 |
+| 100 | 1.1.7-2 | 录屏无延迟正式适配：对照 CCRecordNoDelay 0.1.0 逆向实锤，iOS 17.2 宿主 = RPControlCenterClient（RPControlCenter 家族，1.1.5 日志截断的 RPControlCen 即它）。ctor 主线程挂 RPControlCenterClient + SBControlCenterController 双宿主，3s 主队列延迟重试兜底懒加载；无延迟路径 startRecordingWithHandler:/startRecord 与参考插件一致。版本 1.1.7-2/1001050。 |

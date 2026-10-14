@@ -29395,6 +29395,44 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                                   (uint64_t)(0.3 * NSEC_PER_SEC));
         dispatch_source_set_event_handler(qaBtnProbeTimer, ^{
             @try {
+                // 1.1.7-1 · CC 录屏按钮 target-action 探针（主队列，10s 限流一次）：
+                //   控制中心打开时扫描 SBControlCenterWindow 里的 UIControl，
+                //   类名/target/Action 含 ecord/Record 的直接打印 —— 定位录屏按钮事件接收者。
+                static CFTimeInterval lastCCBtn = 0.0;
+                CFTimeInterval nowCCB = CACurrentMediaTime();
+                if (gERControlCenterPresented && nowCCB - lastCCBtn > 10.0) {
+                    lastCCBtn = nowCCB;
+                    for (UIWindow *w in ERAllApplicationWindows()) {
+                        if (![NSStringFromClass(w.class) containsString:@"ControlCenter"]) continue;
+                        NSMutableArray<NSString *> *outp = [NSMutableArray array];
+                        NSMutableArray<UIView *> *st = [NSMutableArray arrayWithObject:w];
+                        NSInteger guardB = 0;
+                        while (st.count && guardB++ < 4000 && outp.count < 12) {
+                            UIView *v = st.lastObject;
+                            [st removeLastObject];
+                            if ([v isKindOfClass:[UIControl class]]) {
+                                UIControl *ctl = (UIControl *)v;
+                                NSString *cn = NSStringFromClass(ctl.class);
+                                NSMutableString *desc = [NSMutableString stringWithFormat:@"%@ evt=%lu", cn, (unsigned long)ctl.allControlEvents];
+                                for (id t in ctl.allTargets) {
+                                    for (id act in [ctl actionsForTarget:t forControlEvent:UIControlEventTouchUpInside]) {
+                                        [desc appendFormat:@" ->[%@ %@]", NSStringFromClass([t class]), act];
+                                    }
+                                }
+                                if ([desc rangeOfString:@"ecord"].location != NSNotFound ||
+                                    [desc rangeOfString:@"Record"].location != NSNotFound) {
+                                    [outp addObject:desc];
+                                }
+                            }
+                            [st addObjectsFromArray:v.subviews];
+                        }
+                        if (outp.count) {
+                            ERLogInfo(@"CC-BTN-PROBE 录屏相关控件=%@", outp);
+                        } else {
+                            ERLogInfo(@"CC-BTN-PROBE 本轮无 ecord/Record 控件（窗口=%lu）", (unsigned long)0);
+                        }
+                    }
+                }
                 if (!gEnabled || !gERControlCenterPresented) return;
                 for (UIWindow *probeWindow in ERAllApplicationWindows()) {
                     UIView *qaHost = [probeWindow viewWithTag:181000];
@@ -29446,25 +29484,52 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
         // 1.0.9-175 · 录屏无延迟：运行时探测 SBControlCenterController 的 startRecordingCountdown
         //   （方法在才挂，参考 CCRecordNoDelay 同类名同选择器；方法不在时零副作用）
         {
-            Class ccc = objc_getClass("SBControlCenterController");
-            SEL selCD = NSSelectorFromString(@"startRecordingCountdown");
-            if (ccc && [ccc instancesRespondToSelector:selCD] && gERCCRecHostCnt < ERCCREC_MAX_HOSTS) {
-                gERCCRecHostCls[gERCCRecHostCnt] = ccc;
-                MSHookMessageEx(ccc, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
-                gERCCRecHostCnt++;
-                ERLogInfo(@"CC-RECORD hook 已挂载 SBControlCenterController startRecordingCountdown");
-            } else {
-                ERLogInfo(@"CC-RECORD 类或方法缺失（class=%@ has=%d），录屏无延迟不可用",
-                          ccc ? NSStringFromClass(ccc) : @"(nil)",
-                          (int)(ccc && [ccc instancesRespondToSelector:selCD]));
+            // 1.1.7-2 · 录屏无延迟正式适配（对照参考插件 CCRecordNoDelay 0.1.0 逆向实锤）：
+            //   iOS 17.2 上 startRecordingCountdown 的宿主 = RPControlCenterClient（RPControlCenter 家族，
+            //   1.1.5 崩溃日志里截断的 "RPControlCen..." 即它）。旧宿主 SBControlCenterController 已无此方法。
+            //   挂钩一律在【主线程】执行（1.1.5/1.1.6 事故 = 后台线程挂钩竞态）；RPControlCenterClient
+            //   若为懒加载，ctor 挂不上时由下方主队列延迟重试兜底。
+            {
+                SEL selCD = NSSelectorFromString(@"startRecordingCountdown");
+                NSArray<NSString *> *hostNames = @[@"RPControlCenterClient", @"SBControlCenterController"];
+                for (NSString *hn in hostNames) {
+                    Class c = objc_getClass(hn.UTF8String);
+                    BOOL hookedAlready = NO;
+                    for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hookedAlready = YES;
+                    if (!c || ![c instancesRespondToSelector:selCD]) {
+                        ERLogInfo(@"CC-RECORD %@ 不可挂（class=%@ has=%d）", hn,
+                                  c ? NSStringFromClass(c) : @"(nil)",
+                                  (int)(c && [c instancesRespondToSelector:selCD]));
+                        continue;
+                    }
+                    if (hookedAlready || gERCCRecHostCnt >= ERCCREC_MAX_HOSTS) continue;
+                    gERCCRecHostCls[gERCCRecHostCnt] = c;
+                    MSHookMessageEx(c, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
+                    gERCCRecHostCnt++;
+                    ERLogInfo(@"CC-RECORD hook 已挂载 %@ startRecordingCountdown", hn);
+                }
+                // 主队列延迟重试（懒加载兜底）：3s 与 10s 各一次，只针对 RPControlCenterClient，
+                // 且只在主线程执行 —— 重现参考插件 Logos ctor 语义，无竞态。
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    @try {
+                        Class c = objc_getClass("RPControlCenterClient");
+                        SEL s2 = NSSelectorFromString(@"startRecordingCountdown");
+                        if (!c || ![c instancesRespondToSelector:s2]) return;
+                        BOOL hookedAlready = NO;
+                        for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hookedAlready = YES;
+                        if (hookedAlready || gERCCRecHostCnt >= ERCCREC_MAX_HOSTS) {
+                            ERLogInfo(@"CC-RECORD retry3s: %@ 已挂或配额满", NSStringFromClass(c));
+                            return;
+                        }
+                        gERCCRecHostCls[gERCCRecHostCnt] = c;
+                        MSHookMessageEx(c, s2, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
+                        gERCCRecHostCnt++;
+                        ERLogInfo(@"CC-RECORD retry3s: 已挂载 RPControlCenterClient startRecordingCountdown");
+                    } @catch (__unused NSException *e172) {}
+                });
+                ERLogInfo(@"ctor: CC-RECORD init done (1.1.7-2 host=RPControlCenterClient)");
             }
-            // 1.1.7 · 【60s 后台全类扫描已删除】
-            //   三连崩溃（1.1.4/1.1.5/1.1.6 崩溃栈一致：SIGABRT <- QuartzCore <-
-            //   UIKitCore <- NotificationCenter <- objc +initialize <- 本插件后台队列）实证：
-            //   后台线程首次触碰懒加载类（NTK*ColorPalette/REMAuxiliary* 等）触发其
-            //   +initialize 的 UIKit/CA 副作用 -> 后台线程断言 abort，主线程同时卡死。
-            //   扫描使命已结束（RPControlCenter* 候选已发现），后续探测一律主队列一次性执行。
-            ERLogInfo(@"ctor: CC-RECORD init done (background scan removed in 1.1.7)");
             // 1.1.2 · iOS 27 录屏新钩点探测：老方法 startRecordingCountdown 已不存在（has=0 实锤），
             //   列出 SBControlCenterController 全部含 ecord 的方法 + 全类表中含 Recording 的类，
             //   下一轮日志即可确定新钩点。
