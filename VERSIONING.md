@@ -2,3 +2,6 @@
 | 92 | 1.1.1 | 系统增强两功能失效修复诊断：录屏无延迟（ctor CC-RECORD 块）与隐藏锁屏音乐（%hook CSCoverSheetViewController）均挂在主开关 Enabled 门之后，实测两功能日志全零而 DI 类（不受该门控）正常——主开关被 cfpresd 判为 NO 嫌疑最大。ctor 增加主开关读值/CC-RECORD 初始化标记，音乐胶囊钩子增加 MC-HIT 命中标记。版本 1.1.1/1001042。 |
 | 93 | 1.1.2 | 录屏无延迟 iOS 27 适配探测：实锤 SBControlCenterController 已无 startRecordingCountdown（has=0）。扫描定时器改静态持有+心跳日志；ctor 新增 CC-PROBE（SBCC 全部含 ecord 方法 + 全类表含 Recording 类名），下一轮日志确定新钩点。版本 1.1.2/1001043。 |
 | 94 | 1.1.3 | 录屏无延迟第二轮探测：设备实为 iOS 17.2；SBControlCenterController 173 方法零 ecord（老钩点彻底消失）。新增 CC-PROBE2：对含 Recording/ScreenRecord 类名的类枚举含 ecord/ountdown/tart 的方法，锁定 SBRecordingIndicatorManager 等新候选。版本 1.1.3/1001044。 |
+| 95 | 1.1.4 | 录屏新钩点时间线：RCPScreenRecorder（start/stopRecording）日志钩子（msgSendSuper 透传），定位按钮按下→倒计时→startRecording 的时间间隔；扫描心跳确认无任何类再有老方法。版本 1.1.4/1001045。 |
+| 96 | 1.1.5 | 修复 1.1.4 崩溃循环：RCP 钩子从 objc_msgSendSuper 转发（父类无实现 → unrecognized selector → SpringBoard 崩溃循环进安全模式）改为标准 MSHookMessageEx orig 捕获透传，行为零改动仅日志。版本 1.1.5/1001046。 |
+| 97 | 1.1.6 | 崩溃循环真凶修复：1.1.4/1.1.5 的崩溃并非 RCP msgSendSuper（背锅），而是 60s 扫描器在后台线程对懒加载新类 RPControlCenter* 自动 MSHookMessageEx，与主线程使用竞态崩溃。扫描器降级为只记录候选类名+方法清单（绝不自动挂钩）。版本 1.1.6/1001047。 |

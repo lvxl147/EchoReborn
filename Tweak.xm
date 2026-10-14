@@ -29288,6 +29288,21 @@ static void EROpButtonProbeLog(UIView *view, const char *hook) {
 %end
 
 // ---- 1.0.9-175 · 录屏无延迟（参考 CCRecordNoDelay 0.1.0 还原实现）----
+// 1.1.5 · RCP 日志钩子改标准姿势：MSHookMessageEx 第 4 参捕获 orig IMP 并调用。
+//   【1.1.4 事故复盘】此前用 objc_msgSendSuper 转发，但 startRecording 是
+//   RCPScreenRecorder 自己实现的（父类没有）→ 任何调用直接 unrecognized selector
+//   → SpringBoard 崩溃循环 → 安全模式。教训：替换实现必须捕获并调用 orig。
+static void (*origRCPStart)(id, SEL);
+static void (*origRCPStop)(id, SEL);
+static void ERRCPStartLog(id self, SEL _cmd) {
+    ERLogInfo(@"RCP-TIMELINE startRecording t=%.3f", CACurrentMediaTime());
+    if (origRCPStart) origRCPStart(self, _cmd);
+}
+static void ERRCPStopLog(id self, SEL _cmd) {
+    ERLogInfo(@"RCP-TIMELINE stopRecording t=%.3f", CACurrentMediaTime());
+    if (origRCPStop) origRCPStop(self, _cmd);
+}
+
 //   参考插件（CCRecordNoDelay.dylib，filter=com.apple.springboard）字符串还原：
 //   hook SBControlCenterController，startRecordingCountdown（3 秒倒计时）替换为
 //   startRecordingWithHandler:/startRecord 直接开录；随后 performSelector:
@@ -29469,15 +29484,27 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                                     BOOL hooked = NO;
                                     for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hooked = YES;
                                     if (hooked) { [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(已挂)"]]; continue; }
-                                    if (gERCCRecHostCnt < ERCCREC_MAX_HOSTS) {
-                                        gERCCRecHostCls[gERCCRecHostCnt] = c;
-                                        MSHookMessageEx(c, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
-                                        gERCCRecHostCnt++;
-                                        [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(新挂)"]];
-                                        ERLogInfo(@"CC-RECORD 扫描发现新宿主并挂载：%@", NSStringFromClass(c));
-                                    } else {
-                                        [hosts addObject:NSStringFromClass(c)];
+                                    // 1.1.6 · 【安全修复】不再自动挂钩！1.1.4/1.1.5 的事故根因：
+                                    //   后台线程对新类 MSHookMessageEx，与主线程使用该类竞态 → 崩溃循环。
+                                    //   改为只记录类名 + 该类含 ecord/ountdown/tart 的方法清单，人工研判后再决定。
+                                    unsigned int mCntP = 0;
+                                    Method *mLstP = class_copyMethodList(c, &mCntP);
+                                    NSMutableArray<NSString *> *sels = [NSMutableArray array];
+                                    if (mLstP) {
+                                        for (unsigned int k = 0; k < mCntP && sels.count < 16; k++) {
+                                            NSString *sn = NSStringFromSelector(method_getName(mLstP[k]));
+                                            if ([sn rangeOfString:@"ecord"].location != NSNotFound ||
+                                                [sn rangeOfString:@"ountdown"].location != NSNotFound ||
+                                                [sn rangeOfString:@"tart"].location != NSNotFound) {
+                                                [sels addObject:sn];
+                                            }
+                                        }
+                                        free(mLstP);
                                     }
+                                    [hosts addObject:[NSString stringWithFormat:@"%@(候选未挂) 方法=%@",
+                                                      NSStringFromClass(c),
+                                                      sels.count ? [sels componentsJoinedByString:@","] : @"(无)"]];
+                                    ERLogInfo(@"CC-RECORD 发现候选宿主（仅记录不挂钩）：%@", NSStringFromClass(c));
                                 }
                             }
                             free(clsList);
@@ -29550,6 +29577,25 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                     free(cLst2);
                 }
                 ERLogInfo(@"CC-PROBE2 录屏候选类方法=%@", probe2);
+            }
+            // 1.1.4 · RCPScreenRecorder 日志钩子（时间线定位倒计时）+ CC 录屏按钮 target 探测
+            {
+                Class rcp = objc_getClass("RCPScreenRecorder");
+                if (rcp) {
+                    static dispatch_once_t onceRCP;
+                    dispatch_once(&onceRCP, ^{
+                        SEL sStart = NSSelectorFromString(@"startRecording");
+                        SEL sStop = NSSelectorFromString(@"stopRecording");
+                        if ([rcp instancesRespondToSelector:sStart]) {
+                            MSHookMessageEx(rcp, sStart, (IMP)ERRCPStartLog, (IMP *)&origRCPStart);
+                            ERLogInfo(@"RCP-HOOK startRecording 已挂（orig 透传）");
+                        }
+                        if ([rcp instancesRespondToSelector:sStop]) {
+                            MSHookMessageEx(rcp, sStop, (IMP)ERRCPStopLog, (IMP *)&origRCPStop);
+                            ERLogInfo(@"RCP-HOOK stopRecording 已挂（orig 透传）");
+                        }
+                    });
+                }
             }
         }
         // The package intentionally has no firmware ceiling so it installs on
