@@ -6866,7 +6866,6 @@ static NSArray<NSString *> *ERShortcutSymbolCandidates(NSString *mapped, unsigne
             }
         }
     }
-    if (glyph == 0xF000) add(@"square.2.layers.3d");
     return candidates;
 }
 
@@ -7281,18 +7280,33 @@ static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     static NSMutableDictionary<NSString *, UIImage *> *cache;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
-    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu|%@",
+    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu|%@|%@",
                           shortcut[@"uuid"] ?: @"", (long long)[shortcut[@"color"] longLongValue],
                           (unsigned long)[shortcut[@"glyph"] unsignedIntegerValue],
-                          shortcut[@"bundleId"] ?: @""];
+                          shortcut[@"bundleId"] ?: @"",
+                          [shortcut[@"iconPNG"] isKindOfClass:[NSData class]] ? @"wfkit" : @""];
     UIImage *cached = cache[cacheKey];
     if (cached) return cached;
     NSData *imageData = [shortcut[@"imageData"] isKindOfClass:[NSData class]] ? shortcut[@"imageData"] : nil;
+    // 1.1.8-13 · WorkflowKit 自己渲染好的图标（扫描器在设置进程里取到后发布过来）。
+    // iconFull=YES 是完整的圆角图标（直接满铺），NO 是透明底的前景符号（画在底色上）。
+    NSData *iconPNG = [shortcut[@"iconPNG"] isKindOfClass:[NSData class]] ? shortcut[@"iconPNG"] : nil;
+    UIImage *renderedImage = iconPNG.length ? [UIImage imageWithData:iconPNG] : nil;
+    BOOL iconFull = [shortcut[@"iconFull"] isKindOfClass:[NSNumber class]]
+                    ? [shortcut[@"iconFull"] boolValue] : YES;
     UIImage *customImage = imageData.length ? [UIImage imageWithData:imageData] : nil;
     UIColor *background = ERShortcutColorFromValue([shortcut[@"color"] longLongValue]);
     UIImage *glyphImage = nil;
     BOOL fullBleedImage = NO;
-    if (customImage && !background) {
+    if (renderedImage) {
+        // 「快捷指令」App 画什么就贴什么：不猜符号名，也不为任何一条单独适配。
+        if (iconFull) {
+            fullBleedImage = YES;
+            glyphImage = renderedImage;
+        } else {
+            glyphImage = renderedImage;
+        }
+    } else if (customImage && !background) {
         // A photo-style icon fills the whole tile.
         fullBleedImage = YES;
         glyphImage = customImage;

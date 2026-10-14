@@ -157,7 +157,6 @@ static NSArray<NSString *> *ERShortcutSymbolCandidates(NSString *mapped, unsigne
             }
         }
     }
-    if (glyph == 0xF000) add(@"square.2.layers.3d");
     return candidates;
 }
 
@@ -282,13 +281,28 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
     UIImage *glyph = nil;
     NSString *resolvedName = nil;
 
+    // 1.1.8-13 · WorkflowKit 渲染好的图标：iconFull=YES 是完整圆角方块（满铺），
+    // NO 是透明底的前景符号（画在我们的底色上）。两种都自动识别，不需要按
+    // glyph 分情况处理 —— 以后新增多少条快捷指令都一样。
+    NSString *iconSource = nil;
     NSString *iconFile = [shortcut[@"iconFile"] isKindOfClass:[NSString class]] ? shortcut[@"iconFile"] : nil;
+    BOOL iconFull = [shortcut[@"iconFull"] isKindOfClass:[NSNumber class]]
+                    ? [shortcut[@"iconFull"] boolValue] : YES;
     if (iconFile.length) {
-        customImage = [UIImage imageWithContentsOfFile:
-                       [ERShortcutIconDirectory() stringByAppendingPathComponent:iconFile]];
+        UIImage *rendered = [UIImage imageWithContentsOfFile:
+                             [ERShortcutIconDirectory() stringByAppendingPathComponent:iconFile]];
+        if (rendered) {
+            if (iconFull) {
+                customImage = rendered;
+                iconSource = @"wfkit-full";
+            } else {
+                glyph = rendered;
+                iconSource = @"wfkit-glyph";
+            }
+        }
     }
 
-    if (!customImage) {
+    if (!customImage && !glyph) {
         static NSString *(*mapper)(unsigned short);
         static dispatch_once_t onceToken;
         dispatch_once(&onceToken, ^{
@@ -351,7 +365,7 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
                       [shortcut[@"name"] description],
                       (unsigned)[shortcut[@"glyph"] unsignedShortValue],
                       [shortcut[@"bundleId"] description] ?: @"-",
-                      customImage ? @"app/custom" : (glyph ? @"symbol" : @"fallback"),
+                      iconSource ?: (customImage ? @"app/custom" : (glyph ? @"symbol" : @"fallback")),
                       resolvedName ?: @"-");
     }
 
