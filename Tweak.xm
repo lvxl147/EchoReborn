@@ -29447,16 +29447,19 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
             //   且一次性扫描的日志总赶不上日志轮转抓不到。改为启动后 5s 起每 60s 扫一遍
             //   （后台队列 + @try）：发现新宿主类直接自动挂 hook（自配置），日志每轮都输出，
             //   任何时刻抓日志都能看到扫描结果与开关读值。
-            dispatch_source_t scanTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                                                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-            if (scanTimer) {
-                dispatch_source_set_timer(scanTimer,
+            // 1.1.2 · 扫描定时器改静态持有（此前 __block 局部持有实测 60s 扫描零日志，
+            //   疑似 source 被提前释放），handler 首行加心跳。
+            static dispatch_source_t sERCCRecScanTimer = nil;
+            if (!sERCCRecScanTimer) {
+                sERCCRecScanTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                           dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
+                dispatch_source_set_timer(sERCCRecScanTimer,
                                           dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
                                           (uint64_t)(60.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
-                __block dispatch_source_t keepScan = scanTimer;
-                dispatch_source_set_event_handler(scanTimer, ^{
+                dispatch_source_set_event_handler(sERCCRecScanTimer, ^{
                     @autoreleasepool {
                         @try {
+                            ERLogInfo(@"CC-RECORD scan tick hosts=%ld", (long)gERCCRecHostCnt);
                             unsigned int cnt = 0;
                             Class *clsList = objc_copyClassList(&cnt);
                             NSMutableArray<NSString *> *hosts = [NSMutableArray array];
@@ -29485,8 +29488,35 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                         }
                     }
                 });
-                dispatch_resume(scanTimer);
+                dispatch_resume(sERCCRecScanTimer);
                 ERLogInfo(@"ctor: CC-RECORD scan timer started");
+            }
+            // 1.1.2 · iOS 27 录屏新钩点探测：老方法 startRecordingCountdown 已不存在（has=0 实锤），
+            //   列出 SBControlCenterController 全部含 ecord 的方法 + 全类表中含 Recording 的类，
+            //   下一轮日志即可确定新钩点。
+            {
+                unsigned int mCnt = 0;
+                Class cccCls = objc_getClass("SBControlCenterController");
+                Method *mLst = cccCls ? class_copyMethodList(cccCls, &mCnt) : NULL;
+                if (mLst) {
+                    NSMutableArray<NSString *> *hits = [NSMutableArray array];
+                    for (unsigned int i = 0; i < mCnt && hits.count < 24; i++) {
+                        NSString *n = NSStringFromSelector(method_getName(mLst[i]));
+                        if ([n rangeOfString:@"ecord"].location != NSNotFound) [hits addObject:n];
+                    }
+                    free(mLst);
+                    ERLogInfo(@"CC-PROBE SBControlCenterController 含 ecord 方法(%lu)=%@",
+                              (unsigned long)mCnt, hits);
+                }
+                unsigned int cCnt = 0;
+                Class *cLst = objc_copyClassList(&cCnt);
+                NSMutableArray<NSString *> *cHits = [NSMutableArray array];
+                for (unsigned int i = 0; i < cCnt && cHits.count < 40; i++) {
+                    NSString *n = NSStringFromClass(cLst[i]);
+                    if ([n rangeOfString:@"Recording"].location != NSNotFound) [cHits addObject:n];
+                }
+                if (cLst) free(cLst);
+                ERLogInfo(@"CC-PROBE 含 Recording 的类(%lu/%u)=%@", (unsigned long)cHits.count, cCnt, cHits);
             }
         }
         // The package intentionally has no firmware ceiling so it installs on
