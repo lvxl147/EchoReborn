@@ -6829,60 +6829,13 @@ static BOOL ERDuplicateLedgerHasLiveEntry(NSString *identifier) {
     return [value isKindOfClass:[NSString class]] && ((NSString *)value).length > 0;
 }
 
-static NSString *ERShortcutSymbolNameForGlyph(unsigned short glyph) {
-    static NSString *(*mapper)(unsigned short);
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{
-        void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
-        if (handle) mapper = (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter");
-    });
-    if (!mapper) return nil;
-    @try { return mapper(glyph); } @catch (__unused NSException *exception) { return nil; }
-}
-
 // 1.1.8-12 · 字形表给出的符号名不一定在本机的 CoreGlyphs 里存在。
 // WorkflowKit 这套系统把 0xF000（「快捷指令」图标选择器「符号」分组的第一个图标）
 // 映射成 app.2.stack.3d，而设备的 CoreGlyphs.bundle 里根本没有这个名字：
 // SF Symbols 已经把这族符号改名了，name_aliases.strings 里就写着
 // square.2.stack.3d -> square.2.layers.3d。systemImageNamed: 于是返回 nil，
 // 这些磁贴/行就只剩一块底色。这里按候选链逐个试，谁先出图就用谁。
-static NSArray<NSString *> *ERShortcutSymbolCandidates(NSString *mapped, unsigned short glyph) {
-    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
-    void (^add)(NSString *) = ^(NSString *name) {
-        if (name.length && ![candidates containsObject:name]) [candidates addObject:name];
-    };
-    if (mapped.length) {
-        add(mapped);
-        if ([mapped rangeOfString:@".stack.3d"].location != NSNotFound) {
-            add([mapped stringByReplacingOccurrencesOfString:@".stack.3d" withString:@".layers.3d"]);
-        }
-        if ([mapped hasPrefix:@"app."]) {
-            NSString *tail = [mapped substringFromIndex:4];
-            add([@"square." stringByAppendingString:tail]);
-            if ([tail rangeOfString:@".stack.3d"].location != NSNotFound) {
-                add([@"square." stringByAppendingString:
-                     [tail stringByReplacingOccurrencesOfString:@".stack.3d"
-                                                     withString:@".layers.3d"]]);
-            }
-        }
-    }
-    return candidates;
-}
-
 // 逐个试候选名，返回第一张画得出来的图；outName 回报真正生效的名字（便于日志确认）。
-static UIImage *ERShortcutSymbolImage(NSString *mapped, unsigned short glyph,
-                                      UIImageSymbolConfiguration *configuration, NSString **outName) {
-    for (NSString *name in ERShortcutSymbolCandidates(mapped, glyph)) {
-        UIImage *image = configuration ? [UIImage systemImageNamed:name withConfiguration:configuration]
-                                       : [UIImage systemImageNamed:name];
-        if (image) {
-            if (outName) *outName = name;
-            return image;
-        }
-    }
-    return nil;
-}
-
 static UIColor *ERShortcutColorFromValue(long long value) {
     // 1.1.8-9 · 数据库里颜色是 0xRRGGBBAA 的无符号 32 位，高位会被存成负数
     // （例如 0xA9A9A9FF = -1448498689）。旧判断 value <= 0 直接判成「没颜色」，
@@ -7238,68 +7191,34 @@ static NSDictionary *ERShortcutForIdentifier(NSString *identifier) {
 // custom image when the shortcut uses one).
 // 1.1.8-10 · 关联 App 的图标：来自 App 的快捷指令 glyph 恒为 0xF000，映射出的
 // app.2.stack.3d 在这套系统上取不到图，真图标是关联 App 自己的图标。
-static UIImage *ERShortcutAppIconImage(NSString *bundleId) {
-    if (!bundleId.length) return nil;
-    Class uiImageClass = [UIImage class];
-    SEL iconSel = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
-    if ([uiImageClass respondsToSelector:iconSel]) {
-        @try {
-            UIImage *(*fn)(id, SEL, id, int, CGFloat) =
-                (UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend;
-            CGFloat scale = [UIScreen mainScreen].scale;
-            for (int format = 1; format <= 3; format++) {
-                UIImage *image = fn(uiImageClass, iconSel, bundleId, format, scale);
-                if (image) return image;
-            }
-            UIImage *image = fn(uiImageClass, iconSel, bundleId, 0, scale);
-            if (image) return image;
-        } @catch (__unused NSException *exception) {}
-    }
-    Class proxyClass = NSClassFromString(@"LSApplicationProxy");
-    if (proxyClass) {
-        @try {
-            id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass,
-                                                          @selector(applicationProxyForIdentifier:),
-                                                          bundleId);
-            NSData *data = nil;
-            if (proxy && [proxy respondsToSelector:NSSelectorFromString(@"iconDataForVariant:")]) {
-                data = ((NSData *(*)(id, SEL, int))objc_msgSend)(proxy,
-                        NSSelectorFromString(@"iconDataForVariant:"), 2);
-            }
-            if (data.length) {
-                UIImage *image = [UIImage imageWithData:data];
-                if (image) return image;
-            }
-        } @catch (__unused NSException *exception) {}
-    }
-    return nil;
-}
-
 static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     static NSMutableDictionary<NSString *, UIImage *> *cache;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
-    NSString *cacheKey = [NSString stringWithFormat:@"%@|%lld|%lu|%@|%@",
-                          shortcut[@"uuid"] ?: @"", (long long)[shortcut[@"color"] longLongValue],
-                          (unsigned long)[shortcut[@"glyph"] unsignedIntegerValue],
-                          shortcut[@"bundleId"] ?: @"",
-                          [shortcut[@"iconPNG"] isKindOfClass:[NSData class]] ? @"wfkit" : @""];
+    NSString *cacheKey = [NSString stringWithFormat:@"%@|%@|%@",
+                          shortcut[@"uuid"] ?: @"",
+                          shortcut[@"iconFull"] ?: @"?",
+                          [shortcut[@"iconPNG"] isKindOfClass:[NSData class]]
+                            ? @([(NSData *)shortcut[@"iconPNG"] length]).stringValue : @"-"];
     UIImage *cached = cache[cacheKey];
     if (cached) return cached;
-    NSData *imageData = [shortcut[@"imageData"] isKindOfClass:[NSData class]] ? shortcut[@"imageData"] : nil;
-    // 1.1.8-13 · WorkflowKit 自己渲染好的图标（扫描器在设置进程里取到后发布过来）。
-    // iconFull=YES 是完整的圆角图标（直接满铺），NO 是透明底的前景符号（画在底色上）。
+
+    // 1.1.8-15 · 图标由扫描器（设置进程）解析好并发布过来 —— SpringBoard 读不到
+    // 快捷指令数据库，也没有必要在这里重猜一遍符号名。
+    //   iconFull=YES → 完整圆角图标，直接满铺
+    //   iconFull=NO  → 白色前景符号，叠在快捷指令自己的底色上
     NSData *iconPNG = [shortcut[@"iconPNG"] isKindOfClass:[NSData class]] ? shortcut[@"iconPNG"] : nil;
+    NSData *imageData = [shortcut[@"imageData"] isKindOfClass:[NSData class]] ? shortcut[@"imageData"] : nil;
     UIImage *renderedImage = iconPNG.length ? [UIImage imageWithData:iconPNG] : nil;
+    UIImage *customImage = imageData.length ? [UIImage imageWithData:imageData] : nil;
     BOOL iconFull = [shortcut[@"iconFull"] isKindOfClass:[NSNumber class]]
                     ? [shortcut[@"iconFull"] boolValue] : YES;
-    UIImage *customImage = imageData.length ? [UIImage imageWithData:imageData] : nil;
     UIColor *background = ERShortcutColorFromValue([shortcut[@"color"] longLongValue]);
     UIImage *glyphImage = nil;
     BOOL fullBleedImage = NO;
+
     if (renderedImage) {
-        // 「快捷指令」App 画什么就贴什么：不猜符号名，也不为任何一条单独适配。
         if (iconFull) {
             fullBleedImage = YES;
             glyphImage = renderedImage;
@@ -7313,40 +7232,11 @@ static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
     } else if (customImage) {
         glyphImage = customImage;
     } else {
-        // 1.1.8-12 · 取图次序对齐「快捷指令」App：
-        //   glyph=0xF000 是「占位字形」（关联 App 的快捷指令、以及从 iCloud 链接
-        //   导入的快捷指令都用它），有绑定 App 就取 App 图标，没有就画默认的
-        //   「两层叠放」系统符号；其余字形走 glyph → SF Symbol。
-        unsigned short glyphCode = (unsigned short)[shortcut[@"glyph"] unsignedShortValue];
-        NSString *symbolName = [shortcut[@"symbolName"] isKindOfClass:[NSString class]] ? shortcut[@"symbolName"] : nil;
-        BOOL placeholderGlyph = (glyphCode == 0xF000);
-        UIImageSymbolConfiguration *configuration = [UIImageSymbolConfiguration configurationWithPointSize:64.0 weight:UIImageSymbolWeightMedium];
-        if (placeholderGlyph) {
-            NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
-            UIImage *appIcon = ERShortcutAppIconImage(bundleId);
-            if (appIcon) {
-                fullBleedImage = YES;
-                glyphImage = appIcon;
-            } else {
-                glyphImage = ERShortcutSymbolImage(nil, glyphCode, configuration, NULL);
-            }
-        } else {
-            if (!symbolName.length) symbolName = ERShortcutSymbolNameForGlyph(glyphCode);
-            glyphImage = ERShortcutSymbolImage(symbolName, glyphCode, configuration, NULL);
-            if (!glyphImage) {
-                NSString *bundleId = [shortcut[@"bundleId"] isKindOfClass:[NSString class]] ? shortcut[@"bundleId"] : nil;
-                UIImage *appIcon = ERShortcutAppIconImage(bundleId);
-                if (appIcon) {
-                    fullBleedImage = YES;
-                    glyphImage = appIcon;
-                }
-            }
-        }
-        if (!glyphImage) {
-            glyphImage = ERShortcutSymbolImage(@"wand.and.stars", 0, configuration, NULL)
-                         ?: [UIImage systemImageNamed:@"sparkles"];
-        }
+        // 扫描器没给出图时的最后兜底。
+        glyphImage = [UIImage systemImageNamed:@"wand.and.stars"]
+                     ?: [UIImage systemImageNamed:@"sparkles"];
     }
+
     CGSize size = CGSizeMake(120.0, 120.0);
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
     __block UIImage *result = nil;
@@ -7359,10 +7249,12 @@ static UIImage *ERShortcutIconImage(NSDictionary *shortcut) {
         if (glyphImage) {
             UIImage *drawable = glyphImage;
             if (!fullBleedImage) {
-                drawable = [glyphImage imageWithTintColor:UIColor.whiteColor renderingMode:UIImageRenderingModeAlwaysOriginal] ?: glyphImage;
+                // 前景符号统一画成白色，叠在快捷指令自己的底色上。
+                drawable = [glyphImage imageWithTintColor:UIColor.whiteColor
+                                            renderingMode:UIImageRenderingModeAlwaysOriginal] ?: glyphImage;
             }
             if (drawable) {
-                CGFloat side = fullBleedImage ? size.width - 6.0 : size.width * 0.52;
+                CGFloat side = fullBleedImage ? size.width - 6.0 : size.width * 0.62;
                 CGRect glyphRect = CGRectMake((size.width - side) * 0.5, (size.height - side) * 0.5, side, side);
                 [drawable drawInRect:glyphRect];
             }

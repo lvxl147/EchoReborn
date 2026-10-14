@@ -515,6 +515,169 @@ static NSDictionary<NSString *, NSDictionary *> *ERWorkflowKitIcons(void) {
     return table;
 }
 
+// ---------------------------------------------------------------------------
+// 1.1.8-15 · 图标解析（全插件唯一的一处）
+//
+// 之前的教训：把「glyph 是几」当成分支条件，就会变成一条快捷指令一个补丁 ——
+// 0xF000 打一个、下一条再打一个。这里改成只按**数据本身**分情况，规则通用：
+//   ① WorkflowKit 自己渲染的图（最准，它画什么就用什么）
+//   ② 用户自定义图片（库里真有 blob 时）
+//   ③ 绑定了 App 的快捷指令 → 那个 App 的图标（且必须是「完整圆角方块」，否则换下一个取法）
+//   ④ 其余的 → 字形映射出的系统符号，走通用改名候选链
+//   ⑤ 还不行 → wand.and.stars
+// 解析结果落成一张 PNG（iconPNG 给控制中心、<uuid>.png 给设置页），
+// 两个界面只负责画，不再各自解析。
+// ---------------------------------------------------------------------------
+static NSString *(*ERShortcutGlyphMapper)(unsigned short);
+
+static NSString *ERShortcutSymbolNameForGlyph(unsigned short glyph) {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+        if (handle) ERShortcutGlyphMapper = (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter");
+    });
+    if (!ERShortcutGlyphMapper) return nil;
+    @try { return ERShortcutGlyphMapper(glyph); } @catch (__unused NSException *exception) { return nil; }
+}
+
+// SF Symbols 会改名（设备 CoreGlyphs 的 name_aliases.strings 里就写着
+// square.2.stack.3d -> square.2.layers.3d），而字形表可能还返回旧名字。
+// 这里只做**命名规则**层面的候选，不针对任何具体的 glyph 取值。
+static NSArray<NSString *> *ERShortcutSymbolCandidates(NSString *mapped) {
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    void (^add)(NSString *) = ^(NSString *name) {
+        if (name.length && ![candidates containsObject:name]) [candidates addObject:name];
+    };
+    if (!mapped.length) return candidates;
+    add(mapped);
+    if ([mapped rangeOfString:@".stack.3d"].location != NSNotFound) {
+        add([mapped stringByReplacingOccurrencesOfString:@".stack.3d" withString:@".layers.3d"]);
+    }
+    if ([mapped hasPrefix:@"app."]) {
+        NSString *tail = [mapped substringFromIndex:4];
+        add([@"square." stringByAppendingString:tail]);
+        if ([tail rangeOfString:@".stack.3d"].location != NSNotFound) {
+            add([@"square." stringByAppendingString:
+                 [tail stringByReplacingOccurrencesOfString:@".stack.3d" withString:@".layers.3d"]]);
+        }
+    }
+    return candidates;
+}
+
+static UIImage *ERShortcutSymbolImage(NSString *mapped, CGFloat pointSize) {
+    for (NSString *name in ERShortcutSymbolCandidates(mapped)) {
+        UIImage *image = [UIImage systemImageNamed:name
+                             withConfiguration:[UIImageSymbolConfiguration configurationWithPointSize:pointSize
+                                                                                                weight:UIImageSymbolWeightMedium]];
+        if (image) return image;
+    }
+    return nil;
+}
+
+// 把符号画成白色前景（透明底）—— 和「快捷指令」App 里符号叠在底色上的效果一致。
+static UIImage *ERShortcutForegroundImage(UIImage *symbol, CGSize size) {
+    if (!symbol) return nil;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        UIImage *white = [symbol imageWithTintColor:UIColor.whiteColor
+                                      renderingMode:UIImageRenderingModeAlwaysOriginal] ?: symbol;
+        CGSize original = white.size;
+        CGFloat factor = MIN(size.width * 0.62 / MAX(original.width, 1.0),
+                             size.height * 0.62 / MAX(original.height, 1.0));
+        CGSize drawn = CGSizeMake(original.width * factor, original.height * factor);
+        [white drawInRect:CGRectMake((size.width - drawn.width) * 0.5,
+                                     (size.height - drawn.height) * 0.5,
+                                     drawn.width, drawn.height)];
+    }];
+}
+
+// 取关联 App 的图标。同一个 bundleId 有好几种取法（format/variant），
+// 其中一部分返回的是单色符号版而不是真图标，所以用「完整圆角方块」校验挑出真的那张。
+static UIImage *ERAppIconImage(NSString *bundleId) {
+    if (!bundleId.length) return nil;
+    static NSMutableDictionary<NSString *, UIImage *> *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
+    UIImage *cached = cache[bundleId];
+    if (cached) return (cached == (UIImage *)[NSNull null]) ? nil : cached;
+
+    UIImage *result = nil;
+    SEL iconSelector = NSSelectorFromString(@"_applicationIconImageForBundleIdentifier:format:scale:");
+    if ([[UIImage class] respondsToSelector:iconSelector]) {
+        CGFloat scale = [UIScreen mainScreen].scale;
+        for (int format = 0; format <= 12 && !result; format++) {
+            UIImage *candidate = nil;
+            @try {
+                candidate = ((UIImage *(*)(id, SEL, id, int, CGFloat))objc_msgSend)(
+                    [UIImage class], iconSelector, bundleId, format, scale);
+            } @catch (__unused NSException *exception) {}
+            if (candidate && ERIconImageIsFullTile(candidate)) {
+                result = candidate;
+                ERShortcutLog(@"appicon: %@ format=%d 命中完整图标", bundleId, format);
+            }
+        }
+    }
+    if (!result) {
+        dlopen("/System/Library/PrivateFrameworks/MobileCoreServices.framework/MobileCoreServices", RTLD_LAZY);
+        Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+        SEL variantSelector = NSSelectorFromString(@"iconDataForVariant:");
+        @try {
+            id proxy = proxyClass
+                ? ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, @selector(applicationProxyForIdentifier:), bundleId)
+                : nil;
+            for (int variant = 0; variant <= 4 && !result && proxy && [proxy respondsToSelector:variantSelector]; variant++) {
+                NSData *data = ((NSData *(*)(id, SEL, int))objc_msgSend)(proxy, variantSelector, variant);
+                UIImage *candidate = data.length ? [UIImage imageWithData:data] : nil;
+                if (candidate && ERIconImageIsFullTile(candidate)) {
+                    result = candidate;
+                    ERShortcutLog(@"appicon: %@ variant=%d 命中完整图标", bundleId, variant);
+                }
+            }
+        } @catch (__unused NSException *exception) {}
+    }
+    if (!result) ERShortcutLog(@"appicon: %@ 没有可用的完整图标", bundleId);
+    cache[bundleId] = result ?: (UIImage *)[NSNull null];
+    return result;
+}
+
+static UIImage *ERResolveShortcutIcon(NSString *uuid, NSString *bundleId, NSNumber *glyphNumber,
+                                      NSString *symbolName, NSData *customData, BOOL *outFull) {
+    CGSize size = CGSizeMake(120.0, 120.0);
+    if (outFull) *outFull = YES;
+
+    // ① WorkflowKit 自己渲染的结果（识别到就用它，这是最准的一条）
+    NSDictionary *workflowKitIcon = ERWorkflowKitIcons()[uuid];
+    UIImage *rendered = workflowKitIcon[@"icon"];
+    if ([rendered isKindOfClass:[UIImage class]]) {
+        if (outFull) *outFull = [workflowKitIcon[@"full"] boolValue];
+        return rendered;
+    }
+
+    // ② 用户自己设的图片
+    if (customData.length) {
+        UIImage *image = [UIImage imageWithData:customData];
+        if (image) return image;
+    }
+
+    // ③ 绑定了 App 的快捷指令 → 用那个 App 的图标
+    UIImage *appIcon = ERAppIconImage(bundleId);
+    if (appIcon) return appIcon;
+
+    // ④ 字形 → 系统符号（有关联 App 的已经在 ③ 返回了）
+    unsigned short glyphCode = (unsigned short)glyphNumber.unsignedShortValue;
+    NSString *mapped = symbolName.length ? symbolName : ERShortcutSymbolNameForGlyph(glyphCode);
+    UIImage *symbol = ERShortcutSymbolImage(mapped, 64.0);
+    if (symbol) {
+        if (outFull) *outFull = NO;
+        return ERShortcutForegroundImage(symbol, size);
+    }
+
+    // ⑤ 兜底
+    if (outFull) *outFull = NO;
+    UIImage *fallback = ERShortcutSymbolImage(@"wand.and.stars", 64.0);
+    return ERShortcutForegroundImage(fallback ?: [UIImage systemImageNamed:@"sparkles"], size);
+}
+
 // 1.1.8-8 · 把设备上这篇数据库复制到日志目录，方便拉回本地用 sqlite 直接看。
 static void ERCopyStoreForDiagnostics(NSString *path) {
     if (!path.length) return;
@@ -557,7 +720,7 @@ void ERShortcutScanAndPublish(void) {
     NSString *status = @"ok";
     NSUInteger rowsSeen = 0, kept = 0, droppedTomb = 0, droppedHidden = 0;
     NSUInteger droppedNoName = 0, droppedNoID = 0, usedFallback = 0;
-    NSUInteger workflowKitUsed = 0;
+    NSUInteger fullTiles = 0;
 
     if (!databasePath) {
         status = @"no-database";
@@ -632,33 +795,21 @@ void ERShortcutScanAndPublish(void) {
                     if (icon[@"symbolName"]) record[@"symbolName"] = icon[@"symbolName"];
                     if (icon[@"emoji"]) record[@"emoji"] = icon[@"emoji"];
                     if (icon[@"imageData"]) record[@"imageData"] = icon[@"imageData"];
-                    // 1.1.8-13 · 图标以 WorkflowKit 自己渲染的结果为准 —— 它画什么
-                    // 我们就贴什么，不猜符号名，也不为任何一条快捷指令单独适配。
-                    NSDictionary *workflowKitIcon = ERWorkflowKitIcons()[uuid];
-                    UIImage *rendered = workflowKitIcon[@"icon"];
-                    if ([rendered isKindOfClass:[UIImage class]]) {
-                        // 设置页读文件，控制中心（SpringBoard）只能读 plist，
-                        // 所以两种载体都发布。
-                        NSData *png = UIImagePNGRepresentation(rendered);
+                    // 1.1.8-15 · 图标只在这里解析一次（全插件唯一的一处），
+                    // 控制中心与设置页都只管把结果画出来。
+                    BOOL iconFull = YES;
+                    UIImage *resolved = ERResolveShortcutIcon(uuid, bundleId, icon[@"glyph"],
+                                                              record[@"symbolName"], icon[@"imageData"],
+                                                              &iconFull);
+                    if (resolved) {
+                        // 设置页读文件，控制中心（SpringBoard）读不到文件、只能读 plist，
+                        // 所以两种载体都发布同一张图。
+                        NSData *png = UIImagePNGRepresentation(resolved);
                         if (png.length) record[@"iconPNG"] = png;
-                        NSString *file = ERWriteShortcutIconImage(uuid, rendered);
-                        if (file || png.length) {
-                            if (file) record[@"iconFile"] = file;
-                            record[@"iconFull"] = workflowKitIcon[@"full"] ?: @NO;
-                            workflowKitUsed++;
-                        }
-                    }
-                    if (!record[@"iconFile"] && icon[@"imageData"]) {
-                        NSString *file = ERWriteShortcutIconFile(uuid, icon[@"imageData"]);
+                        record[@"iconFull"] = @(iconFull);
+                        NSString *file = ERWriteShortcutIconImage(uuid, resolved);
                         if (file) record[@"iconFile"] = file;
-                    }
-                    if (!record[@"symbolName"] &&
-                        [workflowKitIcon[@"symbolName"] isKindOfClass:[NSString class]]) {
-                        record[@"symbolName"] = workflowKitIcon[@"symbolName"];
-                    }
-                    if (!record[@"bundleId"] &&
-                        [workflowKitIcon[@"bundleId"] isKindOfClass:[NSString class]]) {
-                        record[@"bundleId"] = workflowKitIcon[@"bundleId"];
+                        if (iconFull) fullTiles++;
                     }
                     [records addObject:record];
                     kept++;
@@ -690,10 +841,10 @@ void ERShortcutScanAndPublish(void) {
                  [record[@"glyph"] longLongValue] != 0xF000) glyphOnly++;
         else noIcon++;
     }
-    ERShortcutLog(@"scan: 图标来源 symbol=%lu emoji=%lu image=%lu glyph=%lu none=%lu bundleId=%lu wfkit=%lu",
+    ERShortcutLog(@"scan: 图标来源 symbol=%lu emoji=%lu image=%lu glyph=%lu none=%lu bundleId=%lu 完整方块=%lu",
                   (unsigned long)withSymbol, (unsigned long)withEmoji, (unsigned long)withImage,
                   (unsigned long)glyphOnly, (unsigned long)noIcon, (unsigned long)withBundle,
-                  (unsigned long)workflowKitUsed);
+                  (unsigned long)fullTiles);
     ERCopyStoreForDiagnostics(databasePath);
 
     // Publish the FULL catalog (including imageData) to the shared prefs domain
