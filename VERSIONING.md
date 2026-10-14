@@ -18,3 +18,4 @@
 | 108 | 1.1.8-3 | 音乐胶囊液态玻璃背景：液态玻璃页新增“底部控件”开关（MusicCapsule.LiquidGlassEnabled 默认关）；开 = 胶囊背景 LGLiveBackdropView（控制中心同款渲染，lgTrackGlass 注册）；关 = 深色原始态；去浅色：UIBlurEffectStyle Regular→SystemUltraThinMaterialDark 固定深色。版本 1.1.8-3/1001058。 |
 | 109 | 1.1.8-4 | 胶囊玻璃不渲染修复：lgTrackGlass 材质视图参数由 nil 改为胶囊自身（VolumeHUD 同款），玻璃圆角/连续曲率/masksToBounds 对齐 clipView，创建帧改用 clipView.bounds。版本 1.1.8-4/1001059。 |
 | 110 | 1.1.8-5 | 玻璃诊断文件化：apply 状态写 mcful.log（创建失败/成功/帧/隐藏态/背景色全记录）；layoutSubviews 液态帧跟随。版本 1.1.8-5/1001060。 |
+| 111 | 1.1.8-6 | 胶囊玻璃根因修复：LGCreateRegisteredGlass 按宿主注册表校验前缀，MusicCapsule 不在表内 → 工厂拒绝返回 nil。改用合法宿主 ControlCenter（filter echoreborn.liquidglass.cc，即用户指定的控制中心渲染），lgTrackGlass 同步。版本 1.1.8-6/1001061。 |

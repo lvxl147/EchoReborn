@@ -28267,7 +28267,9 @@ static void ERMusicGlassFileLog(NSString *line) {
 - (void)erMusicApplyBackgroundStyle {
     if (self.liquidGlassEnabled) {
         if (!self.glassView) {
-            LGLiveBackdropView *g = LGCreateRegisteredGlass(self.clipView.bounds, nil, @"MusicCapsule");
+            // 1.1.8-6 · 前缀必须是宿主注册表内的合法项（MusicCapsule 不在表内 → 工厂拒绝）。
+            //   用户指定“控制中心这套渲染” → 使用 ControlCenter 宿主（filter: echoreborn.liquidglass.cc）
+            LGLiveBackdropView *g = LGCreateRegisteredGlass(self.clipView.bounds, nil, @"ControlCenter");
             if (!g) {
                 ERMusicGlassFileLog(@"LGCreateRegisteredGlass 返回 nil！（工厂失败）");
                 ERLogInfo(@"MUSICCAPSULE LGCreateRegisteredGlass 返回 nil");
@@ -28280,7 +28282,7 @@ static void ERMusicGlassFileLog(NSString *line) {
             g.layer.masksToBounds = YES;
             [self.clipView insertSubview:g atIndex:0];
             self.glassView = g;
-            lgTrackGlass(g, @"MusicCapsule", self);
+            lgTrackGlass(g, @"ControlCenter", self);
             ERMusicGlassFileLog([NSString stringWithFormat:@"玻璃已创建 %@ frame=%@", g, NSStringFromCGRect(g.frame)]);
         }
         self.glassView.frame = self.clipView.bounds;
