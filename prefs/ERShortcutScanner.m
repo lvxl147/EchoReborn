@@ -247,20 +247,6 @@ static NSString *ERShortcutIconDirectory(void) {
     return [kERShortcutSnapshotDirectory stringByAppendingPathComponent:@"shortcut-icons"];
 }
 
-static NSString *ERWriteShortcutIconFile(NSString *uuid, NSData *data) {
-    if (!uuid.length || !data.length) return nil;
-    NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *dir = ERShortcutIconDirectory();
-    [fm createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
-    NSString *name = [uuid stringByAppendingPathExtension:@"png"];
-    NSString *path = [dir stringByAppendingPathComponent:name];
-    // 统一转成 PNG，设置页直接 imageWithContentsOfFile:。
-    UIImage *image = [UIImage imageWithData:data];
-    NSData *png = image ? UIImagePNGRepresentation(image) : data;
-    if ([png writeToFile:path atomically:YES]) return name;
-    return nil;
-}
-
 static NSString *ERWriteShortcutIconImage(NSString *uuid, UIImage *image) {
     if (!uuid.length || !image) return nil;
     CGImageRef cgImage = image.CGImage;
