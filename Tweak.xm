@@ -28675,6 +28675,12 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    // 1.1.1 · 钩子命中标记：证明 CSCoverSheetViewController 在本机 iOS 上存在且被钩到
+    static BOOL erMCHitLogged = NO;
+    if (!erMCHitLogged) {
+        erMCHitLogged = YES;
+        ERLogInfo(@"MC-HIT coverSheet viewDidAppear gEnabled=%d", gEnabled ? 1 : 0);
+    }
     if (!gEnabled) return;
     ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
     manager.coverSheetController = self;
@@ -29413,10 +29419,15 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
         // current and future feature is covered automatically because nothing
         // below this line runs. (Toggling the master switch needs a respring to
         // fully take effect, since hooks can't be uninstalled live.)
+        // 1.1.1 · 主开关读值显式落盘：录屏无延迟/隐藏锁屏音乐都挂在本开关之后，
+        //   此前怀疑 cfpresd 残留 Enabled=NO 旧缓存导致两功能静默失效，先亮读值再判定。
+        ERLogInfo(@"ctor: master switch Enabled=%d quick=%d logging=%d",
+                  gEnabled ? 1 : 0, gQuickAccessButtonsEnabled ? 1 : 0, gERLoggingEnabled ? 1 : 0);
         if (!gEnabled) {
-            ERLogRecord(@"WARN", @"ctor: EchoReborn disabled, no hooks installed");
+            ERLogRecord(@"WARN", @"ctor: EchoReborn disabled, no hooks installed (Enabled=NO)");
             return;
         }
+        ERLogInfo(@"ctor: entering CC-RECORD init");
         // 1.0.9-175 · 录屏无延迟：运行时探测 SBControlCenterController 的 startRecordingCountdown
         //   （方法在才挂，参考 CCRecordNoDelay 同类名同选择器；方法不在时零副作用）
         {
@@ -29475,6 +29486,7 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
                     }
                 });
                 dispatch_resume(scanTimer);
+                ERLogInfo(@"ctor: CC-RECORD scan timer started");
             }
         }
         // The package intentionally has no firmware ceiling so it installs on
