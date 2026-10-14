@@ -28259,8 +28259,7 @@ static void ERMusicGlassFileLog(NSString *line) {
         FILE *f = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
         if (!f) f = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
         if (!f) return;
-        fprintf(f, "[GLASS] %s
-", line.UTF8String ?: "?");
+        fprintf(f, "[GLASS] %s\n", line.UTF8String ?: "?");
         fclose(f);
     } @catch (__unused NSException *e) {}
 }
