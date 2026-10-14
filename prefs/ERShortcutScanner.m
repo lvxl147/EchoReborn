@@ -337,6 +337,45 @@ static UIImage *ERShortcutForegroundImage(UIImage *symbol, CGSize size) {
     }];
 }
 
+// 分辨一张图是「完整圆角方块」还是「透明底的前景符号」：采样四角 / 四条边中点 /
+// 中心的 alpha —— 中心不透明且四边中点 ≥3 个不透明 = 圆角方块（完整图标）；
+// 四角透明、边中点也透明、只有中心有内容 = 只画了符号（前景）。
+static BOOL ERIconImageIsFullTile(UIImage *image) {
+    CGImageRef cgImage = image.CGImage;
+    if (!cgImage) return NO;
+    size_t width = CGImageGetWidth(cgImage);
+    size_t height = CGImageGetHeight(cgImage);
+    if (width < 12 || height < 12) return NO;
+    CGColorSpaceRef space = CGColorSpaceCreateDeviceRGB();
+    if (!space) return NO;
+    unsigned char *buffer = (unsigned char *)calloc(width * height * 4, 1);
+    if (!buffer) { CGColorSpaceRelease(space); return NO; }
+    CGContextRef context = CGBitmapContextCreate(buffer, width, height, 8, width * 4, space,
+                                                 kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    BOOL full = NO;
+    if (context) {
+        CGContextDrawImage(context, CGRectMake(0.0, 0.0, (CGFloat)width, (CGFloat)height), cgImage);
+        size_t inset = 2;
+        size_t centerIndex = ((height / 2) * width + (width / 2)) * 4 + 3;
+        BOOL centerOpaque = buffer[centerIndex] > 32;
+        size_t edgeSamples[4] = {
+            (inset * width + (width / 2)) * 4 + 3,                // 上
+            ((height - 1 - inset) * width + (width / 2)) * 4 + 3, // 下
+            ((height / 2) * width + inset) * 4 + 3,               // 左
+            ((height / 2) * width + (width - 1 - inset)) * 4 + 3  // 右
+        };
+        NSUInteger opaqueEdges = 0;
+        for (int index = 0; index < 4; index++) {
+            if (buffer[edgeSamples[index]] > 32) opaqueEdges++;
+        }
+        full = centerOpaque && opaqueEdges >= 3;
+        CGContextRelease(context);
+    }
+    free(buffer);
+    CGColorSpaceRelease(space);
+    return full;
+}
+
 // 取关联 App 的图标。同一个 bundleId 有好几种取法（format/variant），
 // 其中一部分返回的是单色符号版而不是真图标，所以用「完整圆角方块」校验挑出真的那张。
 static UIImage *ERAppIconImage(NSString *bundleId) {
