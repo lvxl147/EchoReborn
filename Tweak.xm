@@ -28167,6 +28167,11 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
 
     CGFloat h = self.bounds.size.height;
     CGFloat w = self.bounds.size.width;
+
+    // 1.1.8-5 · 液态玻璃帧跟随（仅开启态；glassView 在则刷新帧与滤镜）
+    if (self.liquidGlassEnabled && self.glassView && !self.glassView.hidden) {
+        self.glassView.frame = self.clipView.bounds;
+    }
     CGFloat r = h / 2.0;
 
     self.clipView.frame = self.bounds;
@@ -28248,11 +28253,27 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
 }
 
 // 1.1.8-3 · 背景样式应用：液态玻璃（控制中心同款 LGLiveBackdropView）⇄ 深色原始态
+// 1.1.8-5 · 状态写独立文件（主日志轮转吞日志）；对齐 VolumeHUD 完整用法
+static void ERMusicGlassFileLog(NSString *line) {
+    @try {
+        FILE *f = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+        if (!f) f = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+        if (!f) return;
+        fprintf(f, "[GLASS] %s
+", line.UTF8String ?: "?");
+        fclose(f);
+    } @catch (__unused NSException *e) {}
+}
+
 - (void)erMusicApplyBackgroundStyle {
     if (self.liquidGlassEnabled) {
         if (!self.glassView) {
             LGLiveBackdropView *g = LGCreateRegisteredGlass(self.clipView.bounds, nil, @"MusicCapsule");
-            if (!g) return;
+            if (!g) {
+                ERMusicGlassFileLog(@"LGCreateRegisteredGlass 返回 nil！（工厂失败）");
+                ERLogInfo(@"MUSICCAPSULE LGCreateRegisteredGlass 返回 nil");
+                return;
+            }
             g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
             g.userInteractionEnabled = NO;
             g.layer.cornerRadius = self.clipView.layer.cornerRadius;
@@ -28260,20 +28281,24 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
             g.layer.masksToBounds = YES;
             [self.clipView insertSubview:g atIndex:0];
             self.glassView = g;
-            // 1.1.8-4 · 材质视图必须传（VolumeHUD 同款）；传 nil 玻璃不渲染
             lgTrackGlass(g, @"MusicCapsule", self);
-            ERLogInfo(@"MUSICCAPSULE 玻璃视图已创建");
+            ERMusicGlassFileLog([NSString stringWithFormat:@"玻璃已创建 %@ frame=%@", g, NSStringFromCGRect(g.frame)]);
         }
         self.glassView.frame = self.clipView.bounds;
         self.glassView.hidden = NO;
         [self.glassView applyFilters];
         self.blurView.hidden = YES;
         self.tintView.hidden = YES;
+        ERMusicGlassFileLog([NSString stringWithFormat:@"apply 液态 glass=%@ clipBounds=%@ glassHidden=%d blurHidden=%d selfBg=%@",
+                             self.glassView, NSStringFromCGRect(self.clipView.bounds),
+                             (int)self.glassView.hidden, (int)self.blurView.hidden,
+                             self.backgroundColor ?: @"(nil)"]);
         ERLogInfo(@"MUSICCAPSULE 背景已切液态玻璃");
     } else {
         self.glassView.hidden = YES;
         self.blurView.hidden = NO;
         self.tintView.hidden = NO;
+        ERMusicGlassFileLog(@"apply 深色（原始态）");
     }
 }
 

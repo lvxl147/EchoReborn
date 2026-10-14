@@ -17,3 +17,4 @@
 | 107 | 1.1.8-2 | 三修：① 手势无反应根因 = 胶囊 hitTest 对空白处返回 nil 透传，swipeEnabled 时改返回胶囊自身（触摸可达手势）；② 隐藏失效根因 = 切歌后系统重建媒体卡（新 cell 可见），refresh 收到 MR 变更后 0.6s/1.6s 两次再断言隐藏；③ 滑动开关行加 SF Symbol 图标 arrow.left.arrow.right。版本 1.1.8-2/1001057。 |
 | 108 | 1.1.8-3 | 音乐胶囊液态玻璃背景：液态玻璃页新增“底部控件”开关（MusicCapsule.LiquidGlassEnabled 默认关）；开 = 胶囊背景 LGLiveBackdropView（控制中心同款渲染，lgTrackGlass 注册）；关 = 深色原始态；去浅色：UIBlurEffectStyle Regular→SystemUltraThinMaterialDark 固定深色。版本 1.1.8-3/1001058。 |
 | 109 | 1.1.8-4 | 胶囊玻璃不渲染修复：lgTrackGlass 材质视图参数由 nil 改为胶囊自身（VolumeHUD 同款），玻璃圆角/连续曲率/masksToBounds 对齐 clipView，创建帧改用 clipView.bounds。版本 1.1.8-4/1001059。 |
+| 110 | 1.1.8-5 | 玻璃诊断文件化：apply 状态写 mcful.log（创建失败/成功/帧/隐藏态/背景色全记录）；layoutSubviews 液态帧跟随。版本 1.1.8-5/1001060。 |
