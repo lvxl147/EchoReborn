@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <stdarg.h>
 #import <objc/message.h>
+#import <stdlib.h>
 
 // Must match Tweak.xm's kERPrefsDomain and the prefs pane's constants.
 static NSString *const kERShortcutPrefsDomain = @"com.strive.echoreborn.preferences";
@@ -409,6 +410,22 @@ static NSDictionary<NSString *, NSDictionary *> *ERWorkflowKitIcons(void) {
             }
         } @catch (NSException *exception) {
             ERShortcutLog(@"wfkit: open exception %@", exception.reason);
+        }
+        if (!database) {
+            // 显式建库失败（比如没有权限创建 CoreData 栈）时退到类方法入口。
+            for (NSString *selectorName in @[@"defaultDatabase", @"shortcutsDatabase",
+                                             @"sharedDatabase", @"standardDatabase"]) {
+                SEL selector = NSSelectorFromString(selectorName);
+                if (![databaseClass respondsToSelector:selector]) continue;
+                @try {
+                    id candidate = ((id (*)(id, SEL))objc_msgSend)(databaseClass, selector);
+                    if (candidate) {
+                        database = candidate;
+                        ERShortcutLog(@"wfkit: using +%@", selectorName);
+                        break;
+                    }
+                } @catch (__unused NSException *exception) {}
+            }
         }
         if (!database) { ERShortcutLog(@"wfkit: database API unavailable"); return; }
 

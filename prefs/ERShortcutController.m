@@ -181,91 +181,142 @@ static void ERShortcutLog(NSString *format, ...);
 static void ERWFKitProbeOnce(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
+        dlopen("/System/Library/Frameworks/CoreData.framework/CoreData", RTLD_LAZY);
         void *handle = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
-        ERShortcutLog(@"WFPROBE dlopen=%d", handle ? 1 : 0);
+        ERShortcutLog(@"WFPROBE2 dlopen=%d", handle ? 1 : 0);
         if (!handle) return;
+        Class dbClass = NSClassFromString(@"WFDatabase");
+        if (!dbClass) { ERShortcutLog(@"WFPROBE2 no WFDatabase"); return; }
 
-        // 1) WorkflowKit 镜像里所有跟 Icon / Workflow 有关的类
-        unsigned int total = 0;
-        Class *all = objc_copyClassList(&total);
-        NSMutableArray<NSString *> *wfClasses = [NSMutableArray array];
-        if (all) {
-            for (unsigned int index = 0; index < total; index++) {
-                const char *image = class_getImageName(all[index]);
-                if (!image) continue;
-                NSString *imagePath = [NSString stringWithUTF8String:image];
-                if ([imagePath rangeOfString:@"WorkflowKit"].location == NSNotFound) continue;
-                NSString *className = NSStringFromClass(all[index]);
-                if (!className.length) continue;
-                if (([className rangeOfString:@"Icon"].location != NSNotFound ||
-                     [className rangeOfString:@"Workflow"].location != NSNotFound) &&
-                    wfClasses.count < 160) {
-                    [wfClasses addObject:className];
+        // 1) 两条入口各建一个库对象：+defaultDatabase 与 initWithStoreDescription:
+        NSMutableArray *databases = [NSMutableArray array];
+        id defaultDatabase = nil;
+        @try {
+            if ([dbClass respondsToSelector:@selector(defaultDatabase)]) {
+                defaultDatabase = ((id (*)(id, SEL))objc_msgSend)(dbClass, @selector(defaultDatabase));
+            }
+        } @catch (NSException *exception) {
+            ERShortcutLog(@"WFPROBE2 +defaultDatabase exception %@", exception.reason);
+        }
+        if (defaultDatabase) {
+            [databases addObject:defaultDatabase];
+            ERShortcutLog(@"WFPROBE2 +defaultDatabase -> %@", NSStringFromClass([defaultDatabase class]));
+        } else {
+            ERShortcutLog(@"WFPROBE2 +defaultDatabase -> nil");
+        }
+
+        id describedDatabase = nil;
+        @try {
+            Class descriptionClass = NSClassFromString(@"NSPersistentStoreDescription");
+            if (descriptionClass) {
+                id description = ((id (*)(id, SEL, id))objc_msgSend)(
+                    [descriptionClass alloc], NSSelectorFromString(@"initWithURL:"),
+                    [NSURL fileURLWithPath:@"/var/mobile/Library/Shortcuts/Shortcuts.sqlite"]);
+                SEL selector = NSSelectorFromString(@"initWithStoreDescription:runMigrationsIfNecessary:useLockFile:error:");
+                if (description && [[dbClass alloc] respondsToSelector:selector]) {
+                    NSError *error = nil;
+                    describedDatabase = ((id (*)(id, SEL, id, BOOL, BOOL, NSError **))objc_msgSend)(
+                        [dbClass alloc], selector, description, NO, NO, &error);
+                    ERShortcutLog(@"WFPROBE2 initWithStoreDescription -> %@ err=%@",
+                                  describedDatabase ? NSStringFromClass([describedDatabase class]) : @"nil",
+                                  error.localizedDescription ?: @"-");
                 }
             }
-            free(all);
+        } @catch (NSException *exception) {
+            ERShortcutLog(@"WFPROBE2 initWithStoreDescription exception %@", exception.reason);
         }
-        ERShortcutLog(@"WFPROBE WorkflowKit 类(%lu)=%@", (unsigned long)wfClasses.count, wfClasses);
-
-        // 2) 逐个 Icon 类列出方法面（类方法 + 实例方法各前 25 条）
-        for (NSString *className in wfClasses) {
-            if ([className rangeOfString:@"Icon"].location == NSNotFound) continue;
-            Class cls = NSClassFromString(className);
-            if (!cls) continue;
-            unsigned int classCount = 0;
-            Method *classMethods = class_copyMethodList(object_getClass(cls), &classCount);
-            NSMutableArray<NSString *> *classNames = [NSMutableArray array];
-            for (unsigned int index = 0; index < classCount && index < 25; index++) {
-                [classNames addObject:NSStringFromSelector(method_getName(classMethods[index]))];
-            }
-            if (classMethods) free(classMethods);
-            unsigned int instCount = 0;
-            Method *instMethods = class_copyMethodList(cls, &instCount);
-            NSMutableArray<NSString *> *instNames = [NSMutableArray array];
-            for (unsigned int index = 0; index < instCount && index < 25; index++) {
-                [instNames addObject:NSStringFromSelector(method_getName(instMethods[index]))];
-            }
-            if (instMethods) free(instMethods);
-            ERShortcutLog(@"WFPROBE [%@] +(%u)=%@ -(%u)=%@",
-                          className, classCount, classNames, instCount, instNames);
+        if (describedDatabase && ![databases containsObject:describedDatabase]) {
+            [databases addObject:describedDatabase];
         }
 
-        // 3) WFDatabase 的方法面（Actra 就是从这里取 workflow 的）
-        Class dbClass = NSClassFromString(@"WFDatabase");
-        if (dbClass) {
-            unsigned int classCount = 0;
-            Method *classMethods = class_copyMethodList(object_getClass(dbClass), &classCount);
-            NSMutableArray<NSString *> *classNames = [NSMutableArray array];
-            for (unsigned int index = 0; index < classCount && index < 40; index++) {
-                [classNames addObject:NSStringFromSelector(method_getName(classMethods[index]))];
-            }
-            if (classMethods) free(classMethods);
-            ERShortcutLog(@"WFPROBE WFDatabase +(%u)=%@", classCount, classNames);
-
-            unsigned int instCount = 0;
-            Method *instMethods = class_copyMethodList(dbClass, &instCount);
-            NSMutableArray<NSString *> *instNames = [NSMutableArray array];
-            for (unsigned int index = 0; index < instCount && index < 60; index++) {
-                [instNames addObject:NSStringFromSelector(method_getName(instMethods[index]))];
-            }
-            if (instMethods) free(instMethods);
-            ERShortcutLog(@"WFPROBE WFDatabase -(%u)前60=%@", instCount, instNames);
-        }
-
-        // 4) 直接验证 glyph → 符号名映射（0xF000 就是那条画不出来的默认值）
-        NSString *(*mapper)(unsigned short) =
-            (NSString *(*)(unsigned short))dlsym(handle, "WFSystemImageNameForGlyphCharacter");
-        ERShortcutLog(@"WFPROBE mapper=%d", mapper ? 1 : 0);
-        if (mapper) {
-            for (NSNumber *glyph in @[@(0xF000), @(0xE82D), @(0xE877), @(0xF086), @(0xE80D)]) {
-                unsigned short code = (unsigned short)glyph.unsignedShortValue;
-                NSString *name = mapper(code);
-                ERShortcutLog(@"WFPROBE glyph 0x%04X -> %@ (image=%d)", (unsigned)code,
-                              name ?: @"nil", name.length ? ([UIImage systemImageNamed:name] ? 1 : 0) : -1);
+        // 2) WFDatabase 上所有「不带参数、像取列表」的方法，逐个实调看谁能出数组
+        unsigned int methodCount = 0;
+        Method *methods = class_copyMethodList(dbClass, &methodCount);
+        NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+        for (unsigned int index = 0; index < methodCount; index++) {
+            NSString *name = NSStringFromSelector(method_getName(methods[index]));
+            if ([name rangeOfString:@":"].location != NSNotFound) continue;
+            if ([name rangeOfString:@"orkflow"].location != NSNotFound ||
+                [name rangeOfString:@"escriptor"].location != NSNotFound ||
+                [name hasPrefix:@"sorted"] || [name hasPrefix:@"all"] ||
+                [name hasPrefix:@"visible"] || [name hasPrefix:@"shortcut"]) {
+                [candidates addObject:name];
             }
         }
+        if (methods) free(methods);
+        ERShortcutLog(@"WFPROBE2 候选取列表方法(%lu)=%@", (unsigned long)candidates.count, candidates);
+
+        NSArray *foundWorkflows = nil;
+        NSString *foundSelector = nil;
+        for (id database in databases) {
+            for (NSString *name in candidates) {
+                SEL selector = NSSelectorFromString(name);
+                if (![database respondsToSelector:selector]) continue;
+                id result = nil;
+                @try { result = ((id (*)(id, SEL))objc_msgSend)(database, selector); }
+                @catch (NSException *exception) {
+                    ERShortcutLog(@"WFPROBE2 %@ -> exception %@", name, exception.reason);
+                    continue;
+                }
+                NSString *kind = nil;
+                if ([result isKindOfClass:[NSArray class]]) {
+                    kind = [NSString stringWithFormat:@"NSArray(%lu)", (unsigned long)[(NSArray *)result count]];
+                    if (!foundWorkflows && [(NSArray *)result count] > 0) {
+                        foundWorkflows = (NSArray *)result;
+                        foundSelector = name;
+                    }
+                } else {
+                    kind = result ? NSStringFromClass([result class]) : @"nil";
+                }
+                ERShortcutLog(@"WFPROBE2 db %@ -> %@", name, kind);
+            }
+        }
+        ERShortcutLog(@"WFPROBE2 命中列表 %@ 共 %lu 条", foundSelector ?: @"无",
+                      (unsigned long)foundWorkflows.count);
+
+        // 3) 拿到的第一条 workflow：把它的类、无参方法面、图标相关方法全 dump 一遍
+        id sample = foundWorkflows.firstObject;
+        if (!sample) return;
+        ERShortcutLog(@"WFPROBE2 workflow 类=%@", NSStringFromClass([sample class]));
+        unsigned int sampleCount = 0;
+        Method *sampleMethods = class_copyMethodList([sample class], &sampleCount);
+        NSMutableArray<NSString *> *iconNames = [NSMutableArray array];
+        for (unsigned int index = 0; index < sampleCount && index < 400; index++) {
+            NSString *name = NSStringFromSelector(method_getName(sampleMethods[index]));
+            if ([name rangeOfString:@":"].location != NSNotFound) continue;
+            if ([name rangeOfString:@"con"].location != NSNotFound ||
+                [name rangeOfString:@"ymbol"].location != NSNotFound ||
+                [name rangeOfString:@"lyph"].location != NSNotFound ||
+                [name rangeOfString:@"olor"].location != NSNotFound ||
+                [name hasPrefix:@"name"] || [name rangeOfString:@"dentifier"].location != NSNotFound) {
+                [iconNames addObject:name];
+            }
+        }
+        if (sampleMethods) free(sampleMethods);
+        ERShortcutLog(@"WFPROBE2 workflow 图标相关无参方法=%@", iconNames);
+        for (NSString *name in iconNames) {
+            SEL selector = NSSelectorFromString(name);
+            if (![sample respondsToSelector:selector]) continue;
+            id result = nil;
+            @try { result = ((id (*)(id, SEL))objc_msgSend)(sample, selector); }
+            @catch (NSException *exception) { ERShortcutLog(@"WFPROBE2 wf %@ -> exception %@", name, exception.reason); continue; }
+            ERShortcutLog(@"WFPROBE2 wf %@ -> %@", name,
+                          result ? NSStringFromClass([result class]) : @"nil");
+        }
+        // 带 : 的方法里凡是含 attributionIcon 的都列出来（确认真实签名）
+        unsigned int signedCount = 0;
+        Method *signedMethods = class_copyMethodList([sample class], &signedCount);
+        for (unsigned int index = 0; index < signedCount && index < 400; index++) {
+            NSString *name = NSStringFromSelector(method_getName(signedMethods[index]));
+            if ([name rangeOfString:@"ttribution"].location != NSNotFound ||
+                [name rangeOfString:@"ymbolImage"].location != NSNotFound) {
+                ERShortcutLog(@"WFPROBE2 wf 签名方法 %@", name);
+            }
+        }
+        if (signedMethods) free(signedMethods);
     });
 }
+
 static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
     if (![shortcut isKindOfClass:[NSDictionary class]]) return nil;
     UIColor *background = ERShortcutCellColorFromValue([shortcut[@"color"] longLongValue]);
