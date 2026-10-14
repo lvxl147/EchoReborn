@@ -41,6 +41,8 @@ static UIColor *ERShortcutCellColorFromValue(long long value) {
 // 1.1.8-8 · WFKit 图标 API 探测（一次性）：对照 Actra 的用法（WFDatabase
 // sortedVisibleWorkflowsByName），反射列出 workflow 对象的全部属性名与
 // 常见图标选择器响应情况 —— 确定真实图标属性的读取路径。
+static void ERShortcutLog(NSString *format, ...);
+
 static void ERWFKitProbeOnce(void) {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
@@ -53,7 +55,7 @@ static void ERWFKitProbeOnce(void) {
         id db = nil;
         if ([dbClass respondsToSelector:@selector(sharedDatabase)]) {
             db = ((id (*)(id, SEL))objc_msgSend)(dbClass, @selector(sharedDatabase));
-            ERShortcutLog(@"WFPROBE sharedDatabase=%@ (%@)", db ? @"有" : @"nil", NSStringFromClass(db.class));
+            ERShortcutLog(@"WFPROBE sharedDatabase=%@ (%@)", db ? @"有" : @"nil", NSStringFromClass([db class]));
         } else {
             ERShortcutLog(@"WFPROBE 无 sharedDatabase 类方法");
         }
@@ -77,7 +79,7 @@ static void ERWFKitProbeOnce(void) {
             }
             free(props);
             ERShortcutLog(@"WFPROBE 首对象 %@ 属性(%lu)=%@",
-                          NSStringFromClass(wf.class), (unsigned long)pCnt, names);
+                          NSStringFromClass([wf class]), (unsigned long)pCnt, names);
             // 常见图标相关选择器响应探测
             for (NSString *selName in @[@"icon", @"iconImage", @"image", @"shortcutIcon",
                                         @"iconImageData", @"glyph", @"color", @"workflowIcon"]) {
@@ -85,7 +87,7 @@ static void ERWFKitProbeOnce(void) {
                 if ([wf respondsToSelector:s]) {
                     @try {
                         id v = ((id (*)(id, SEL))objc_msgSend)(wf, s);
-                        ERLogInfo(@"WFPROBE %@ → %@ (%@)", selName, v ?: @"nil", NSStringFromClass(v.class) ?: @"-");
+                        ERShortcutLog(@"WFPROBE %@ → %@ (%@)", selName, v ?: @"nil", NSStringFromClass([v class]) ?: @"-");
                     } @catch (__unused NSException *e) {
                         ERShortcutLog(@"WFPROBE %@ 调用异常", selName);
                     }
