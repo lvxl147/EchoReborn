@@ -26003,6 +26003,22 @@ static NSString *const kERAppShortcutRequestNotification = @"com.strive.echorebo
 static NSString *const kERAppShortcutCatalogNotification = @"com.strive.echoreborn/AppShortcutsCatalog";
 // 1.1.9-8：桌面上显示的 App（用户能点到的），供设置页过滤系统隐藏组件。
 static NSString *const kERHomeScreenAppsKey = @"HomeScreenApps";
+// 1.1.9-10：远程诊断键（发布器每步进度都落盘，roothide 下看不到日志时用）。
+static NSString *const kERAppShortcutDiagKey = @"AppShortcutDiag";
+static void ERAppShortcutDiagSet(NSString *step, id value) {
+    @try {
+        Class prefsClass = NSClassFromString(@"NSUserDefaults");
+        SEL stdSel = NSSelectorFromString(@"standardUserDefaults");
+        id defs = ((id (*)(id, SEL))objc_msgSend)((id)prefsClass, stdSel);
+        SEL setSel = NSSelectorFromString(@"setObject:forKey:");
+        NSString *key = [@"appShortcuts." stringByAppendingString:step];
+        if ([defs respondsToSelector:setSel] && value) {
+            ((void (*)(id, SEL, id, id))objc_msgSend)(defs, setSel, value, key);
+        }
+        SEL syncSel = NSSelectorFromString(@"synchronize");
+        if ([defs respondsToSelector:syncSel]) ((BOOL (*)(id, SEL))objc_msgSend)(defs, syncSel);
+    } @catch (__unused NSException *e) {}
+}
 
 // 直接读 App 静态 Quick Actions。objectForInfoDictionaryKey: 是 LSBundleProxy 的
 // 正牌接口（infoDictionary 在 SpringBoard 里对部分 App 取不全，1.1.9-8 的兜底因此失效）。
@@ -26078,11 +26094,13 @@ static void ERAppShortcutPublishHomeScreenApps(void) {
                                      (__bridge CFPropertyListRef)[ids allObjects], kERPrefsDomain);
             CFPreferencesAppSynchronize(kERPrefsDomain);
             ERLogInfo(@"appShortcuts: 桌面图标 %lu 个", (unsigned long)ids.count);
+            ERAppShortcutDiagSet(@"home_screen", @(ids.count));
         } else {
             // SB 刚启动 +8s 时图标模型常未就绪 → 12s/30s 重试链。
             if (gERHomeScreenRetries < 3) {
                 gERHomeScreenRetries++;
                 ERLogInfo(@"appShortcuts: 桌面图标为空，第 %d 次重试", gERHomeScreenRetries);
+                ERAppShortcutDiagSet(@"home_retry", @(gERHomeScreenRetries));
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(gERHomeScreenRetries * 15 * NSEC_PER_SEC)),
                                dispatch_get_main_queue(), ^{
                     ERAppShortcutPublishHomeScreenApps();
@@ -26098,6 +26116,7 @@ static void ERAppShortcutPublishHomeScreenApps(void) {
 
 static void ERAppShortcutCatalogPublish(void) {
     @try {
+        ERAppShortcutDiagSet(@"publish_start", [NSString stringWithFormat:@"%@", [NSDate date]]);
         Class controllerClass = NSClassFromString(@"SBApplicationController");
         if (!controllerClass) { ERLogInfo(@"appShortcuts: SBApplicationController 不可用"); return; }
         SEL shared = NSSelectorFromString(@"sharedInstance");
@@ -26111,6 +26130,7 @@ static void ERAppShortcutCatalogPublish(void) {
             if ([candidate isKindOfClass:[NSArray class]] && candidate.count > 0) {
                 apps = candidate;
                 ERLogInfo(@"appShortcuts: +%@ 取到 %lu 个应用", selName, (unsigned long)apps.count);
+                ERAppShortcutDiagSet(@"sb_apps", [NSString stringWithFormat:@"%@=%lu", selName, (unsigned long)apps.count]);
                 break;
             }
         }
@@ -26134,6 +26154,7 @@ static void ERAppShortcutCatalogPublish(void) {
                         }
                     }
                     ERLogInfo(@"appShortcuts: LSApplicationWorkspace 安装列表 %lu 个", (unsigned long)proxyById.count);
+                    ERAppShortcutDiagSet(@"ws_proxies", @(proxyById.count));
                 }
             }
         } @catch (__unused NSException *wsEx) {}
@@ -26230,6 +26251,8 @@ static void ERAppShortcutCatalogPublish(void) {
             catalog[bid] = @{@"name": name.length ? name : bid, @"items": items};
             staticOnly++;
         }
+        ERAppShortcutDiagSet(@"static_only", @(staticOnly));
+        ERAppShortcutDiagSet(@"catalog_n", @(catalog.count));
         if (staticOnly) {
             ERLogInfo(@"appShortcuts: 静态补扫新增 %lu 个应用", (unsigned long)staticOnly);
         }
@@ -26249,6 +26272,7 @@ static void ERAppShortcutCatalogPublish(void) {
         ERLogInfo(@"appShortcuts: 发布 %lu 个应用的快捷方式目录", (unsigned long)catalog.count);
     } @catch (NSException *exception) {
         ERLogInfo(@"appShortcuts: 发布失败 %@", exception.reason);
+        ERAppShortcutDiagSet(@"publish_error", [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""]);
     }
 }
 
@@ -30186,7 +30210,9 @@ static void ERBootLog(NSString *tag) {
     } @catch (__unused NSException *e) {}
 }
 
+static void ERAppShortcutDiagSet(NSString *step, id value);
 %ctor {
+    ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
