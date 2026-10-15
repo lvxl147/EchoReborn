@@ -471,7 +471,8 @@ static void ERLinkRequestAppShortcutCatalog(void) {
 // ① SpringBoard 发布的快照（静态+动态，最全）；② 兜底读 App Info.plist 的静态项。
 static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) {
     if (!bundleId.length) return @[];
-    // ① SpringBoard 快照
+    // ① SpringBoard 快照（先强刷一次，别读到 cfprefsd 的旧缓存）
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERLinkPrefsDomain);
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
                                                         (__bridge CFStringRef)kERLinkPrefsDomain);
     if (value) {
@@ -489,10 +490,17 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
                     [result addObject:@{@"type": type,
                                         @"title": title.length ? title : type}];
                 }
-                if (result.count) { CFRelease(value); return result; }
+                if (result.count) {
+                    ERLinkLog(@"appShortcuts: %@ 快照命中 %lu 条", bundleId, (unsigned long)result.count);
+                    CFRelease(value);
+                    return result;
+                }
             }
         }
         CFRelease(value);
+        ERLinkLog(@"appShortcuts: %@ 快照无记录，走静态兜底", bundleId);
+    } else {
+        ERLinkLog(@"appShortcuts: %@ 快照缺失（SpringBoard 尚未发布？），走静态兜底", bundleId);
     }
     // ② 静态兜底：LSApplicationProxy → Info.plist UIApplicationShortcutItems
     @try {
@@ -506,7 +514,10 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         if (![proxy respondsToSelector:infoSel]) return @[];
         NSDictionary *info = ((id (*)(id, SEL))objc_msgSend)(proxy, infoSel);
         NSArray *raw = info[@"UIApplicationShortcutItems"];
-        if (![raw isKindOfClass:[NSArray class]]) return @[];
+        if (![raw isKindOfClass:[NSArray class]]) {
+            ERLinkLog(@"appShortcuts: %@ Info.plist 无静态 Quick Actions", bundleId);
+            return @[];
+        }
         NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
         for (NSDictionary *item in raw) {
             if (![item isKindOfClass:[NSDictionary class]]) continue;
@@ -517,8 +528,10 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
                 ? item[@"UIApplicationShortcutItemTitle"] : nil;
             [result addObject:@{@"type": type, @"title": title.length ? title : type}];
         }
+        ERLinkLog(@"appShortcuts: %@ 静态兜底 %lu 条", bundleId, (unsigned long)result.count);
         return result;
     } @catch (__unused NSException *exception) {
+        ERLinkLog(@"appShortcuts: 静态兜底异常 %@", exception.reason);
         return @[];
     }
 }
@@ -1059,6 +1072,24 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     [self reloadShortcuts];
     // 让 SpringBoard 顺手把目录刷一遍（静态+动态），下次进来更全。
     ERLinkRequestAppShortcutCatalog();
+    // 快照可能要等 SpringBoard 扫完才落地：没拿到就自动补拉两次。
+    if (self.shortcutItems.count == 0) [self scheduleShortcutRetry:1];
+}
+
+// 首次进入时 SpringBoard 可能还没发布快照：发布是异步的，这里 3s/7s 各补拉一次。
+- (void)scheduleShortcutRetry:(NSInteger)attempt {
+    if (attempt > 2) return;
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((attempt == 1 ? 3.0 : 7.0) * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.view.window) return;   // 已离开页面就不再刷
+        if (strongSelf.shortcutItems.count > 0) return;       // 已经拿到了
+        ERLinkLog(@"appShortcuts: 第 %ld 次补拉目录", (long)attempt);
+        ERLinkRequestAppShortcutCatalog();
+        [strongSelf reloadShortcuts];
+        [strongSelf scheduleShortcutRetry:attempt + 1];
+    });
 }
 
 - (void)reloadShortcuts {

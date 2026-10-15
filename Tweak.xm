@@ -26009,16 +26009,36 @@ static void ERAppShortcutCatalogPublish(void) {
         SEL shared = NSSelectorFromString(@"sharedInstance");
         if (![controllerClass respondsToSelector:shared]) return;
         id controller = ((id (*)(id, SEL))objc_msgSend)(controllerClass, shared);
-        SEL appsSelector = NSSelectorFromString(@"applications");
-        if (![controller respondsToSelector:appsSelector]) return;
-        NSArray *apps = ((id (*)(id, SEL))objc_msgSend)(controller, appsSelector);
-        if (![apps isKindOfClass:[NSArray class]]) return;
+        NSArray *apps = nil;
+        for (NSString *selName in @[@"applications", @"allApplications"]) {
+            SEL sel = NSSelectorFromString(selName);
+            if (![controller respondsToSelector:sel]) continue;
+            NSArray *candidate = ((id (*)(id, SEL))objc_msgSend)(controller, sel);
+            if ([candidate isKindOfClass:[NSArray class]] && candidate.count > 0) {
+                apps = candidate;
+                ERLogInfo(@"appShortcuts: +%@ 取到 %lu 个应用", selName, (unsigned long)apps.count);
+                break;
+            }
+        }
+        if (!apps) {
+            ERLogInfo(@"appShortcuts: 应用列表为空，8s 后重试一次");
+            static BOOL gERAppShortcutRetried = NO;
+            if (!gERAppShortcutRetried) {
+                gERAppShortcutRetried = YES;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    ERAppShortcutCatalogPublish();
+                });
+            }
+            return;
+        }
 
         NSMutableDictionary<NSString *, NSDictionary *> *catalog = [NSMutableDictionary dictionary];
         SEL typeSel = NSSelectorFromString(@"type");
         SEL titleSel = NSSelectorFromString(@"localizedTitle");
+        NSUInteger appsWithProps = 0;
         for (id app in apps) {
             @try {
+                BOOL hasProps = NO;
                 NSString *bundleId = nil;
                 for (NSString *selName in @[@"bundleIdentifier", @"applicationIdentifier"]) {
                     SEL sel = NSSelectorFromString(selName);
@@ -26042,6 +26062,7 @@ static void ERAppShortcutCatalogPublish(void) {
                     SEL sel = NSSelectorFromString(propName);
                     if (![app respondsToSelector:sel]) continue;
                     NSArray *list = ((id (*)(id, SEL))objc_msgSend)(app, sel);
+                    if ([list isKindOfClass:[NSArray class]] && list.count) hasProps = YES;
                     if (![list isKindOfClass:[NSArray class]]) continue;
                     BOOL dynamic = [propName hasPrefix:@"dynamic"];
                     for (id item in list) {
@@ -26071,7 +26092,11 @@ static void ERAppShortcutCatalogPublish(void) {
                 catalog[bundleId] = @{@"name": name.length ? name : bundleId, @"items": items};
             } @catch (__unused NSException *outer) {}
         }
-        if (!catalog.count) { ERLogInfo(@"appShortcuts: 扫到 0 个带快捷方式的应用"); return; }
+        if (!catalog.count) {
+            ERLogInfo(@"appShortcuts: 扫到 0 个带快捷方式的应用（共 %lu 个，%lu 个有 shortcut 属性）",
+                      (unsigned long)[apps count], (unsigned long)appsWithProps);
+            return;
+        }
         CFPreferencesSetAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
                                  (__bridge CFPropertyListRef)[catalog copy], kERPrefsDomain);
         CFPreferencesAppSynchronize(kERPrefsDomain);
