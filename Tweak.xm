@@ -26316,16 +26316,17 @@ static void ERAppShortcutCatalogPublish(void) {
             id bproxy = proxyById[@"com.baidu.map"];
             if (bproxy) {
                 SEL objKeySel = NSSelectorFromString(@"objectForInfoDictionaryKey:");
-                id ok1 = [bproxy respondsToSelector:objKeySel]
-                    ? ((id (*)(id, SEL, id))objc_msgSend)(bproxy, objKeySel, @"UIApplicationShortcutItems") : nil;
+                NSArray *ok1 = [bproxy respondsToSelector:objKeySel]
+                    ? ((NSArray *(*)(id, SEL, id))objc_msgSend)(bproxy, objKeySel, @"UIApplicationShortcutItems") : nil;
                 SEL infoSel = NSSelectorFromString(@"infoDictionary");
                 NSDictionary *info = [bproxy respondsToSelector:infoSel]
-                    ? ((id (*)(id, SEL))objc_msgSend)(bproxy, infoSel) : nil;
-                ERAppShortcutDiagSet(@"baidu_objkey", [ok1 isKindOfClass:[NSArray class]] ? @(ok1.count) : @"nil");
+                    ? ((NSDictionary *(*)(id, SEL))objc_msgSend)(bproxy, infoSel) : nil;
+                ERAppShortcutDiagSet(@"baidu_objkey", ok1 ? @(ok1.count) : @"nil");
                 ERAppShortcutDiagSet(@"baidu_info", info ? @(info.count) : @"nil");
+                NSArray *bShortcuts = info[@"UIApplicationShortcutItems"];
                 ERAppShortcutDiagSet(@"baidu_info_shortcuts",
-                                     ([info isKindOfClass:[NSDictionary class]] && info[@"UIApplicationShortcutItems"])
-                                     ? @([info[@"UIApplicationShortcutItems"] count]) : @"nil");
+                                     ([bShortcuts isKindOfClass:[NSArray class]])
+                                     ? @(bShortcuts.count) : @"nil");
             } else {
                 ERAppShortcutDiagSet(@"baidu_objkey", @"no-proxy");
             }
