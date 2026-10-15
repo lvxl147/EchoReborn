@@ -6634,7 +6634,8 @@ static NSDictionary *ERLinkRecordForSlot(NSInteger slot) {
     NSString *uuid = nil;
     if (value) {
         if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
-            id entry = (__bridge NSDictionary *)value[[NSString stringWithFormat:@"%ld", (long)slot]];
+            NSDictionary *assignments = (__bridge NSDictionary *)value;
+            id entry = assignments[[NSString stringWithFormat:@"%ld", (long)slot]];
             if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) uuid = entry;
         }
         CFRelease(value);
@@ -6650,8 +6651,9 @@ static void ERLinkSetSlotAssignment(NSInteger slot, NSString *uuid) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, kERPrefsDomain);
     if (value) {
         if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
-            for (NSString *key in (__bridge NSDictionary *)value) {
-                id entry = (__bridge NSDictionary *)value[key];
+            NSDictionary *stored = (__bridge NSDictionary *)value;
+            for (NSString *key in stored) {
+                id entry = stored[key];
                 if ([key isKindOfClass:[NSString class]] && [entry isKindOfClass:[NSString class]]) assignments[key] = entry;
             }
         }
@@ -6670,8 +6672,9 @@ static NSString *ERLinkSlotIdentifierForAddingUUID(NSString *uuid) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, kERPrefsDomain);
     if (value) {
         if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
-            for (NSString *key in (__bridge NSDictionary *)value) {
-                id entry = (__bridge NSDictionary *)value[key];
+            NSDictionary *stored = (__bridge NSDictionary *)value;
+            for (NSString *key in stored) {
+                id entry = stored[key];
                 if ([key isKindOfClass:[NSString class]] && [entry isKindOfClass:[NSString class]]) linkAssignments[key] = entry;
             }
         }
@@ -17799,11 +17802,15 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
         return [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
     }];
     NSUInteger shortcutCount = 0;
-    for (NSDictionary *entry in catalog) if ([entry[@"category"] isEqualToString:@"快捷指令"]) shortcutCount++;
-    ERLogInfo(@"catalog: %lu selectable control(s) (%lu shortcut(s); %lu fetched but not enabled in Settings), %lu hidden as already added",
-               (unsigned long)catalog.count, (unsigned long)shortcutCount,
+    NSUInteger linkCount = 0;
+    for (NSDictionary *entry in catalog) {
+        if ([entry[@"category"] isEqualToString:@"快捷指令"]) shortcutCount++;
+        if ([entry[@"category"] isEqualToString:@"快捷方式"]) linkCount++;
+    }
+    ERLogInfo(@"catalog: %lu selectable control(s) (%lu shortcut(s), %lu link(s); %lu fetched but not enabled in Settings), %lu hidden as already added",
+               (unsigned long)catalog.count, (unsigned long)shortcutCount, (unsigned long)linkCount,
                (unsigned long)notEnabledShortcuts,
-               (unsigned long)(hiddenAdded + hiddenShortcuts));
+               (unsigned long)(hiddenAdded + hiddenShortcuts + hiddenLinks));
     return catalog;
 }
 
