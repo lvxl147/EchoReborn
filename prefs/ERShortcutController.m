@@ -170,8 +170,9 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
             CGRect ink = ERInkBoundsForKey(iconFile.length ? iconFile : @"fallback", glyph);
             CGFloat inkWidth = MAX(ink.size.width * glyph.size.width, 0.001);
             CGFloat inkHeight = MAX(ink.size.height * glyph.size.height, 0.001);
-            CGFloat factor = MIN((inner.size.width * 0.86) / inkWidth,
-                                 (inner.size.height * 0.95) / inkHeight);
+            // 1.1.8-19 · 用户反馈过于大了，缩小 1/5：0.86/0.95 → 0.69/0.76。
+            CGFloat factor = MIN((inner.size.width * 0.69) / inkWidth,
+                                 (inner.size.height * 0.76) / inkHeight);
             CGSize drawn = CGSizeMake(glyph.size.width * factor, glyph.size.height * factor);
             [glyph drawInRect:CGRectMake(CGRectGetMidX(inner) - drawn.width / 2.0,
                                          CGRectGetMidY(inner) - drawn.height / 2.0,
@@ -575,7 +576,9 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     cell.detailTextLabel.text = ([uuid isKindOfClass:[NSString class]] && uuid.length > 8)
         ? [uuid substringToIndex:8]
         : (uuid ?: @"");
-    cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    // 1.1.8-19 · secondaryLabelColor 在白底下太发白（用户反馈），
+    // 用 labelColor 靠字号区分主次，颜色上足够清楚。
+    cell.detailTextLabel.textColor = UIColor.labelColor;
     cell.accessoryType = UITableViewCellAccessoryNone;
     return cell;
 }
@@ -607,21 +610,26 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
 
-    // 搜索框固定在顶部（不作为 tableHeaderView，这样它不会跟着列表滚走）。
-    UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0.0, 0.0, frame.size.width, 56.0)];
-    bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    bar.delegate = self;
-    bar.placeholder = @"搜索快捷指令";
-    bar.showsCancelButton = YES;
-    [self.view addSubview:bar];
-    self.searchBar = bar;
-
-    UITableView *table = [[UITableView alloc] initWithFrame:CGRectMake(0.0, 56.0, frame.size.width,
-                                                                      frame.size.height - 56.0)
-                                                      style:UITableViewStyleInsetGrouped];
+    // 1.1.8-19 · 搜索框改成表格的 tableHeaderView。
+    // 之前用「addSubview + 手写 frame」放在 y=0，结果这个页面的 view 是整屏的
+    // （会伸到导航栏底下），搜索框被导航栏压住一大半、点到状态栏上去。
+    // 交给表格自己定位：表格的内容 inset 系统已经算好了（主页就是这么正常显示的），
+    // 表头视图正好落在导航栏下面、也就是用户红框标出的位置。
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds
+                                                     style:UITableViewStyleInsetGrouped];
     table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     table.dataSource = self;
     table.delegate = self;
+
+    UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0.0, 0.0, frame.size.width, 56.0)];
+    bar.delegate = self;
+    bar.placeholder = @"搜索快捷指令";
+    // tableHeaderView 的宽度要以表格当前宽度为准，否则横屏/分屏下会短一截。
+    bar.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(table.bounds), 56.0);
+    [bar layoutIfNeeded];
+    table.tableHeaderView = bar;
+    self.searchBar = bar;
+
     [self.view addSubview:table];
     self.addTableView = table;
 }
@@ -629,6 +637,8 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"添加";
+    // 取消按钮在视图已入窗口后再打开，否则 loadView 阶段设置经常不渲染。
+    self.searchBar.showsCancelButton = YES;
     [self refilter];
 }
 
@@ -740,7 +750,9 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     cell.detailTextLabel.text = ([uuid isKindOfClass:[NSString class]] && uuid.length > 8)
         ? [uuid substringToIndex:8]
         : (uuid ?: @"");
-    cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    // 1.1.8-19 · secondaryLabelColor 在白底下太发白（用户反馈），
+    // 用 labelColor 靠字号区分主次，颜色上足够清楚。
+    cell.detailTextLabel.textColor = UIColor.labelColor;
     cell.accessoryType = UITableViewCellAccessoryNone;
     return cell;
 }
