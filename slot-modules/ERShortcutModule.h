@@ -48,6 +48,7 @@
 // ---------------------------------------------------------------------------
 
 #import <UIKit/UIKit.h>
+#import <objc/message.h>
 #include <dlfcn.h>
 #include <dispatch/dispatch.h>
 
@@ -81,6 +82,74 @@ static NSString *const kERShortcutCatalogKey = @"ShortcutCatalog";
 static NSString *const kERShortcutRunRequestKey = @"ShortcutRunRequest";
 static NSString *const kERShortcutReloadNotification = @"com.strive.echoreborn/ReloadPrefs";
 static NSString *const kERShortcutRunNotification = @"com.strive.echoreborn/RunShortcut";
+
+// 1.1.9-19 · 快捷方式（LinkCatalog）与快捷指令共用同一批槽位：绑定先查
+// ShortcutSlotAssignments，未命中再查 LinkSlotAssignments。点击 link 磁贴把
+// uuid 写进 LinkRunRequest 并广播 RunLink，由 SpringBoard 侧按条目类型执行。
+static NSString *const kERLinkSlotAssignmentsKey = @"LinkSlotAssignments";
+static NSString *const kERLinkCatalogKey = @"LinkCatalog";
+static NSString *const kERLinkRunRequestKey = @"LinkRunRequest";
+static NSString *const kERLinkRunNotification = @"com.strive.echoreborn/RunLink";
+
+// 槽位绑定的快捷方式条目（LinkCatalog 数组里按 uuid 查找）。
+static inline NSDictionary *ERLinkBindingForSlot(NSInteger slot, NSString **uuidOut) {
+    if (uuidOut) *uuidOut = nil;
+    if (slot <= 0) return nil;
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+    id assignments = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, (__bridge CFStringRef)kERShortcutPrefsDomain);
+    if (![assignments isKindOfClass:[NSDictionary class]]) return nil;
+    NSString *uuid = assignments[[NSString stringWithFormat:@"%ld", (long)slot]];
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return nil;
+    if (uuidOut) *uuidOut = uuid;
+    id catalog = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkCatalogKey, (__bridge CFStringRef)kERShortcutPrefsDomain);
+    if (![catalog isKindOfClass:[NSArray class]]) return nil;
+    for (NSDictionary *candidate in catalog) {
+        if ([candidate isKindOfClass:[NSDictionary class]] &&
+            [candidate[@"uuid"] isKindOfClass:[NSString class]] &&
+            [candidate[@"uuid"] isEqualToString:uuid]) return candidate;
+    }
+    return nil;
+}
+
+// 1.1.9-19 · App 图标的白色单色剪影：从 App 安装目录读 Info.plist 的
+// CFBundleIconFiles，找到 PNG 后用 imageWithTintColor 变成纯白剪影 —— 磁贴上
+// 不出现彩色方块（与快捷指令磁贴的「白色字形、无底板」规则一致）。
+static inline UIImage *ERLinkWhiteAppIcon(NSString *bundleId) {
+    if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) return nil;
+    @try {
+        Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+        if (!proxyClass) return nil;
+        id proxy = ((id (*)(id, SEL, id))objc_msgSend)(proxyClass, @selector(applicationProxyForIdentifier:), bundleId);
+        if (!proxy) return nil;
+        NSURL *bundleURL = [proxy valueForKey:@"bundleURL"];
+        if (![bundleURL isKindOfClass:[NSURL class]] || !bundleURL.path.length) return nil;
+        CFDictionaryRef infoRef = CFBundleCopyInfoDictionaryForURL((__bridge CFURLRef)bundleURL);
+        if (!infoRef) return nil;
+        NSDictionary *info = (__bridge_transfer NSDictionary *)infoRef;
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        id iconFiles = info[@"CFBundleIconFiles"];
+        if ([iconFiles isKindOfClass:[NSArray class]]) {
+            for (id name in iconFiles) if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name];
+        } else if ([iconFiles isKindOfClass:[NSString class]] && iconFiles.length) {
+            [names addObject:iconFiles];
+        }
+        id iconNames = info[@"CFBundleIconName"];
+        if ([iconNames isKindOfClass:[NSArray class]]) {
+            for (id name in iconNames) if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name];
+        }
+        NSString *directory = bundleURL.path;
+        for (NSString *name in names) {
+            for (NSString *candidate in @[name, [name stringByAppendingString:@".png"],
+                                          [NSString stringWithFormat:@"%@@2x.png", name],
+                                          [NSString stringWithFormat:@"%@@3x.png", name]]) {
+                NSString *path = [directory stringByAppendingPathComponent:candidate];
+                UIImage *image = [UIImage imageWithContentsOfFile:path];
+                if (image) return [image imageWithTintColor:UIColor.whiteColor] ?: image;
+            }
+        }
+    } @catch (__unused NSException *exception) {}
+    return nil;
+}
 
 // Maps a Shortcuts glyph number to an SF Symbol name via WorkflowKit's own
 // helper (the same one the tweak uses). Returns nil when WorkflowKit is absent
@@ -172,6 +241,9 @@ typedef NS_ENUM(NSInteger, ERShortcutTileLayout) {
 };
 
 @interface ERShortcutTileViewController ()
+// 1.1.9-19：槽位绑定到 LinkCatalog（快捷方式）条目时的标记与白色剪影图。
+@property (nonatomic, assign) BOOL isLinkEntry;
+@property (nonatomic, strong) UIImage *linkImage;
 @property (nonatomic, strong) UIImageView *glyphView;
 @property (nonatomic, strong) UILabel *nameLabel;
 @property (nonatomic, strong) UILabel *runLabel;
@@ -279,8 +351,32 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
 - (void)reloadBinding {
     NSString *uuid = nil;
     NSDictionary *record = ERShortcutBindingForSlot(ERShortcutSlotNumber(), &uuid);
+    // 1.1.9-19：快捷指令未命中时查快捷方式（LinkCatalog）。槽位绘制规则一致 ——
+    // 白色单色剪影、无自绘底板；App/appShortcut 条目用 App 图标的白色剪影，
+    // 其它用条目自带 SF 符号，最后退回「链接」符号。
+    self.isLinkEntry = NO;
+    self.linkImage = nil;
+    if (!record) {
+        NSDictionary *link = ERLinkBindingForSlot(ERShortcutSlotNumber(), &uuid);
+        if (link) {
+            record = link;
+            self.isLinkEntry = YES;
+            NSString *kind = [link[@"iconKind"] isKindOfClass:[NSString class]] ? link[@"iconKind"] : @"";
+            if ([kind isEqualToString:@"app"]) {
+                UIImage *icon = ERLinkWhiteAppIcon([link[@"iconValue"] isKindOfClass:[NSString class]] ? link[@"iconValue"] : link[@"bundleId"]);
+                if (icon) self.linkImage = icon;
+            }
+        }
+    }
     self.ccaUUID = uuid;
-    self.symbolName = ERShortcutSymbolForRecord(record);
+    if (self.isLinkEntry) {
+        NSString *kind = [record[@"iconKind"] isKindOfClass:[NSString class]] ? record[@"iconKind"] : @"";
+        NSString *preferred = [record[@"iconValue"] isKindOfClass:[NSString class]] ? record[@"iconValue"] : @"";
+        NSString *symbol = ([kind isEqualToString:@"symbol"] && preferred.length && [UIImage systemImageNamed:preferred]) ? preferred : @"link";
+        self.symbolName = symbol;
+    } else {
+        self.symbolName = ERShortcutSymbolForRecord(record);
+    }
     NSString *name = [record[@"name"] isKindOfClass:[NSString class]] ? record[@"name"] : nil;
     self.nameLabel.text = name;
     // Force the next layout pass to re-render the glyph at its layout size.
@@ -306,7 +402,7 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
                       :                                              26.0;
     if (pointSize != _glyphPointSize || !_glyphView.image) {
         _glyphPointSize = pointSize;
-        _glyphView.image = ERShortcutGlyphImage(_symbolName, pointSize);
+        _glyphView.image = _linkImage ?: ERShortcutGlyphImage(_symbolName, pointSize);
     }
 
     BOOL showsText = (layout != ERShortcutTileLayoutCompact);
@@ -376,10 +472,12 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
     self.view.alpha = 1.0;
     NSString *uuid = self.ccaUUID;
     if (!uuid.length) return;
-    CFPreferencesSetAppValue((__bridge CFStringRef)kERShortcutRunRequestKey, (__bridge CFPropertyListRef)uuid, (__bridge CFStringRef)kERShortcutPrefsDomain);
+    NSString *requestKey = _isLinkEntry ? kERLinkRunRequestKey : kERShortcutRunRequestKey;
+    NSString *notifyName = _isLinkEntry ? kERLinkRunNotification : kERShortcutRunNotification;
+    CFPreferencesSetAppValue((__bridge CFStringRef)requestKey, (__bridge CFPropertyListRef)uuid, (__bridge CFStringRef)kERShortcutPrefsDomain);
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
-                                         (__bridge CFStringRef)kERShortcutRunNotification, NULL, NULL, TRUE);
+                                         (__bridge CFStringRef)notifyName, NULL, NULL, TRUE);
 }
 
 // A shortcut slot is a momentary action, not an expandable module. Declare no
