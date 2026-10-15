@@ -1028,29 +1028,27 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // MARK: - Table
 
 - (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
-    return 2;
+    // 1.1.9-17：三张卡片 —— ① 创建链接（独立卡）② 有快捷方式 ③ 其他应用。
+    return 3;
 }
 
 - (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    // 第一张卡：「创建链接」+ 有快捷方式的应用；第二张卡：其他应用。
-    if (section == 0) return (NSInteger)self.withShortcuts.count + 1;
+    if (section == 0) return 1;   // 「创建链接」独占一张卡
+    if (section == 1) return (NSInteger)self.withShortcuts.count;
     return (NSInteger)self.withoutShortcuts.count;
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    if (section == 0) return [NSString stringWithFormat:@"有快捷方式（%lu）", (unsigned long)self.withShortcuts.count];
+    if (section == 0) return @"创建链接";
+    if (section == 1) return [NSString stringWithFormat:@"有快捷方式（%lu）", (unsigned long)self.withShortcuts.count];
     return [NSString stringWithFormat:@"其他应用（%lu）", (unsigned long)self.withoutShortcuts.count];
 }
 
 - (NSDictionary *)appForIndexPath:(NSIndexPath *)indexPath {
-    if (indexPath.section == 0) {
-        NSUInteger index = (NSUInteger)indexPath.row - 1;
-        if (indexPath.row == 0 || index >= self.withShortcuts.count) return nil;
-        return self.withShortcuts[index];
-    }
+    NSArray<NSDictionary *> *list = (indexPath.section == 1) ? self.withShortcuts : self.withoutShortcuts;
     NSUInteger index = (NSUInteger)indexPath.row;
-    if (index >= self.withoutShortcuts.count) return nil;
-    return self.withoutShortcuts[index];
+    if (index >= list.count) return nil;
+    return list[index];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1058,8 +1056,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:identifier];
 
-    if (indexPath.section == 0 && indexPath.row == 0) {
-        // 「创建链接」固定在第一张卡顶部。
+    if (indexPath.section == 0) {
+        // 「创建链接」单独一张卡。
         cell.textLabel.text = @"创建链接";
         cell.textLabel.textColor = UIColor.labelColor;
         cell.detailTextLabel.text = @"自定义网址或 URL Scheme";
@@ -1074,12 +1072,13 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     }
     NSDictionary *app = [self appForIndexPath:indexPath];
     if (!app) {
-        cell.textLabel.text = self.searchText.length ? @"没有匹配的应用" : @"没有可添加的应用";
-        cell.textLabel.textColor = UIColor.secondaryLabelColor;
+        // 空卡片不显示任何占位文字（用户要求：不要「没有可添加的应用」这类行）。
+        cell.textLabel.text = nil;
         cell.detailTextLabel.text = nil;
+        cell.imageView.image = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        cell.userInteractionEnabled = YES;
+        cell.userInteractionEnabled = NO;
         return cell;
     }
     cell.userInteractionEnabled = YES;
@@ -1099,7 +1098,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.section == 0 && indexPath.row == 0) {
+    if (indexPath.section == 0) {
         [self presentCreateLink];
         return;
     }
@@ -1237,8 +1236,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 }
 
 - (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
-    // 第一行：App 头部；之后是快捷方式条目（没有条目时给一行空状态）。
-    return 1 + (self.shortcutItems.count ? (NSInteger)self.shortcutItems.count : 1);
+    // 第一行：App 头部；之后是快捷方式条目（无条目时不显示任何占位行）。
+    return 1 + (NSInteger)self.shortcutItems.count;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1263,37 +1262,6 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     static NSString *itemId = @"ERLinkAppItemCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:itemId];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:itemId];
-    if (self.shortcutItems.count == 0) {
-        cell.imageView.image = nil;
-        // 空状态带自诊断：快照规模 + 是否包含当前 App，便于远程定位断点。
-        CFPreferencesAppSynchronize((__bridge CFStringRef)kERLinkPrefsDomain);
-        CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
-                                                            (__bridge CFStringRef)kERLinkPrefsDomain);
-        NSUInteger snapshotApps = 0;
-        BOOL snapshotHasApp = NO;
-        if (value) {
-            if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
-                NSDictionary *catalog = (__bridge NSDictionary *)value;
-                snapshotApps = catalog.count;
-                snapshotHasApp = catalog[self.appBundleId] != nil;
-            }
-            CFRelease(value);
-        }
-        if (snapshotApps == 0) {
-            cell.textLabel.text = @"该应用没有可用的快捷方式（目录尚未发布，稍后自动重试）";
-        } else if (snapshotHasApp) {
-            cell.textLabel.text = @"该应用的快捷方式条目为空";
-        } else {
-            cell.textLabel.text = [NSString stringWithFormat:@"目录共 %lu 个应用，不含 %@（可先打开一次该 App 再回来）",
-                                   (unsigned long)snapshotApps, self.appName];
-        }
-        cell.textLabel.textColor = UIColor.secondaryLabelColor;
-        cell.textLabel.numberOfLines = 0;
-        cell.accessoryType = UITableViewCellAccessoryNone;
-        cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        cell.userInteractionEnabled = YES;
-        return cell;
-    }
     cell.userInteractionEnabled = YES;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     NSDictionary *item = self.shortcutItems[(NSUInteger)(indexPath.row - 1)];
