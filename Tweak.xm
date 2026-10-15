@@ -26037,6 +26037,21 @@ static NSArray<NSDictionary *> *ERAppShortcutStaticItemsFromProxy(id proxy) {
                 }
             }
         }
+        if (!raw) {
+            // 兜底：绕过 LS 内部缓存，直接读 App bundle 目录里的 Info.plist。
+            SEL urlSel = NSSelectorFromString(@"bundleURL");
+            if ([proxy respondsToSelector:urlSel]) {
+                NSURL *url = ((NSURL *(*)(id, SEL))objc_msgSend)(proxy, urlSel);
+                if (url) {
+                    CFDictionaryRef disk = CFBundleCopyInfoDictionaryForURL((__bridge CFURLRef)url);
+                    if (disk) {
+                        NSDictionary *info = (__bridge_transfer NSDictionary *)disk;
+                        id v3 = info[@"UIApplicationShortcutItems"];
+                        if ([v3 isKindOfClass:[NSArray class]]) raw = v3;
+                    }
+                }
+            }
+        }
         if (!raw) return result;
         for (NSDictionary *item in raw) {
             if (![item isKindOfClass:[NSDictionary class]]) continue;
@@ -26056,32 +26071,81 @@ static int gERHomeScreenRetries = 0;
 static void ERAppShortcutPublishHomeScreenApps(void) {
     @try {
         NSMutableSet<NSString *> *ids = [NSMutableSet set];
-        Class icClass = NSClassFromString(@"SBIconController");
-        SEL shared = NSSelectorFromString(@"sharedInstance");
-        if (icClass && [icClass respondsToSelector:shared]) {
-            id controller = ((id (*)(id, SEL))objc_msgSend)(icClass, shared);
-            SEL modelSel = NSSelectorFromString(@"iconModel");
-            if ([controller respondsToSelector:modelSel]) {
-                id model = ((id (*)(id, SEL))objc_msgSend)(controller, modelSel);
-                SEL leafSel = NSSelectorFromString(@"leafIcons");
-                if (model && [model respondsToSelector:leafSel]) {
-                    NSArray *icons = ((id (*)(id, SEL))objc_msgSend)(model, leafSel);
-                    for (id icon in icons) {
-                        @try {
-                            SEL appSel = NSSelectorFromString(@"application");
-                            if (![icon respondsToSelector:appSel]) continue;
-                            id app = ((id (*)(id, SEL))objc_msgSend)(icon, appSel);
-                            if (!app) continue;
-                            SEL bidSel = NSSelectorFromString(@"bundleIdentifier");
-                            if (![app respondsToSelector:bidSel]) continue;
-                            id bid = ((id (*)(id, SEL))objc_msgSend)(app, bidSel);
-                            if ([bid isKindOfClass:[NSString class]] && [(NSString *)bid length]) {
-                                [ids addObject:bid];
+        __block NSString *path = @"none";
+        @try {
+            Class icClass = NSClassFromString(@"SBIconController");
+            SEL shared = NSSelectorFromString(@"sharedInstance");
+            if (!icClass || ![icClass respondsToSelector:shared]) {
+                ERAppShortcutDiagSet(@"icon_path", @"no-controller");
+            } else {
+                id controller = ((id (*)(id, SEL))objc_msgSend)(icClass, shared);
+                if (!controller) {
+                    ERAppShortcutDiagSet(@"icon_path", @"controller-nil");
+                } else {
+                    // 路径1：iconModel.leafIcons；路径2：iconModel.applicationIcons 的键；
+                    // 路径3：iconListModel.allIcons。
+                    id model = nil;
+                    SEL modelSel = NSSelectorFromString(@"iconModel");
+                    if ([controller respondsToSelector:modelSel]) {
+                        model = ((id (*)(id, SEL))objc_msgSend)(controller, modelSel);
+                    }
+                    SEL listSel = NSSelectorFromString(@"iconListModel");
+                    id listModel = nil;
+                    if ([controller respondsToSelector:listSel]) {
+                        listModel = ((id (*)(id, SEL))objc_msgSend)(controller, listSel);
+                    }
+                    id useModel = model ?: listModel;
+                    if (!useModel) {
+                        ERAppShortcutDiagSet(@"icon_path", @"model-nil");
+                    } else {
+                        NSArray *icons = nil;
+                        SEL leafSel = NSSelectorFromString(@"leafIcons");
+                        if ([useModel respondsToSelector:leafSel]) {
+                            icons = ((id (*)(id, SEL))objc_msgSend)(useModel, leafSel);
+                        }
+                        if (!icons.count) {
+                            SEL allSel = NSSelectorFromString(@"allIcons");
+                            if ([useModel respondsToSelector:allSel]) {
+                                icons = ((id (*)(id, SEL))objc_msgSend)(useModel, allSel);
                             }
-                        } @catch (__unused NSException *inner) {}
+                        }
+                        if (!icons.count) {
+                            // applicationIcons 是 bundleId → SBIconIcon 的字典，直接拿键最快。
+                            SEL appIconsSel = NSSelectorFromString(@"applicationIcons");
+                            if ([useModel respondsToSelector:appIconsSel]) {
+                                NSDictionary *appIcons = ((id (*)(id, SEL))objc_msgSend)(useModel, appIconsSel);
+                                if ([appIcons isKindOfClass:[NSDictionary class]]) {
+                                    for (id key in appIcons) {
+                                        if ([key isKindOfClass:[NSString class]]) [ids addObject:key];
+                                    }
+                                    path = @"applicationIcons";
+                                }
+                            }
+                        } else {
+                            for (id icon in icons) {
+                                @try {
+                                    SEL appSel = NSSelectorFromString(@"application");
+                                    if (![icon respondsToSelector:appSel]) continue;
+                                    id app = ((id (*)(id, SEL))objc_msgSend)(icon, appSel);
+                                    if (!app) continue;
+                                    SEL bidSel = NSSelectorFromString(@"bundleIdentifier");
+                                    if (![app respondsToSelector:bidSel]) continue;
+                                    id bid = ((id (*)(id, SEL))objc_msgSend)(app, bidSel);
+                                    if ([bid isKindOfClass:[NSString class]] && [(NSString *)bid length]) {
+                                        [ids addObject:bid];
+                                    }
+                                } @catch (__unused NSException *inner) {}
+                            }
+                            path = icons == nil ? @"nil" : @"leaf/all-icons";
+                        }
                     }
                 }
             }
+        } @catch (NSException *iconEx) {
+            path = [@"exception:" stringByAppendingString:iconEx.name ?: @""];
+        }
+        if (!ids.count) {
+            ERAppShortcutDiagSet(@"icon_path", path);
         }
         if (ids.count) {
             gERHomeScreenRetries = 0;
@@ -26247,6 +26311,25 @@ static void ERAppShortcutCatalogPublish(void) {
             staticOnly++;
         }
         ERAppShortcutDiagSet(@"static_only", @(staticOnly));
+        {
+            // 百度地图专项诊断：三种取法各返回什么。
+            id bproxy = proxyById[@"com.baidu.map"];
+            if (bproxy) {
+                SEL objKeySel = NSSelectorFromString(@"objectForInfoDictionaryKey:");
+                id ok1 = [bproxy respondsToSelector:objKeySel]
+                    ? ((id (*)(id, SEL, id))objc_msgSend)(bproxy, objKeySel, @"UIApplicationShortcutItems") : nil;
+                SEL infoSel = NSSelectorFromString(@"infoDictionary");
+                NSDictionary *info = [bproxy respondsToSelector:infoSel]
+                    ? ((id (*)(id, SEL))objc_msgSend)(bproxy, infoSel) : nil;
+                ERAppShortcutDiagSet(@"baidu_objkey", ok1 ? @(ok1.count) : @"nil");
+                ERAppShortcutDiagSet(@"baidu_info", info ? @(info.count) : @"nil");
+                ERAppShortcutDiagSet(@"baidu_info_shortcuts",
+                                     ([info isKindOfClass:[NSDictionary class]] && info[@"UIApplicationShortcutItems"])
+                                     ? @([info[@"UIApplicationShortcutItems"] count]) : @"nil");
+            } else {
+                ERAppShortcutDiagSet(@"baidu_objkey", @"no-proxy");
+            }
+        }
         ERAppShortcutDiagSet(@"catalog_n", @(catalog.count));
         if (staticOnly) {
             ERLogInfo(@"appShortcuts: 静态补扫新增 %lu 个应用", (unsigned long)staticOnly);
