@@ -46,7 +46,7 @@ static void ERPrefsLog(NSString *format, ...) {
 static NSArray<NSString *> *ERDefaultCategories(void) {
     return @[@"辅助功能", @"拍摄", @"时钟", @"连接", @"显示", @"专注", @"家庭",
              @"媒体", @"备忘录", @"语音备忘录", @"钱包", @"实用工具",
-             @"快捷指令", @"第三方插件"];
+             @"快捷指令", @"快捷方式", @"第三方插件"];
 }
 
 static NSString *const kERCategoryCellIdentifier = @"ERCategoryCell";
