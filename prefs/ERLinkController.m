@@ -376,16 +376,6 @@ static NSArray<NSDictionary *> *ERLinkInstalledApps(void) {
     return cache;
 }
 
-// 把外部 URL 的图片拷进 link-icons/（带 security-scope 处理），返回文件名。
-static NSString *ERLinkImportImageFromURL(NSURL *url) {
-    if (!url) return nil;
-    BOOL scoped = [url startAccessingSecurityScopedResource];
-    NSData *data = [NSData dataWithContentsOfURL:url];
-    if (scoped) [url stopAccessingSecurityScopedResource];
-    UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
-    return ERLinkImportImageFromImage(image);
-}
-
 // 把 UIImage 存成 PNG 落进 link-icons/，返回文件名。
 static NSString *ERLinkImportImageFromImage(UIImage *image) {
     if (![image isKindOfClass:[UIImage class]]) return nil;
@@ -400,6 +390,16 @@ static NSString *ERLinkImportImageFromImage(UIImage *image) {
     }
     return nil;
 }
+// 把外部 URL 的图片拷进 link-icons/（带 security-scope 处理），返回文件名。
+static NSString *ERLinkImportImageFromURL(NSURL *url) {
+    if (!url) return nil;
+    BOOL scoped = [url startAccessingSecurityScopedResource];
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    if (scoped) [url stopAccessingSecurityScopedResource];
+    UIImage *image = data.length ? [UIImage imageWithData:data] : nil;
+    return ERLinkImportImageFromImage(image);
+}
+
 
 // 画一个「彩色圆角底 + 白色符号」的 40×40 小磁贴（创建链接行、取不到 App 图标时的兜底）。
 static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
@@ -424,8 +424,21 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
 
 // MARK: - 主页
 
-// 「添加」子页面（实现放在本文件末尾，和主页共用上面的静态助手）。
-@class ERLinkAddController;
+@interface ERLinkAddController : PSViewController <UITableViewDataSource,
+                                                    UITableViewDelegate,
+                                                    UISearchBarDelegate,
+                                                    UIDocumentPickerDelegate,
+                                                    PHPickerViewControllerDelegate>
+@property (nonatomic, strong) NSArray<NSDictionary *> *existing;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *apps;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
+@property (nonatomic, copy) NSString *searchText;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) UITableView *addTableView;
+// 「添加链接」弹窗里正在编辑的那一份（从文件/相册导入图标时要用）
+@property (nonatomic, strong) UIAlertController *pendingAlert;
+@property (nonatomic, copy) NSString *pendingIconFile;
+@end
 
 @interface ERLinkController () <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UITableView *linkTableView;
@@ -552,21 +565,6 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
 
 // MARK: - 添加子页面
 
-@interface ERLinkAddController : PSViewController <UITableViewDataSource,
-                                                    UITableViewDelegate,
-                                                    UISearchBarDelegate,
-                                                    UIDocumentPickerDelegate,
-                                                    PHPickerViewControllerDelegate>
-@property (nonatomic, strong) NSArray<NSDictionary *> *existing;
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *apps;
-@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
-@property (nonatomic, copy) NSString *searchText;
-@property (nonatomic, strong) UISearchBar *searchBar;
-@property (nonatomic, strong) UITableView *addTableView;
-// 「添加链接」弹窗里正在编辑的那一份（从文件/相册导入图标时要用）
-@property (nonatomic, strong) UIAlertController *pendingAlert;
-@property (nonatomic, copy) NSString *pendingIconFile;
-@end
 
 @implementation ERLinkAddController
 
@@ -753,9 +751,15 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.pendingAlert = alert;
-        UIDocumentPickerViewController *picker =
-            [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.image"]
-                                                                   inMode:UIDocumentPickerModeImport];
+        UIDocumentPickerViewController *picker = nil;
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        // iOS 14 起推荐 forOpeningContentTypes:，但那需要 UniformTypeIdentifiers；
+        // 旧的 documentTypes:inMode: 在这两个系统版本上都还在，只是标了废弃，
+        // 而本工程开了 -Werror，所以局部把这条警告按掉。
+        picker = [[UIDocumentPickerViewController alloc] initWithDocumentTypes:@[@"public.image"]
+                                                                       inMode:UIDocumentPickerModeImport];
+#pragma clang diagnostic pop
         picker.delegate = strongSelf;
         [strongSelf presentViewController:picker animated:YES completion:nil];
     }];
@@ -786,7 +790,7 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
     [picker dismissViewControllerAnimated:YES completion:nil];
     NSURL *url = urls.firstObject;
     if (!url) return;
-    NSString *fileName = [ERLinkImportImageFromURL:url];
+    NSString *fileName = ERLinkImportImageFromURL(url);
     if (!fileName.length) return;
     self.pendingIconFile = fileName;
     // 回填到弹窗的图标输入框，让用户看见已经选好了。
