@@ -5856,7 +5856,7 @@ static NSArray<NSString *> *ERDefaultCategoryOrder(void) {
     // 不会留下空标题。
     return @[@"辅助功能", @"拍摄", @"时钟", @"连接", @"显示", @"专注", @"家庭",
              @"媒体", @"备忘录", @"语音备忘录", @"钱包", @"实用工具",
-             @"快捷指令", @"第三方插件"];
+             @"快捷指令", @"快捷方式", @"第三方插件"];
 }
 
 static NSArray<NSString *> *ERCategoryOrder(void) {
@@ -6579,6 +6579,135 @@ static NSString *ERShortcutUUIDFromIdentifier(NSString *identifier) {
 }
 
 // ---------------------------------------------------------------------------
+// 1.1.9-19 · 快捷方式（LinkCatalog：打开 App / App 快捷方式 / 链接）槽位绑定
+//
+// 与快捷指令**共用同一批 32 个槽位模块**（com.strive.echoreborn.shortcut.N）：
+// 槽位绑定先查 ShortcutSlotAssignments（快捷指令），未命中再查 LinkSlotAssignments
+// （快捷方式）。认领槽位时两个家族一起算占用，互不重叠。磁贴的绘制与点击在
+// slot-modules/ERShortcutModule.h 里做同样的双查；点击 link 磁贴时 bundle 把
+// uuid 写进 LinkRunRequest 并广播 RunLink，本进程读回后按条目类型执行：
+//   link        → openURL（网址 / URL Scheme）
+//   app         → FBSOpenApplicationService 打开 App
+//   appShortcut → SBSApplicationShortcutItem + SBIconController activateShortcut:
+// ---------------------------------------------------------------------------
+static NSString *const kERLinkSlotAssignmentsKey = @"LinkSlotAssignments";
+static NSString *const kERLinkCatalogKey = @"LinkCatalog";
+static NSString *const kERLinkRunRequestKey = @"LinkRunRequest";
+static NSString *const kERLinkRunNotification = @"com.strive.echoreborn/RunLink";
+
+// 执行一条 LinkCatalog 条目（定义在 ERShortcutRunRequested 之后；此处先声明，
+// 供画廊点按代理在 1.1.9-19 里直接调用）。
+static BOOL ERRunLinkEntry(NSDictionary *entry);
+
+static NSArray<NSDictionary *> *ERLinkCatalogRecords(void) {
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkCatalogKey, kERPrefsDomain);
+    if (!value) return @[];
+    NSArray *records = nil;
+    if (CFGetTypeID(value) == CFArrayGetTypeID()) records = [(__bridge NSArray *)value copy];
+    CFRelease(value);
+    if (!records) return @[];
+    NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+    for (NSDictionary *entry in records) {
+        if (![entry isKindOfClass:[NSDictionary class]]) continue;
+        NSString *uuid = entry[@"uuid"];
+        if (![uuid isKindOfClass:[NSString class]] || !uuid.length) continue;
+        [result addObject:entry];
+    }
+    return result;
+}
+
+static NSDictionary *ERLinkRecordForUUID(NSString *uuid) {
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return nil;
+    for (NSDictionary *entry in ERLinkCatalogRecords()) {
+        NSString *candidate = entry[@"uuid"];
+        if ([candidate isKindOfClass:[NSString class]] && [candidate isEqualToString:uuid]) return entry;
+    }
+    return nil;
+}
+
+// 槽号 -> 绑定的快捷方式条目。该槽位已被快捷指令占用时返回 nil（快捷指令优先）。
+static NSDictionary *ERLinkRecordForSlot(NSInteger slot) {
+    if (slot <= 0) return nil;
+    if (ERShortcutUUIDForSlot(slot).length) return nil;
+    CFPreferencesAppSynchronize(kERPrefsDomain);
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, kERPrefsDomain);
+    NSString *uuid = nil;
+    if (value) {
+        if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+            id entry = (__bridge NSDictionary *)value[[NSString stringWithFormat:@"%ld", (long)slot]];
+            if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) uuid = entry;
+        }
+        CFRelease(value);
+    }
+    return uuid ? ERLinkRecordForUUID(uuid) : nil;
+}
+
+// 落盘槽位 -> 快捷方式条目的绑定（「添加控制项」点添加时由画廊目录构建写入）。
+static void ERLinkSetSlotAssignment(NSInteger slot, NSString *uuid) {
+    if (slot <= 0 || slot > (NSInteger)kERShortcutSlotCount) return;
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
+    NSMutableDictionary<NSString *, NSString *> *assignments = [NSMutableDictionary dictionary];
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, kERPrefsDomain);
+    if (value) {
+        if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+            for (NSString *key in (__bridge NSDictionary *)value) {
+                id entry = (__bridge NSDictionary *)value[key];
+                if ([key isKindOfClass:[NSString class]] && [entry isKindOfClass:[NSString class]]) assignments[key] = entry;
+            }
+        }
+        CFRelease(value);
+    }
+    assignments[[NSString stringWithFormat:@"%ld", (long)slot]] = uuid;
+    CFPreferencesSetAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, (__bridge CFPropertyListRef)[assignments copy], kERPrefsDomain);
+    CFPreferencesAppSynchronize(kERPrefsDomain);
+}
+
+// 为一条快捷方式取槽位标识符：已有绑定则复用；否则认领**两个家族都没有占用**的
+// 第一个空槽（快捷指令与快捷方式共用 32 个槽位池）。
+static NSString *ERLinkSlotIdentifierForAddingUUID(NSString *uuid) {
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return nil;
+    NSMutableDictionary<NSString *, NSString *> *linkAssignments = [NSMutableDictionary dictionary];
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, kERPrefsDomain);
+    if (value) {
+        if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+            for (NSString *key in (__bridge NSDictionary *)value) {
+                id entry = (__bridge NSDictionary *)value[key];
+                if ([key isKindOfClass:[NSString class]] && [entry isKindOfClass:[NSString class]]) linkAssignments[key] = entry;
+            }
+        }
+        CFRelease(value);
+    }
+    for (NSString *key in linkAssignments) {
+        if ([linkAssignments[key] isEqualToString:uuid]) {
+            NSInteger slot = key.integerValue;
+            if (slot >= 1 && slot <= (NSInteger)kERShortcutSlotCount) return ERShortcutSlotIdentifier(slot);
+        }
+    }
+    NSMutableSet<NSString *> *occupied = [NSMutableSet setWithArray:linkAssignments.allKeys];
+    // 快捷指令侧的占用也要算进来。
+    for (NSString *key in ERShortcutSlotAssignments()) [occupied addObject:key];
+    id coordinatorClass = NSClassFromString(@"EchoRebornCoordinator");
+    if (coordinatorClass && [coordinatorClass respondsToSelector:@selector(shared)]) {
+        id coordinator = ((id (*)(id, SEL))objc_msgSend)(coordinatorClass, @selector(shared));
+        if ([coordinator respondsToSelector:@selector(enabledModuleIdentifiers)]) {
+            NSArray *enabled = ((id (*)(id, SEL))objc_msgSend)(coordinator, @selector(enabledModuleIdentifiers));
+            for (NSString *identifier in enabled) {
+                if ([identifier isKindOfClass:[NSString class]] && [identifier hasPrefix:kERShortcutIdentifierPrefix]) {
+                    [occupied addObject:[identifier substringFromIndex:kERShortcutIdentifierPrefix.length]];
+                }
+            }
+        }
+    }
+    for (NSInteger slot = 1; slot <= (NSInteger)kERShortcutSlotCount; slot++) {
+        NSString *key = [NSString stringWithFormat:@"%ld", (long)slot];
+        if ([occupied containsObject:key]) continue;
+        ERLinkSetSlotAssignment(slot, uuid);
+        return ERShortcutSlotIdentifier(slot);
+    }
+    return nil;
+}
+
+// ---------------------------------------------------------------------------
 // 0.5.4: running a shortcut without bringing the Shortcuts app to the front.
 //
 // `shortcuts://run-shortcut?name=` is a *foreground* URL: opening it activates
@@ -7284,6 +7413,17 @@ static UIView *ERFindStockButtonForModuleView(UIView *moduleView) {
 }
 
 static NSString *ERFriendlyNameForIdentifier(NSString *identifier) {
+    // 1.1.9-19：槽位绑定到 LinkCatalog 条目 → 显示条目自己的名字（须在快捷指令
+    // 判断之前：槽位标识符是同一个前缀，先按绑定内容分流）。
+    NSInteger linkSlotProbe = ERShortcutSlotIndexFromIdentifier(identifier);
+    if (linkSlotProbe > 0) {
+        NSDictionary *linkRecord = ERLinkRecordForSlot(linkSlotProbe);
+        if (linkRecord) {
+            NSString *name = linkRecord[@"name"];
+            if ([name isKindOfClass:[NSString class]] && name.length) return name;
+            return @"快捷方式";
+        }
+    }
     if (ERShortcutIdentifierIsShortcut(identifier)) {
         NSDictionary *shortcut = ERShortcutForIdentifier(identifier);
         if ([shortcut[@"name"] isKindOfClass:[NSString class]]) return shortcut[@"name"];
@@ -7824,6 +7964,10 @@ static BOOL ERIdentifierIsEchoRebornOwned(NSString *identifier) {
 }
 
 static NSString *ERCategoryForIdentifier(NSString *identifier) {
+    // 1.1.9-19：槽位绑定到 LinkCatalog 条目 → 「快捷方式」分类（须在快捷指令
+    // 判断之前，因为槽位标识符是同一个前缀）。
+    NSInteger linkSlotProbe = ERShortcutSlotIndexFromIdentifier(identifier);
+    if (linkSlotProbe > 0 && ERLinkRecordForSlot(linkSlotProbe)) return @"快捷方式";
     if (ERShortcutIdentifierIsShortcut(identifier)) return @"快捷指令";
     NSString *lower = identifier.lowercaseString;
     NSArray<NSArray *> *categories = @[
@@ -17628,6 +17772,27 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
             @"bundleURL": (id)NSNull.null,
         }];
     }
+    // 1.1.9-19 · 快捷方式（LinkCatalog）与快捷指令同一套槽位机制：设置页里
+    // 用户添加的每一条（打开 App / App 快捷方式 / 链接）都在这里认领槽位后
+    // 进入「快捷方式」分类，排在「第三方插件」之前。
+    NSUInteger hiddenLinks = 0;
+    for (NSDictionary *entry in ERLinkCatalogRecords()) {
+        NSString *uuid = entry[@"uuid"];
+        NSString *name = entry[@"name"];
+        if (![name isKindOfClass:[NSString class]] || !name.length) name = @"快捷方式";
+        NSString *slotIdentifier = ERLinkSlotIdentifierForAddingUUID(uuid);
+        if (!slotIdentifier) continue;   // 32 个槽位都被占满
+        if ([present containsObject:slotIdentifier]) { hiddenLinks++; continue; }
+        [catalog addObject:@{
+            @"identifier": slotIdentifier,
+            @"name": name,
+            @"category": @"快捷方式",
+            @"added": @NO,
+            @"allowsMultiple": @NO,
+            @"instanceCount": @0,
+            @"bundleURL": (id)NSNull.null,
+        }];
+    }
     // Stable alphabetical order — a module's position never changes based on
     // whether it is currently added.
     [catalog sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
@@ -18088,6 +18253,22 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
 - (void)shortcutTileProxyTapped:(UIButton *)sender {
     if (gEditModeActive || gERExpandedModuleOpen) return;
     NSString *identifier = objc_getAssociatedObject(sender, kERConnectivityIdentifierKey);
+    // 1.1.9-19：槽位绑定到快捷方式条目 → 按条目类型执行（链接 / App / App 快捷方式）。
+    NSInteger linkSlot = ERShortcutSlotIndexFromIdentifier(identifier);
+    if (linkSlot > 0) {
+        NSDictionary *linkRecord = ERLinkRecordForSlot(linkSlot);
+        if (linkRecord) {
+            ERHaptic();
+            id controller = gERSBControlCenterController;
+            SEL dismissSelector = @selector(dismissAnimated:);
+            if (controller && [controller respondsToSelector:dismissSelector]) {
+                ((void (*)(id, SEL, BOOL))objc_msgSend)(controller, dismissSelector, NO);
+            }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ ERRunLinkEntry(linkRecord); });
+            return;
+        }
+    }
     NSDictionary *shortcut = ERShortcutForIdentifier(identifier);
     NSString *name = [shortcut[@"name"] isKindOfClass:[NSString class]] ? shortcut[@"name"] : nil;
     if (!name.length) return;
@@ -25976,8 +26157,124 @@ static void ERShortcutRunRequested(__unused CFNotificationCenterRef center, __un
     });
 }
 
-static void ERShortcutRescanRequested(__unused CFNotificationCenterRef center, __unused void *observer, __unused CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
-    dispatch_async(dispatch_get_main_queue(), ^{
+// ---------------------------------------------------------------------------
+// 1.1.9-19 · 快捷方式条目的执行。
+//   link        → openURL（网址 / URL Scheme；无 scheme 的裸网址补 https://）
+//   app         → FBSOpenApplicationService 打开 App（失败退回 openURL 无果则 NO）
+//   appShortcut → SBSApplicationShortcutItem + SBIconController activateShortcut:
+//                 （Actra 的同一路径；对 nil 图标视图调用在 SBIconController 的
+//                  快捷菜单处理里是合法的 —— 走应用快捷方式激活流程）
+// ---------------------------------------------------------------------------
+static BOOL ERRunLinkOpenURL(NSURL *url) {
+    if (![url isKindOfClass:[NSURL class]]) return NO;
+    if (![url.scheme isKindOfClass:[NSString class]] || !url.scheme.length) {
+        NSString *raw = url.absoluteString ?: @"";
+        if (!raw.length) return NO;
+        url = [NSURL URLWithString:[@"https://" stringByAppendingString:raw]];
+        if (!url) return NO;
+    }
+    @try {
+        [[UIApplication sharedApplication] openURL:url options:@{} completionHandler:nil];
+        return YES;
+    } @catch (NSException *exception) {
+        ERLogInfo(@"link-run: openURL EXC %@ -- %@", exception.name, exception.reason);
+        return NO;
+    }
+}
+
+static BOOL ERRunLinkOpenApp(NSString *bundleId) {
+    if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) return NO;
+    Class serviceClass = NSClassFromString(@"FBSOpenApplicationService");
+    if (!serviceClass) { ERLogInfo(@"link-run: FBSOpenApplicationService absent"); return NO; }
+    @try {
+        id service = ((id (*)(id, SEL))objc_msgSend)(serviceClass, @selector(sharedService));
+        SEL openSelector = NSSelectorFromString(@"openApplication:options:clientPort:withResultHandler:");
+        if (!service || ![service respondsToSelector:openSelector]) {
+            ERLogInfo(@"link-run: FBSOpenApplicationService selector missing");
+            return NO;
+        }
+        void (^handler)(NSError *) = ^(NSError *error) {
+            if (error) ERLogInfo(@"link-run: openApp %@ failed %@", bundleId, error);
+        };
+        Class optionsClass = NSClassFromString(@"FBSOpenApplicationOptions");
+        id options = optionsClass ? ((id (*)(id, SEL))objc_msgSend)(optionsClass, @selector(options)) : nil;
+        ((void (*)(id, SEL, id, id, id, void (^)(NSError *)))objc_msgSend)
+            (service, openSelector, bundleId, options, (id)nil, handler);
+        return YES;
+    } @catch (NSException *exception) {
+        ERLogInfo(@"link-run: openApp EXC %@ -- %@", exception.name, exception.reason);
+        return NO;
+    }
+}
+
+static BOOL ERRunLinkEntry(NSDictionary *entry) {
+    if (![entry isKindOfClass:[NSDictionary class]]) return NO;
+    NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
+    NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+    ERLogInfo(@"link-run: %@ %@ (%@)", type, entry[@"uuid"], name);
+    if ([type isEqualToString:@"link"]) {
+        return ERRunLinkOpenURL([NSURL URLWithString:entry[@"url"]]);
+    }
+    if ([type isEqualToString:@"app"]) {
+        return ERRunLinkOpenApp(entry[@"bundleId"]);
+    }
+    if ([type isEqualToString:@"appShortcut"]) {
+        @try {
+            Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
+            Class controllerClass = NSClassFromString(@"SBIconController");
+            if (!itemClass || !controllerClass) return NO;
+            id item = [[itemClass alloc] init];
+            // SBSApplicationShortcutItem 继承 UIApplicationShortcutItem，用它的
+            // 初始化器最稳；@try 兜底退化成逐属性赋值。
+            SEL shortcutInit = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
+            if ([itemClass instancesRespondToSelector:shortcutInit]) {
+                item = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)
+                    ([itemClass alloc], shortcutInit,
+                     [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"",
+                     name, nil, nil, nil);
+            } else {
+                ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setType:),
+                    [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"");
+                ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setLocalizedTitle:), name);
+            }
+            id controller = ((id (*)(id, SEL))objc_msgSend)(controllerClass, @selector(sharedInstance));
+            SEL activate = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+            if (!item || !controller || ![controller respondsToSelector:activate]) return NO;
+            ((void (*)(id, SEL, id, id, id))objc_msgSend)
+                (controller, activate, item, entry[@"bundleId"], (id)nil);
+            return YES;
+        } @catch (NSException *exception) {
+            ERLogInfo(@"link-run: appShortcut EXC %@ -- %@", exception.name, exception.reason);
+            return NO;
+        }
+    }
+    return NO;
+}
+
+// 槽位 bundle 的快捷方式磁贴被点击了。bundle 已把条目 uuid 写进 LinkRunRequest 并
+// 广播 RunLink；这里读回来按条目类型执行（与快捷指令同一套流程）。
+static void ERLinkRunRequested(__unused CFNotificationCenterRef center, __unused void *observer, __unused CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
+    CFPropertyListRef request = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkRunRequestKey, kERPrefsDomain);
+    if (!request) return;
+    NSString *uuid = (__bridge_transfer NSString *)request;
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
+    NSDictionary *entry = ERLinkRecordForUUID(uuid);
+    if (!entry) {
+        ERLogInfo(@"link-run: no LinkCatalog record for %@", uuid);
+        return;
+    }
+    ERHaptic();
+    id controller = gERSBControlCenterController;
+    SEL dismissSelector = @selector(dismissAnimated:);
+    if (controller && [controller respondsToSelector:dismissSelector]) {
+        ((void (*)(id, SEL, BOOL))objc_msgSend)(controller, dismissSelector, NO);
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        ERRunLinkEntry(entry);
+    });
+}
+
+static void ERShortcutRescanRequested(__unused CFNotificationCenterRef center, __unused void *observer, __unused CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {    dispatch_async(dispatch_get_main_queue(), ^{
         // 0.5.1: pull the pane's freshly written catalog into this process
         // before refreshing, otherwise the rescan re-reads the cached copy.
         CFPreferencesAppSynchronize(kERPrefsDomain);
@@ -30606,6 +30903,9 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
         // 槽位 bundle 点击 -> 广播 RunShortcut；本进程读 ShortcutRunRequest 并按
         // 标识符运行工作流（不前台化快捷指令 App）。
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERShortcutRunRequested, (__bridge CFStringRef)kERShortcutRunNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        // 1.1.9-19：槽位 bundle 的快捷方式磁贴点击 -> 广播 RunLink；本进程读
+        // LinkRunRequest 并按条目类型执行（链接 / App / App 快捷方式）。
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERLinkRunRequested, (__bridge CFStringRef)kERLinkRunNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         // 1.1.9-5：设置页请求 App 快捷方式（主屏 Quick Actions）目录 → SpringBoard 扫描发布。
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERAppShortcutCatalogRequested, (__bridge CFStringRef)kERAppShortcutRequestNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         // 启动后先自发扫一次，让目录尽早可用。
