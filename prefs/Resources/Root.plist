@@ -2,17 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>title</key>
-	<string>Echo Reborn</string>
 	<key>items</key>
 	<array>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+			<key>headerHeight</key>
+			<real>14.0</real>
 			<key>label</key>
 			<string>插件作者</string>
-			<key>headerHeight</key>
-			<real>14</real>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -20,29 +18,27 @@
 			<key>cellClass</key>
 			<string>ERAuthorCell</string>
 			<key>height</key>
-			<real>64</real>
+			<real>64.0</real>
 		</dict>
-		<!-- 1.0.8-1：这条空分组是「作者行」与下方卡片之间的分隔带，用户明确要求**不要动下面**，
-		     所以按原样保留。（上一版误删了它、去动下面，已被要求改回来。） -->
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openEnhancedSettings:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>界面优化</string>
-			<key>action</key>
-			<string>openEnhancedSettings:</string>
 			<key>erIcon</key>
 			<string>slider.horizontal.3</string>
 			<key>erIconColor</key>
 			<string>purple</string>
+			<key>label</key>
+			<string>界面优化</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -51,20 +47,20 @@
 			<string>视觉效果</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openGlass:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>液态玻璃</string>
-			<key>action</key>
-			<string>openGlass:</string>
 			<key>erIcon</key>
 			<string>drop.fill</string>
 			<key>erIconColor</key>
 			<string>teal</string>
+			<key>label</key>
+			<string>液态玻璃</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -73,52 +69,68 @@
 			<string>控制项分类</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openCategoryOrder:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>分类管理</string>
-			<key>action</key>
-			<string>openCategoryOrder:</string>
 			<key>erIcon</key>
 			<string>line.3.horizontal</string>
 			<key>erIconColor</key>
 			<string>orange</string>
+			<key>label</key>
+			<string>分类管理</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openShortcuts:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>快捷指令</string>
-			<key>action</key>
-			<string>openShortcuts:</string>
 			<key>erIcon</key>
 			<string>bolt.fill</string>
 			<key>erIconColor</key>
 			<string>amber</string>
+			<key>label</key>
+			<string>快捷指令</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openLinks:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
+			<key>erIcon</key>
+			<string>link.circle.fill</string>
+			<key>erIconColor</key>
+			<string>blue</string>
 			<key>label</key>
-			<string>模块管理</string>
+			<string>快捷方式</string>
+		</dict>
+		<dict>
 			<key>action</key>
 			<string>openModuleSettings:</string>
+			<key>alignment</key>
+			<integer>0</integer>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>cellClass</key>
+			<string>EREntryButtonCell</string>
 			<key>erIcon</key>
 			<string>square.grid.2x2.fill</string>
 			<key>erIconColor</key>
 			<string>red</string>
+			<key>label</key>
+			<string>模块管理</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -127,42 +139,42 @@
 			<string>锁屏控制项</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openSokoSettings:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>锁屏控件</string>
-			<key>action</key>
-			<string>openSokoSettings:</string>
 			<key>erIcon</key>
 			<string>lock.fill</string>
 			<key>erIconColor</key>
 			<string>indigo</string>
+			<key>label</key>
+			<string>锁屏控件</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openBottomComponents:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>底部组件</string>
-			<key>action</key>
-			<string>openBottomComponents:</string>
 			<key>erIcon</key>
 			<string>dock.rectangle</string>
+			<key>erIconColor</key>
+			<string>pink</string>
 			<key>erIconSymbols</key>
 			<array>
 				<string>dock.rectangle</string>
 				<string>rectangle.bottomthird.inset.filled</string>
 				<string>music.note</string>
 			</array>
-			<key>erIconColor</key>
-			<string>pink</string>
+			<key>label</key>
+			<string>底部组件</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -171,32 +183,32 @@
 			<string>iOS27 Siri</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openSiriSettings:</string>
+			<key>alignment</key>
+			<integer>0</integer>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>cellClass</key>
 			<string>EREntryButtonCell</string>
-			<key>alignment</key>
-			<integer>0</integer>
-			<key>label</key>
-			<string>Siri</string>
-			<key>action</key>
-			<string>openSiriSettings:</string>
 			<key>erIcon</key>
 			<string>waveform</string>
 			<key>erIconColor</key>
 			<string>pink</string>
+			<key>label</key>
+			<string>Siri</string>
 		</dict>
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
 		</dict>
 		<dict>
+			<key>action</key>
+			<string>openSystemEnhance:</string>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
 			<string>系统增强</string>
-			<key>action</key>
-			<string>openSystemEnhance:</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -205,45 +217,47 @@
 			<string>诊断日志</string>
 		</dict>
 		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
 			<key>cell</key>
 			<string>PSSwitchCell</string>
-			<key>label</key>
-			<string>启用日志记录</string>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>key</key>
-			<string>LoggingEnabled</string>
 			<key>default</key>
 			<false/>
-			<key>set</key>
-			<string>setLoggingEnabled:specifier:</string>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
 			<key>erIcon</key>
 			<string>doc.text.fill</string>
 			<key>erIconColor</key>
 			<string>gray</string>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>key</key>
+			<string>LoggingEnabled</string>
+			<key>label</key>
+			<string>启用日志记录</string>
+			<key>set</key>
+			<string>setLoggingEnabled:specifier:</string>
 		</dict>
 		<dict>
-			<key>cell</key>
-			<string>PSButtonCell</string>
-			<key>label</key>
-			<string>导出日志</string>
 			<key>action</key>
 			<string>exportLog:</string>
 			<key>alignment</key>
 			<integer>1</integer>
-		</dict>
-		<dict>
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>清空日志</string>
+			<string>导出日志</string>
+		</dict>
+		<dict>
 			<key>action</key>
 			<string>clearLog:</string>
 			<key>alignment</key>
 			<integer>1</integer>
+			<key>cell</key>
+			<string>PSButtonCell</string>
+			<key>label</key>
+			<string>清空日志</string>
 		</dict>
 	</array>
+	<key>title</key>
+	<string>Echo Reborn</string>
 </dict>
 </plist>

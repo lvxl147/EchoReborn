@@ -1,6 +1,7 @@
 #import "ERRootListController.h"
 #import "ERCategoryOrderController.h"
 #import "ERShortcutController.h"
+#import "ERLinkController.h"
 #import "ERGlassListController.h"
 #import "ERModuleSettingsController.h"
 #import "EREnhancedSettingsController.h"
@@ -260,6 +261,15 @@ static void ERPrefsLog(NSString *format, ...) {
     // navigation bar is correct even if the pane's own -viewDidLoad is
     // deferred (the Preferences framework can push before the view loads).
     controller.title = @"快捷指令";
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+// 「快捷方式」子页（1.1.9-1 新增）。同 openShortcuts: 的手推模式：绕开
+// Preferences 的跨 bundle 类查找，且这个页面自己读写共享偏好域，不依赖那条查找。
+- (void)openLinks:(__unused PSSpecifier *)specifier {
+    ERLinkController *controller = [[ERLinkController alloc] init];
+    if (!controller) return;
+    controller.title = @"快捷方式";
     [self.navigationController pushViewController:controller animated:YES];
 }
 
