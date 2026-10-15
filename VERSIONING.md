@@ -57,3 +57,4 @@
 | 140 | 1.1.9-15 | 百度已修复（catalog 57→85，磁盘 Info.plist 兜底生效）；剩 HomeScreenApps 仍空（SBHIconManager/SBIconModel 九个选择器全空）。① 详情页无条目时不再显示任何占位/诊断文字行（用户要求删除）；② 图标探测加细分诊断 `icon_probe`（每模型×每选择器：是否响应/返回类型/数量/异常），一次装机即可定位 iOS 17 桌面图标集合的正确取法。版本 1.1.9-15/1001091。 |
 | 141 | 1.1.9-16 | `icon_probe` 细分诊断揭示真因：`SBIconModel.leafIcons` 其实返回 NSSet（253 个）/visibleLeafIcons 250 个，但 `ERAppShortcutCollectBids` 只认 NSArray/NSDictionary，NSSet 被跳过 → 一直 no-hit。修复：容器判断加 NSSet；删除已完成使命的百度专项诊断块（其 infoDictionary 调用会抛包装类异常）。HomeScreenApps 预计本版落盘，「其他应用」卡片的桌面过滤随之生效。版本 1.1.9-16/1001092。 |
 | 142 | 1.1.9-17 | 「添加」页改三张卡片：① 创建链接（独立卡）② 有快捷方式 ③ 其他应用；同时删掉空卡片的占位文案行（「没有可添加的应用 / 没有匹配的应用」不再显示，空卡片就是空行）。版本 1.1.9-17/1001093。 |
+| 143 | 1.1.9-18 | 根因修复：push9_5.py 一直没推 prefs/*.m（ERLinkController.m 等），导致 -15/-16/-17 的设置页改动（空态文字删除、三卡片）从未进 CI 编译，设备上跑的一直是仓库旧文件。本版把 ERLinkController.m / ERShortcutController.m / ERRootListController.m 加入推送清单重推；同时修正 Info.plist 漏改的 CFBundleShortVersionString。版本 1.1.9-18/1001094。 |
