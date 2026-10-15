@@ -15,6 +15,8 @@ static NSString *const kERLinkSnapshotFileName = @"links.plist";
 // 1.1.9-5：App 快捷方式（主屏 Quick Actions）目录由 Tweak.xm 在 SpringBoard 发布。
 static NSString *const kERAppShortcutCatalogKey = @"AppShortcutCatalog";
 static NSString *const kERAppShortcutRequestNotification = @"com.strive.echoreborn/RequestAppShortcuts";
+// 1.1.9-8：桌面上显示的 App 集合（SpringBoard 发布），用来过滤系统隐藏组件。
+static NSString *const kERHomeScreenAppsKey = @"HomeScreenApps";
 
 // ---------------------------------------------------------------------------
 // 日志。句柄复用：一次扫描/一次保存要写几十条，别每条都开合一次文件。
@@ -467,6 +469,56 @@ static void ERLinkRequestAppShortcutCatalog(void) {
                                          NULL, NULL, YES);
 }
 
+// 桌面上显示的 App 集合（SpringBoard 发布；取不到就返回空 → 设置页不过滤）。
+static NSSet<NSString *> *ERLinkHomeScreenApps(void) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERLinkPrefsDomain);
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERHomeScreenAppsKey,
+                                                        (__bridge CFStringRef)kERLinkPrefsDomain);
+    if (!value) return [NSSet set];
+    NSMutableSet<NSString *> *result = [NSMutableSet set];
+    if (CFGetTypeID(value) == CFArrayGetTypeID()) {
+        for (NSString *bid in (__bridge NSArray *)value) {
+            if ([bid isKindOfClass:[NSString class]] && bid.length) [result addObject:bid];
+        }
+    }
+    CFRelease(value);
+    return result;
+}
+
+// 快照里带快捷方式的应用集合（用来把添加页拆成两张卡片）。
+static NSSet<NSString *> *ERLinkAppsWithShortcuts(void) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERLinkPrefsDomain);
+    CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
+                                                        (__bridge CFStringRef)kERLinkPrefsDomain);
+    if (!value) return [NSSet set];
+    NSMutableSet<NSString *> *result = [NSMutableSet set];
+    if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+        for (NSString *bid in (__bridge NSDictionary *)value) {
+            if ([bid isKindOfClass:[NSString class]] && bid.length) [result addObject:bid];
+        }
+    }
+    CFRelease(value);
+    return result;
+}
+
+// 以 App 维度造一条「打开 App」的快捷方式条目（详情页头部点击时用）。
+static NSDictionary *ERLinkMakeAppEntry(NSString *bundleId, NSString *name) {
+    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+    entry[@"uuid"] = [[NSUUID UUID] UUIDString];
+    entry[@"name"] = name.length ? name : bundleId;
+    entry[@"type"] = @"app";
+    entry[@"bundleId"] = bundleId ?: @"";
+    entry[@"iconKind"] = @"app";
+    entry[@"iconValue"] = bundleId ?: @"";
+    entry[@"color"] = @(0xFF3B82F6LL);
+    NSString *file = ERLinkWriteRenderedIcon(entry);
+    if (file) {
+        entry[@"iconFile"] = file;
+        entry[@"iconFull"] = @YES;
+    }
+    return entry;
+}
+
 // 取一个 App 的快捷方式列表（@{type,title}）：
 // ① SpringBoard 发布的快照（静态+动态，最全）；② 兜底读 App Info.plist 的静态项。
 static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) {
@@ -545,7 +597,9 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
                                                     PHPickerViewControllerDelegate>
 @property (nonatomic, strong) NSArray<NSDictionary *> *existing;
 @property (nonatomic, strong) NSMutableArray<NSDictionary *> *apps;
-@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
+// 1.1.9-8：有快捷方式的 / 没有快捷方式的，两张卡片分开显示。
+@property (nonatomic, strong) NSArray<NSDictionary *> *withShortcuts;
+@property (nonatomic, strong) NSArray<NSDictionary *> *withoutShortcuts;
 @property (nonatomic, copy) NSString *searchText;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UITableView *addTableView;
@@ -755,19 +809,37 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)refilter {
     NSString *needle = self.searchText.lowercaseString;
-    NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+    // 桌面上没有的（电视提供商、用户认证等系统组件）不显示；集合为空则不过滤。
+    NSSet<NSString *> *homeApps = ERLinkHomeScreenApps();
+    // 目录里有快捷方式的拆到第一张卡。
+    NSSet<NSString *> *hasShortcuts = ERLinkAppsWithShortcuts();
+    NSMutableArray<NSDictionary *> *withList = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *withoutList = [NSMutableArray array];
     for (NSDictionary *app in self.apps) {
         NSString *bundleId = app[@"bundleId"];
         NSString *name = app[@"name"];
         if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) continue;
+        if (homeApps.count && ![homeApps containsObject:bundleId]) continue;
         if (needle.length) {
             BOOL matched = ([name isKindOfClass:[NSString class]] && [name.lowercaseString containsString:needle]);
             if (!matched && [bundleId.lowercaseString containsString:needle]) matched = YES;
             if (!matched) continue;
         }
-        [result addObject:app];
+        if ([hasShortcuts containsObject:bundleId]) {
+            [withList addObject:app];
+        } else {
+            [withoutList addObject:app];
+        }
     }
-    self.filtered = result;
+    // 卡片内按名称 A→Z。
+    [withList sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        return [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
+    }];
+    [withoutList sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        return [left[@"name"] localizedCaseInsensitiveCompare:right[@"name"]];
+    }];
+    self.withShortcuts = withList;
+    self.withoutShortcuts = withoutList;
 }
 
 // MARK: - 保存一条快捷方式
@@ -956,16 +1028,29 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // MARK: - Table
 
 - (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
-    return 1;
+    return 2;
 }
 
-- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
-    // +1：第一行是「创建链接」
-    return (NSInteger)self.filtered.count + 1;
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    // 第一张卡：「创建链接」+ 有快捷方式的应用；第二张卡：其他应用。
+    if (section == 0) return (NSInteger)self.withShortcuts.count + 1;
+    return (NSInteger)self.withoutShortcuts.count;
 }
 
-- (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(__unused NSInteger)section {
-    return [NSString stringWithFormat:@"未添加（%lu）", (unsigned long)self.filtered.count];
+- (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    if (section == 0) return [NSString stringWithFormat:@"有快捷方式（%lu）", (unsigned long)self.withShortcuts.count];
+    return [NSString stringWithFormat:@"其他应用（%lu）", (unsigned long)self.withoutShortcuts.count];
+}
+
+- (NSDictionary *)appForIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.section == 0) {
+        NSUInteger index = (NSUInteger)indexPath.row - 1;
+        if (indexPath.row == 0 || index >= self.withShortcuts.count) return nil;
+        return self.withShortcuts[index];
+    }
+    NSUInteger index = (NSUInteger)indexPath.row;
+    if (index >= self.withoutShortcuts.count) return nil;
+    return self.withoutShortcuts[index];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -973,8 +1058,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:identifier];
 
-    if (indexPath.row == 0) {
-        // 「创建链接」固定在搜索框下面第一行。
+    if (indexPath.section == 0 && indexPath.row == 0) {
+        // 「创建链接」固定在第一张卡顶部。
         cell.textLabel.text = @"创建链接";
         cell.textLabel.textColor = UIColor.labelColor;
         cell.detailTextLabel.text = @"自定义网址或 URL Scheme";
@@ -987,9 +1072,9 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         cell.userInteractionEnabled = YES;
         return cell;
     }
-    NSUInteger index = (NSUInteger)indexPath.row - 1;
-    if (index >= self.filtered.count) {
-        cell.textLabel.text = @"没有可添加的 App";
+    NSDictionary *app = [self appForIndexPath:indexPath];
+    if (!app) {
+        cell.textLabel.text = self.searchText.length ? @"没有匹配的应用" : @"没有可添加的应用";
         cell.textLabel.textColor = UIColor.secondaryLabelColor;
         cell.detailTextLabel.text = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
@@ -1000,7 +1085,6 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     cell.userInteractionEnabled = YES;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
 
-    NSDictionary *app = self.filtered[index];
     cell.textLabel.text = app[@"name"];
     cell.textLabel.textColor = UIColor.labelColor;
     cell.detailTextLabel.text = app[@"bundleId"];
@@ -1015,13 +1099,12 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row == 0) {
+    if (indexPath.section == 0 && indexPath.row == 0) {
         [self presentCreateLink];
         return;
     }
-    NSUInteger index = (NSUInteger)indexPath.row - 1;
-    if (index >= self.filtered.count) return;
-    NSDictionary *app = self.filtered[index];
+    NSDictionary *app = [self appForIndexPath:indexPath];
+    if (!app) return;
     // 点击 App → 进入该 App 的详情页，在详情页里打对号添加/取消。
     ERLinkAppDetailController *detail =
         [[ERLinkAppDetailController alloc] initWithAppBundleId:app[@"bundleId"]
@@ -1113,6 +1196,40 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     return NO;
 }
 
+// 「打开 App」条目是否已添加（type = app，按 bundleId 定位）。
+- (BOOL)appEntryIsAdded {
+    for (NSDictionary *entry in ERLinkStoredCatalog()) {
+        if ([entry[@"type"] isEqualToString:@"app"] &&
+            [entry[@"bundleId"] isKindOfClass:[NSString class]] &&
+            [entry[@"bundleId"] isEqualToString:self.appBundleId]) return YES;
+    }
+    return NO;
+}
+
+// 移除该 App 的某类条目（kind = @"app" 或 @"appShortcut"；appShortcut 再按 type 过滤），
+// 返回移除条目的 uuid 数组（用于清理图标文件）。
+- (NSArray<NSString *> *)removeCatalogEntriesOfKind:(NSString *)kind shortcutType:(NSString *)type {
+    NSMutableArray<NSDictionary *> *remaining = [NSMutableArray array];
+    NSMutableArray<NSString *> *removedUUIDs = [NSMutableArray array];
+    for (NSDictionary *entry in ERLinkStoredCatalog()) {
+        BOOL match = [entry[@"type"] isEqualToString:kind] &&
+                     [entry[@"bundleId"] isKindOfClass:[NSString class]] &&
+                     [entry[@"bundleId"] isEqualToString:self.appBundleId];
+        if (match && [kind isEqualToString:@"appShortcut"]) {
+            match = [entry[@"shortcutType"] isKindOfClass:[NSString class]] &&
+                    [entry[@"shortcutType"] isEqualToString:type];
+        }
+        if (match) {
+            NSString *uuid = entry[@"uuid"];
+            if ([uuid isKindOfClass:[NSString class]] && uuid.length) [removedUUIDs addObject:uuid];
+        } else {
+            [remaining addObject:entry];
+        }
+    }
+    if (removedUUIDs.count) ERLinkPersistCatalog(remaining);
+    return removedUUIDs;
+}
+
 // MARK: Table
 
 - (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
@@ -1129,15 +1246,17 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         static NSString *headerId = @"ERLinkAppHeaderCell";
         UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:headerId];
         if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:headerId];
-        // 页内图标整体缩小一档（用户指定只改这个页面）。
-        cell.imageView.image = ERLinkAppCellIcon(self.appBundleId, 32.0);
+        // 页内图标统一 30×30（用户指定与条目一致）。
+        cell.imageView.image = ERLinkAppCellIcon(self.appBundleId, 30.0);
         cell.imageView.layer.cornerRadius = 7.0;
         cell.imageView.clipsToBounds = YES;
         cell.textLabel.text = self.appName;
         cell.textLabel.textColor = UIColor.labelColor;
         cell.textLabel.font = [UIFont boldSystemFontOfSize:16.0];
-        cell.accessoryType = UITableViewCellAccessoryNone;
-        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        // 点击头部 = 添加/取消「打开 App」快捷方式。
+        cell.accessoryType = [self appEntryIsAdded] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+        cell.tintColor = [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0];
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
         cell.userInteractionEnabled = YES;
         return cell;
     }
@@ -1178,8 +1297,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     cell.userInteractionEnabled = YES;
     cell.selectionStyle = UITableViewCellSelectionStyleDefault;
     NSDictionary *item = self.shortcutItems[(NSUInteger)(indexPath.row - 1)];
-    cell.imageView.image = ERLinkAppCellIcon(self.appBundleId, 28.0);
-    cell.imageView.layer.cornerRadius = 6.0;
+    cell.imageView.image = ERLinkAppCellIcon(self.appBundleId, 30.0);
+    cell.imageView.layer.cornerRadius = 7.0;
     cell.imageView.clipsToBounds = YES;
     NSString *rawTitle = item[@"title"];
     NSString *title = [rawTitle isKindOfClass:[NSString class]] && rawTitle.length
@@ -1200,33 +1319,35 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row <= 0) return;
+    if (indexPath.row == 0) {
+        // 头部行：添加/取消「打开 App」。
+        NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
+        if ([self appEntryIsAdded]) {
+            for (NSString *uuid in [self removeCatalogEntriesOfKind:@"app" shortcutType:nil]) {
+                [[NSFileManager defaultManager]
+                    removeItemAtPath:ERLinkLocalImagePath([uuid stringByAppendingPathExtension:@"png"])
+                               error:nil];
+            }
+            ERLinkLog(@"appDetail: 取消打开App %@", self.appBundleId);
+        } else {
+            [catalog addObject:ERLinkMakeAppEntry(self.appBundleId, self.appName)];
+            ERLinkPersistCatalog(catalog);
+            ERLinkLog(@"appDetail: 添加打开App %@", self.appBundleId);
+        }
+        [tableView reloadData];
+        return;
+    }
     if (indexPath.row > (NSInteger)self.shortcutItems.count) return;
     NSDictionary *item = self.shortcutItems[(NSUInteger)(indexPath.row - 1)];
     NSString *type = [item[@"type"] isKindOfClass:[NSString class]] ? item[@"type"] : @"";
     if (!type.length) return;
     NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
     if ([self shortcutIsAddedForType:type]) {
-        // 取消：移除该 App 同 type 的条目，顺手删渲染好的图标文件。
-        NSMutableArray<NSDictionary *> *remaining = [NSMutableArray array];
-        for (NSDictionary *entry in catalog) {
-            BOOL match = [entry[@"type"] isEqualToString:@"appShortcut"] &&
-                         [entry[@"bundleId"] isKindOfClass:[NSString class]] &&
-                         [entry[@"bundleId"] isEqualToString:self.appBundleId] &&
-                         [entry[@"shortcutType"] isKindOfClass:[NSString class]] &&
-                         [entry[@"shortcutType"] isEqualToString:type];
-            if (match) {
-                NSString *uuid = entry[@"uuid"];
-                if ([uuid isKindOfClass:[NSString class]] && uuid.length) {
-                    [[NSFileManager defaultManager]
-                        removeItemAtPath:ERLinkLocalImagePath([uuid stringByAppendingPathExtension:@"png"])
-                                   error:nil];
-                }
-            } else {
-                [remaining addObject:entry];
-            }
+        for (NSString *uuid in [self removeCatalogEntriesOfKind:@"appShortcut" shortcutType:type]) {
+            [[NSFileManager defaultManager]
+                removeItemAtPath:ERLinkLocalImagePath([uuid stringByAppendingPathExtension:@"png"])
+                           error:nil];
         }
-        ERLinkPersistCatalog(remaining);
         ERLinkLog(@"appDetail: 取消 %@ / %@", self.appBundleId, type);
     } else {
         [catalog addObject:ERLinkMakeAppShortcutEntry(self.appBundleId, self.appName, type, item[@"title"])];

@@ -26001,6 +26001,82 @@ static void ERShortcutRescanRequested(__unused CFNotificationCenterRef center, _
 static NSString *const kERAppShortcutCatalogKey = @"AppShortcutCatalog";
 static NSString *const kERAppShortcutRequestNotification = @"com.strive.echoreborn/RequestAppShortcuts";
 static NSString *const kERAppShortcutCatalogNotification = @"com.strive.echoreborn/AppShortcutsCatalog";
+// 1.1.9-8：桌面上显示的 App（用户能点到的），供设置页过滤系统隐藏组件。
+static NSString *const kERHomeScreenAppsKey = @"HomeScreenApps";
+
+// 直接读 App Info.plist 的静态 Quick Actions（SBApplication 属性缺失时的兜底，
+// 百度地图这类条目就靠它）。
+static NSArray<NSDictionary *> *ERAppShortcutStaticItemsFromInfoPlist(NSString *bundleId) {
+    NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+    @try {
+        Class proxyClass = NSClassFromString(@"LSApplicationProxy");
+        SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+        if (!proxyClass || ![(id)proxyClass respondsToSelector:proxySel]) return result;
+        id proxy = ((id (*)(id, SEL, id))objc_msgSend)((id)proxyClass, proxySel, bundleId);
+        if (!proxy) return result;
+        SEL infoSel = NSSelectorFromString(@"infoDictionary");
+        if (![proxy respondsToSelector:infoSel]) return result;
+        NSDictionary *info = ((id (*)(id, SEL))objc_msgSend)(proxy, infoSel);
+        NSArray *raw = info[@"UIApplicationShortcutItems"];
+        if (![raw isKindOfClass:[NSArray class]]) return result;
+        SEL typeSel = NSSelectorFromString(@"type");
+        for (NSDictionary *item in raw) {
+            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            NSString *type = [item[@"UIApplicationShortcutItemType"] isKindOfClass:[NSString class]]
+                ? item[@"UIApplicationShortcutItemType"] : nil;
+            if (!type.length) continue;
+            NSString *title = [item[@"UIApplicationShortcutItemTitle"] isKindOfClass:[NSString class]]
+                ? item[@"UIApplicationShortcutItemTitle"] : nil;
+            [result addObject:@{@"type": type, @"title": title.length ? title : type, @"dynamic": @(NO)}];
+            (void)typeSel;
+        }
+    } @catch (__unused NSException *exception) {}
+    return result;
+}
+
+// 桌面上显示的 App（含文件夹内的叶子图标）：SBIconController → iconModel → leafIcons。
+static void ERAppShortcutPublishHomeScreenApps(void) {
+    @try {
+        NSMutableSet<NSString *> *ids = [NSMutableSet set];
+        Class icClass = NSClassFromString(@"SBIconController");
+        SEL shared = NSSelectorFromString(@"sharedInstance");
+        if (icClass && [icClass respondsToSelector:shared]) {
+            id controller = ((id (*)(id, SEL))objc_msgSend)(icClass, shared);
+            SEL modelSel = NSSelectorFromString(@"iconModel");
+            if ([controller respondsToSelector:modelSel]) {
+                id model = ((id (*)(id, SEL))objc_msgSend)(controller, modelSel);
+                SEL leafSel = NSSelectorFromString(@"leafIcons");
+                if (model && [model respondsToSelector:leafSel]) {
+                    NSArray *icons = ((id (*)(id, SEL))objc_msgSend)(model, leafSel);
+                    for (id icon in icons) {
+                        @try {
+                            SEL appSel = NSSelectorFromString(@"application");
+                            if (![icon respondsToSelector:appSel]) continue;
+                            id app = ((id (*)(id, SEL))objc_msgSend)(icon, appSel);
+                            if (!app) continue;
+                            SEL bidSel = NSSelectorFromString(@"bundleIdentifier");
+                            if (![app respondsToSelector:bidSel]) continue;
+                            id bid = ((id (*)(id, SEL))objc_msgSend)(app, bidSel);
+                            if ([bid isKindOfClass:[NSString class]] && [(NSString *)bid length]) {
+                                [ids addObject:bid];
+                            }
+                        } @catch (__unused NSException *inner) {}
+                    }
+                }
+            }
+        }
+        if (ids.count) {
+            CFPreferencesSetAppValue((__bridge CFStringRef)kERHomeScreenAppsKey,
+                                     (__bridge CFPropertyListRef)[ids allObjects], kERPrefsDomain);
+            CFPreferencesAppSynchronize(kERPrefsDomain);
+            ERLogInfo(@"appShortcuts: 桌面图标 %lu 个", (unsigned long)ids.count);
+        } else {
+            ERLogInfo(@"appShortcuts: 桌面图标集合为空（SBIconController 未就绪？）");
+        }
+    } @catch (NSException *exception) {
+        ERLogInfo(@"appShortcuts: 桌面图标发布失败 %@", exception.reason);
+    }
+}
 
 static void ERAppShortcutCatalogPublish(void) {
     @try {
@@ -26089,6 +26165,10 @@ static void ERAppShortcutCatalogPublish(void) {
                     }
                 }
                 if (hasProps) appsWithProps++;
+                if (!items.count) {
+                    // SBApplication 两类属性都没给 → 读 App Info.plist 静态项兜底。
+                    items = [ERAppShortcutStaticItemsFromInfoPlist(bundleId) mutableCopy];
+                }
                 if (!items.count) continue;
                 catalog[bundleId] = @{@"name": name.length ? name : bundleId, @"items": items};
             } @catch (__unused NSException *outer) {}
@@ -26101,6 +26181,8 @@ static void ERAppShortcutCatalogPublish(void) {
         CFPreferencesSetAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
                                  (__bridge CFPropertyListRef)[catalog copy], kERPrefsDomain);
         CFPreferencesAppSynchronize(kERPrefsDomain);
+        // 同一把刷出桌面图标集合（设置页用来过滤系统隐藏组件）。
+        ERAppShortcutPublishHomeScreenApps();
         CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                                              (__bridge CFStringRef)kERAppShortcutCatalogNotification,
                                              NULL, NULL, YES);
