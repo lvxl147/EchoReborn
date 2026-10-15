@@ -1124,8 +1124,9 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     cell.imageView.image = ERLinkAppCellIcon(self.appBundleId, 28.0);
     cell.imageView.layer.cornerRadius = 6.0;
     cell.imageView.clipsToBounds = YES;
-    NSString *title = [item[@"title"] isKindOfClass:[NSString class]] && item[@"title"].length
-        ? item[@"title"] : item[@"type"];
+    NSString *rawTitle = item[@"title"];
+    NSString *title = [rawTitle isKindOfClass:[NSString class]] && rawTitle.length
+        ? rawTitle : item[@"type"];
     cell.textLabel.text = title;
     cell.textLabel.textColor = UIColor.labelColor;
     cell.accessoryType = [self shortcutIsAddedForType:item[@"type"]]
