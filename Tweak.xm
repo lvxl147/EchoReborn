@@ -26088,6 +26088,7 @@ static void ERAppShortcutCatalogPublish(void) {
                         } @catch (__unused NSException *inner) {}
                     }
                 }
+                if (hasProps) appsWithProps++;
                 if (!items.count) continue;
                 catalog[bundleId] = @{@"name": name.length ? name : bundleId, @"items": items};
             } @catch (__unused NSException *outer) {}
