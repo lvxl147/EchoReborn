@@ -25986,6 +25986,113 @@ static void ERShortcutRescanRequested(__unused CFNotificationCenterRef center, _
 }
 
 // ---------------------------------------------------------------------------
+// 1.1.9-5 · App 快捷方式目录（主屏 Quick Actions，参考 Actra 逆向结论）
+//
+// 「App 的快捷方式」= 长按主屏图标弹出的那些菜单项（UIApplicationShortcutItem），
+// 分静态（App Info.plist 的 UIApplicationShortcutItems）与动态
+// （UIApplication.shortcutItems）。Actra 的做法（libActra.dylib 符号证实）：
+// 在 SpringBoard 里用 SBApplication 的 staticApplicationShortcutItems /
+// dynamicApplicationShortcutItems 拿全量目录，再经 Darwin 通知 + 快照发给设置页。
+// 本插件同一思路：设置页发 RequestAppShortcuts → 这里扫一遍 SBApplicationController
+// 的 applications，把 {bundleId: {name, items:[{type,title,dynamic}]}} 写进
+// 共享偏好域 AppShortcutCatalog，并广播 AppShortcutsCatalog。设置页拿不到的动态项
+// 只有这里有；设置页另有一份 Info.plist 静态兜底。
+// ---------------------------------------------------------------------------
+static NSString *const kERAppShortcutCatalogKey = @"AppShortcutCatalog";
+static NSString *const kERAppShortcutRequestNotification = @"com.strive.echoreborn/RequestAppShortcuts";
+static NSString *const kERAppShortcutCatalogNotification = @"com.strive.echoreborn/AppShortcutsCatalog";
+
+static void ERAppShortcutCatalogPublish(void) {
+    @try {
+        Class controllerClass = NSClassFromString(@"SBApplicationController");
+        if (!controllerClass) { ERLogInfo(@"appShortcuts: SBApplicationController 不可用"); return; }
+        SEL shared = NSSelectorFromString(@"sharedInstance");
+        if (![controllerClass respondsToSelector:shared]) return;
+        id controller = ((id (*)(id, SEL))objc_msgSend)(controllerClass, shared);
+        SEL appsSelector = NSSelectorFromString(@"applications");
+        if (![controller respondsToSelector:appsSelector]) return;
+        NSArray *apps = ((id (*)(id, SEL))objc_msgSend)(controller, appsSelector);
+        if (![apps isKindOfClass:[NSArray class]]) return;
+
+        NSMutableDictionary<NSString *, NSDictionary *> *catalog = [NSMutableDictionary dictionary];
+        SEL typeSel = NSSelectorFromString(@"type");
+        SEL titleSel = NSSelectorFromString(@"localizedTitle");
+        for (id app in apps) {
+            @try {
+                NSString *bundleId = nil;
+                for (NSString *selName in @[@"bundleIdentifier", @"applicationIdentifier"]) {
+                    SEL sel = NSSelectorFromString(selName);
+                    if ([app respondsToSelector:sel]) {
+                        id value = ((id (*)(id, SEL))objc_msgSend)(app, sel);
+                        if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) {
+                            bundleId = value;
+                            break;
+                        }
+                    }
+                }
+                if (!bundleId.length) continue;
+                NSString *name = nil;
+                SEL nameSel = NSSelectorFromString(@"localizedName");
+                if ([app respondsToSelector:nameSel]) {
+                    id value = ((id (*)(id, SEL))objc_msgSend)(app, nameSel);
+                    if ([value isKindOfClass:[NSString class]]) name = value;
+                }
+                NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+                for (NSString *propName in @[@"staticApplicationShortcutItems", @"dynamicApplicationShortcutItems"]) {
+                    SEL sel = NSSelectorFromString(propName);
+                    if (![app respondsToSelector:sel]) continue;
+                    NSArray *list = ((id (*)(id, SEL))objc_msgSend)(app, sel);
+                    if (![list isKindOfClass:[NSArray class]]) continue;
+                    BOOL dynamic = [propName hasPrefix:@"dynamic"];
+                    for (id item in list) {
+                        @try {
+                            if (![item respondsToSelector:typeSel]) continue;
+                            NSString *type = nil;
+                            id tv = ((id (*)(id, SEL))objc_msgSend)(item, typeSel);
+                            if ([tv isKindOfClass:[NSString class]]) type = tv;
+                            if (!type.length) continue;
+                            // 静态优先：同一 type 已有静态项就不再记动态副本。
+                            BOOL exists = NO;
+                            for (NSDictionary *existing in items) {
+                                if ([existing[@"type"] isEqualToString:type]) { exists = YES; break; }
+                            }
+                            if (exists) continue;
+                            NSString *title = nil;
+                            if ([item respondsToSelector:titleSel]) {
+                                id lv = ((id (*)(id, SEL))objc_msgSend)(item, titleSel);
+                                if ([lv isKindOfClass:[NSString class]]) title = lv;
+                            }
+                            if (!title.length) title = type;
+                            [items addObject:@{@"type": type, @"title": title, @"dynamic": @(dynamic)}];
+                        } @catch (__unused NSException *inner) {}
+                    }
+                }
+                if (!items.count) continue;
+                catalog[bundleId] = @{@"name": name.length ? name : bundleId, @"items": items};
+            } @catch (__unused NSException *outer) {}
+        }
+        if (!catalog.count) { ERLogInfo(@"appShortcuts: 扫到 0 个带快捷方式的应用"); return; }
+        CFPreferencesSetAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
+                                 (__bridge CFPropertyListRef)[catalog copy], kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                             (__bridge CFStringRef)kERAppShortcutCatalogNotification,
+                                             NULL, NULL, YES);
+        ERLogInfo(@"appShortcuts: 发布 %lu 个应用的快捷方式目录", (unsigned long)catalog.count);
+    } @catch (NSException *exception) {
+        ERLogInfo(@"appShortcuts: 发布失败 %@", exception.reason);
+    }
+}
+
+static void ERAppShortcutCatalogRequested(__unused CFNotificationCenterRef center, __unused void *observer,
+                                          __unused CFStringRef name, __unused const void *object,
+                                          __unused CFDictionaryRef userInfo) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ERAppShortcutCatalogPublish();
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 1.0.4：更名（CCAster → Echo Reborn）遗留状态的一次性迁移
 // ---------------------------------------------------------------------------
 // 更名同时改了三样东西：
@@ -30171,6 +30278,12 @@ static void ERBootLog(NSString *tag) {
         // 槽位 bundle 点击 -> 广播 RunShortcut；本进程读 ShortcutRunRequest 并按
         // 标识符运行工作流（不前台化快捷指令 App）。
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERShortcutRunRequested, (__bridge CFStringRef)kERShortcutRunNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        // 1.1.9-5：设置页请求 App 快捷方式（主屏 Quick Actions）目录 → SpringBoard 扫描发布。
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERAppShortcutCatalogRequested, (__bridge CFStringRef)kERAppShortcutRequestNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        // 启动后先自发扫一次，让目录尽早可用。
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            ERAppShortcutCatalogPublish();
+        });
         Class overlayClass = NSClassFromString(@"CCUIModularControlCenterOverlayViewController");
         SEL willOpen = NSSelectorFromString(@"moduleCollectionViewController:willOpenExpandedModule:");
         SEL didClose = NSSelectorFromString(@"moduleCollectionViewController:didCloseExpandedModule:");
