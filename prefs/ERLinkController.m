@@ -438,6 +438,7 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
 // 「添加链接」弹窗里正在编辑的那一份（从文件/相册导入图标时要用）
 @property (nonatomic, strong) UIAlertController *pendingAlert;
 @property (nonatomic, copy) NSString *pendingIconFile;
+- (instancetype)initWithExisting:(NSArray<NSDictionary *> *)existing;
 @end
 
 @interface ERLinkController () <UITableViewDataSource, UITableViewDelegate>
