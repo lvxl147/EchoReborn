@@ -14,6 +14,8 @@ static NSString *const kERShortcutRescanNotification = @"com.strive.echoreborn/R
 static NSString *const kERShortcutSnapshotDirectory = @"/var/mobile/Library/Logs/EchoReborn";
 static NSString *const kERShortcutSnapshotFileName = @"shortcuts.plist";
 
+// 1.1.8-18 · 句柄复用（与控制器同一套做法）：一次扫描要写近百条日志，
+// 原来每条都 fileHandleForWritingAtPath + closeFile 一遍，白耗时间。
 static void ERShortcutLog(NSString *format, ...) {
     va_list args;
     va_start(args, format);
@@ -25,17 +27,23 @@ static void ERShortcutLog(NSString *format, ...) {
                                                attributes:nil
                                                     error:nil];
     NSString *path = [kERShortcutSnapshotDirectory stringByAppendingPathComponent:@"echoreborn.log"];
-    NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:path];
-    if (!handle) {
-        [line writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
-        return;
-    }
+    static NSFileHandle *handle = nil;
+    if (!handle) handle = [NSFileHandle fileHandleForWritingAtPath:path];
     @try {
         [handle seekToEndOfFile];
         [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
     } @catch (__unused NSException *exception) {
-    } @finally {
+        // 句柄失效（日志被外部轮转/删掉）时重开一次，不再退回「每次开关」。
         @try { [handle closeFile]; } @catch (__unused NSException *ignored) {}
+        handle = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (handle) {
+            @try {
+                [handle seekToEndOfFile];
+                [handle writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+            } @catch (__unused NSException *alsoIgnored) {}
+        } else {
+            [line writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
+        }
     }
 }
 
@@ -142,64 +150,6 @@ static ER_sqlite3 *EROpenStoreCopy(NSString *path) {
 // 1.1.8-8 · 诊断：把 ZSHORTCUTICON 的真实列结构写进日志。1.1.8-7 的现象是
 // 「glyph = 0xF000 的行只有素色方块」，怀疑这些行的图标其实存在 ZSYMBOLNAME
 // / ZEMOJI 一类的列里（iOS 17 的图标选择器改成「符号名 + 颜色」为主）。
-static void ERDumpIconSchema(ER_sqlite3 *database) {
-    if (!database) return;
-    ER_sqlite3_stmt *stmt = NULL;
-    NSMutableArray<NSString *> *tables = [NSMutableArray array];
-    if (ERPrepareV2(database, "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%ICON%'",
-                    -1, &stmt, NULL) == 0 && stmt) {
-        while (ERStep(stmt) == 100) {
-            const unsigned char *t = ERColumnText(stmt, 0);
-            if (t) [tables addObject:[NSString stringWithUTF8String:(const char *)t]];
-        }
-        ERFinalize(stmt);
-    }
-    ERShortcutLog(@"schema: ICON tables=%@", tables);
-
-    stmt = NULL;
-    if (ERPrepareV2(database, "PRAGMA table_info(ZSHORTCUTICON)", -1, &stmt, NULL) == 0 && stmt) {
-        NSMutableArray<NSString *> *cols = [NSMutableArray array];
-        while (ERStep(stmt) == 100) {
-            const unsigned char *n = ERColumnText(stmt, 1);
-            const unsigned char *ty = ERColumnText(stmt, 2);
-            if (n) {
-                [cols addObject:[NSString stringWithFormat:@"%s:%s",
-                                 (const char *)n, ty ? (const char *)ty : "?"]];
-            }
-        }
-        ERFinalize(stmt);
-        ERShortcutLog(@"schema: ZSHORTCUTICON 列=%@", cols);
-    }
-
-    stmt = NULL;
-    if (ERPrepareV2(database, "SELECT * FROM ZSHORTCUTICON LIMIT 3", -1, &stmt, NULL) == 0 && stmt) {
-        int row = 0;
-        while (ERStep(stmt) == 100 && row < 3) {
-            NSMutableArray<NSString *> *vals = [NSMutableArray array];
-            int columns = ERColumnCount(stmt);
-            for (int index = 0; index < columns; index++) {
-                const char *rawName = ERColumnName(stmt, index);
-                if (!rawName) continue;
-                NSString *name = [NSString stringWithUTF8String:rawName];
-                int type = ERColumnType(stmt, index);
-                if (type == 1) {
-                    [vals addObject:[NSString stringWithFormat:@"%@=%lld", name, ERColumnInt64(stmt, index)]];
-                } else if (type == 3) {
-                    const unsigned char *t = ERColumnText(stmt, index);
-                    [vals addObject:[NSString stringWithFormat:@"%@=\"%s\"", name, t ? (const char *)t : ""]];
-                } else if (type == 4) {
-                    [vals addObject:[NSString stringWithFormat:@"%@=<blob %d>", name, ERColumnBytes(stmt, index)]];
-                } else {
-                    [vals addObject:[NSString stringWithFormat:@"%@=<type %d>", name, type]];
-                }
-            }
-            ERShortcutLog(@"schema: ZSHORTCUTICON row%d %@", row, [vals componentsJoinedByString:@" "]);
-            row++;
-        }
-        ERFinalize(stmt);
-    }
-}
-
 // Reads one icon row (ZSHORTCUTICON) by primary key, mapping columns by name.
 static NSDictionary *ERReadIconRow(ER_sqlite3 *database, long long iconPK) {
     if (!database || iconPK <= 0) return nil;
@@ -455,25 +405,6 @@ static UIImage *ERResolveShortcutIcon(NSString *bundleId, NSNumber *glyphNumber,
     return ERShortcutForegroundImage(fallback ?: [UIImage systemImageNamed:@"sparkles"], size);
 }
 
-// 1.1.8-8 · 把设备上这篇数据库复制到日志目录，方便拉回本地用 sqlite 直接看。
-static void ERCopyStoreForDiagnostics(NSString *path) {
-    if (!path.length) return;
-    NSFileManager *fm = [NSFileManager defaultManager];
-    for (NSString *suffix in @[@"", @"-wal", @"-shm"]) {
-        NSString *src = [path stringByAppendingString:suffix];
-        if (![fm fileExistsAtPath:src]) continue;
-        NSString *dst = [kERShortcutSnapshotDirectory
-                         stringByAppendingPathComponent:[@"Shortcuts.sqlite" stringByAppendingString:suffix]];
-        [fm removeItemAtPath:dst error:nil];
-        NSError *error = nil;
-        if ([fm copyItemAtPath:src toPath:dst error:&error]) {
-            ERShortcutLog(@"dbcopy: ok %@", dst);
-        } else {
-            ERShortcutLog(@"dbcopy: fail %@ (%@)", suffix, error.localizedDescription);
-        }
-    }
-}
-
 void ERShortcutScanAndPublish(void) {
     if (!ERSQLiteResolve()) {
         ERShortcutLog(@"scan: libsqlite3 could not be resolved");
@@ -509,7 +440,6 @@ void ERShortcutScanAndPublish(void) {
             status = @"query-failed";
             ERShortcutLog(@"scan: failed to open store copy at %@", databasePath);
         } else {
-            ERDumpIconSchema(database);
             ER_sqlite3_stmt *statement = NULL;
             if (ERPrepareV2(database, "SELECT * FROM ZSHORTCUT", -1, &statement, NULL) == 0 && statement) {
                 while (ERStep(statement) == 100 /* SQLITE_ROW */) {
@@ -628,7 +558,6 @@ void ERShortcutScanAndPublish(void) {
                   (unsigned long)withSymbol, (unsigned long)withEmoji, (unsigned long)withImage,
                   (unsigned long)glyphOnly, (unsigned long)noIcon, (unsigned long)withBundle,
                   (unsigned long)fullTiles);
-    ERCopyStoreForDiagnostics(databasePath);
 
     // Publish the FULL catalog (including imageData) to the shared prefs domain
     // so SpringBoard can render native icons without touching the sandboxed store.
