@@ -26321,7 +26321,7 @@ static void ERAppShortcutCatalogPublish(void) {
                 SEL infoSel = NSSelectorFromString(@"infoDictionary");
                 NSDictionary *info = [bproxy respondsToSelector:infoSel]
                     ? ((id (*)(id, SEL))objc_msgSend)(bproxy, infoSel) : nil;
-                ERAppShortcutDiagSet(@"baidu_objkey", ok1 ? @(ok1.count) : @"nil");
+                ERAppShortcutDiagSet(@"baidu_objkey", [ok1 isKindOfClass:[NSArray class]] ? @(ok1.count) : @"nil");
                 ERAppShortcutDiagSet(@"baidu_info", info ? @(info.count) : @"nil");
                 ERAppShortcutDiagSet(@"baidu_info_shortcuts",
                                      ([info isKindOfClass:[NSDictionary class]] && info[@"UIApplicationShortcutItems"])
