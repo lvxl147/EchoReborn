@@ -422,6 +422,39 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
     }];
 }
 
+// App 图标统一画进 40×40 圆角（与「创建链接」图标同尺寸，设置页所有行一致）。
+static UIImage *ERLinkAppCellIcon(NSString *bundleId) {
+    UIImage *appIcon = ERLinkAppIconImage(bundleId);
+    if (!appIcon) return ERLinkGlyphTile(@"app.fill", 0xFF3B82F6LL);
+    CGSize size = CGSizeMake(40.0, 40.0);
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(0.0, 0.0, size.width, size.height)
+                                                        cornerRadius:9.0];
+        [path addClip];
+        [appIcon drawInRect:CGRectMake(0.0, 0.0, size.width, size.height)];
+    }];
+}
+
+// 以 App 维度造一条「打开 App」的快捷方式条目（详情页对号添加时用）。
+static NSDictionary *ERLinkMakeAppEntry(NSString *bundleId, NSString *name) {
+    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+    entry[@"uuid"] = [[NSUUID UUID] UUIDString];
+    entry[@"name"] = name.length ? name : bundleId;
+    entry[@"type"] = @"app";
+    entry[@"bundleId"] = bundleId ?: @"";
+    entry[@"iconKind"] = @"app";
+    entry[@"iconValue"] = bundleId ?: @"";
+    // 底色：和快捷指令一样由条目自己带，这里给一个默认强调色。
+    entry[@"color"] = @(0xFF3B82F6LL);
+    NSString *file = ERLinkWriteRenderedIcon(entry);
+    if (file) {
+        entry[@"iconFile"] = file;
+        entry[@"iconFull"] = @YES;
+    }
+    return entry;
+}
+
 // MARK: - 主页
 
 @interface ERLinkAddController : PSViewController <UITableViewDataSource,
@@ -439,6 +472,14 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
 @property (nonatomic, strong) UIAlertController *pendingAlert;
 @property (nonatomic, copy) NSString *pendingIconFile;
 - (instancetype)initWithExisting:(NSArray<NSDictionary *> *)existing;
+@end
+
+// App 详情页：顶部第一行是 App 卡片（左图标 + 右名称），
+// 与该 App 的快捷方式条目共用一张卡片；条目可点击打对号/取消对号。
+@interface ERLinkAppDetailController : PSViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, copy) NSString *appBundleId;
+@property (nonatomic, copy) NSString *appName;
+- (instancetype)initWithAppBundleId:(NSString *)bundleId name:(NSString *)name;
 @end
 
 @interface ERLinkController () <UITableViewDataSource, UITableViewDelegate>
@@ -646,26 +687,6 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
 }
 
 // MARK: - 保存一条快捷方式
-
-- (NSDictionary *)entryForApp:(NSDictionary *)app {
-    NSString *bundleId = app[@"bundleId"];
-    NSString *name = app[@"name"];
-    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-    entry[@"uuid"] = [[NSUUID UUID] UUIDString];
-    entry[@"name"] = [name isKindOfClass:[NSString class]] && name.length ? name : bundleId;
-    entry[@"type"] = @"app";
-    entry[@"bundleId"] = bundleId ?: @"";
-    entry[@"iconKind"] = @"app";
-    entry[@"iconValue"] = bundleId ?: @"";
-    // 底色：和快捷指令一样由条目自己带，这里给一个默认强调色。
-    entry[@"color"] = @(0xFF3B82F6LL);
-    NSString *file = ERLinkWriteRenderedIcon(entry);
-    if (file) {
-        entry[@"iconFile"] = file;
-        entry[@"iconFull"] = @YES;
-    }
-    return entry;
-}
 
 - (void)saveEntry:(NSDictionary *)entry {
     NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy];
@@ -900,15 +921,11 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
     cell.textLabel.textColor = UIColor.labelColor;
     cell.detailTextLabel.text = app[@"bundleId"];
     cell.detailTextLabel.textColor = UIColor.labelColor;
-    UIImage *appIcon = ERLinkAppIconImage(app[@"bundleId"]);
-    if (appIcon) {
-        cell.imageView.image = appIcon;
-    } else {
-        cell.imageView.image = ERLinkGlyphTile(@"app.fill", 0xFF3B82F6LL);
-    }
+    // 图标统一 40×40，和「创建链接」一致。
+    cell.imageView.image = ERLinkAppCellIcon(app[@"bundleId"]);
     cell.imageView.layer.cornerRadius = 9.0;
     cell.imageView.clipsToBounds = YES;
-    cell.accessoryType = UITableViewCellAccessoryNone;
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     return cell;
 }
 
@@ -921,17 +938,133 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
     NSUInteger index = (NSUInteger)indexPath.row - 1;
     if (index >= self.filtered.count) return;
     NSDictionary *app = self.filtered[index];
-    // 已经加过的就不再重复加。
-    NSString *bundleId = app[@"bundleId"];
-    for (NSDictionary *entry in self.existing) {
-        if ([entry[@"bundleId"] isKindOfClass:[NSString class]] &&
-            [entry[@"bundleId"] isEqualToString:bundleId]) {
-            ERLinkLog(@"addApp: %@ 已存在，跳过", bundleId);
-            [self.navigationController popViewControllerAnimated:YES];
-            return;
-        }
+    // 点击 App → 进入该 App 的详情页，在详情页里打对号添加/取消。
+    ERLinkAppDetailController *detail =
+        [[ERLinkAppDetailController alloc] initWithAppBundleId:app[@"bundleId"]
+                                                          name:app[@"name"]];
+    [self.navigationController pushViewController:detail animated:YES];
+}
+
+@end
+
+// MARK: - App 详情页
+
+@implementation ERLinkAppDetailController
+{
+    UITableView *_detailTable;
+}
+
+- (instancetype)initWithAppBundleId:(NSString *)bundleId name:(NSString *)name {
+    self = [super init];
+    if (!self) return nil;
+    _appBundleId = [bundleId isKindOfClass:[NSString class]] ? bundleId : @"";
+    _appName = name.length ? name : _appBundleId;
+    return self;
+}
+
+- (void)loadView {
+    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+
+    // 单个 section = 一张卡片：第一行 App 头部（图标左 + 名称右），
+    // 第二行起是该 App 的快捷方式条目，可点击打对号。
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    [self.view addSubview:table];
+    _detailTable = table;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = self.appName;
+}
+
+// 该 App 当前是否已在目录里（决定对号显示）。
+- (BOOL)appIsAdded {
+    for (NSDictionary *entry in ERLinkStoredCatalog()) {
+        if ([entry[@"type"] isEqualToString:@"app"] &&
+            [entry[@"bundleId"] isKindOfClass:[NSString class]] &&
+            [entry[@"bundleId"] isEqualToString:self.appBundleId]) return YES;
     }
-    [self saveEntry:[self entryForApp:app]];
+    return NO;
+}
+
+// MARK: Table
+
+- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
+    return 1;
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+    // 第一行：App 头部；第二行：「打开 App」快捷方式。
+    return 2;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (indexPath.row == 0) {
+        static NSString *headerId = @"ERLinkAppHeaderCell";
+        UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:headerId];
+        if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:headerId];
+        cell.imageView.image = ERLinkAppCellIcon(self.appBundleId);
+        cell.imageView.layer.cornerRadius = 9.0;
+        cell.imageView.clipsToBounds = YES;
+        cell.textLabel.text = self.appName;
+        cell.textLabel.textColor = UIColor.labelColor;
+        cell.textLabel.font = [UIFont boldSystemFontOfSize:17.0];
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        cell.userInteractionEnabled = YES;
+        return cell;
+    }
+    static NSString *toggleId = @"ERLinkAppToggleCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:toggleId];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:toggleId];
+    cell.textLabel.text = [NSString stringWithFormat:@"打开 %@", self.appName];
+    cell.textLabel.textColor = UIColor.labelColor;
+    cell.accessoryType = [self appIsAdded] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
+    cell.tintColor = [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0];
+    cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    cell.userInteractionEnabled = YES;
+    return cell;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
+    return @"点击「打开」即可添加为快捷方式，再次点击取消对号。";
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row != 1) return;
+    NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
+    if ([self appIsAdded]) {
+        // 取消：移除该 App 的全部条目，顺手删渲染好的图标文件。
+        NSMutableArray<NSDictionary *> *remaining = [NSMutableArray array];
+        for (NSDictionary *entry in catalog) {
+            BOOL match = [entry[@"type"] isEqualToString:@"app"] &&
+                         [entry[@"bundleId"] isKindOfClass:[NSString class]] &&
+                         [entry[@"bundleId"] isEqualToString:self.appBundleId];
+            if (match) {
+                NSString *uuid = entry[@"uuid"];
+                if ([uuid isKindOfClass:[NSString class]] && uuid.length) {
+                    [[NSFileManager defaultManager]
+                        removeItemAtPath:ERLinkLocalImagePath([uuid stringByAppendingPathExtension:@"png"])
+                                   error:nil];
+                }
+            } else {
+                [remaining addObject:entry];
+            }
+        }
+        ERLinkPersistCatalog(remaining);
+        ERLinkLog(@"appDetail: 取消 %@", self.appBundleId);
+    } else {
+        [catalog addObject:ERLinkMakeAppEntry(self.appBundleId, self.appName)];
+        ERLinkPersistCatalog(catalog);
+        ERLinkLog(@"appDetail: 添加 %@", self.appBundleId);
+    }
+    [tableView reloadData];
 }
 
 @end
