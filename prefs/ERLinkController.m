@@ -1065,6 +1065,10 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = self.appName;
+    // viewWillAppear 在个别导航场景可能晚到/不触发，这里先拉一次。
+    [self reloadShortcuts];
+    ERLinkRequestAppShortcutCatalog();
+    if (self.shortcutItems.count == 0) [self scheduleShortcutRetry:1];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1142,8 +1146,30 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:itemId];
     if (self.shortcutItems.count == 0) {
         cell.imageView.image = nil;
-        cell.textLabel.text = @"该应用没有可用的快捷方式";
+        // 空状态带自诊断：快照规模 + 是否包含当前 App，便于远程定位断点。
+        CFPreferencesAppSynchronize((__bridge CFStringRef)kERLinkPrefsDomain);
+        CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERAppShortcutCatalogKey,
+                                                            (__bridge CFStringRef)kERLinkPrefsDomain);
+        NSUInteger snapshotApps = 0;
+        BOOL snapshotHasApp = NO;
+        if (value) {
+            if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+                NSDictionary *catalog = (__bridge NSDictionary *)value;
+                snapshotApps = catalog.count;
+                snapshotHasApp = catalog[self.appBundleId] != nil;
+            }
+            CFRelease(value);
+        }
+        if (snapshotApps == 0) {
+            cell.textLabel.text = @"该应用没有可用的快捷方式（目录尚未发布，稍后自动重试）";
+        } else if (snapshotHasApp) {
+            cell.textLabel.text = @"该应用的快捷方式条目为空";
+        } else {
+            cell.textLabel.text = [NSString stringWithFormat:@"目录共 %lu 个应用，不含 %@（可先打开一次该 App 再回来）",
+                                   (unsigned long)snapshotApps, self.appName];
+        }
         cell.textLabel.textColor = UIColor.secondaryLabelColor;
+        cell.textLabel.numberOfLines = 0;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         cell.userInteractionEnabled = YES;
