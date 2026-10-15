@@ -247,8 +247,21 @@ static void ERShortcutLog(NSString *format, ...) {
     }
 }
 
-// 1.1.8-18 · 「添加」子页面（实现放在本文件末尾，和主页共用上面的静态助手）。
-@class ERShortcutAddController;
+// MARK: - 添加子页面
+//
+// 1.1.8-18 · 未显示的那批快捷指令单独拆到这里：顶部搜索框 + 未显示控制项列表，
+// 点一条就加入显示列表并弹回主页。加入/移除的逻辑都在，只是主页先不挂交互
+// （用户后面还有别的需求），所以这里也只做「加入」这一个方向。
+@interface ERShortcutAddController : PSViewController <UITableViewDataSource,
+                                                       UITableViewDelegate,
+                                                       UISearchBarDelegate>
+@property (nonatomic, strong) NSArray<NSDictionary *> *allShortcuts;
+@property (nonatomic, strong) NSMutableSet<NSString *> *visibleUUIDs;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
+@property (nonatomic, copy) NSString *searchText;
+@property (nonatomic, strong) UISearchBar *searchBar;
+@property (nonatomic, strong) UITableView *addTableView;
+@end
 
 @interface ERShortcutController () <UITableViewDataSource, UITableViewDelegate>
 // NOT `tableView`. PSViewController already declares a READONLY
@@ -567,26 +580,13 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     return cell;
 }
 
+@end
+
 // 主页纯展示，所以这里故意不做任何事 —— 保留方法只为满足 UITableViewDelegate
 // 的可选协议，行本身已经把 userInteractionEnabled 关掉了。
 - (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(__unused NSIndexPath *)indexPath {
 }
 
-// MARK: - 添加子页面
-//
-// 1.1.8-18 · 未显示的那批快捷指令单独拆到这里：顶部搜索框 + 未显示控制项列表，
-// 点一条就加入显示列表并弹回主页。加入/移除的逻辑都在，只是主页先不挂交互
-// （用户后面还有别的需求），所以这里也只做「加入」这一个方向。
-@interface ERShortcutAddController : PSViewController <UITableViewDataSource,
-                                                       UITableViewDelegate,
-                                                       UISearchBarDelegate>
-@property (nonatomic, strong) NSArray<NSDictionary *> *allShortcuts;
-@property (nonatomic, strong) NSMutableSet<NSString *> *visibleUUIDs;
-@property (nonatomic, strong) NSArray<NSDictionary *> *filtered;
-@property (nonatomic, copy) NSString *searchText;
-@property (nonatomic, strong) UISearchBar *searchBar;
-@property (nonatomic, strong) UITableView *addTableView;
-@end
 
 @implementation ERShortcutAddController
 
@@ -759,7 +759,5 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     // 加完就弹回主页，主页在 viewWillAppear 里刷新，这一条会立刻出现在列表里。
     [self.navigationController popViewControllerAnimated:YES];
 }
-
-@end
 
 @end
