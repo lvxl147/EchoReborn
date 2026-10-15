@@ -557,12 +557,19 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
         cell.detailTextLabel.text = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        cell.userInteractionEnabled = NO;
+        cell.userInteractionEnabled = YES;
         return cell;
     }
-    // 1.1.8-18 · 主页是纯展示列表：不打钩（在列表里就等于已启用）、不响应点击。
-    cell.userInteractionEnabled = NO;
+    // 1.1.8-20 · 主页是纯展示列表：不打钩（在列表里就等于已启用）、点了也没反应
+    // （didSelect 是空实现）、选中不高亮。
+    // 注意：**不能**再设 userInteractionEnabled = NO —— UIKit 会把禁用单元格里的
+    // 文字整体调暗（实测 labelColor 被渲染成约 47% 的灰，不再是纯黑，就是 1.1.8-19
+    // 被反馈"右边文字发白"的原因）。所以保持可交互，用空实现 + 无高亮来达到
+    // "点了没反应"的效果。
+    cell.userInteractionEnabled = YES;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.alpha = 1.0;
+    cell.detailTextLabel.alpha = 1.0;
 
     NSDictionary *shortcut = rows[indexPath.row];
     cell.textLabel.text = [self displayNameForShortcut:shortcut];
@@ -624,6 +631,15 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0.0, 0.0, frame.size.width, 56.0)];
     bar.delegate = self;
     bar.placeholder = @"搜索快捷指令";
+    // 1.1.8-20 · 参考视频里的效果：搜索框不要背景。
+    //   Minimal 样式去掉整条灰底；再把搜索字段自己的背景也置空，
+    //   只剩放大镜 + 占位文字，直接贴在分组背景上。
+    bar.searchBarStyle = UISearchBarStyleMinimal;
+    bar.translucent = YES;
+    bar.backgroundImage = [UIImage new];
+    [bar setSearchFieldBackgroundImage:[UIImage new] forState:UIControlStateNormal];
+    // 取消按钮只在输入时出现（见 searchBarTextDidBeginEditing:）
+    bar.showsCancelButton = NO;
     // tableHeaderView 的宽度要以表格当前宽度为准，否则横屏/分屏下会短一截。
     bar.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(table.bounds), 56.0);
     [bar layoutIfNeeded];
@@ -637,8 +653,6 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"添加";
-    // 取消按钮在视图已入窗口后再打开，否则 loadView 阶段设置经常不渲染。
-    self.searchBar.showsCancelButton = YES;
     [self refilter];
 }
 
@@ -670,6 +684,15 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 }
 
 // MARK: - UISearchBarDelegate
+
+// 1.1.8-20 · 「取消」只在点击输入框、开始编辑时出现；不点就不显示。
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+    [searchBar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+    [searchBar setShowsCancelButton:NO animated:YES];
+}
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
     self.searchText = searchText ?: @"";
@@ -734,7 +757,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
         cell.detailTextLabel.text = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        cell.userInteractionEnabled = NO;
+        cell.userInteractionEnabled = YES;
         return cell;
     }
     cell.userInteractionEnabled = YES;
