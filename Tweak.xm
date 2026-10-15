@@ -26142,21 +26142,24 @@ static void ERAppShortcutCollectBids(id container, NSMutableSet<NSString *> *ids
 }
 
 // 对一个模型对象逐个探测图标选择器，取第一个非空的，返回选择器名。
-static NSString *ERAppShortcutProbeIcons(id model, NSMutableSet<NSString *> *ids) {
+static NSString *ERAppShortcutProbeIcons(id model, NSMutableSet<NSString *> *ids, NSMutableString *log) {
     if (!model) return nil;
     for (NSString *selName in @[@"leafIcons", @"allIcons", @"visibleLeafIcons", @"visibleIcons", @"icons",
                                 @"applicationIcons", @"iconLists", @"rootFolder", @"allIconLists"]) {
         SEL sel = NSSelectorFromString(selName);
-        if (![model respondsToSelector:sel]) continue;
+        BOOL resp = [model respondsToSelector:sel];
         @try {
-            id v = ((id (*)(id, SEL))objc_msgSend)(model, sel);
-            if (!v) continue;
+            id v = resp ? ((id (*)(id, SEL))objc_msgSend)(model, sel) : nil;
             NSUInteger n = 0;
             if ([v respondsToSelector:@selector(count)]) n = [(NSArray *)v count];
-            if (!n) continue;
+            [log appendFormat:@"%@|%@=%lu(%@) ", selName, resp ? @"r1" : @"r0",
+                (unsigned long)n, v ? NSStringFromClass([v class]) : @"nil"];
+            if (!v || !n) continue;
             ERAppShortcutCollectBids(v, ids);
             if (ids.count) return selName;
-        } @catch (__unused NSException *e) {}
+        } @catch (NSException *e) {
+            [log appendFormat:@"%@|EXC=%@ ", selName, e.name];
+        }
     }
     return nil;
 }
@@ -26192,13 +26195,21 @@ static void ERAppShortcutPublishHomeScreenApps(void) {
                     }
                 }
                 NSString *hit = nil;
+                NSMutableString *probeLog = [NSMutableString string];
                 for (id m in models) {
-                    hit = ERAppShortcutProbeIcons(m, ids);
+                    [probeLog appendFormat:@"%@ >> ", NSStringFromClass([m class])];
+                    hit = ERAppShortcutProbeIcons(m, ids, probeLog);
                     if (hit) {
                         ERAppShortcutDiagSet(@"icon_model_class", NSStringFromClass([m class]));
                         ERAppShortcutDiagSet(@"icon_sel", hit);
                         break;
                     }
+                }
+                if (probeLog.length > 2000) {
+                    ERAppShortcutDiagSet(@"icon_probe2", [probeLog substringFromIndex:2000]);
+                    ERAppShortcutDiagSet(@"icon_probe", [probeLog substringToIndex:2000]);
+                } else {
+                    ERAppShortcutDiagSet(@"icon_probe", probeLog);
                 }
                 if (!hit) {
                     NSMutableArray<NSString *> *info = [NSMutableArray array];
