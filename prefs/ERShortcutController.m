@@ -20,8 +20,6 @@ static NSString *const kERShortcutRescanNotification = @"com.strive.echoreborn/R
 static NSString *const kERShortcutSnapshotDirectory = @"/var/mobile/Library/Logs/EchoReborn";
 static NSString *const kERShortcutSnapshotFileName = @"shortcuts.plist";
 
-static NSInteger const kERSectionVisible = 0;
-
 // 1.0.7-17：子页行图标 —— 与控制中心里快捷指令磁贴**同一套画法**。
 // 颜色解码与 glyph→SF Symbol 映射与 Tweak.xm 的 ERShortcutColorFromValue /
 // ERShortcutSymbolNameForGlyph 完全一致（后者来自 WorkflowKit 的私有函数，
