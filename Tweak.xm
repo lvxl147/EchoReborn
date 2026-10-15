@@ -26021,7 +26021,15 @@ static void ERAppShortcutDiagSet(NSString *step, id value) {
 // 包装对象（不是 NSArray），需要解包 / 反序列化。
 static id ERAppShortcutUnwrapPlist(id v) {
     if (!v) return nil;
-    if ([v isKindOfClass:[NSArray class]] || [v isKindOfClass:[NSDictionary class]]) return v;
+    if ([v isKindOfClass:[NSArray class]] || [v isKindOfClass:[NSDictionary class]]) {
+        // LS 的包装类可能继承了集合类型却没实现 count（调用即崩），先做安全测试。
+        @try {
+            if ([v respondsToSelector:@selector(count)]) {
+                (void)[(NSArray *)v count];
+                return v;
+            }
+        } @catch (__unused NSException *countEx) {}
+    }
     if ([v isKindOfClass:[NSData class]]) {
         NSError *err = nil;
         id plist = [NSPropertyListSerialization propertyListWithData:(NSData *)v
@@ -26054,24 +26062,29 @@ static NSArray<NSDictionary *> *ERAppShortcutStaticItemsFromProxy(id proxy) {
     @try {
         if (!proxy) return result;
         NSArray *raw = nil;
-        SEL objKeySel = NSSelectorFromString(@"objectForInfoDictionaryKey:");
-        if ([proxy respondsToSelector:objKeySel]) {
-            id v = ((id (*)(id, SEL, id))objc_msgSend)(proxy, objKeySel, @"UIApplicationShortcutItems");
-            id unwrapped = ERAppShortcutUnwrapPlist(v);
-            if ([unwrapped isKindOfClass:[NSArray class]]) raw = unwrapped;
-        }
-        if (!raw) {
+        // 取法1：objectForInfoDictionaryKey:（独立 @try，失败不阻断后面的取法）。
+        @try {
+            SEL objKeySel = NSSelectorFromString(@"objectForInfoDictionaryKey:");
+            if ([proxy respondsToSelector:objKeySel]) {
+                id v = ((id (*)(id, SEL, id))objc_msgSend)(proxy, objKeySel, @"UIApplicationShortcutItems");
+                id unwrapped = ERAppShortcutUnwrapPlist(v);
+                if ([unwrapped isKindOfClass:[NSArray class]]) raw = unwrapped;
+            }
+        } @catch (__unused NSException *e1) {}
+        // 取法2：infoDictionary。
+        if (!raw) @try {
             SEL infoSel = NSSelectorFromString(@"infoDictionary");
             if ([proxy respondsToSelector:infoSel]) {
-                NSDictionary *info = ((id (*)(id, SEL))objc_msgSend)(proxy, infoSel);
+                id infoObj = ((id (*)(id, SEL))objc_msgSend)(proxy, infoSel);
+                id info = ERAppShortcutUnwrapPlist(infoObj);
                 if ([info isKindOfClass:[NSDictionary class]]) {
                     id v2 = ERAppShortcutUnwrapPlist(info[@"UIApplicationShortcutItems"]);
                     if ([v2 isKindOfClass:[NSArray class]]) raw = v2;
                 }
             }
-        }
-        if (!raw) {
-            // 兜底：绕过 LS 内部缓存，直接读 App bundle 目录里的 Info.plist。
+        } @catch (__unused NSException *e2) {}
+        // 取法3：绕过 LS 缓存，直接读 App bundle 目录里的 Info.plist。
+        if (!raw) @try {
             SEL urlSel = NSSelectorFromString(@"bundleURL");
             if ([proxy respondsToSelector:urlSel]) {
                 NSURL *url = ((NSURL *(*)(id, SEL))objc_msgSend)(proxy, urlSel);
@@ -26084,7 +26097,7 @@ static NSArray<NSDictionary *> *ERAppShortcutStaticItemsFromProxy(id proxy) {
                     }
                 }
             }
-        }
+        } @catch (__unused NSException *e3) {}
         if (!raw) return result;
         for (NSDictionary *item in raw) {
             if (![item isKindOfClass:[NSDictionary class]]) continue;
@@ -26104,10 +26117,13 @@ static int gERHomeScreenRetries = 0;
 
 // 容器 → bundleId 集合：字典（bundleId → icon）取键；数组逐个 icon.application.bundleIdentifier。
 static void ERAppShortcutCollectBids(id container, NSMutableSet<NSString *> *ids) {
+    // 字典：键即 bundleId。
     if ([container isKindOfClass:[NSDictionary class]]) {
-        for (id key in (NSDictionary *)container) {
-            if ([key isKindOfClass:[NSString class]] && [(NSString *)key length]) [ids addObject:key];
-        }
+        @try {
+            for (id key in (NSDictionary *)container) {
+                if ([key isKindOfClass:[NSString class]] && [(NSString *)key length]) [ids addObject:key];
+            }
+        } @catch (__unused NSException *e) {}
         return;
     }
     if (![container isKindOfClass:[NSArray class]]) return;
@@ -26128,15 +26144,18 @@ static void ERAppShortcutCollectBids(id container, NSMutableSet<NSString *> *ids
 // 对一个模型对象逐个探测图标选择器，取第一个非空的，返回选择器名。
 static NSString *ERAppShortcutProbeIcons(id model, NSMutableSet<NSString *> *ids) {
     if (!model) return nil;
-    for (NSString *selName in @[@"leafIcons", @"allIcons", @"visibleLeafIcons", @"visibleIcons", @"icons", @"applicationIcons"]) {
+    for (NSString *selName in @[@"leafIcons", @"allIcons", @"visibleLeafIcons", @"visibleIcons", @"icons",
+                                @"applicationIcons", @"iconLists", @"rootFolder", @"allIconLists"]) {
         SEL sel = NSSelectorFromString(selName);
         if (![model respondsToSelector:sel]) continue;
         @try {
             id v = ((id (*)(id, SEL))objc_msgSend)(model, sel);
-            if (([v isKindOfClass:[NSArray class]] || [v isKindOfClass:[NSDictionary class]]) && [(NSArray *)v count]) {
-                ERAppShortcutCollectBids(v, ids);
-                if (ids.count) return selName;
-            }
+            if (!v) continue;
+            NSUInteger n = 0;
+            if ([v respondsToSelector:@selector(count)]) n = [(NSArray *)v count];
+            if (!n) continue;
+            ERAppShortcutCollectBids(v, ids);
+            if (ids.count) return selName;
         } @catch (__unused NSException *e) {}
     }
     return nil;
@@ -26354,6 +26373,7 @@ static void ERAppShortcutCatalogPublish(void) {
             staticOnly++;
         }
         ERAppShortcutDiagSet(@"static_only", @(staticOnly));
+        @try {
         {
             // 百度地图专项诊断：三种取法各返回什么。
             id bproxy = proxyById[@"com.baidu.map"];
@@ -26376,6 +26396,7 @@ static void ERAppShortcutCatalogPublish(void) {
                 ERAppShortcutDiagSet(@"baidu_objkey", @"no-proxy");
             }
         }
+        } @catch (__unused NSException *baiduDiagEx) {}
         ERAppShortcutDiagSet(@"catalog_n", @(catalog.count));
         if (staticOnly) {
             ERLogInfo(@"appShortcuts: 静态补扫新增 %lu 个应用", (unsigned long)staticOnly);
