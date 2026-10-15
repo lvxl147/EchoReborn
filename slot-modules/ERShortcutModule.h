@@ -129,13 +129,13 @@ static inline UIImage *ERLinkWhiteAppIcon(NSString *bundleId) {
         NSMutableArray<NSString *> *names = [NSMutableArray array];
         id iconFiles = info[@"CFBundleIconFiles"];
         if ([iconFiles isKindOfClass:[NSArray class]]) {
-            for (id name in iconFiles) if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name];
-        } else if ([iconFiles isKindOfClass:[NSString class]] && iconFiles.length) {
+            for (id name in iconFiles) if ([name isKindOfClass:[NSString class]] && ((NSString *)name).length) [names addObject:name];
+        } else if ([iconFiles isKindOfClass:[NSString class]] && ((NSString *)iconFiles).length) {
             [names addObject:iconFiles];
         }
         id iconNames = info[@"CFBundleIconName"];
         if ([iconNames isKindOfClass:[NSArray class]]) {
-            for (id name in iconNames) if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name];
+            for (id name in iconNames) if ([name isKindOfClass:[NSString class]] && ((NSString *)name).length) [names addObject:name];
         }
         NSString *directory = bundleURL.path;
         for (NSString *name in names) {
