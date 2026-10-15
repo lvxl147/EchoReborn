@@ -26126,7 +26126,8 @@ static void ERAppShortcutCollectBids(id container, NSMutableSet<NSString *> *ids
         } @catch (__unused NSException *e) {}
         return;
     }
-    if (![container isKindOfClass:[NSArray class]]) return;
+    if (![container isKindOfClass:[NSArray class]] && ![container isKindOfClass:[NSSet class]]) return;
+    // leafIcons 在 iOS 17 返回 NSSet，统一按可枚举集合处理。
     for (id icon in (NSArray *)container) {
         @try {
             SEL appSel = NSSelectorFromString(@"application");
@@ -26384,30 +26385,6 @@ static void ERAppShortcutCatalogPublish(void) {
             staticOnly++;
         }
         ERAppShortcutDiagSet(@"static_only", @(staticOnly));
-        @try {
-        {
-            // 百度地图专项诊断：三种取法各返回什么。
-            id bproxy = proxyById[@"com.baidu.map"];
-            if (bproxy) {
-                SEL objKeySel = NSSelectorFromString(@"objectForInfoDictionaryKey:");
-                id ok1raw = [bproxy respondsToSelector:objKeySel]
-                    ? ((id (*)(id, SEL, id))objc_msgSend)(bproxy, objKeySel, @"UIApplicationShortcutItems") : nil;
-                ERAppShortcutDiagSet(@"baidu_objkey_class",
-                                     ok1raw ? NSStringFromClass([ok1raw class]) : @"nil");
-                NSArray *ok1 = ERAppShortcutUnwrapPlist(ok1raw);
-                ERAppShortcutDiagSet(@"baidu_objkey", ([ok1 isKindOfClass:[NSArray class]]) ? @(ok1.count) : @"nil");
-                SEL infoSel = NSSelectorFromString(@"infoDictionary");
-                NSDictionary *info = [bproxy respondsToSelector:infoSel]
-                    ? ((NSDictionary *(*)(id, SEL))objc_msgSend)(bproxy, infoSel) : nil;
-                ERAppShortcutDiagSet(@"baidu_info", info ? @(info.count) : @"nil");
-                NSArray *bShortcuts = ERAppShortcutUnwrapPlist(info[@"UIApplicationShortcutItems"]);
-                ERAppShortcutDiagSet(@"baidu_info_shortcuts",
-                                     ([bShortcuts isKindOfClass:[NSArray class]]) ? @(bShortcuts.count) : @"nil");
-            } else {
-                ERAppShortcutDiagSet(@"baidu_objkey", @"no-proxy");
-            }
-        }
-        } @catch (__unused NSException *baiduDiagEx) {}
         ERAppShortcutDiagSet(@"catalog_n", @(catalog.count));
         if (staticOnly) {
             ERLogInfo(@"appShortcuts: 静态补扫新增 %lu 个应用", (unsigned long)staticOnly);
