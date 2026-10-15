@@ -26006,17 +26006,12 @@ static NSString *const kERHomeScreenAppsKey = @"HomeScreenApps";
 // 1.1.9-10：远程诊断键（发布器每步进度都落盘，roothide 下看不到日志时用）。
 static NSString *const kERAppShortcutDiagKey = @"AppShortcutDiag";
 static void ERAppShortcutDiagSet(NSString *step, id value) {
+    // 写进自己的共享域（roothide 会隐藏 SpringBoard 自身的 prefs，但我们的域远程可读）。
     @try {
-        Class prefsClass = NSClassFromString(@"NSUserDefaults");
-        SEL stdSel = NSSelectorFromString(@"standardUserDefaults");
-        id defs = ((id (*)(id, SEL))objc_msgSend)((id)prefsClass, stdSel);
-        SEL setSel = NSSelectorFromString(@"setObject:forKey:");
-        NSString *key = [@"appShortcuts." stringByAppendingString:step];
-        if ([defs respondsToSelector:setSel] && value) {
-            ((void (*)(id, SEL, id, id))objc_msgSend)(defs, setSel, value, key);
-        }
-        SEL syncSel = NSSelectorFromString(@"synchronize");
-        if ([defs respondsToSelector:syncSel]) ((BOOL (*)(id, SEL))objc_msgSend)(defs, syncSel);
+        if (!value) return;
+        NSString *key = [@"Diag." stringByAppendingString:step];
+        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)value, kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
     } @catch (__unused NSException *e) {}
 }
 
