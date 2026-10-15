@@ -261,6 +261,8 @@ static void ERShortcutLog(NSString *format, ...) {
 @property (nonatomic, copy) NSString *searchText;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UITableView *addTableView;
+- (instancetype)initWithShortcuts:(NSArray<NSDictionary *> *)shortcuts
+                    visibleUUIDs:(NSSet<NSString *> *)visibleUUIDs;
 @end
 
 @interface ERShortcutController () <UITableViewDataSource, UITableViewDelegate>
@@ -580,12 +582,12 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     return cell;
 }
 
-@end
-
 // 主页纯展示，所以这里故意不做任何事 —— 保留方法只为满足 UITableViewDelegate
 // 的可选协议，行本身已经把 userInteractionEnabled 关掉了。
 - (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(__unused NSIndexPath *)indexPath {
 }
+
+@end
 
 
 @implementation ERShortcutAddController
