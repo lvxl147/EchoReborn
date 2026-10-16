@@ -18647,6 +18647,9 @@ static void ERActClsProbe(void) {
                 ERAddDiagSet(@"P.Helper.BPH", ERLinkDumpMethods(NSClassFromString(@"BProcessHandle"), YES, @[@"rocess", @"urrent", @"PID"]));
                 ERAddDiagSet(@"P.Helper.BSSet", ERLinkDumpMethods(NSClassFromString(@"BSSettings"), NO, @[@"nit", @"bject", @"ettings"]));
                 ERAddDiagSet(@"P.Helper.BSMS", ERLinkDumpMethods(NSClassFromString(@"BSMutableSettings"), NO, @[@"nit", @"bject", @"ettings"]));
+                // 1.1.9-41：BSProcessHandle 类方法表（构造 origin 用）
+                ERAddDiagSet(@"P.Helper.BSPH", ERLinkDumpMethods(NSClassFromString(@"BSProcessHandle"), YES, @[@"rocess", @"urrent", @"PID", @"nit"]));
+                ERAddDiagSet(@"P.Helper.BSPH.I", ERLinkDumpMethods(NSClassFromString(@"BSProcessHandle"), NO, @[@"nit", @"rocess"]));
             } @catch (__unused NSException *exception) {
                 ERAddDiagSet(@"P.ActCls.Stage", @"EXC");
             }
@@ -26602,12 +26605,18 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                             ([itemCls alloc], scInit, shortcutType, name, (id)nil, (id)nil, (id)nil);
                     }
                     // info = BSMutableSettings{ shortcutItem: scItem }
+                    // 1.1.9-41：BSSettings 的写入方法实际为 setObject:forSetting:（P.Helper.BSMS）
                     id info = nil;
                     Class bsSetCls = NSClassFromString(@"BSMutableSettings");
                     if (bsSetCls) info = [[bsSetCls alloc] init];
+                    SEL setSetting = NSSelectorFromString(@"setObject:forSetting:");
                     SEL setObj = NSSelectorFromString(@"setObject:forKey:");
-                    if (info && scItem && [info respondsToSelector:setObj])
-                        ((void (*)(id, SEL, id, id))objc_msgSend)(info, setObj, scItem, @"shortcutItem");
+                    if (info && scItem) {
+                        if ([info respondsToSelector:setSetting])
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(info, setSetting, scItem, @"shortcutItem");
+                        else if ([info respondsToSelector:setObj])
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(info, setObj, scItem, @"shortcutItem");
+                    }
                     // action = UIHandleApplicationShortcutAction，初始化选择器运行时探测
                     id action = nil;
                     Class actCls = NSClassFromString(@"UIHandleApplicationShortcutAction");
@@ -26635,15 +26644,18 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                     if (!actSetCls) actSetCls = NSClassFromString(@"BSMutableSettings");
                     if (actSetCls) {
                         settings = [[actSetCls alloc] init];
-                        SEL setBool = NSSelectorFromString(@"setObject:forKey:");
-                        if (settings && [settings respondsToSelector:setObj])
+                        if (settings && [settings respondsToSelector:setSetting])
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setSetting, @YES, @"fromTrustedSystemServiceRequest");
+                        else if (settings && [settings respondsToSelector:setObj])
                             ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setObj, @YES, @"fromTrustedSystemServiceRequest");
                     }
-                    // origin = 当前进程（SpringBoard）的 BProcessHandle
+                    // origin = 当前进程（SpringBoard）的 BSProcessHandle
+                    //（1.1.9-41：BProcessHandle 类不存在，JT 日志里实为 BSProcessHandle）
                     id origin = nil;
-                    Class phCls = NSClassFromString(@"BProcessHandle");
+                    Class phCls = NSClassFromString(@"BSProcessHandle");
+                    if (!phCls) phCls = NSClassFromString(@"BProcessHandle");
                     if (phCls) {
-                        for (NSString *cand in @[@"currentProcessHandle", @"processHandle"]) {
+                        for (NSString *cand in @[@"currentProcessHandle", @"processHandle", @"mainProcessHandle"]) {
                             SEL cSel = NSSelectorFromString(cand);
                             if ([phCls respondsToSelector:cSel]) {
                                 origin = ((id (*)(id, SEL))objc_msgSend)(phCls, cSel);
