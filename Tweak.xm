@@ -18450,6 +18450,57 @@ static void ERAddDiagSet(NSString *key, id value) {
     } @catch (__unused NSException *exception) {}
 }
 
+// 1.1.9-23：运行时方法表探测 —— iOS 17 打开 App 的 FBS/SB 接口全变了，
+// 直接把候选类的方法名（按关键字过滤）导出到诊断域，确定真实可用 selector。
+static NSString *ERLinkDumpMethods(Class cls, BOOL classMethods, NSArray *needles) {
+    if (!cls) return @"cls-nil";
+    unsigned int n = 0;
+    Method *list = class_copyMethodList(classMethods ? object_getClass(cls) : cls, &n);
+    if (!list) return @"no-list";
+    NSMutableArray *out = [NSMutableArray array];
+    for (unsigned int i = 0; i < n; i++) {
+        NSString *name = NSStringFromSelector(method_getName(list[i]));
+        for (NSString *needle in needles) {
+            if ([name rangeOfString:needle options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                [out addObject:name];
+                break;
+            }
+        }
+    }
+    free(list);
+    return out.count ? [out componentsJoinedByString:@","] : @"no-hit";
+}
+
+static void ERLinkProbeAPIs(void) {
+    @try {
+        NSArray *openNeedles = @[@"penApplication", @"penUntrusted", @"penSystemApplication"];
+        NSArray *actNeedles = @[@"ctivateApplication", @"aunchApplication", @"aunchApp", @"penApplication"];
+        Class svc = NSClassFromString(@"FBSOpenApplicationService");
+        Class sys = NSClassFromString(@"FBSSystemService");
+        Class ui = NSClassFromString(@"SBUIController");
+        Class req = NSClassFromString(@"FBSOpenApplicationRequest");
+        Class appCtl = NSClassFromString(@"SBApplicationController");
+        Class launchSvc = NSClassFromString(@"SBSLaunchApplicationService");
+        ERAddDiagSet(@"P.Svc.I", ERLinkDumpMethods(svc, NO, openNeedles));
+        ERAddDiagSet(@"P.Svc.C", ERLinkDumpMethods(svc, YES, openNeedles));
+        ERAddDiagSet(@"P.Sys.I", ERLinkDumpMethods(sys, NO, openNeedles));
+        ERAddDiagSet(@"P.Sys.C", ERLinkDumpMethods(sys, YES, openNeedles));
+        ERAddDiagSet(@"P.UI.I", ERLinkDumpMethods(ui, NO, actNeedles));
+        ERAddDiagSet(@"P.UI.C", ERLinkDumpMethods(ui, YES, actNeedles));
+        ERAddDiagSet(@"P.Req", [NSString stringWithFormat:@"cls=%@ I:%@ C:%@",
+            req ? @"1" : @"0",
+            ERLinkDumpMethods(req, NO, @[@"nit", @"equest"]),
+            ERLinkDumpMethods(req, YES, @[@"nit", @"equest", @"ith"])]);
+        ERAddDiagSet(@"P.AppCtl.I", ERLinkDumpMethods(appCtl, NO, @[@"applicationWithBundle", @"applicationMatching"]));
+        ERAddDiagSet(@"P.LaunchSvc", [NSString stringWithFormat:@"cls=%@ I:%@ C:%@",
+            launchSvc ? @"1" : @"0",
+            ERLinkDumpMethods(launchSvc, NO, openNeedles),
+            ERLinkDumpMethods(launchSvc, YES, openNeedles)]);
+        // SBUIController 上的快捷菜单/shortcut 相关方法也导一份（appShortcut 备用路径）
+        ERAddDiagSet(@"P.UI.Shortcut", ERLinkDumpMethods(ui, NO, @[@"hortcut"]));
+    } @catch (__unused NSException *exception) {}
+}
+
 - (void)erAddControlSheetDidSelectIdentifierCore:(NSString *)identifier fromSheet:(UIViewController *)sheet {
     ERAddDiagSet([@"Add." stringByAppendingString:identifier ?: @"nil"],
                  [NSString stringWithFormat:@"tap %@ dm=%d", [NSDate date], (int)ERShortcutSlotIndexFromIdentifier(identifier)]);
@@ -30804,6 +30855,7 @@ static void ERBootLog(NSString *tag) {
 static void ERAppShortcutDiagSet(NSString *step, id value);
 %ctor {
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
+    ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
