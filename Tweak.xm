@@ -18642,6 +18642,11 @@ static void ERActClsProbe(void) {
                     ERAddDiagSet(@"P.Svc1.C.Full", ERLinkDumpMethods(svc1, YES, @[@""]));
                 }
                 ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"done classes=%d", total]);
+                // 1.1.9-39：直达链路辅助类方法表（若 .tr 尝试失败，据此修正构件构造）
+                ERAddDiagSet(@"P.Helper.Act", ERLinkDumpMethods(NSClassFromString(@"UIHandleApplicationShortcutAction"), NO, @[@""]));
+                ERAddDiagSet(@"P.Helper.BPH", ERLinkDumpMethods(NSClassFromString(@"BProcessHandle"), YES, @[@"rocess", @"urrent", @"PID"]));
+                ERAddDiagSet(@"P.Helper.BSSet", ERLinkDumpMethods(NSClassFromString(@"BSSettings"), NO, @[@"nit", @"bject", @"ettings"]));
+                ERAddDiagSet(@"P.Helper.BSMS", ERLinkDumpMethods(NSClassFromString(@"BSMutableSettings"), NO, @[@"nit", @"bject", @"ettings"]));
             } @catch (__unused NSException *exception) {
                 ERAddDiagSet(@"P.ActCls.Stage", @"EXC");
             }
@@ -26575,6 +26580,102 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
+            }
+            // 1.1.9-39 最优先层：Actra 同款直达 —— 直接调 SBMainWorkspace 的
+            // _handleTrustedOpenRequestForApplication:options:activationSettings:origin:withResult:。
+            // -36 JT 实锤：Actra 跳米家即走此入口，opts 为
+            // {__Actions=[UIHandleApplicationShortcutAction(info=BSSettings{shortcutItem=…})],
+            //  __ActivateSuspended=0, __LaunchOrigin=SBSLaunchOriginShortcutItem, __PromptUnlockDevice=1}。
+            // 走系统服务层会被清洗 opts（我们磁贴的 QQ 跳转到达 MainWS 时 opts 已成 {}），
+            // 必须进程内直调。各构件逐个记 try/sent，任何一环缺类回退后续层。
+            @try {
+                Class wsCls = NSClassFromString(@"SBMainWorkspace");
+                SEL trustedSel = NSSelectorFromString(@"_handleTrustedOpenRequestForApplication:options:activationSettings:origin:withResult:");
+                id ws = ([wsCls respondsToSelector:@selector(sharedInstance)])
+                    ? ((id (*)(id, SEL))objc_msgSend)(wsCls, @selector(sharedInstance)) : nil;
+                if (ws && [ws respondsToSelector:trustedSel]) {
+                    Class itemCls = NSClassFromString(@"SBSApplicationShortcutItem");
+                    SEL scInit = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
+                    id scItem = nil;
+                    if (itemCls && [itemCls instancesRespondToSelector:scInit]) {
+                        scItem = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)
+                            ([itemCls alloc], scInit, shortcutType, name, (id)nil, (id)nil, (id)nil);
+                    }
+                    // info = BSMutableSettings{ shortcutItem: scItem }
+                    id info = nil;
+                    Class bsSetCls = NSClassFromString(@"BSMutableSettings");
+                    if (bsSetCls) info = [[bsSetCls alloc] init];
+                    SEL setObj = NSSelectorFromString(@"setObject:forKey:");
+                    if (info && scItem && [info respondsToSelector:setObj])
+                        ((void (*)(id, SEL, id, id))objc_msgSend)(info, setObj, scItem, @"shortcutItem");
+                    // action = UIHandleApplicationShortcutAction，初始化选择器运行时探测
+                    id action = nil;
+                    Class actCls = NSClassFromString(@"UIHandleApplicationShortcutAction");
+                    NSString *actHow = @"no-cls";
+                    if (actCls) {
+                        SEL initInfo = NSSelectorFromString(@"initWithInfo:");
+                        if ([actCls instancesRespondToSelector:initInfo]) {
+                            action = ((id (*)(id, SEL, id))objc_msgSend)([actCls alloc], initInfo, info);
+                            actHow = @"initWithInfo:";
+                        }
+                        if (!action) {
+                            action = [[actCls alloc] init];
+                            SEL setInfo = NSSelectorFromString(@"setInfo:");
+                            if (action && [action respondsToSelector:setInfo]) {
+                                ((void (*)(id, SEL, id))objc_msgSend)(action, setInfo, info);
+                                actHow = @"init+setInfo:";
+                            } else if (action && info) {
+                                actHow = @"init(no-info)";
+                            }
+                        }
+                    }
+                    // settings = SBActivationSettings（BSMutableSettings 子类），塞信任标记
+                    id settings = nil;
+                    Class actSetCls = NSClassFromString(@"SBActivationSettings");
+                    if (!actSetCls) actSetCls = NSClassFromString(@"BSMutableSettings");
+                    if (actSetCls) {
+                        settings = [[actSetCls alloc] init];
+                        SEL setBool = NSSelectorFromString(@"setObject:forKey:");
+                        if (settings && [settings respondsToSelector:setObj])
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setObj, @YES, @"fromTrustedSystemServiceRequest");
+                    }
+                    // origin = 当前进程（SpringBoard）的 BProcessHandle
+                    id origin = nil;
+                    Class phCls = NSClassFromString(@"BProcessHandle");
+                    if (phCls) {
+                        for (NSString *cand in @[@"currentProcessHandle", @"processHandle"]) {
+                            SEL cSel = NSSelectorFromString(cand);
+                            if ([phCls respondsToSelector:cSel]) {
+                                origin = ((id (*)(id, SEL))objc_msgSend)(phCls, cSel);
+                                if (origin) break;
+                            }
+                        }
+                        if (!origin) {
+                            SEL pidSel = NSSelectorFromString(@"processHandleForPID:");
+                            if ([phCls respondsToSelector:pidSel])
+                                origin = ((id (*)(id, SEL, int))objc_msgSend)(phCls, pidSel,
+                                            [[NSProcessInfo processInfo] processIdentifier]);
+                        }
+                    }
+                    ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
+                                 [NSString stringWithFormat:@"parts item=%d info=%d action=%@(%@) settings=%@ origin=%@",
+                                  scItem != nil, info != nil, action != nil, actHow, settings != nil, origin != nil]);
+                    if (scItem && action && settings && origin) {
+                        NSDictionary *trOpts = @{@"__Actions": @[action],
+                                                 @"__ActivateSuspended": @0,
+                                                 @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
+                                                 @"__PromptUnlockDevice": @1};
+                        ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"try");
+                        ((void (*)(id, SEL, id, id, id, id, id))objc_msgSend)
+                            (ws, trustedSel, entry[@"bundleId"], trOpts, settings, origin, (id)nil);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"sent");
+                        return YES;
+                    }
+                } else {
+                    ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"no-ws-or-sel");
+                }
+            } @catch (NSException *tex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".tr"], [NSString stringWithFormat:@"EXC %@", tex.name]);
             }
             // 1.1.9-29 第二层：iOS 17 的桌面快捷菜单激活接口（Actra 同款）——
             // activateShortcutForApplication:type:userInfo:completion: 直接吃
