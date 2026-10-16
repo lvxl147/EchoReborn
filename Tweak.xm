@@ -26208,30 +26208,62 @@ static BOOL ERRunLinkOpenURL(NSURL *url) {
     }
 }
 
-static BOOL ERRunLinkOpenApp(NSString *bundleId) {
+// 1.1.9-21：统一走 FBSSystemService（openApplication:options:withResultHandler:
+// 直接吃 bundleId 字符串，是各越狱插件验证过的路径）。extraOptions 可携带
+// __ActivateApplicationShortcutItem（快捷方式随启动执行）。
+static BOOL ERRunLinkOpenApp(NSString *bundleId, NSDictionary *extraOptions) {
     if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) return NO;
-    Class serviceClass = NSClassFromString(@"FBSOpenApplicationService");
-    if (!serviceClass) { ERLogInfo(@"link-run: FBSOpenApplicationService absent"); return NO; }
-    @try {
-        id service = ((id (*)(id, SEL))objc_msgSend)(serviceClass, @selector(sharedService));
-        SEL openSelector = NSSelectorFromString(@"openApplication:options:clientPort:withResultHandler:");
-        if (!service || ![service respondsToSelector:openSelector]) {
-            ERLogInfo(@"link-run: FBSOpenApplicationService selector missing");
-            ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"service=%d sel=%d", service != nil, service ? [service respondsToSelector:openSelector] : -1]);
-            return NO;
+    // 主路径：FBSSystemService
+    Class sysClass = NSClassFromString(@"FBSSystemService");
+    if (sysClass) {
+        @try {
+            id service = ((id (*)(id, SEL))objc_msgSend)(sysClass, @selector(sharedService));
+            SEL openSelector = NSSelectorFromString(@"openApplication:options:withResultHandler:");
+            if (service && [service respondsToSelector:openSelector]) {
+                void (^handler)(NSError *) = ^(NSError *error) {
+                    if (error) {
+                        ERLogInfo(@"link-run: openApp %@ failed %@", bundleId, error);
+                        ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"sys-err %@", error.localizedDescription]);
+                    }
+                };
+                ((void (*)(id, SEL, id, id, void (^)(NSError *)))objc_msgSend)
+                    (service, openSelector, bundleId, extraOptions ?: @{}, handler);
+                ERAddDiagSet(@"FBS", @"sys-service dispatched");
+                return YES;
+            }
+            ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"sys service=%d sel=%d", service != nil, service ? [service respondsToSelector:openSelector] : -1]);
+        } @catch (NSException *exception) {
+            ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"sys EXC %@", exception.name]);
         }
-        void (^handler)(NSError *) = ^(NSError *error) {
-            if (error) ERLogInfo(@"link-run: openApp %@ failed %@", bundleId, error);
-        };
-        Class optionsClass = NSClassFromString(@"FBSOpenApplicationOptions");
-        id options = optionsClass ? ((id (*)(id, SEL))objc_msgSend)(optionsClass, @selector(options)) : nil;
-        ((void (*)(id, SEL, id, id, id, void (^)(NSError *)))objc_msgSend)
-            (service, openSelector, bundleId, options, (id)nil, handler);
-        return YES;
-    } @catch (NSException *exception) {
-        ERLogInfo(@"link-run: openApp EXC %@ -- %@", exception.name, exception.reason);
-        return NO;
+    } else {
+        ERAddDiagSet(@"FBS", @"FBSSystemService absent");
     }
+    // 兜底：FBSOpenApplicationService + FBSOpenApplicationRequest（第一个参数必须是请求对象）
+    Class serviceClass = NSClassFromString(@"FBSOpenApplicationService");
+    Class requestClass = NSClassFromString(@"FBSOpenApplicationRequest");
+    if (serviceClass && requestClass) {
+        @try {
+            id service = ((id (*)(id, SEL))objc_msgSend)(serviceClass, @selector(sharedService));
+            SEL requestSel = NSSelectorFromString(@"requestWithApplicationIdentifier:");
+            id request = requestClass && [requestClass respondsToSelector:requestSel]
+                ? ((id (*)(id, SEL, id))objc_msgSend)(requestClass, requestSel, bundleId) : nil;
+            SEL openSelector = NSSelectorFromString(@"openApplication:options:clientPort:withResultHandler:");
+            if (service && request && [service respondsToSelector:openSelector]) {
+                Class optionsClass = NSClassFromString(@"FBSOpenApplicationOptions");
+                id options = optionsClass ? ((id (*)(id, SEL, id))objc_msgSend)(optionsClass, @selector(optionsWithDictionary:), extraOptions ?: @{}) : nil;
+                ((void (*)(id, SEL, id, id, id, void (^)(NSError *)))objc_msgSend)
+                    (service, openSelector, request, options, (id)nil, ^(NSError *error) {
+                        if (error) ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"fbs-err %@", error.localizedDescription]);
+                    });
+                ERAddDiagSet(@"FBS", @"fbs-request dispatched");
+                return YES;
+            }
+            ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"fbs service=%d req=%d sel=%d", service != nil, request != nil, service ? [service respondsToSelector:openSelector] : -1]);
+        } @catch (NSException *exception) {
+            ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"fbs EXC %@", exception.name]);
+        }
+    }
+    return NO;
 }
 
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
@@ -26248,15 +26280,14 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
         return ok;
     }
     if ([type isEqualToString:@"app"]) {
-        BOOL ok = ERRunLinkOpenApp(entry[@"bundleId"]);
+        BOOL ok = ERRunLinkOpenApp(entry[@"bundleId"], nil);
         ERAddDiagSet([diagKey stringByAppendingString:@".app"], ok ? @"fbs YES" : @"fbs NO");
         return ok;
     }
     if ([type isEqualToString:@"appShortcut"]) {
         @try {
             Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
-            Class controllerClass = NSClassFromString(@"SBIconController");
-            if (!itemClass || !controllerClass) return NO;
+            if (!itemClass) { ERAddDiagSet([diagKey stringByAppendingString:@".sc"], @"no itemClass"); return NO; }
             id item = [[itemClass alloc] init];
             // SBSApplicationShortcutItem 继承 UIApplicationShortcutItem，用它的
             // 初始化器最稳；@try 兜底退化成逐属性赋值。
@@ -26271,18 +26302,15 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                     [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"");
                 ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setLocalizedTitle:), name);
             }
-            id controller = ((id (*)(id, SEL))objc_msgSend)(controllerClass, @selector(sharedInstance));
-            SEL activate = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
-            if (!item || !controller || ![controller respondsToSelector:activate]) {
-                ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
-                             [NSString stringWithFormat:@"item=%d controller=%d sel=%d",
-                              item != nil, controller != nil, controller ? [controller respondsToSelector:activate] : -1]);
-                return NO;
-            }
-            ((void (*)(id, SEL, id, id, id))objc_msgSend)
-                (controller, activate, item, entry[@"bundleId"], (id)nil);
-            ERAddDiagSet([diagKey stringByAppendingString:@".sc"], @"activated");
-            return YES;
+            // 1.1.9-21：iOS 17 SBIconController 不响应 activateShortcut:...（sel=0）。
+            // 改为把快捷项塞进启动 options（__ActivateApplicationShortcutItem），
+            // 随应用一起启动 —— 与 SpringBoard 桌面快捷菜单同一机制。
+            NSString *shortcutType = [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"";
+            BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"],
+                                             @{@"__ActivateApplicationShortcutItem": item});
+            ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
+                         [NSString stringWithFormat:@"item=%d type=%@ launched=%d", item != nil, shortcutType, launched]);
+            return launched;
         } @catch (NSException *exception) {
             ERLogInfo(@"link-run: appShortcut EXC %@ -- %@", exception.name, exception.reason);
             return NO;
