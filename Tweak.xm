@@ -18588,8 +18588,10 @@ static void ERActClsProbe(void) {
                     @autoreleasepool {
                         Class cls = (Class)obj;
                         NSString *name = candNames[idx];
-                        if ([cls instancesRespondToSelector:newSel]) [newHits addObject:name];
-                        if ([cls instancesRespondToSelector:oldSel]) [oldHits addObject:name];
+                        if ([cls instancesRespondToSelector:newSel] ||
+                            [(id)cls respondsToSelector:newSel]) [newHits addObject:name];
+                        if ([cls instancesRespondToSelector:oldSel] ||
+                            [(id)cls respondsToSelector:oldSel]) [oldHits addObject:name];
                         NSString *m = ERLinkDumpMethods(cls, NO, @[@"hortcut"]);
                         if (![m isEqualToString:@"no-hit"] && ![m isEqualToString:@"no-list"] && ![m isEqualToString:@"cls-nil"])
                             [scMethods addObject:[NSString stringWithFormat:@"%@::%@", name, m]];
@@ -18608,6 +18610,14 @@ static void ERActClsProbe(void) {
                     @"Svc2": @"SBApplicationShortcutStoreManager",
                     @"Svc3": @"SBApplicationShortcutStore",
                     @"Svc4": @"ActraApplicationShortcutApplication",
+                    // 1.1.9-37：-36 JT 证实 Actra 米家跳转最终经 FBSOpenApplicationService
+                    // openApplication:withOptions:completion:，options 里 __Actions 已由
+                    // SB 内部构建（UIHandleApplicationShortcutAction）。Actra 侧引用了
+                    // activateShortcut* 两个 selector 但实例级枚举查无 —— 补类方法级
+                    // 检查 + 导出 Actra 自己的模块方法表看它转调了谁。
+                    @"Svc5": @"ActraShortcutActionModule",
+                    @"Svc6": @"SBMainWorkspace",
+                    @"Svc7": @"SBIconController",
                 };
                 [svcNames enumerateKeysAndObjectsUsingBlock:^(NSString *tag, NSString *clsName, __unused BOOL *innerStop) {
                     Class cls = NSClassFromString(clsName);
