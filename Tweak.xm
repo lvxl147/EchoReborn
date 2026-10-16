@@ -18199,6 +18199,41 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     if ([enabled containsObject:identifier]) return NO;
     NSMutableArray<NSString *> *updated = [enabled mutableCopy] ?: [NSMutableArray array];
     [updated addObject:identifier];
+
+    // 1.1.9-26：与普通模块同款定位 —— 从**当前可见页**开始找空位，写入
+    // ModuleGridOrigins。不再交给原生布局（原生会填到第一个有空位的页，
+    // 导致新磁贴落在前面的页）。
+    NSMutableSet<NSString *> *present = [NSMutableSet setWithArray:updated];
+    [present addObjectsFromArray:[self fixedModuleIdentifiers]];
+    UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
+    for (UIViewController *module in ERCollectModuleControllers(overlay)) {
+        NSString *moduleIdentifier = ERModuleIdentifier(module);
+        if (moduleIdentifier.length) [present addObject:moduleIdentifier];
+    }
+    NSMutableDictionary<NSString *, NSValue *> *layout = [NSMutableDictionary dictionary];
+    for (NSString *existing in gERNativeLayoutRects) {
+        if (![present containsObject:existing]) continue;
+        CCUILayoutRect rect = {};
+        [gERNativeLayoutRects[existing] getValue:&rect];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(existing);
+        if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
+        NSArray<NSNumber *> *customSize = gERCustomSizes[existing];
+        if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
+        layout[existing] = [NSValue value:&rect withObjCType:@encode(CCUILayoutRect)];
+    }
+    CCUILayoutPoint destination = {0, 0};
+    NSUInteger startPage = overlay ? ERDerivedVisiblePageForOverlay(overlay) : MIN(gERCurrentPage, kERMaxPages - 1);
+    if (ERGuaranteedPagedSlot(identifier, (CCUILayoutSize){1, 1}, startPage, layout, &destination)) {
+        [gERCustomSizes removeObjectForKey:identifier];
+        gERCustomOrigins[identifier] = @[@(destination.x), @(destination.y)];
+        CFPreferencesSetAppValue(CFSTR("ModuleGridOrigins"), (__bridge CFPropertyListRef)[gERCustomOrigins copy], kERPrefsDomain);
+        CFPreferencesSetAppValue(CFSTR("ModuleGridSizes"), (__bridge CFPropertyListRef)[gERCustomSizes copy], kERPrefsDomain);
+        ERAddDiagSet(@"SlotPlace", [NSString stringWithFormat:@"%@ p%ld (%ld,%ld) start=%ld",
+                     identifier, (long)(destination.y / kERMinimumGridRows), (long)destination.x, (long)destination.y, (long)startPage]);
+    } else {
+        ERAddDiagSet(@"SlotPlace", [NSString stringWithFormat:@"%@ no-slot start=%ld", identifier, (long)startPage]);
+    }
+
     [self saveEnabledModuleIdentifiers:updated];
     ERLogInfo(@"add: slot %ld enabled as a real Control Center module (native layout)", (long)slot);
     ERAddDiagSet([@"SlotSaved." stringByAppendingString:identifier ?: @"nil"],
@@ -26353,30 +26388,72 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
     }
     if ([type isEqualToString:@"appShortcut"]) {
         @try {
+            NSString *shortcutType = [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"";
+            // 1.1.9-26 第一层：读 App 磁盘 Info.plist 里注册的快捷方式条目，
+            // userInfo 里若带 URL（很多系统 App 的深链就在这）直接 openURL ——
+            // 比 SpringBoard 启动参数可靠（上一版 __ActivateApplicationShortcutItem
+            // 被无视，只打开了 App 本体）。
+            NSURL *deepURL = nil;
+            @try {
+                id proxy = nil;
+                Class lsClass = NSClassFromString(@"LSApplicationProxy");
+                SEL proxySel = NSSelectorFromString(@"applicationProxyForIdentifier:");
+                if (lsClass && [lsClass respondsToSelector:proxySel])
+                    proxy = ((id (*)(id, SEL, id))objc_msgSend)(lsClass, proxySel, entry[@"bundleId"]);
+                NSURL *bundleURL = proxy ? ((NSURL *(*)(id, SEL))objc_msgSend)(proxy, @selector(bundleURL)) : nil;
+                if (bundleURL) {
+                    CFDictionaryRef infoRef = CFBundleCopyInfoDictionaryForURL((__bridge CFURLRef)bundleURL);
+                    NSDictionary *info = (__bridge_transfer NSDictionary *)infoRef;
+                    NSArray *items = [info isKindOfClass:[NSDictionary class]] ? info[@"UIApplicationShortcutItems"] : nil;
+                    for (NSDictionary *it in items) {
+                        if (![it isKindOfClass:[NSDictionary class]]) continue;
+                        if (![it[@"UIApplicationShortcutItemType"] isKindOfClass:[NSString class]]) continue;
+                        if (![it[@"UIApplicationShortcutItemType"] isEqualToString:shortcutType]) continue;
+                        NSDictionary *ui = [it[@"UIApplicationShortcutItemUserInfo"] isKindOfClass:[NSDictionary class]]
+                            ? it[@"UIApplicationShortcutItemUserInfo"] : nil;
+                        ERAddDiagSet([diagKey stringByAppendingString:@".ui"], ui ? [NSString stringWithFormat:@"%@", ui] : @"nil");
+                        for (NSString *k in ui) {
+                            id v = ui[k];
+                            if ([v isKindOfClass:[NSURL class]]) { deepURL = v; break; }
+                            if ([v isKindOfClass:[NSString class]] && ([v containsString:@"://"])) {
+                                NSURL *u = [NSURL URLWithString:v];
+                                if (u) { deepURL = u; break; }
+                            }
+                        }
+                        if (deepURL) break;
+                    }
+                    if (!items) ERAddDiagSet([diagKey stringByAppendingString:@".ui"], @"no-items");
+                }
+            } @catch (NSException *iex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".ui"], [NSString stringWithFormat:@"EXC %@", iex.name]);
+            }
+            if (deepURL) {
+                BOOL ok = ERRunLinkOpenURL(deepURL);
+                ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
+                             [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
+                return ok;
+            }
+            // 1.1.9-26 第二层：options 用 FBSOpenApplicationOptions 正式构造
+            //（之前传裸 NSDictionary 可能被序列化丢弃）。
             Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
             if (!itemClass) { ERAddDiagSet([diagKey stringByAppendingString:@".sc"], @"no itemClass"); return NO; }
             id item = [[itemClass alloc] init];
-            // SBSApplicationShortcutItem 继承 UIApplicationShortcutItem，用它的
-            // 初始化器最稳；@try 兜底退化成逐属性赋值。
             SEL shortcutInit = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
             if ([itemClass instancesRespondToSelector:shortcutInit]) {
                 item = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)
-                    ([itemClass alloc], shortcutInit,
-                     [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"",
-                     name, nil, nil, nil);
+                    ([itemClass alloc], shortcutInit, shortcutType, name, nil, nil, nil);
             } else {
-                ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setType:),
-                    [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"");
+                ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setType:), shortcutType);
                 ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setLocalizedTitle:), name);
             }
-            // 1.1.9-21：iOS 17 SBIconController 不响应 activateShortcut:...（sel=0）。
-            // 改为把快捷项塞进启动 options（__ActivateApplicationShortcutItem），
-            // 随应用一起启动 —— 与 SpringBoard 桌面快捷菜单同一机制。
-            NSString *shortcutType = [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"";
-            BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"],
-                                             @{@"__ActivateApplicationShortcutItem": item});
+            NSDictionary *scOpts = @{@"__ActivateApplicationShortcutItem": item};
+            Class optionsClass = NSClassFromString(@"FBSOpenApplicationOptions");
+            SEL optsSel = NSSelectorFromString(@"optionsWithDictionary:");
+            id properOpts = (optionsClass && [optionsClass respondsToSelector:optsSel])
+                ? ((id (*)(id, SEL, id))objc_msgSend)(optionsClass, optsSel, scOpts) : scOpts;
+            BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"], properOpts);
             ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
-                         [NSString stringWithFormat:@"item=%d type=%@ launched=%d", item != nil, shortcutType, launched]);
+                         [NSString stringWithFormat:@"item=%d type=%@ opts=%d launched=%d", item != nil, shortcutType, properOpts != nil, launched]);
             return launched;
         } @catch (NSException *exception) {
             ERLogInfo(@"link-run: appShortcut EXC %@ -- %@", exception.name, exception.reason);
