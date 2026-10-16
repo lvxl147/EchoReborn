@@ -26658,7 +26658,7 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         }
                     }
                     ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
-                                 [NSString stringWithFormat:@"parts item=%d info=%d action=%@(%@) settings=%@ origin=%@",
+                                 [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d origin=%d",
                                   scItem != nil, info != nil, action != nil, actHow, settings != nil, origin != nil]);
                     if (scItem && action && settings && origin) {
                         NSDictionary *trOpts = @{@"__Actions": @[action],
