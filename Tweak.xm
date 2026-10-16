@@ -26424,6 +26424,37 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                     }
                     if (!items) ERAddDiagSet([diagKey stringByAppendingString:@".ui"], @"no-items");
                 }
+                // 1.1.9-27：系统 App 的快捷方式不在磁盘 Info.plist，在
+                // LSApplicationProxy 的 static/dynamicApplicationShortcutItems 里。
+                @try {
+                    if (!deepURL && proxy) {
+                        SEL staticSel = NSSelectorFromString(@"staticApplicationShortcutItems");
+                        SEL dynSel = NSSelectorFromString(@"dynamicApplicationShortcutItems");
+                        for (SEL srcSel in @[staticSel, dynSel]) {
+                            if (![proxy respondsToSelector:srcSel]) continue;
+                            NSArray *srcItems = ((NSArray *(*)(id, SEL))objc_msgSend)(proxy, srcSel);
+                            for (id sc in srcItems) {
+                                NSString *scType = [sc respondsToSelector:@selector(type)] ? ((NSString *(*)(id, SEL))objc_msgSend)(sc, @selector(type)) : nil;
+                                if (![scType isKindOfClass:[NSString class]] || ![scType isEqualToString:shortcutType]) continue;
+                                NSDictionary *ui = [sc respondsToSelector:@selector(userInfo)] ? ((NSDictionary *(*)(id, SEL))objc_msgSend)(sc, @selector(userInfo)) : nil;
+                                ERAddDiagSet([diagKey stringByAppendingString:@".ui"],
+                                             [NSString stringWithFormat:@"ls(%@) %@", (srcSel == staticSel ? @"static" : @"dynamic"), ui ?: @"nil"]);
+                                for (NSString *k in ui) {
+                                    id v = ui[k];
+                                    if ([v isKindOfClass:[NSURL class]]) { deepURL = v; break; }
+                                    if ([v isKindOfClass:[NSString class]] && ([v containsString:@"://"])) {
+                                        NSURL *u = [NSURL URLWithString:v];
+                                        if (u) { deepURL = u; break; }
+                                    }
+                                }
+                                if (deepURL) break;
+                            }
+                            if (deepURL) break;
+                        }
+                    }
+                } @catch (NSException *lex) {
+                    ERAddDiagSet([diagKey stringByAppendingString:@".ui"], [NSString stringWithFormat:@"ls-EXC %@", lex.name]);
+                }
             } @catch (NSException *iex) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".ui"], [NSString stringWithFormat:@"EXC %@", iex.name]);
             }
@@ -26447,11 +26478,10 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setLocalizedTitle:), name);
             }
             NSDictionary *scOpts = @{@"__ActivateApplicationShortcutItem": item};
-            Class optionsClass = NSClassFromString(@"FBSOpenApplicationOptions");
-            SEL optsSel = NSSelectorFromString(@"optionsWithDictionary:");
-            id properOpts = (optionsClass && [optionsClass respondsToSelector:optsSel])
-                ? ((id (*)(id, SEL, id))objc_msgSend)(optionsClass, optsSel, scOpts) : scOpts;
-            BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"], properOpts);
+            // 1.1.9-27：B 路径（FBSSystemService）只吃 NSDictionary —— 传
+            // FBSOpenApplicationOptions 对象会 NSInvalidArgumentException。
+            // 裸字典直接走启动链（-25 已验证 B-try B-sent 可开 App）。
+            BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"], scOpts);
             ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
                          [NSString stringWithFormat:@"item=%d type=%@ opts=%d launched=%d", item != nil, shortcutType, properOpts != nil, launched]);
             return launched;
