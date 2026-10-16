@@ -18538,43 +18538,61 @@ static void ERLinkProbeAPIs(void) {
 
 // 1.1.9-30：全类枚举探测 —— both-sel-missing 说明 activateShortcutForApplication:
 // type:userInfo:completion: 不在 SBIconController/SBUIController 上（Actra 可能自己
-// 挂了分类）。遍历 SpringBoard 全部类：谁实例响应新旧两个 activateShortcut selector、
-// 名字带 Shortcut 的类有哪些、这些类上含 shortcut 字样的实例方法名。
+// 挂了分类）。
+// 1.1.9-31：-30 在 ctor 里同步遍历全部类，Diag.P.* 都写完了、ActCls 一个没有 →
+// 崩在枚举内部、把 SpringBoard 干进安全模式。改为 ctor 后 3 秒、后台队列执行，
+// 分段写 Stage 进度（copy→loop n→dump→done），每段 @autoreleasepool；无论崩在哪
+// 一段 Diag 都能指出位置，且不再影响 SB 启动。
 static void ERActClsProbe(void) {
-    @try {
-        unsigned int count = 0;
-        Class *classes = objc_copyClassList(&count);
-        if (!classes) { ERAddDiagSet(@"P.ActCls", @"no-list"); return; }
-        SEL newSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
-        SEL oldSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
-        NSMutableArray *newHits = [NSMutableArray array];
-        NSMutableArray *oldHits = [NSMutableArray array];
-        NSMutableArray *scNames = [NSMutableArray array];
-        NSMutableArray *scMethods = [NSMutableArray array];
-        for (unsigned int i = 0; i < count; i++) {
-            Class cls = classes[i];
-            const char *nm = class_getName(cls);
-            NSString *name = nm ? [NSString stringWithUTF8String:nm] : @"";
-            if ([cls instancesRespondToSelector:newSel]) [newHits addObject:name];
-            if ([cls instancesRespondToSelector:oldSel]) [oldHits addObject:name];
-            if ([name rangeOfString:@"Shortcut"].location != NSNotFound && scNames.count < 80) {
-                [scNames addObject:name];
-                if (scMethods.count < 80) {
-                    NSString *m = ERLinkDumpMethods(cls, NO, @[@"hortcut"]);
-                    if (![m isEqualToString:@"no-hit"] && ![m isEqualToString:@"no-list"] && ![m isEqualToString:@"cls-nil"])
-                        [scMethods addObject:[NSString stringWithFormat:@"%@::%@", name, m]];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        @autoreleasepool {
+            @try {
+                ERAddDiagSet(@"P.ActCls.Stage", @"copy");
+                int total = objc_getClassList(NULL, 0);
+                if (total <= 0) { ERAddDiagSet(@"P.ActCls.Stage", @"empty"); return; }
+                Class *classes = (Class *)malloc((size_t)total * sizeof(Class));
+                if (!classes) { ERAddDiagSet(@"P.ActCls.Stage", @"no-mem"); return; }
+                objc_getClassList(classes, total);
+                ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"list total=%d", total]);
+                SEL newSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
+                SEL oldSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                NSMutableArray *newHits = [NSMutableArray array];
+                NSMutableArray *oldHits = [NSMutableArray array];
+                NSMutableArray *scNames = [NSMutableArray array];
+                NSMutableArray *scMethods = [NSMutableArray array];
+                for (int i = 0; i < total; i++) {
+                    @autoreleasepool {
+                        Class cls = classes[i];
+                        if (!cls) continue;
+                        const char *nm = class_getName(cls);
+                        NSString *name = nm ? [NSString stringWithUTF8String:nm] : @"";
+                        if ([cls instancesRespondToSelector:newSel]) [newHits addObject:name];
+                        if ([cls instancesRespondToSelector:oldSel]) [oldHits addObject:name];
+                        if ([name rangeOfString:@"Shortcut"].location != NSNotFound && scNames.count < 80) {
+                            [scNames addObject:name];
+                            if (scMethods.count < 80) {
+                                NSString *m = ERLinkDumpMethods(cls, NO, @[@"hortcut"]);
+                                if (![m isEqualToString:@"no-hit"] && ![m isEqualToString:@"no-list"] && ![m isEqualToString:@"cls-nil"])
+                                    [scMethods addObject:[NSString stringWithFormat:@"%@::%@", name, m]];
+                            }
+                        }
+                        if ((i % 4000) == 3999)
+                            ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"loop %d/%d", i + 1, total]);
+                    }
                 }
+                free(classes);
+                ERAddDiagSet(@"P.ActCls.Stage", @"dump");
+                ERAddDiagSet(@"P.ActCls.New", newHits.count ? [newHits componentsJoinedByString:@","] : @"none");
+                ERAddDiagSet(@"P.ActCls.Old", oldHits.count ? [oldHits componentsJoinedByString:@","] : @"none");
+                ERAddDiagSet(@"P.ActCls.Names", [scNames componentsJoinedByString:@","]);
+                ERAddDiagSet(@"P.ActCls.Methods", [scMethods componentsJoinedByString:@" || "]);
+                ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"done classes=%d", total]);
+            } @catch (__unused NSException *exception) {
+                ERAddDiagSet(@"P.ActCls.Stage", @"EXC");
             }
         }
-        free(classes);
-        ERAddDiagSet(@"P.ActCls.New", newHits.count ? [newHits componentsJoinedByString:@","] : @"none");
-        ERAddDiagSet(@"P.ActCls.Old", oldHits.count ? [oldHits componentsJoinedByString:@","] : @"none");
-        ERAddDiagSet(@"P.ActCls.Names", [scNames componentsJoinedByString:@","]);
-        ERAddDiagSet(@"P.ActCls.Methods", [scMethods componentsJoinedByString:@" || "]);
-        ERAddDiagSet(@"P.ActCls.Count", [NSString stringWithFormat:@"classes=%u", count]);
-    } @catch (__unused NSException *exception) {
-        ERAddDiagSet(@"P.ActCls", @"EXC");
-    }
+    });
 }
 
 - (void)erAddControlSheetDidSelectIdentifierCore:(NSString *)identifier fromSheet:(UIViewController *)sheet {
