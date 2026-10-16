@@ -384,12 +384,29 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
     }
     self.ccaUUID = uuid;
     if (self.isLinkEntry) {
+        // 1.1.9-33：按条目类型区分磁贴呈现（仅显示层，设置页不变）。
+        // 副标题：link=一键直达 / appShortcut=快捷跳转 / app=打开应用；
+        // 图标：link 保持现有逻辑（symbol 条目用自带 SF 符号、兜底 link），
+        // appShortcut 固定 bolt.fill、app 固定 square.grid.2x2.fill（尺寸/位置不变）。
+        NSString *entryType = [record[@"type"] isKindOfClass:[NSString class]] ? record[@"type"] : @"";
         NSString *kind = [record[@"iconKind"] isKindOfClass:[NSString class]] ? record[@"iconKind"] : @"";
         NSString *preferred = [record[@"iconValue"] isKindOfClass:[NSString class]] ? record[@"iconValue"] : @"";
         NSString *symbol = ([kind isEqualToString:@"symbol"] && preferred.length && [UIImage systemImageNamed:preferred]) ? preferred : @"link";
+        if ([entryType isEqualToString:@"appShortcut"]) {
+            symbol = @"bolt.fill";
+            self.linkImage = nil;
+        } else if ([entryType isEqualToString:@"app"]) {
+            symbol = @"square.grid.2x2.fill";
+            self.linkImage = nil;
+        }
         self.symbolName = symbol;
+        _runLabel.text = [entryType isEqualToString:@"link"] ? @"一键直达"
+                       : [entryType isEqualToString:@"appShortcut"] ? @"快捷跳转"
+                       : [entryType isEqualToString:@"app"] ? @"打开应用"
+                       : @"点击运行";
     } else {
         self.symbolName = ERShortcutSymbolForRecord(record);
+        _runLabel.text = @"点击运行";
     }
     NSString *name = [record[@"name"] isKindOfClass:[NSString class]] ? record[@"name"] : nil;
     self.nameLabel.text = name;
