@@ -18650,6 +18650,9 @@ static void ERActClsProbe(void) {
                 // 1.1.9-41：BSProcessHandle 类方法表（构造 origin 用）
                 ERAddDiagSet(@"P.Helper.BSPH", ERLinkDumpMethods(NSClassFromString(@"BSProcessHandle"), YES, @[@"rocess", @"urrent", @"PID", @"nit"]));
                 ERAddDiagSet(@"P.Helper.BSPH.I", ERLinkDumpMethods(NSClassFromString(@"BSProcessHandle"), NO, @[@"nit", @"rocess"]));
+                // 1.1.9-43：FBSOpenApplicationOptions 完整方法表（找字典构造器）
+                ERAddDiagSet(@"P.Helper.FBSOpts", ERLinkDumpMethods(NSClassFromString(@"FBSOpenApplicationOptions"), YES, @[@""]));
+                ERAddDiagSet(@"P.Helper.FBSOpts.I", ERLinkDumpMethods(NSClassFromString(@"FBSOpenApplicationOptions"), NO, @[@"nit", @"ictionary"]));
             } @catch (__unused NSException *exception) {
                 ERAddDiagSet(@"P.ActCls.Stage", @"EXC");
             }
@@ -26680,19 +26683,40 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                                  [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d origin=%d",
                                   scItem != nil, info != nil, action != nil, actHow, settings != nil, origin != nil]);
                     if (scItem && settings && origin) {
-                        // 1.1.9-42：优先用旧版键 __ApplicationShortcutItem（直接放
-                        // SBSApplicationShortcutItem；此前用的 __ActivateApplicationShortcutItem
-                        // 是错误键名，被系统清洗成空 opts）。action 对象由 SpringBoard 自建
-                        //（Actra 亦不构造 UIHandleApplicationShortcutAction）。
-                        NSDictionary *trOpts = @{@"__ApplicationShortcutItem": scItem,
-                                                 @"__ActivateSuspended": @0,
-                                                 @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
-                                                 @"__PromptUnlockDevice": @1};
-                        ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"try");
-                        ((void (*)(id, SEL, id, id, id, id, id))objc_msgSend)
-                            (ws, trustedSel, entry[@"bundleId"], trOpts, settings, origin, (id)nil);
-                        ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"sent");
-                        return YES;
+                        NSDictionary *trOptsDict = @{@"__ApplicationShortcutItem": scItem,
+                                                     @"__ActivateSuspended": @0,
+                                                     @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
+                                                     @"__PromptUnlockDevice": @1};
+                        // 1.1.9-43：-42 裸 NSDictionary 直调 trusted 入口 → 点击进安全模式
+                        //（该入口只吃 FBSOpenApplicationOptions 对象）。必须运行时找到字典
+                        // 构造器（optionsWithDictionary:/initWithDictionary:）建出真对象才
+                        // 调用；找不到一律跳过本层，绝不用裸字典。
+                        id trOpts = nil;
+                        Class optsCls = NSClassFromString(@"FBSOpenApplicationOptions");
+                        NSString *optsHow = @"no-cls";
+                        if (optsCls) {
+                            SEL withDict = NSSelectorFromString(@"optionsWithDictionary:");
+                            if ([optsCls respondsToSelector:withDict]) {
+                                trOpts = ((id (*)(id, SEL, id))objc_msgSend)(optsCls, withDict, trOptsDict);
+                                optsHow = @"optionsWithDictionary:";
+                            }
+                            if (!trOpts) {
+                                SEL initDict = NSSelectorFromString(@"initWithDictionary:");
+                                if ([optsCls instancesRespondToSelector:initDict]) {
+                                    trOpts = ((id (*)(id, SEL, id))objc_msgSend)([optsCls alloc], initDict, trOptsDict);
+                                    optsHow = @"initWithDictionary:";
+                                }
+                            }
+                        }
+                        ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
+                                     [NSString stringWithFormat:@"opts=%d(%@)", trOpts != nil, optsHow]);
+                        if (trOpts) {
+                            ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"try");
+                            ((void (*)(id, SEL, id, id, id, id, id))objc_msgSend)
+                                (ws, trustedSel, entry[@"bundleId"], trOpts, settings, origin, (id)nil);
+                            ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"sent");
+                            return YES;
+                        }
                     }
                 } else {
                     ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"no-ws-or-sel");
