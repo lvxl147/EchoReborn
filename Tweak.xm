@@ -18540,9 +18540,11 @@ static void ERLinkProbeAPIs(void) {
 // type:userInfo:completion: 不在 SBIconController/SBUIController 上（Actra 可能自己
 // 挂了分类）。
 // 1.1.9-31：-30 在 ctor 里同步遍历全部类，Diag.P.* 都写完了、ActCls 一个没有 →
-// 崩在枚举内部、把 SpringBoard 干进安全模式。改为 ctor 后 3 秒、后台队列执行，
-// 分段写 Stage 进度（copy→loop n→dump→done），每段 @autoreleasepool；无论崩在哪
-// 一段 Diag 都能指出位置，且不再影响 SB 启动。
+// 崩在枚举内部、把 SpringBoard 干进安全模式。改为 ctor 后 3 秒、后台队列执行。
+// 1.1.9-32：-31 Stage 停在 list total=103460 → 崩在循环内前 4000 类（第一个进度
+// 标记都没写出）。疑 instancesRespondToSelector / class_copyMethodList 踩到异常类。
+// 收缩：第一遍只读 class_getName（绝不碰方法表），每 10000 写进度；只对名字含
+// Shortcut/Icon/Workspace/Activ 的类（几十~几百个）做响应检查与方法扫描。
 static void ERActClsProbe(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
                    dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
@@ -18555,37 +18557,48 @@ static void ERActClsProbe(void) {
                 if (!classes) { ERAddDiagSet(@"P.ActCls.Stage", @"no-mem"); return; }
                 objc_getClassList(classes, total);
                 ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"list total=%d", total]);
-                SEL newSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
-                SEL oldSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
-                NSMutableArray *newHits = [NSMutableArray array];
-                NSMutableArray *oldHits = [NSMutableArray array];
-                NSMutableArray *scNames = [NSMutableArray array];
-                NSMutableArray *scMethods = [NSMutableArray array];
+                NSMutableArray *candNames = [NSMutableArray array];
+                NSMutableArray *candCls = [NSMutableArray array];
                 for (int i = 0; i < total; i++) {
                     @autoreleasepool {
                         Class cls = classes[i];
                         if (!cls) continue;
                         const char *nm = class_getName(cls);
                         NSString *name = nm ? [NSString stringWithUTF8String:nm] : @"";
-                        if ([cls instancesRespondToSelector:newSel]) [newHits addObject:name];
-                        if ([cls instancesRespondToSelector:oldSel]) [oldHits addObject:name];
-                        if ([name rangeOfString:@"Shortcut"].location != NSNotFound && scNames.count < 80) {
-                            [scNames addObject:name];
-                            if (scMethods.count < 80) {
-                                NSString *m = ERLinkDumpMethods(cls, NO, @[@"hortcut"]);
-                                if (![m isEqualToString:@"no-hit"] && ![m isEqualToString:@"no-list"] && ![m isEqualToString:@"cls-nil"])
-                                    [scMethods addObject:[NSString stringWithFormat:@"%@::%@", name, m]];
-                            }
+                        // 只读名字，不做任何方法表操作
+                        if ([name rangeOfString:@"Shortcut"].location != NSNotFound ||
+                            [name rangeOfString:@"IconController"].location != NSNotFound ||
+                            [name rangeOfString:@"Workspace"].location != NSNotFound ||
+                            [name rangeOfString:@"Activat"].location != NSNotFound) {
+                            [candNames addObject:name];
+                            [candCls addObject:cls];
                         }
-                        if ((i % 4000) == 3999)
-                            ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"loop %d/%d", i + 1, total]);
+                        if ((i % 10000) == 9999)
+                            ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"names %d/%d", i + 1, total]);
                     }
                 }
                 free(classes);
+                ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"scan cands=%lu", (unsigned long)candNames.count]);
+                NSMutableArray *newHits = [NSMutableArray array];
+                NSMutableArray *oldHits = [NSMutableArray array];
+                NSMutableArray *scMethods = [NSMutableArray array];
+                SEL newSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
+                SEL oldSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                [candCls enumerateObjectsUsingBlock:^(id obj, NSUInteger idx, BOOL *stop) {
+                    @autoreleasepool {
+                        Class cls = (Class)obj;
+                        NSString *name = candNames[idx];
+                        if ([cls instancesRespondToSelector:newSel]) [newHits addObject:name];
+                        if ([cls instancesRespondToSelector:oldSel]) [oldHits addObject:name];
+                        NSString *m = ERLinkDumpMethods(cls, NO, @[@"hortcut"]);
+                        if (![m isEqualToString:@"no-hit"] && ![m isEqualToString:@"no-list"] && ![m isEqualToString:@"cls-nil"])
+                            [scMethods addObject:[NSString stringWithFormat:@"%@::%@", name, m]];
+                    }
+                }];
                 ERAddDiagSet(@"P.ActCls.Stage", @"dump");
                 ERAddDiagSet(@"P.ActCls.New", newHits.count ? [newHits componentsJoinedByString:@","] : @"none");
                 ERAddDiagSet(@"P.ActCls.Old", oldHits.count ? [oldHits componentsJoinedByString:@","] : @"none");
-                ERAddDiagSet(@"P.ActCls.Names", [scNames componentsJoinedByString:@","]);
+                ERAddDiagSet(@"P.ActCls.Names", [candNames componentsJoinedByString:@","]);
                 ERAddDiagSet(@"P.ActCls.Methods", [scMethods componentsJoinedByString:@" || "]);
                 ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"done classes=%d", total]);
             } @catch (__unused NSException *exception) {
