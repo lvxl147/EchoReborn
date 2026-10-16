@@ -18536,6 +18536,47 @@ static void ERLinkProbeAPIs(void) {
     } @catch (__unused NSException *exception) {}
 }
 
+// 1.1.9-30：全类枚举探测 —— both-sel-missing 说明 activateShortcutForApplication:
+// type:userInfo:completion: 不在 SBIconController/SBUIController 上（Actra 可能自己
+// 挂了分类）。遍历 SpringBoard 全部类：谁实例响应新旧两个 activateShortcut selector、
+// 名字带 Shortcut 的类有哪些、这些类上含 shortcut 字样的实例方法名。
+static void ERActClsProbe(void) {
+    @try {
+        unsigned int count = 0;
+        Class *classes = objc_copyClassList(&count);
+        if (!classes) { ERAddDiagSet(@"P.ActCls", @"no-list"); return; }
+        SEL newSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
+        SEL oldSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+        NSMutableArray *newHits = [NSMutableArray array];
+        NSMutableArray *oldHits = [NSMutableArray array];
+        NSMutableArray *scNames = [NSMutableArray array];
+        NSMutableArray *scMethods = [NSMutableArray array];
+        for (unsigned int i = 0; i < count; i++) {
+            Class cls = classes[i];
+            const char *nm = class_getName(cls);
+            NSString *name = nm ? [NSString stringWithUTF8String:nm] : @"";
+            if ([cls instancesRespondToSelector:newSel]) [newHits addObject:name];
+            if ([cls instancesRespondToSelector:oldSel]) [oldHits addObject:name];
+            if ([name rangeOfString:@"Shortcut"].location != NSNotFound && scNames.count < 80) {
+                [scNames addObject:name];
+                if (scMethods.count < 80) {
+                    NSString *m = ERLinkDumpMethods(cls, NO, @[@"hortcut"]);
+                    if (![m isEqualToString:@"no-hit"] && ![m isEqualToString:@"no-list"] && ![m isEqualToString:@"cls-nil"])
+                        [scMethods addObject:[NSString stringWithFormat:@"%@::%@", name, m]];
+                }
+            }
+        }
+        free(classes);
+        ERAddDiagSet(@"P.ActCls.New", newHits.count ? [newHits componentsJoinedByString:@","] : @"none");
+        ERAddDiagSet(@"P.ActCls.Old", oldHits.count ? [oldHits componentsJoinedByString:@","] : @"none");
+        ERAddDiagSet(@"P.ActCls.Names", [scNames componentsJoinedByString:@","]);
+        ERAddDiagSet(@"P.ActCls.Methods", [scMethods componentsJoinedByString:@" || "]);
+        ERAddDiagSet(@"P.ActCls.Count", [NSString stringWithFormat:@"classes=%u", count]);
+    } @catch (__unused NSException *exception) {
+        ERAddDiagSet(@"P.ActCls", @"EXC");
+    }
+}
+
 - (void)erAddControlSheetDidSelectIdentifierCore:(NSString *)identifier fromSheet:(UIViewController *)sheet {
     ERAddDiagSet([@"Add." stringByAppendingString:identifier ?: @"nil"],
                  [NSString stringWithFormat:@"tap %@ dm=%d", [NSDate date], (int)ERShortcutSlotIndexFromIdentifier(identifier)]);
@@ -26496,6 +26537,41 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
             } @catch (NSException *aex) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".act"], [NSString stringWithFormat:@"EXC %@", aex.name]);
             }
+            // 1.1.9-30 第二层补充：老接口 activateShortcut:withBundleIdentifier:forIconView:
+            // 若在任一控制器上存在，直接拿 SBSApplicationShortcutItem 激活（iOS 16 路径）。
+            @try {
+                SEL oldActSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                Class itemCls0 = NSClassFromString(@"SBSApplicationShortcutItem");
+                id scItem = nil;
+                SEL scInit = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
+                if (itemCls0) {
+                    if ([itemCls0 instancesRespondToSelector:scInit]) {
+                        scItem = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)
+                            ([itemCls0 alloc], scInit, shortcutType, name, (id)nil, (id)nil, (id)nil);
+                    } else {
+                        scItem = [[itemCls0 alloc] init];
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem, @selector(setType:), shortcutType);
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem, @selector(setLocalizedTitle:), name);
+                    }
+                }
+                if (scItem) {
+                    for (NSString *ctlName in @[@"SBIconController", @"SBUIController"]) {
+                        Class ctlClass2 = NSClassFromString(ctlName);
+                        if (!ctlClass2 || ![ctlClass2 instancesRespondToSelector:oldActSel]) continue;
+                        id ctl2 = ((id (*)(id, SEL))objc_msgSend)(ctlClass2, @selector(sharedInstance));
+                        if (!ctl2) continue;
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act"], [NSString stringWithFormat:@"old-try %@", ctlName]);
+                        ((void (*)(id, SEL, id, id, id))objc_msgSend)(ctl2, oldActSel, scItem, entry[@"bundleId"], (id)nil);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act"], [NSString stringWithFormat:@"old-sent %@", ctlName]);
+                        return YES;
+                    }
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"old-sel-missing");
+                } else {
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"no-scitem");
+                }
+            } @catch (NSException *oex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".act"], [NSString stringWithFormat:@"old-EXC %@", oex.name]);
+            }
             // 第三层兜底：只开 App（options 塞 SBSApplicationShortcutItem，
             // B 路径只吃 NSDictionary —— -25 已验证可开 App）。
             Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
@@ -30915,6 +30991,7 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
 %ctor {
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
+    ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
