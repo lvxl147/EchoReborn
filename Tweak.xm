@@ -26695,16 +26695,20 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         Class optsCls = NSClassFromString(@"FBSOpenApplicationOptions");
                         NSString *optsHow = @"no-cls";
                         if (optsCls) {
-                            SEL withDict = NSSelectorFromString(@"optionsWithDictionary:");
-                            if ([optsCls respondsToSelector:withDict]) {
-                                trOpts = ((id (*)(id, SEL, id))objc_msgSend)(optsCls, withDict, trOptsDict);
-                                optsHow = @"optionsWithDictionary:";
-                            }
-                            if (!trOpts) {
+                            // 1.1.9-44：P.Helper.FBSOpts 探测 —— 无类构造器，实例方法有
+                            // setDictionary:（alloc init 后塞字典）；另试 initWithDictionary:。
+                            trOpts = [[optsCls alloc] init];
+                            SEL setDict = NSSelectorFromString(@"setDictionary:");
+                            if (trOpts && [trOpts respondsToSelector:setDict]) {
+                                ((void (*)(id, SEL, id))objc_msgSend)(trOpts, setDict, trOptsDict);
+                                optsHow = @"init+setDictionary:";
+                            } else {
                                 SEL initDict = NSSelectorFromString(@"initWithDictionary:");
                                 if ([optsCls instancesRespondToSelector:initDict]) {
                                     trOpts = ((id (*)(id, SEL, id))objc_msgSend)([optsCls alloc], initDict, trOptsDict);
                                     optsHow = @"initWithDictionary:";
+                                } else {
+                                    trOpts = nil;
                                 }
                             }
                         }
