@@ -18452,7 +18452,7 @@ static void ERAddDiagSet(NSString *key, id value) {
 
 - (void)erAddControlSheetDidSelectIdentifierCore:(NSString *)identifier fromSheet:(UIViewController *)sheet {
     ERAddDiagSet([@"Add." stringByAppendingString:identifier ?: @"nil"],
-                 [NSString stringWithFormat:@"tap %@ dm=%d", [NSDate date], (int)[ERShortcutSlotIndexFromIdentifier(identifier)]]);
+                 [NSString stringWithFormat:@"tap %@ dm=%d", [NSDate date], (int)ERShortcutSlotIndexFromIdentifier(identifier)]);
     BOOL added = [self addModuleIdentifierToControlCenter:identifier];
     ERAddDiagSet([@"AddResult." stringByAppendingString:identifier ?: @"nil"],
                  added ? @"YES" : @"NO");
@@ -26238,7 +26238,8 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
     NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
-    NSString *diagKey = [NSString stringWithFormat:@"Run.%@", [entry[@"uuid"] isKindOfClass:[NSString class]] && entry[@"uuid"].length >= 8 ? [entry[@"uuid"] substringToIndex:8] : @"?"];
+    NSString *uuidStr = [entry isKindOfClass:[NSDictionary class]] && [entry[@"uuid"] isKindOfClass:[NSString class]] ? entry[@"uuid"] : nil;
+    NSString *diagKey = [NSString stringWithFormat:@"Run.%@", uuidStr.length >= 8 ? [uuidStr substringToIndex:8] : @"?"];
     ERAddDiagSet(diagKey, [NSString stringWithFormat:@"%@ %@ t=%@", type, name, [NSDate date]]);
     ERLogInfo(@"link-run: %@ %@ (%@)", type, entry[@"uuid"], name);
     if ([type isEqualToString:@"link"]) {
