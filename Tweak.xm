@@ -31044,10 +31044,41 @@ static void ERBootLog(NSString *tag) {
 }
 
 static void ERAppShortcutDiagSet(NSString *step, id value);
+
+// 1.1.9-34：跳转追踪 —— Actra 能直达但全 SB 无类响应 activateShortcut* selector，
+// 疑走 SBMultitaskingApplicationShortcutService performShortcutAction:forBundleIdentifier:
+// 或 FBSOpenApplicationService 特殊 options。纯日志钩子：用户用 Actra 跳一次，
+// Diag.JT.* 依次记录每个接口的参数（action 对象内容、options 字典），据此还原实现。
+%group ERJumpTrace
+%hook SBMultitaskingApplicationShortcutService
+- (void)performShortcutAction:(id)action forBundleIdentifier:(NSString *)bundleId {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"perform bid=%@ action=%@", bundleId, action]);
+    %orig;
+}
+- (void)fetchSupportedShortcutActionsForBundleIdentifier:(NSString *)bundleId withCompletionHandler:(id)handler {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"fetch bid=%@", bundleId]);
+    %orig;
+}
+%end
+%hook FBSSystemService
+- (void)openApplication:(id)application options:(id)options withResult:(id)result {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"FBS openApp=%@ options=%@", application, options]);
+    %orig;
+}
+%end
+%end
+
 %ctor {
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
+    %init(ERJumpTrace);  // 1.1.9-34：跳转追踪（纯日志）
+    // 1.1.9-34：SBMultitaskingApplicationShortcutService 完整方法表（无过滤），
+    // 找 sharedInstance 获取方式与 performShortcutAction 第一参数类型线索。
+    ERAddDiagSet(@"P.Svc1.I.Full", ERLinkDumpMethods(NSClassFromString(@"SBMultitaskingApplicationShortcutService"), NO, @[@""]));
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
