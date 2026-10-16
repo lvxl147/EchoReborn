@@ -26259,153 +26259,63 @@ static BOOL ERRunLinkOpenURL(NSURL *url) {
     }
 }
 
-// 1.1.9-22：iOS 17 上 FBSSystemService.openApplication:options:withResultHandler:
-// 不响应（sel=0）、FBSOpenApplicationRequest 类可能缺失。改为按候选顺序逐路尝试，
-// 每步结果记进 Diag.FBS，一次装机即可确定可用路径。
+// 1.1.9-24：按 1.1.9-23 方法表探测到的 iOS 17 真实 selector 重写执行链：
+//   ① FBSOpenApplicationService  hd_openApplication:optionsDictionary:completion:
+//   ② FBSOpenApplicationService  openApplication:withOptions:completion:
+//   ③ FBSSystemService           openApplication:options:withResult:   ← 之前败在选择器名 withResultHandler:
+//   ④ SBUIController             activateApplication:fromIcon:location:activationSettings:actions:
+// 每步结果记 Diag.FBS。extraOptions 携带 __ActivateApplicationShortcutItem（快捷项随启动）。
 static BOOL ERRunLinkOpenApp(NSString *bundleId, NSDictionary *extraOptions) {
     if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) return NO;
     NSMutableArray *notes = [NSMutableArray array];
     NSDictionary *opts = extraOptions ?: @{};
-    ERAddDiagSet(@"FBSCls", [NSString stringWithFormat:@"svc=%d req=%d sys=%d optcls=%d",
-        NSClassFromString(@"FBSOpenApplicationService") != nil,
-        NSClassFromString(@"FBSOpenApplicationRequest") != nil,
-        NSClassFromString(@"FBSSystemService") != nil,
-        NSClassFromString(@"FBSOpenApplicationOptions") != nil]);
 
-    // 构造启动 options（快捷项随启动走 FBSOpenApplicationOptions）
-    id options = opts;
-    Class optionsClass = NSClassFromString(@"FBSOpenApplicationOptions");
-    if (optionsClass) {
-        SEL optsSel = NSSelectorFromString(@"optionsWithDictionary:");
-        if ([optionsClass respondsToSelector:optsSel]) {
-            @try {
-                options = ((id (*)(id, SEL, id))objc_msgSend)(optionsClass, optsSel, opts);
-            } @catch (NSException *e) {
-                [notes addObject:[NSString stringWithFormat:@"opt-EXC %@", e.name]];
-                options = opts;
-            }
-        } else {
-            [notes addObject:@"opt-sel0"];
-        }
-    } else {
-        [notes addObject:@"optcls0"];
+    typedef void (*EROpenBlock)(NSError *);
+    #define ER_DISPATCH(note, target, selector, ...) do { \
+        @try { \
+            ((void (*)(id, SEL, __VA_ARGS__))objc_msgSend)(target, selector, __VA_ARGS__); \
+            [notes addObject:note]; \
+            ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]); \
+            return YES; \
+        } @catch (NSException *exception) { \
+            [notes addObject:[NSString stringWithFormat:@"%@-EXC %@", note, exception.name]]; \
+        } \
+    } while (0)
+
+    // ① FBSOpenApplicationService.hd_openApplication:optionsDictionary:completion:
+    Class svcClass = NSClassFromString(@"FBSOpenApplicationService");
+    SEL hdSel = NSSelectorFromString(@"hd_openApplication:optionsDictionary:completion:");
+    if (svcClass && [svcClass instancesRespondToSelector:hdSel]) {
+        id svc = ((id (*)(id, SEL))objc_msgSend)(svcClass, @selector(sharedService));
+        if (svc) ER_DISPATCH(@"A1", svc, hdSel, bundleId, opts, nil);
     }
-
-    // ── 候选 A：FBSOpenApplicationService + FBSOpenApplicationRequest ──
-    Class serviceClass = NSClassFromString(@"FBSOpenApplicationService");
-    Class requestClass = NSClassFromString(@"FBSOpenApplicationRequest");
-    SEL openSel = NSSelectorFromString(@"openApplication:options:clientPort:withResultHandler:");
-    if (serviceClass && requestClass) {
-        @try {
-            id service = ((id (*)(id, SEL))objc_msgSend)(serviceClass, @selector(sharedService));
-            id request = nil;
-            SEL clsReqSel = NSSelectorFromString(@"requestWithApplicationIdentifier:");
-            SEL initReqSel = NSSelectorFromString(@"initWithApplicationIdentifier:");
-            if ([requestClass respondsToSelector:clsReqSel]) {
-                request = ((id (*)(id, SEL, id))objc_msgSend)(requestClass, clsReqSel, bundleId);
-                [notes addObject:@"req=cls"];
-            } else if ([requestClass instancesRespondToSelector:initReqSel]) {
-                request = ((id (*)(id, SEL, id))objc_msgSend)
-                    (((id (*)(id, SEL))objc_msgSend)(requestClass, @selector(alloc)), initReqSel, bundleId);
-                [notes addObject:@"req=init"];
-            } else {
-                [notes addObject:@"req=none"];
-            }
-            SEL dictSel = NSSelectorFromString(@"optionsWithDictionary:");
-            id svcOptions = options;
-            if (optionsClass && ![options isKindOfClass:optionsClass] && [optionsClass respondsToSelector:dictSel]) {
-                svcOptions = ((id (*)(id, SEL, id))objc_msgSend)(optionsClass, dictSel, opts);
-            }
-            if (service && request && [service respondsToSelector:openSel]) {
-                ((void (*)(id, SEL, id, id, id, void (^)(NSError *)))objc_msgSend)
-                    (service, openSel, request, svcOptions, (id)nil, ^(NSError *error) {
-                        if (error) ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"A-err %@", error.localizedDescription]);
-                    });
-                [notes addObject:@"A-dispatch"];
-                ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]);
-                return YES;
-            }
-            [notes addObject:[NSString stringWithFormat:@"A-skip svc=%d req=%d sel=%d",
-                              service != nil, request != nil, service ? [service respondsToSelector:openSel] : -1]];
-        } @catch (NSException *exception) {
-            [notes addObject:[NSString stringWithFormat:@"A-EXC %@", exception.name]];
-        }
-    } else {
-        [notes addObject:[NSString stringWithFormat:@"A-cls0 svc=%d req=%d", serviceClass != nil, requestClass != nil]];
+    // ② FBSOpenApplicationService.openApplication:withOptions:completion:
+    SEL openSel2 = NSSelectorFromString(@"openApplication:withOptions:completion:");
+    if (svcClass && [svcClass instancesRespondToSelector:openSel2]) {
+        id svc = ((id (*)(id, SEL))objc_msgSend)(svcClass, @selector(sharedService));
+        if (svc) ER_DISPATCH(@"A2", svc, openSel2, bundleId, opts, nil);
     }
-
-    // ── 候选 B：FBSSystemService 两种签名 ──
+    // ③ FBSSystemService.openApplication:options:withResult:
     Class sysClass = NSClassFromString(@"FBSSystemService");
-    if (sysClass) {
-        @try {
-            id service = ((id (*)(id, SEL))objc_msgSend)(sysClass, @selector(sharedService));
-            SEL sysSel1 = NSSelectorFromString(@"openApplication:options:clientPort:withResultHandler:");
-            SEL sysSel2 = NSSelectorFromString(@"openApplication:options:withResultHandler:");
-            Class requestClass2 = NSClassFromString(@"FBSOpenApplicationRequest");
-            id request2 = nil;
-            SEL clsReqSel = NSSelectorFromString(@"requestWithApplicationIdentifier:");
-            if (requestClass2 && [requestClass2 respondsToSelector:clsReqSel])
-                request2 = ((id (*)(id, SEL, id))objc_msgSend)(requestClass2, clsReqSel, bundleId);
-            if (service && [service respondsToSelector:sysSel1] && request2) {
-                ((void (*)(id, SEL, id, id, id, void (^)(NSError *)))objc_msgSend)
-                    (service, sysSel1, request2, options, (id)nil, ^(NSError *error) {
-                        if (error) ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"B1-err %@", error.localizedDescription]);
-                    });
-                [notes addObject:@"B1-dispatch"];
-                ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]);
-                return YES;
-            }
-            if (service && [service respondsToSelector:sysSel2]) {
-                ((void (*)(id, SEL, id, id, void (^)(NSError *)))objc_msgSend)
-                    (service, sysSel2, bundleId, options, ^(NSError *error) {
-                        if (error) ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"B2-err %@", error.localizedDescription]);
-                    });
-                [notes addObject:@"B2-dispatch"];
-                ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]);
-                return YES;
-            }
-            [notes addObject:[NSString stringWithFormat:@"B-skip svc=%d s1=%d s2=%d",
-                              service != nil, service ? [service respondsToSelector:sysSel1] : -1, service ? [service respondsToSelector:sysSel2] : -1]];
-        } @catch (NSException *exception) {
-            [notes addObject:[NSString stringWithFormat:@"B-EXC %@", exception.name]];
-        }
-    } else {
-        [notes addObject:@"B-cls0"];
+    SEL sysSel = NSSelectorFromString(@"openApplication:options:withResult:");
+    if (sysClass && [sysClass instancesRespondToSelector:sysSel]) {
+        id svc = ((id (*)(id, SEL))objc_msgSend)(sysClass, @selector(sharedService));
+        if (svc) ER_DISPATCH(@"B", svc, sysSel, bundleId, opts, nil);
     }
-
-    // ── 候选 C：SBApplicationController + SBUIController（SpringBoard 私有 UI 层）──
+    // ④ SBUIController.activateApplication:fromIcon:location:activationSettings:actions:
     Class appCtlClass = NSClassFromString(@"SBApplicationController");
-    Class uiCtlClass = NSClassFromString(@"SBUIController");
-    if (appCtlClass && uiCtlClass) {
-        @try {
-            id appCtl = ((id (*)(id, SEL))objc_msgSend)(appCtlClass, @selector(sharedInstance));
-            SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
-            id app = (appCtl && [appCtl respondsToSelector:appSel])
-                ? ((id (*)(id, SEL, id))objc_msgSend)(appCtl, appSel, bundleId) : nil;
-            id uiCtl = ((id (*)(id, SEL))objc_msgSend)(uiCtlClass, @selector(sharedInstance));
-            SEL uiSel = NSSelectorFromString(@"activateApplicationAnimated:withOptions:");
-            SEL uiSel2 = NSSelectorFromString(@"activateApplication:withOptions:");
-            if (app && uiCtl && [uiCtl respondsToSelector:uiSel]) {
-                ((void (*)(id, SEL, id, id))objc_msgSend)(uiCtl, uiSel, app, opts);
-                [notes addObject:@"C-dispatch"];
-                ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]);
-                return YES;
-            }
-            if (app && uiCtl && [uiCtl respondsToSelector:uiSel2]) {
-                ((void (*)(id, SEL, id, id))objc_msgSend)(uiCtl, uiSel2, app, opts);
-                [notes addObject:@"C2-dispatch"];
-                ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]);
-                return YES;
-            }
-            [notes addObject:[NSString stringWithFormat:@"C-skip app=%d ui=%d s1=%d s2=%d",
-                              app != nil, uiCtl != nil, uiCtl ? [uiCtl respondsToSelector:uiSel] : -1, uiCtl ? [uiCtl respondsToSelector:uiSel2] : -1]];
-        } @catch (NSException *exception) {
-            [notes addObject:[NSString stringWithFormat:@"C-EXC %@", exception.name]];
-        }
-    } else {
-        [notes addObject:[NSString stringWithFormat:@"C-cls0 app=%d ui=%d", appCtlClass != nil, uiCtlClass != nil]];
+    Class uiClass = NSClassFromString(@"SBUIController");
+    SEL uiSel = NSSelectorFromString(@"activateApplication:fromIcon:location:activationSettings:actions:");
+    SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+    if (appCtlClass && uiClass && [uiClass instancesRespondToSelector:uiSel]) {
+        id appCtl = ((id (*)(id, SEL))objc_msgSend)(appCtlClass, @selector(sharedInstance));
+        id ui = ((id (*)(id, SEL))objc_msgSend)(uiClass, @selector(sharedInstance));
+        id app = (appCtl && [appCtl respondsToSelector:appSel])
+            ? ((id (*)(id, SEL, id))objc_msgSend)(appCtl, appSel, bundleId) : nil;
+        if (app && ui) ER_DISPATCH(@"C", ui, uiSel, app, (id)nil, (id)nil, (id)nil, (id)nil);
+        else [notes addObject:[NSString stringWithFormat:@"C-noapp app=%d ui=%d", app != nil, ui != nil]];
     }
-
+    [notes addObject:@"all-miss"];
     ERAddDiagSet(@"FBS", [notes componentsJoinedByString:@" "]);
     return NO;
 }
