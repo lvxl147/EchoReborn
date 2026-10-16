@@ -31109,7 +31109,7 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
 - (BOOL)openApplicationWithBundleURL:(NSURL *)url {
     ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
                  [NSString stringWithFormat:@"LSWS url=%@", url]);
-    %orig;
+    return (BOOL)%orig;
 }
 %end
 %end
