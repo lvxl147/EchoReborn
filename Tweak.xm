@@ -31122,6 +31122,28 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
     return (BOOL)%orig;
 }
 %end
+// 1.1.9-38：-37 枚举发现 SBMainWorkspace _handleUserActionRequest:options:activationSettings:
+// origin:withResult:（__Actions 构建点候选）与 SBIconController _launchFromIconView:
+// withActions:modifierFlags:（带动作启动）。挂日志钩子抓真实参数格式。
+%hook SBMainWorkspace
+- (void)_handleUserActionRequest:(id)request options:(id)options activationSettings:(id)settings origin:(id)origin withResult:(id)result {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"MainWS-userAction req=%@\nopts=%@\nsettings=%@\norigin=%@", request, options, settings, origin]);
+    %orig;
+}
+- (void)_handleTrustedOpenRequestForApplication:(id)app options:(id)options activationSettings:(id)settings origin:(id)origin withResult:(id)result {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"MainWS-trusted app=%@\nopts=%@\nsettings=%@\norigin=%@", app, options, settings, origin]);
+    %orig;
+}
+%end
+%hook SBIconController
+- (void)_launchFromIconView:(id)iconView withActions:(id)actions modifierFlags:(NSUInteger)flags {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"IconCtl-launch icon=%@ actions=%@ flags=%lu", iconView, actions, (unsigned long)flags]);
+    %orig;
+}
+%end
 %end
 
 %ctor {
