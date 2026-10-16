@@ -26463,8 +26463,35 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
             }
-            // 1.1.9-26 第二层：options 用 FBSOpenApplicationOptions 正式构造
-            //（之前传裸 NSDictionary 可能被序列化丢弃）。
+            // 1.1.9-28 第二层：iOS 17 的桌面快捷菜单激活接口（Actra 同款）——
+            // SBIconController.activateShortcutForApplication:type:userInfo:completion:
+            // 直接吃 SBApplication + type + userInfo，不需要 SBSApplicationShortcutItem。
+            @try {
+                Class appCtlClass = NSClassFromString(@"SBApplicationController");
+                Class uiClass = NSClassFromString(@"SBUIController");
+                SEL actSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
+                SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+                if (appCtlClass && uiClass && [uiClass instancesRespondToSelector:actSel]) {
+                    id appCtl = ((id (*)(id, SEL))objc_msgSend)(appCtlClass, @selector(sharedInstance));
+                    id ui = ((id (*)(id, SEL))objc_msgSend)(uiClass, @selector(sharedInstance));
+                    id app = (appCtl && [appCtl respondsToSelector:appSel])
+                        ? ((id (*)(id, SEL, id))objc_msgSend)(appCtl, appSel, entry[@"bundleId"]) : nil;
+                    if (app && ui) {
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"try");
+                        ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(ui, actSel, app, shortcutType, (id)nil, (id)nil);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"sent");
+                        return YES;
+                    }
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act"],
+                                 [NSString stringWithFormat:@"skip app=%d ui=%d", app != nil, ui != nil]);
+                } else {
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"sel-missing");
+                }
+            } @catch (NSException *aex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".act"], [NSString stringWithFormat:@"EXC %@", aex.name]);
+            }
+            // 第三层兜底：只开 App（options 塞 SBSApplicationShortcutItem，
+            // B 路径只吃 NSDictionary —— -25 已验证可开 App）。
             Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
             if (!itemClass) { ERAddDiagSet([diagKey stringByAppendingString:@".sc"], @"no itemClass"); return NO; }
             id item = [[itemClass alloc] init];
@@ -26477,9 +26504,6 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 ((void (*)(id, SEL, id))objc_msgSend)(item, @selector(setLocalizedTitle:), name);
             }
             NSDictionary *scOpts = @{@"__ActivateApplicationShortcutItem": item};
-            // 1.1.9-27：B 路径（FBSSystemService）只吃 NSDictionary —— 传
-            // FBSOpenApplicationOptions 对象会 NSInvalidArgumentException。
-            // 裸字典直接走启动链（-25 已验证 B-try B-sent 可开 App）。
             BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"], scOpts);
             ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
                          [NSString stringWithFormat:@"item=%d type=%@ launched=%d", item != nil, shortcutType, launched]);
