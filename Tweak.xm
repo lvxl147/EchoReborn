@@ -18625,6 +18625,12 @@ static void ERActClsProbe(void) {
                                   (int)[cls instancesRespondToSelector:oldSel],
                                   (int)[cls respondsToSelector:oldSel]]);
                 }];
+                // 1.1.9-35：Service 完整方法表（无过滤；ctor 时写会 no-hit，挪到 3s 探测里）
+                Class svc1 = NSClassFromString(@"SBMultitaskingApplicationShortcutService");
+                if (svc1) {
+                    ERAddDiagSet(@"P.Svc1.I.Full", ERLinkDumpMethods(svc1, NO, @[@""]));
+                    ERAddDiagSet(@"P.Svc1.C.Full", ERLinkDumpMethods(svc1, YES, @[@""]));
+                }
                 ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"done classes=%d", total]);
             } @catch (__unused NSException *exception) {
                 ERAddDiagSet(@"P.ActCls.Stage", @"EXC");
@@ -31068,6 +31074,43 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
                  [NSString stringWithFormat:@"FBS openApp=%@ options=%@", application, options]);
     %orig;
 }
+// 1.1.9-35：-34 四次 Actra 跳转零命中 → 补齐所有开 App 重载与入口。
+- (void)openApplication:(id)application options:(id)options clientPort:(id)port withResult:(id)result {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"FBS+port openApp=%@ options=%@ port=%@", application, options, port]);
+    %orig;
+}
+%end
+%hook FBSOpenApplicationService
+- (void)openApplication:(id)request withOptions:(id)options completion:(id)completion {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"Svc req=%@ options=%@", request, options]);
+    %orig;
+}
+- (void)openApplication:(id)request withOptions:(id)options clientHandle:(id)handle completion:(id)completion {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"Svc+handle req=%@ options=%@", request, options]);
+    %orig;
+}
+%end
+%hook SBUIController
+- (void)activateApplication:(id)application fromIcon:(id)icon location:(id)location activationSettings:(id)settings actions:(id)actions {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"SBUI activate=%@ settings=%@ actions=%@", application, settings, actions]);
+    %orig;
+}
+- (void)_activateApplicationFromAccessibility:(id)settings {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"SBUI-a11y settings=%@", settings]);
+    %orig;
+}
+%end
+%hook LSApplicationWorkspace
+- (BOOL)openApplicationWithBundleURL:(NSURL *)url {
+    ERAddDiagSet([NSString stringWithFormat:@"JT.%@", [NSDate date]],
+                 [NSString stringWithFormat:@"LSWS url=%@", url]);
+    %orig;
+}
 %end
 %end
 
@@ -31076,9 +31119,6 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
     %init(ERJumpTrace);  // 1.1.9-34：跳转追踪（纯日志）
-    // 1.1.9-34：SBMultitaskingApplicationShortcutService 完整方法表（无过滤），
-    // 找 sharedInstance 获取方式与 performShortcutAction 第一参数类型线索。
-    ERAddDiagSet(@"P.Svc1.I.Full", ERLinkDumpMethods(NSClassFromString(@"SBMultitaskingApplicationShortcutService"), NO, @[@""]));
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
