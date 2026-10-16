@@ -18201,6 +18201,8 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     [updated addObject:identifier];
     [self saveEnabledModuleIdentifiers:updated];
     ERLogInfo(@"add: slot %ld enabled as a real Control Center module (native layout)", (long)slot);
+    ERAddDiagSet([@"SlotSaved." stringByAppendingString:identifier ?: @"nil"],
+                 [NSString stringWithFormat:@"enabled=%lu dm=%ld %@", (unsigned long)updated.count, (long)slot, [NSDate date]]);
     return YES;
 }
 
@@ -18264,6 +18266,10 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     NSInteger linkSlot = ERShortcutSlotIndexFromIdentifier(identifier);
     if (linkSlot > 0) {
         NSDictionary *linkRecord = ERLinkRecordForSlot(linkSlot);
+        ERAddDiagSet([NSString stringWithFormat:@"ProxyTap.%ld", (long)linkSlot],
+                     linkRecord ? [NSString stringWithFormat:@"%@ type=%@ bid=%@ url=%@",
+                                   [NSDate date], linkRecord[@"type"], linkRecord[@"bundleId"], linkRecord[@"url"]]
+                                 : @"NO-RECORD");
         if (linkRecord) {
             ERHaptic();
             id controller = gERSBControlCenterController;
@@ -18435,8 +18441,21 @@ static void ERLogCaughtException(NSString *where, NSException *exception) {
 }
 
 // 真正的实现搬到这里，外层只留 @try/@catch。
+// 1.1.9-20：添加链路远程诊断（roothide 下日志文件不可达，写自有偏好域远程可读）。
+static void ERAddDiagSet(NSString *key, id value) {
+    @try {
+        CFPreferencesSetAppValue((__bridge CFStringRef)[@"Diag." stringByAppendingString:key],
+                                 (__bridge CFPropertyListRef)value, kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+    } @catch (__unused NSException *exception) {}
+}
+
 - (void)erAddControlSheetDidSelectIdentifierCore:(NSString *)identifier fromSheet:(UIViewController *)sheet {
+    ERAddDiagSet([@"Add." stringByAppendingString:identifier ?: @"nil"],
+                 [NSString stringWithFormat:@"tap %@ dm=%d", [NSDate date], (int)[ERShortcutSlotIndexFromIdentifier(identifier)]]);
     BOOL added = [self addModuleIdentifierToControlCenter:identifier];
+    ERAddDiagSet([@"AddResult." stringByAppendingString:identifier ?: @"nil"],
+                 added ? @"YES" : @"NO");
     if (!added) {
         // No legal slot (or already present): leave the sheet as-is for now;
         // multi-page support will give this a real destination later.
@@ -26198,6 +26217,7 @@ static BOOL ERRunLinkOpenApp(NSString *bundleId) {
         SEL openSelector = NSSelectorFromString(@"openApplication:options:clientPort:withResultHandler:");
         if (!service || ![service respondsToSelector:openSelector]) {
             ERLogInfo(@"link-run: FBSOpenApplicationService selector missing");
+            ERAddDiagSet(@"FBS", [NSString stringWithFormat:@"service=%d sel=%d", service != nil, service ? [service respondsToSelector:openSelector] : -1]);
             return NO;
         }
         void (^handler)(NSError *) = ^(NSError *error) {
@@ -26218,12 +26238,18 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
     NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+    NSString *diagKey = [NSString stringWithFormat:@"Run.%@", [entry[@"uuid"] isKindOfClass:[NSString class]] && entry[@"uuid"].length >= 8 ? [entry[@"uuid"] substringToIndex:8] : @"?"];
+    ERAddDiagSet(diagKey, [NSString stringWithFormat:@"%@ %@ t=%@", type, name, [NSDate date]]);
     ERLogInfo(@"link-run: %@ %@ (%@)", type, entry[@"uuid"], name);
     if ([type isEqualToString:@"link"]) {
-        return ERRunLinkOpenURL([NSURL URLWithString:entry[@"url"]]);
+        BOOL ok = ERRunLinkOpenURL([NSURL URLWithString:entry[@"url"]]);
+        ERAddDiagSet([diagKey stringByAppendingString:@".url"], ok ? @"openURL YES" : @"openURL NO");
+        return ok;
     }
     if ([type isEqualToString:@"app"]) {
-        return ERRunLinkOpenApp(entry[@"bundleId"]);
+        BOOL ok = ERRunLinkOpenApp(entry[@"bundleId"]);
+        ERAddDiagSet([diagKey stringByAppendingString:@".app"], ok ? @"fbs YES" : @"fbs NO");
+        return ok;
     }
     if ([type isEqualToString:@"appShortcut"]) {
         @try {
@@ -26246,9 +26272,15 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
             }
             id controller = ((id (*)(id, SEL))objc_msgSend)(controllerClass, @selector(sharedInstance));
             SEL activate = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
-            if (!item || !controller || ![controller respondsToSelector:activate]) return NO;
+            if (!item || !controller || ![controller respondsToSelector:activate]) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
+                             [NSString stringWithFormat:@"item=%d controller=%d sel=%d",
+                              item != nil, controller != nil, controller ? [controller respondsToSelector:activate] : -1]);
+                return NO;
+            }
             ((void (*)(id, SEL, id, id, id))objc_msgSend)
                 (controller, activate, item, entry[@"bundleId"], (id)nil);
+            ERAddDiagSet([diagKey stringByAppendingString:@".sc"], @"activated");
             return YES;
         } @catch (NSException *exception) {
             ERLogInfo(@"link-run: appShortcut EXC %@ -- %@", exception.name, exception.reason);
