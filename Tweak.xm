@@ -26463,29 +26463,35 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
             }
-            // 1.1.9-28 第二层：iOS 17 的桌面快捷菜单激活接口（Actra 同款）——
-            // SBIconController.activateShortcutForApplication:type:userInfo:completion:
-            // 直接吃 SBApplication + type + userInfo，不需要 SBSApplicationShortcutItem。
+            // 1.1.9-29 第二层：iOS 17 的桌面快捷菜单激活接口（Actra 同款）——
+            // activateShortcutForApplication:type:userInfo:completion: 直接吃
+            // SBApplication + type + userInfo。老接口在 SBIconController 上，
+            // -28 只查了 SBUIController 所以 sel-missing；本版 SBIconController
+            // 与 SBUIController 都查。
             @try {
                 Class appCtlClass = NSClassFromString(@"SBApplicationController");
-                Class uiClass = NSClassFromString(@"SBUIController");
                 SEL actSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
                 SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
-                if (appCtlClass && uiClass && [uiClass instancesRespondToSelector:actSel]) {
-                    id appCtl = ((id (*)(id, SEL))objc_msgSend)(appCtlClass, @selector(sharedInstance));
-                    id ui = ((id (*)(id, SEL))objc_msgSend)(uiClass, @selector(sharedInstance));
-                    id app = (appCtl && [appCtl respondsToSelector:appSel])
-                        ? ((id (*)(id, SEL, id))objc_msgSend)(appCtl, appSel, entry[@"bundleId"]) : nil;
-                    if (app && ui) {
-                        ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"try");
-                        ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(ui, actSel, app, shortcutType, (id)nil, (id)nil);
-                        ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"sent");
+                id appCtl = (appCtlClass && [appCtlClass respondsToSelector:@selector(sharedInstance)])
+                    ? ((id (*)(id, SEL))objc_msgSend)(appCtlClass, @selector(sharedInstance)) : nil;
+                id app = (appCtl && [appCtl respondsToSelector:appSel])
+                    ? ((id (*)(id, SEL, id))objc_msgSend)(appCtl, appSel, entry[@"bundleId"]) : nil;
+                if (app) {
+                    for (NSString *ctlName in @[@"SBIconController", @"SBUIController"]) {
+                        Class ctlClass = NSClassFromString(ctlName);
+                        if (!ctlClass || ![ctlClass instancesRespondToSelector:actSel]) continue;
+                        id ctl = ((id (*)(id, SEL))objc_msgSend)(ctlClass, @selector(sharedInstance));
+                        if (!ctl) continue;
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act"],
+                                     [NSString stringWithFormat:@"try %@", ctlName]);
+                        ((void (*)(id, SEL, id, id, id, id))objc_msgSend)(ctl, actSel, app, shortcutType, (id)nil, (id)nil);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act"],
+                                     [NSString stringWithFormat:@"sent %@", ctlName]);
                         return YES;
                     }
-                    ERAddDiagSet([diagKey stringByAppendingString:@".act"],
-                                 [NSString stringWithFormat:@"skip app=%d ui=%d", app != nil, ui != nil]);
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"both-sel-missing");
                 } else {
-                    ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"sel-missing");
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act"], @"no-app");
                 }
             } @catch (NSException *aex) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".act"], [NSString stringWithFormat:@"EXC %@", aex.name]);
