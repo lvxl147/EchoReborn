@@ -26428,9 +26428,8 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 // LSApplicationProxy 的 static/dynamicApplicationShortcutItems 里。
                 @try {
                     if (!deepURL && proxy) {
-                        SEL staticSel = NSSelectorFromString(@"staticApplicationShortcutItems");
-                        SEL dynSel = NSSelectorFromString(@"dynamicApplicationShortcutItems");
-                        for (SEL srcSel in @[staticSel, dynSel]) {
+                        for (NSString *srcName in @[@"staticApplicationShortcutItems", @"dynamicApplicationShortcutItems"]) {
+                            SEL srcSel = NSSelectorFromString(srcName);
                             if (![proxy respondsToSelector:srcSel]) continue;
                             NSArray *srcItems = ((NSArray *(*)(id, SEL))objc_msgSend)(proxy, srcSel);
                             for (id sc in srcItems) {
@@ -26438,7 +26437,7 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                                 if (![scType isKindOfClass:[NSString class]] || ![scType isEqualToString:shortcutType]) continue;
                                 NSDictionary *ui = [sc respondsToSelector:@selector(userInfo)] ? ((NSDictionary *(*)(id, SEL))objc_msgSend)(sc, @selector(userInfo)) : nil;
                                 ERAddDiagSet([diagKey stringByAppendingString:@".ui"],
-                                             [NSString stringWithFormat:@"ls(%@) %@", (srcSel == staticSel ? @"static" : @"dynamic"), ui ?: @"nil"]);
+                                             [NSString stringWithFormat:@"ls(%@) %@", (NSString *)srcName, ui ?: @"nil"]);
                                 for (NSString *k in ui) {
                                     id v = ui[k];
                                     if ([v isKindOfClass:[NSURL class]]) { deepURL = v; break; }
@@ -26483,7 +26482,7 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
             // 裸字典直接走启动链（-25 已验证 B-try B-sent 可开 App）。
             BOOL launched = ERRunLinkOpenApp(entry[@"bundleId"], scOpts);
             ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
-                         [NSString stringWithFormat:@"item=%d type=%@ opts=%d launched=%d", item != nil, shortcutType, properOpts != nil, launched]);
+                         [NSString stringWithFormat:@"item=%d type=%@ launched=%d", item != nil, shortcutType, launched]);
             return launched;
         } @catch (NSException *exception) {
             ERLogInfo(@"link-run: appShortcut EXC %@ -- %@", exception.name, exception.reason);
