@@ -26604,6 +26604,13 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         scItem = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)
                             ([itemCls alloc], scInit, shortcutType, name, (id)nil, (id)nil, (id)nil);
                     }
+                    // 1.1.9-42：-40 诊断 item=0 —— scInit 在 iOS 17 不可用；照第三层已验证
+                    // 的兜底（alloc/init + setType: + setLocalizedTitle:）构造。
+                    if (!scItem && itemCls) {
+                        scItem = [[itemCls alloc] init];
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem, @selector(setType:), shortcutType);
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem, @selector(setLocalizedTitle:), name);
+                    }
                     // info = BSMutableSettings{ shortcutItem: scItem }
                     // 1.1.9-41：BSSettings 的写入方法实际为 setObject:forSetting:（P.Helper.BSMS）
                     id info = nil;
@@ -26672,8 +26679,12 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                     ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
                                  [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d origin=%d",
                                   scItem != nil, info != nil, action != nil, actHow, settings != nil, origin != nil]);
-                    if (scItem && action && settings && origin) {
-                        NSDictionary *trOpts = @{@"__Actions": @[action],
+                    if (scItem && settings && origin) {
+                        // 1.1.9-42：优先用旧版键 __ApplicationShortcutItem（直接放
+                        // SBSApplicationShortcutItem；此前用的 __ActivateApplicationShortcutItem
+                        // 是错误键名，被系统清洗成空 opts）。action 对象由 SpringBoard 自建
+                        //（Actra 亦不构造 UIHandleApplicationShortcutAction）。
+                        NSDictionary *trOpts = @{@"__ApplicationShortcutItem": scItem,
                                                  @"__ActivateSuspended": @0,
                                                  @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
                                                  @"__PromptUnlockDevice": @1};
