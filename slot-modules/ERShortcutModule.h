@@ -349,15 +349,29 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
 // whenever the prefs reload notification fires (assignment changed in Settings
 // or by EchoReborn's 添加控制项 sheet).
 - (void)reloadBinding {
+    @try {
+        [self reloadBindingGuarded];
+    } @catch (NSException *exception) {
+        // 任何异常都不能把磁贴画成空白：退回「link」字形。
+        self.isLinkEntry = NO;
+        self.linkImage = nil;
+        self.symbolName = @"link";
+        self.glyphPointSize = 0.0;
+        [self.view setNeedsLayout];
+    }
+}
+
+- (void)reloadBindingGuarded {
+    NSInteger slotNumber = ERShortcutSlotNumber();
     NSString *uuid = nil;
-    NSDictionary *record = ERShortcutBindingForSlot(ERShortcutSlotNumber(), &uuid);
+    NSDictionary *record = ERShortcutBindingForSlot(slotNumber, &uuid);
     // 1.1.9-19：快捷指令未命中时查快捷方式（LinkCatalog）。槽位绘制规则一致 ——
     // 白色单色剪影、无自绘底板；App/appShortcut 条目用 App 图标的白色剪影，
     // 其它用条目自带 SF 符号，最后退回「链接」符号。
     self.isLinkEntry = NO;
     self.linkImage = nil;
     if (!record) {
-        NSDictionary *link = ERLinkBindingForSlot(ERShortcutSlotNumber(), &uuid);
+        NSDictionary *link = ERLinkBindingForSlot(slotNumber, &uuid);
         if (link) {
             record = link;
             self.isLinkEntry = YES;
@@ -379,6 +393,16 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
     }
     NSString *name = [record[@"name"] isKindOfClass:[NSString class]] ? record[@"name"] : nil;
     self.nameLabel.text = name;
+    // 1.1.9-20：渲染状态远程诊断（SpringBoard 进程写自有偏好域）。
+    @try {
+        NSString *diagKey = [NSString stringWithFormat:@"Diag.Slot.%ld", (long)slotNumber];
+        NSString *diagValue = [NSString stringWithFormat:@"uuid=%@ link=%d sym=%@ img=%@ name=%@ t=%@",
+                               uuid ?: @"-", _isLinkEntry ? 1 : 0, _symbolName ?: @"-",
+                               _linkImage ? @"YES" : @"NO", name ?: @"-", [NSDate date]];
+        CFPreferencesSetAppValue((__bridge CFStringRef)diagKey, (__bridge CFPropertyListRef)diagValue,
+                                 (__bridge CFStringRef)kERShortcutPrefsDomain);
+        CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+    } @catch (__unused NSException *exception) {}
     // Force the next layout pass to re-render the glyph at its layout size.
     self.glyphPointSize = 0.0;
     [self.view setNeedsLayout];
