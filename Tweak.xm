@@ -18600,6 +18600,31 @@ static void ERActClsProbe(void) {
                 ERAddDiagSet(@"P.ActCls.Old", oldHits.count ? [oldHits componentsJoinedByString:@","] : @"none");
                 ERAddDiagSet(@"P.ActCls.Names", [candNames componentsJoinedByString:@","]);
                 ERAddDiagSet(@"P.ActCls.Methods", [scMethods componentsJoinedByString:@" || "]);
+                // 1.1.9-33：-32 枚举发现 SBMultitaskingApplicationShortcutService 有
+                // performShortcutAction:forBundleId...（截断）—— 系统级"执行 App 快捷操作"
+                // 接口，导出关键类的完整方法表与类方法响应，锁定可直接调用的入口。
+                NSDictionary *svcNames = @{
+                    @"Svc1": @"SBMultitaskingApplicationShortcutService",
+                    @"Svc2": @"SBApplicationShortcutStoreManager",
+                    @"Svc3": @"SBApplicationShortcutStore",
+                    @"Svc4": @"ActraApplicationShortcutApplication",
+                };
+                [svcNames enumerateKeysAndObjectsUsingBlock:^(NSString *tag, NSString *clsName, __unused BOOL *innerStop) {
+                    Class cls = NSClassFromString(clsName);
+                    if (!cls) { ERAddDiagSet([@"P.ActCls." stringByAppendingString:tag], @"no-cls"); return; }
+                    ERAddDiagSet([@"P.ActCls." stringByAppendingString:tag], [NSString stringWithFormat:@"%@ I:%@ C:%@",
+                        clsName,
+                        ERLinkDumpMethods(cls, NO, @[@"hortcut", @"erform", @"ction", @"ctivat"]),
+                        ERLinkDumpMethods(cls, YES, @[@"hortcut", @"erform", @"ction", @"ctivat"])]);
+                    SEL newSel = NSSelectorFromString(@"activateShortcutForApplication:type:userInfo:completion:");
+                    SEL oldSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                    ERAddDiagSet([NSString stringWithFormat:@"P.ActCls.%@.Sel", tag],
+                                 [NSString stringWithFormat:@"newI=%d newC=%d oldI=%d oldC=%d",
+                                  (int)[cls instancesRespondToSelector:newSel],
+                                  (int)[cls respondsToSelector:newSel],
+                                  (int)[cls instancesRespondToSelector:oldSel],
+                                  (int)[cls respondsToSelector:oldSel]]);
+                }];
                 ERAddDiagSet(@"P.ActCls.Stage", [NSString stringWithFormat:@"done classes=%d", total]);
             } @catch (__unused NSException *exception) {
                 ERAddDiagSet(@"P.ActCls.Stage", @"EXC");
