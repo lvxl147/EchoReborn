@@ -26826,6 +26826,56 @@ static id ERQAFindRealItem(NSString *bundleId, NSString *type, NSString **outCls
     return nil;
 }
 
+// 1.1.9-68 · 脚本条目（type=script）：用 JavaScriptCore 执行脚本源码。
+// 环境里内置 openURL("链接") 函数（打开网址 / URL Scheme），执行结果写入远程诊断。
+// JavaScriptCore 用 dlopen + NSClassFromString 动态加载，不需要改 Makefile 链接。
+static BOOL ERRunScriptEntry(NSDictionary *entry, NSString *diagKey) {
+    NSString *script = [entry[@"script"] isKindOfClass:[NSString class]] ? entry[@"script"] : @"";
+    if (!script.length) {
+        ERAddDiagSet([diagKey stringByAppendingString:@".script"], @"empty");
+        return NO;
+    }
+    @try {
+        static dispatch_once_t onceToken;
+        dispatch_once(&onceToken, ^{
+            dlopen("/System/Library/Frameworks/JavaScriptCore.framework/JavaScriptCore", RTLD_NOW);
+        });
+        Class ctxClass = NSClassFromString(@"JSContext");
+        if (!ctxClass) {
+            ERAddDiagSet([diagKey stringByAppendingString:@".script"], @"no JSContext");
+            return NO;
+        }
+        id ctx = [[ctxClass alloc] init];
+        __block NSInteger opened = 0;
+        id openBlock = ^(NSString *target) {
+            NSString *targetText = [target isKindOfClass:[NSString class]] ? target : [target description];
+            NSURL *targetURL = targetText.length ? [NSURL URLWithString:targetText] : nil;
+            if (!targetURL) return;
+            opened++;
+            // openURL 在 SB 进程里要在主线程走 ERRunLinkOpenURL（与 link 条目同一条通路）。
+            dispatch_async(dispatch_get_main_queue(), ^{ ERRunLinkOpenURL(targetURL); });
+        };
+        // [ctx setObject:openBlock forKeyedSubscript:@"openURL"]
+        ((void (*)(id, SEL, id, id))objc_msgSend)(ctx, @selector(setObject:forKeyedSubscript:), openBlock, @"openURL");
+        id result = ((id (*)(id, SEL, id))objc_msgSend)(ctx, @selector(evaluateScript:), script);
+        NSString *output = nil;
+        if (result && [result respondsToSelector:@selector(toString)]) {
+            @try {
+                output = ((NSString *(*)(id, SEL))objc_msgSend)(result, @selector(toString));
+            } @catch (__unused NSException *e) { output = nil; }
+        }
+        ERAddDiagSet([diagKey stringByAppendingString:@".script"],
+                     [NSString stringWithFormat:@"done opens=%ld out=%@", (long)opened, output ?: @"-"]);
+        ERLogInfo(@"link-run: script done opens=%ld out=%@", (long)opened, output ?: @"-");
+        return YES;
+    } @catch (NSException *exception) {
+        ERAddDiagSet([diagKey stringByAppendingString:@".script"],
+                     [NSString stringWithFormat:@"EXC %@ -- %@", exception.name, exception.reason]);
+        ERLogInfo(@"link-run: script EXC %@ -- %@", exception.name, exception.reason);
+        return NO;
+    }
+}
+
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
@@ -26838,6 +26888,10 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
         BOOL ok = ERRunLinkOpenURL([NSURL URLWithString:entry[@"url"]]);
         ERAddDiagSet([diagKey stringByAppendingString:@".url"], ok ? @"openURL YES" : @"openURL NO");
         return ok;
+    }
+    if ([type isEqualToString:@"script"]) {
+        // 1.1.9-68：脚本条目 —— JavaScriptCore 执行，openURL 桥接。
+        return ERRunScriptEntry(entry, diagKey);
     }
     if ([type isEqualToString:@"app"]) {
         BOOL ok = ERRunLinkOpenApp(entry[@"bundleId"], nil);
