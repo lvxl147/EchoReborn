@@ -26538,6 +26538,34 @@ static void ERBSInjectSettingsMethods(void) {
             class_addMethod(cls, items[i].sel, items[i].imp, items[i].enc);
 }
 
+// 1.1.9-54 方案 B：appShortcut → URL Scheme 映射。伪造系统动作（-39..-53）已证实
+// 无法绕过 responder/XPC 编码问题，改用稳定 openURL 通道。内置常见映射，
+// 用户可经 prefs 键 AppShortcutURLMap（dict，键 "bundleId|type" 或 "type"）扩展。
+static NSString *ERAppShortcutMappedURL(NSString *bundleId, NSString *type) {
+    if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) return nil;
+    NSString *key = [NSString stringWithFormat:@"%@|%@", bundleId, type ?: @""];
+    @try {
+        CFPropertyListRef v = CFPreferencesCopyAppValue((CFStringRef)@"AppShortcutURLMap",
+                                                        (CFStringRef)@"com.strive.echoreborn.preferences");
+        if (v) {
+            NSDictionary *m = CFBridgingRelease(v);
+            if ([m isKindOfClass:[NSDictionary class]]) {
+                NSString *u = m[key] ?: m[type];
+                if ([u isKindOfClass:[NSString class]] && u.length) return u;
+            }
+        }
+    } @catch (NSException *e) {}
+    static NSDictionary *builtin = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        builtin = @{
+            @"com.tencent.mqq|qr": @"mqqapi://qrcode/scan_qrcode?version=1&generalAction=scan",
+        };
+    });
+    NSString *u = builtin[key];
+    return ([u isKindOfClass:[NSString class]] && u.length) ? u : nil;
+}
+
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
@@ -26633,14 +26661,28 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
             }
-            // 1.1.9-39 最优先层：Actra 同款直达 —— 直接调 SBMainWorkspace 的
-            // _handleTrustedOpenRequestForApplication:options:activationSettings:origin:withResult:。
-            // -36 JT 实锤：Actra 跳米家即走此入口，opts 为
-            // {__Actions=[UIHandleApplicationShortcutAction(info=BSSettings{shortcutItem=…})],
-            //  __ActivateSuspended=0, __LaunchOrigin=SBSLaunchOriginShortcutItem, __PromptUnlockDevice=1}。
-            // 走系统服务层会被清洗 opts（我们磁贴的 QQ 跳转到达 MainWS 时 opts 已成 {}），
-            // 必须进程内直调。各构件逐个记 try/sent，任何一环缺类回退后续层。
-            @try {
+            // 1.1.9-54 方案 B：appShortcut → URL Scheme 映射直达（走已验证稳定的
+            // openURL 通道；未收录的应用回退后续层即"打开应用"）
+            {
+                NSString *mapURL = ERAppShortcutMappedURL(entry[@"bundleId"], shortcutType);
+                if (mapURL) {
+                    NSURL *mu = [NSURL URLWithString:mapURL];
+                    if (mu) {
+                        BOOL ok = ERRunLinkOpenURL(mu);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".map"],
+                                     [NSString stringWithFormat:@"%@ %@", mapURL, ok ? @"YES" : @"NO"]);
+                        if (ok) return YES;
+                    }
+                } else {
+                    ERAddDiagSet([diagKey stringByAppendingString:@".map"], @"no-match");
+                }
+            }
+            // 1.1.9-54：-39..-53 的系统动作伪造调用（直调 MainWS / 服务层携带
+            // 自建 action）已证实因 responder/XPC 编码不可伪造而反复硬崩，全线停用。
+            static BOOL _erShortcutSysDisabled = YES;
+            if (_erShortcutSysDisabled) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"sys-disabled");
+            } else @try {
                 Class wsCls = NSClassFromString(@"SBMainWorkspace");
                 SEL trustedSel = NSSelectorFromString(@"_handleTrustedOpenRequestForApplication:options:activationSettings:origin:withResult:");
                 id ws = ([wsCls respondsToSelector:@selector(sharedInstance)])
