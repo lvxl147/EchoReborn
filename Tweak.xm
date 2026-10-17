@@ -26566,6 +26566,54 @@ static NSString *ERAppShortcutMappedURL(NSString *bundleId, NSString *type) {
     return ([u isKindOfClass:[NSString class]] && u.length) ? u : nil;
 }
 
+// 1.1.9-56：修正版全类探测 —— 找出响应 activateShortcut:withBundleIdentifier:
+// forIconView: 的全部类。class_getInstanceMethod / class_getClassMethod 为纯 C
+// 查找，不触发 +initialize（-31 崩溃源于 msgSend 系的 instancesRespondToSelector:）。
+static NSArray *ERAct2ClsList(void) {
+    static NSArray *list = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        list = @[
+            @{@"cls": @"SBShortcutItemSimulator"}, @{@"cls": @"SBIconManager"},
+            @{@"cls": @"SBIconModel"}, @{@"cls": @"SBIconController"},
+            @{@"cls": @"SBIconListView"}, @{@"cls": @"SBUIController"},
+            @{@"cls": @"SBMainWorkspace"}, @{@"cls": @"SBIconService"},
+            @{@"cls": @"SBApplicationController"}, @{@"cls": @"LSApplicationWorkspace"},
+        ];
+    });
+    return list;
+}
+
+static void ERAct2Probe(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(DISPATCH_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            @try {
+                SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                unsigned int count = 0;
+                Class *classes = objc_copyClassList(&count);
+                NSMutableArray *hits = [NSMutableArray array];
+                unsigned int checked = 0;
+                for (unsigned int i = 0; i < count; i++) {
+                    Class c = classes[i];
+                    // 纯 C 查找，不触发 +initialize
+                    if (class_getInstanceMethod(c, actSel) || class_getClassMethod(c, actSel)) {
+                        [hits addObject:NSStringFromClass(c)];
+                    }
+                    checked++;
+                    if ((checked % 20000) == 0)
+                        ERAddDiagSet(@"Diag.P.Act2.Scan", [NSString stringWithFormat:@"%u/%u hits=%lu", checked, count, (unsigned long)hits.count]);
+                }
+                free(classes);
+                ERAddDiagSet(@"Diag.P.Act2.Done",
+                             [NSString stringWithFormat:@"checked=%u hits=%lu %@", count, (unsigned long)hits.count, [hits componentsJoinedByString:@","]]);
+            } @catch (NSException *e) {
+                ERAddDiagSet(@"Diag.P.Act2.EXC", e.name);
+            }
+        }
+    });
+}
+
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
@@ -26660,6 +26708,48 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
+            }
+            // 1.1.9-56：-55 实锤 iconManager 不响应 activateShortcut:...。修正版全类
+            // 探测（结果由 ctor 后 3 秒的后台探测写入 ERAct2ClsList）：用
+            // class_getInstanceMethod / class_getClassMethod（纯 C 查找，不触发
+            // +initialize，无 -31 的崩溃风险）对全部类无死角扫描该选择器。
+            @try {
+                NSString *found = nil;
+                for (NSDictionary *cand in ERAct2ClsList()) {
+                    Class c = NSClassFromString(cand[@"cls"]);
+                    if (!c) continue;
+                    id inst = nil;
+                    for (NSString *acc in @[@"sharedInstance", @"sharedService", @"sharedManager", @"defaultManager"]) {
+                        SEL aSel = NSSelectorFromString(acc);
+                        if ([c respondsToSelector:aSel]) {
+                            inst = ((id (*)(id, SEL))objc_msgSend)(c, aSel);
+                            if (inst) break;
+                        }
+                    }
+                    SEL actSel2 = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                    if (!inst || ![inst respondsToSelector:actSel2]) continue;
+                    Class itemCls2 = NSClassFromString(@"SBSApplicationShortcutItem");
+                    id scItem2 = itemCls2 ? [[itemCls2 alloc] init] : nil;
+                    if (!scItem2) continue;
+                    ((void (*)(id, SEL, id))objc_msgSend)(scItem2, @selector(setType:), shortcutType);
+                    ((void (*)(id, SEL, id))objc_msgSend)(scItem2, @selector(setLocalizedTitle:), name);
+                    SEL subSel2 = NSSelectorFromString(@"setLocalizedSubtitle:");
+                    if ([scItem2 respondsToSelector:subSel2])
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem2, subSel2, @"");
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act2"],
+                                 [NSString stringWithFormat:@"try(%@)", cand[@"cls"]]);
+                    ((void (*)(id, SEL, id, id, id))objc_msgSend)
+                        (inst, actSel2, scItem2, entry[@"bundleId"], (id)nil);
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act2"],
+                                 [NSString stringWithFormat:@"sent(%@)", cand[@"cls"]]);
+                    found = cand[@"cls"];
+                    break;
+                }
+                if (!found) ERAddDiagSet([diagKey stringByAppendingString:@".act2"], @"no-responder");
+                if (found) return YES;
+            } @catch (NSException *aex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".act2"],
+                             [NSString stringWithFormat:@"EXC %@ %@", aex.name, aex.reason ?: @""]);
             }
             // 1.1.9-55：乌贼手势（SquidGesturePro）逆向实锤 —— 它调用
             // activateShortcut:withBundleIdentifier:forIconView:，宿主对象为
@@ -31559,6 +31649,7 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
+    ERAct2Probe();       // 1.1.9-56：修正版探测（纯 C method 查找，无死角扫 activateShortcut:...）
     %init(ERJumpTrace);  // 1.1.9-34：跳转追踪（纯日志）
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
