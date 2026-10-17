@@ -92,3 +92,4 @@
 | 175 | 1.1.9-50 | 1001126 | -49 栈实锤：BSMutableSettings 也没有 bs_boolForKey:（bs_* 族在 iOS 17 两个类上都缺）。-50 注入完整 bs_* 方法族（boolForActivationSetting:/bs_boolForKey:/bs_objectForKey:/bs_stringForKey:），实现从关联字典取值；settings 与 options 都挂各自字典 |
 | 176 | 1.1.9-50b | 1001127 | -50 编译失败修复：objc_get/setAssociatedObject 的 key 改为 static char（const void*）；BOOL 返回值方法类型编码修正为 B@:@。逻辑与 -50 一致 |
 | 177 | 1.1.9-51 | 1001128 | 全链复盘：__ApplicationShortcutItem 键只存在于我们自己的调用；真实调用（Actra）用 __Actions+action。-51 options 切 __Actions=@[UIHandleApplicationShortcutAction(info=shortcutItem)]，action 构造补 _setInfo: 尝试；__ApplicationShortcutItem 降为 action 缺失时兜底 |
+| 178 | 1.1.9-52 | 1001129 | 长按桌面抓包实锤：真实调用 action 带 responder<_BSActionResponder active:YES>（SpringBoard 内构造、无 mach port），origin 即 SpringBoard 自身。-52 构建 _BSActionResponder（alloc init + activate/begin/start）并经 setResponder:/_setResponder: 挂到 action；scItem 补 setLocalizedSubtitle:@""；诊断新增 resp= |
