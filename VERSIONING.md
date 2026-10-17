@@ -108,3 +108,4 @@
 | 191 | 1.1.9-60 | 1001142 | 快捷方式直达打通确认（-59 TypeX 同款路径，用户实测完美抵达）。新增「自动复制验证码」：系统增强页锁屏音乐上方加无标题卡片（图标+开关，键 SMSCodeCopyEnabled）；SpringBoard 侧挂 BBServer 三方法（publishBulletin/publishBulletinRequest/_publishBulletinRequest:forSectionID:），过滤 MobileSMS 分区，关键词+4-8位数字提取（排除年份/小数），按 bulletinID 去重，剪贴板 180s 过期本地写入。键盘X 同款思路自研实现 |
 | 192 | 1.1.9-61 | 1001143 | 统一删除修复：Tweak.xm 新增 ReloadLinks 观察者 + ERLinkReconcileAfterCatalogChange（清理 LinkSlotAssignments 失效绑定、撤 duplicate-families/grid 持久化、syncOwnedDuplicateModules 重建覆盖层），左滑删除后控制中心磁贴同步消失 |
 | 193 | 1.1.9-62 | 1001144 | 自定义快捷方式子页面：点击磁贴行进入（类型只读/改名/图标输入框+选择按钮/替换按钮复用添加流程原位换目标保留槽位）；卡片2 红色删除；图标选择页（搜索+SF符号池）；新增 symbolOverride 字段（ERShortcutModule.h 优先使用，磁贴与子页面两处同步）；ERLinkPersistCatalog 追加 ReloadPrefs 广播 |
+| 194 | 1.1.9-63 | 1001145 | 自定义页按反馈改版：右上角「保存」统一生效（修改先暂存）；第3行名称在左/输入框最大化撑满/选择按钮放大/预览移最右；底部改左右双卡片（恢复默认+删除快捷动作，行高48）；第4行隐藏目标id、替换按钮改大且修掉被覆盖不显示的bug |
