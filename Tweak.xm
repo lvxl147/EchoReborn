@@ -26652,7 +26652,9 @@ static void ERWFProbeImpl(void) {
             BOOL isMain = (i == 0);
             BOOL isSys  = [path containsString:@"/System/Library"] || [path containsString:@"/usr/lib"] || [path containsString:@"/usr/local"];
             BOOL isDylib = [path hasSuffix:@".dylib"];
-            if (!(isMain || (isDylib && !isSys))) continue;
+            // 1.1.9-57b：WorkflowKit / VoiceShortcutClient 是系统框架但含 runWorkflow 调用面，加入白名单
+            BOOL isWFK = [path containsString:@"WorkflowKit"] || [path containsString:@"VoiceShortcut"];
+            if (!(isMain || (isDylib && !isSys) || isWFK)) continue;
             unsigned int cn = 0;
             const char **names = objc_copyClassNamesForImage(p, &cn);
             for (unsigned int j = 0; j < cn; j++) {
