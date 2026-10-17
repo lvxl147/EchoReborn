@@ -1604,12 +1604,16 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
 
 @end
 
-// MARK: - 自定义快捷方式页（1.1.9-62）
+// MARK: - 自定义快捷方式页（1.1.9-63：右上角保存制 + 版式调整）
 
 @implementation ERLinkCustomizeController {
     UITableView *_table;
     NSString *_uuid;
     UITextField *_iconField;
+    // 1.1.9-63：未保存的修改（点右上角「保存」才落盘生效）。
+    NSString *_pendingName;
+    NSString *_pendingSymbol;   // 与 _pendingSymbolSet 搭配：Set=YES 表示改过图标
+    BOOL _pendingSymbolSet;
 }
 
 - (instancetype)initWithUUID:(NSString *)uuid {
@@ -1634,8 +1638,14 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    // 「替换」回来后刷新标题与内容。
     self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    // 1.1.9-63：右上角「保存」—— 修改先暂存，点保存才写入生效。
+    UIBarButtonItem *save = [[UIBarButtonItem alloc] initWithTitle:@"保存"
+                                                             style:UIBarButtonItemStyleDone
+                                                            target:self
+                                                            action:@selector(saveTapped)];
+    self.navigationItem.rightBarButtonItem = save;
+    [self ensureDefaultSnapshot];
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -1644,9 +1654,26 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     [_table reloadData];
 }
 
+// 首次进入时把创建时的名称/图标存档（「恢复默认」用；只写一次）。
+- (void)ensureDefaultSnapshot {
+    NSDictionary *entry = [self entry];
+    if (!entry) return;
+    if ([entry[@"defaultName"] isKindOfClass:[NSString class]] &&
+        ((NSString *)entry[@"defaultName"]).length) return;
+    NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+    NSString *kind = [entry[@"iconKind"] isKindOfClass:[NSString class]] ? entry[@"iconKind"] : @"";
+    NSString *value = [entry[@"iconValue"] isKindOfClass:[NSString class]] ? entry[@"iconValue"] : @"";
+    [self mutateEntryQuiet:^(NSMutableDictionary *updated) {
+        updated[@"defaultName"] = name;
+        updated[@"defaultIconKind"] = kind;
+        updated[@"defaultIconValue"] = value;
+    }];
+}
+
 - (void)refreshTitle {
     NSDictionary *entry = [self entry];
-    NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+    NSString *name = [_pendingName length] ? _pendingName
+                   : ([entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"");
     self.title = name.length ? name : @"自定义快捷方式";
 }
 
@@ -1656,21 +1683,6 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
             [entry[@"uuid"] isEqualToString:_uuid]) return entry;
     }
     return nil;
-}
-
-// 目标描述（第4行副标题）：App/快捷方式 → App 名称 + 快捷方式；链接 → url。
-- (NSString *)targetSummary {
-    NSDictionary *entry = [self entry];
-    if (!entry) return @"";
-    NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
-    if ([type isEqualToString:@"link"]) {
-        NSString *url = [entry[@"url"] isKindOfClass:[NSString class]] ? entry[@"url"] : @"";
-        return url.length ? url : @"未设置";
-    }
-    NSString *bundle = [entry[@"bundleId"] isKindOfClass:[NSString class]] ? entry[@"bundleId"] : @"";
-    NSString *shortcutType = [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"";
-    if (shortcutType.length) return [NSString stringWithFormat:@"%@ · %@", bundle, shortcutType];
-    return bundle.length ? bundle : @"未设置";
 }
 
 // MARK: Table
@@ -1683,6 +1695,11 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     return section == 0 ? 4 : 1;
 }
 
+// 1.1.9-63：删除/恢复卡片加高一点，别太细。
+- (CGFloat)tableView:(__unused UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return indexPath.section == 1 ? 48.0 : 44.0;
+}
+
 - (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(__unused NSInteger)section {
     return section == 0 ? @"快捷方式信息" : nil;
 }
@@ -1692,69 +1709,105 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     static NSString *plainId = @"ERLinkCustomPlain";
     static NSString *iconId = @"ERLinkCustomIcon";
     static NSString *replaceId = @"ERLinkCustomReplace";
-    static NSString *deleteId = @"ERLinkCustomDelete";
+    static NSString *actionsId = @"ERLinkCustomActions";
 
     NSString *identifier = plainId;
     if (indexPath.section == 0 && indexPath.row == 2) identifier = iconId;
     if (indexPath.section == 0 && indexPath.row == 3) identifier = replaceId;
-    if (indexPath.section == 1) identifier = deleteId;
+    if (indexPath.section == 1) identifier = actionsId;
 
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     BOOL iconRow = [identifier isEqualToString:iconId];
-    BOOL replaceRow = [identifier isEqualToString:replaceId];
-    BOOL deleteRow = [identifier isEqualToString:deleteId];
+    BOOL actionsRow = [identifier isEqualToString:actionsId];
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
         if (iconRow) {
-            // 输入框 + 选择按钮装在同一个 accessoryView 容器里，避免与 detail 文本重叠。
-            UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 196.0, 30.0)];
-            UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(0.0, 0.0, 148.0, 30.0)];
+            // 1.1.9-63 版式：名称「图标」在最左，输入框居中放大，「选择」在其右，
+            // 图标预览在最右端。全部用约束挂在 contentView 上。
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            UITextField *field = [[UITextField alloc] initWithFrame:CGRectZero];
             field.placeholder = @"SF 符号名";
-            field.textAlignment = NSTextAlignmentRight;
-            field.font = [UIFont systemFontOfSize:14.0];
+            field.textAlignment = NSTextAlignmentLeft;
+            field.font = [UIFont systemFontOfSize:15.0];
+            field.borderStyle = UITextBorderStyleRoundedRect;
             field.clearButtonMode = UITextFieldViewModeWhileEditing;
             field.returnKeyType = UIReturnKeyDone;
             field.autocorrectionType = UITextAutocorrectionTypeNo;
             field.autocapitalizationType = UITextAutocapitalizationTypeNone;
             field.delegate = self;
-            [field addTarget:self action:@selector(iconFieldEdited:) forControlEvents:UIControlEventEditingDidEnd];
-            [container addSubview:field];
+            field.tag = 61;
+            field.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:field];
             _iconField = field;
             UIButton *pick = [UIButton buttonWithType:UIButtonTypeSystem];
-            pick.frame = CGRectMake(152.0, 0.0, 44.0, 30.0);
+            pick.tag = 62;
             [pick setTitle:@"选择" forState:UIControlStateNormal];
+            pick.titleLabel.font = [UIFont boldSystemFontOfSize:15.0];
             [pick addTarget:self action:@selector(pickIconTapped) forControlEvents:UIControlEventTouchUpInside];
-            [container addSubview:pick];
-            cell.accessoryView = container;
-        } else if (replaceRow) {
-            UIButton *replace = [UIButton buttonWithType:UIButtonTypeSystem];
-            replace.frame = CGRectMake(0.0, 0.0, 48.0, 30.0);
-            [replace setTitle:@"替换" forState:UIControlStateNormal];
-            [replace addTarget:self action:@selector(replaceTapped) forControlEvents:UIControlEventTouchUpInside];
-            cell.accessoryView = replace;
-        } else if (deleteRow) {
+            pick.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:pick];
+            UIImageView *preview = [[UIImageView alloc] initWithFrame:CGRectZero];
+            preview.tag = 63;
+            preview.contentMode = UIViewContentModeScaleAspectFit;
+            preview.layer.cornerRadius = 9.0;
+            preview.clipsToBounds = YES;
+            preview.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:preview];
+            UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
+            [NSLayoutConstraint activateConstraints:@[
+                // 输入框从「图标」标签右侧一直撑到「选择」按钮 —— 宽度最大化。
+                [field.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor constant:72.0],
+                [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [field.heightAnchor constraintEqualToConstant:34.0],
+                [preview.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+                [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [preview.widthAnchor constraintEqualToConstant:34.0],
+                [preview.heightAnchor constraintEqualToConstant:34.0],
+                [pick.trailingAnchor constraintEqualToAnchor:preview.leadingAnchor constant:-10.0],
+                [pick.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [pick.widthAnchor constraintEqualToConstant:56.0],
+                [pick.heightAnchor constraintEqualToConstant:34.0],
+                [field.trailingAnchor constraintEqualToAnchor:pick.leadingAnchor constant:-10.0],
+            ]];
+        } else if (actionsRow) {
+            // 1.1.9-63：左右两个半宽卡片 —— 左「恢复默认」/ 右「删除快捷动作」。
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            UIButton *restore = [UIButton buttonWithType:UIButtonTypeSystem];
+            restore.tag = 64;
+            [restore setTitle:@"恢复默认" forState:UIControlStateNormal];
+            restore.titleLabel.font = [UIFont systemFontOfSize:15.0];
+            restore.backgroundColor = [UIColor secondarySystemFillColor];
+            restore.layer.cornerRadius = 10.0;
+            [restore addTarget:self action:@selector(restoreTapped) forControlEvents:UIControlEventTouchUpInside];
+            restore.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:restore];
             UIButton *delete = [UIButton buttonWithType:UIButtonTypeSystem];
-            delete.frame = CGRectMake(0.0, 0.0, 160.0, 34.0);
-            [delete setTitle:@"删除快捷方式" forState:UIControlStateNormal];
+            delete.tag = 65;
+            [delete setTitle:@"删除快捷动作" forState:UIControlStateNormal];
             [delete setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
+            delete.titleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightMedium];
+            delete.backgroundColor = [UIColor colorWithRed:1.0 green:0.23 blue:0.19 alpha:0.14];
+            delete.layer.cornerRadius = 10.0;
             [delete addTarget:self action:@selector(deleteTapped) forControlEvents:UIControlEventTouchUpInside];
             delete.translatesAutoresizingMaskIntoConstraints = NO;
             [cell.contentView addSubview:delete];
+            UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
             [NSLayoutConstraint activateConstraints:@[
-                [delete.centerXAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor],
-                [delete.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
-                [delete.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor],
-                [delete.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
+                [restore.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor],
+                [restore.trailingAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor constant:-6.0],
+                [restore.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:4.0],
+                [restore.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-4.0],
+                [delete.leadingAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor constant:6.0],
+                [delete.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+                [delete.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:4.0],
+                [delete.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-4.0],
             ]];
         }
     }
-    if (deleteRow) {
-        cell.textLabel.text = nil;
-        cell.detailTextLabel.text = nil;
-        cell.accessoryType = UITableViewCellAccessoryNone;
-        cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        return cell;
-    }
+    if (actionsRow) return cell;
+
+    UITextField *iconField = [cell.contentView viewWithTag:61];
+    UIImageView *preview = [cell.contentView viewWithTag:63];
 
     switch (indexPath.section == 0 ? indexPath.row : 4) {
         case 0: {
@@ -1769,9 +1822,10 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
             break;
         }
         case 1: {
-            // 第2行：名称（点击弹窗改名）。
+            // 第2行：名称（点击弹窗改名 → 暂存，保存生效）。
             cell.textLabel.text = @"名称";
-            NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+            NSString *name = [_pendingName length] ? _pendingName
+                            : ([entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"");
             cell.detailTextLabel.text = name.length ? name : @"未命名";
             cell.detailTextLabel.textColor = UIColor.labelColor;
             cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -1781,33 +1835,44 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
             break;
         }
         case 2: {
-            // 第3行：图标（输入框 + 选择按钮）。
+            // 第3行：图标（名称在左，输入框放大，预览在最右）。
             cell.textLabel.text = @"图标";
-            NSString *override = [entry[@"symbolOverride"] isKindOfClass:[NSString class]] ? entry[@"symbolOverride"] : @"";
-            if (!override.length) {
+            NSString *override = entry[@"symbolOverride"];
+            if (_pendingSymbolSet) override = _pendingSymbol;
+            NSString *current = [override isKindOfClass:[NSString class]] ? override : @"";
+            if (!current.length) {
                 NSString *kind = [entry[@"iconKind"] isKindOfClass:[NSString class]] ? entry[@"iconKind"] : @"";
                 if ([kind isEqualToString:@"symbol"]) {
-                    override = [entry[@"iconValue"] isKindOfClass:[NSString class]] ? entry[@"iconValue"] : @"";
+                    current = [entry[@"iconValue"] isKindOfClass:[NSString class]] ? entry[@"iconValue"] : @"";
                 }
             }
-            _iconField.text = override;
+            iconField.text = current;
+            preview.image = ERLinkCellIcon(entry);
             cell.detailTextLabel.text = nil;
             cell.accessoryType = UITableViewCellAccessoryNone;
-            cell.selectionStyle = UITableViewCellSelectionStyleNone;
-            cell.imageView.image = ERLinkCellIcon(entry);
-            cell.imageView.layer.cornerRadius = 9.0;
-            cell.imageView.clipsToBounds = YES;
+            cell.accessoryView = nil;
             break;
         }
         case 3: {
-            // 第4行：选择快捷方式（替换按钮）。
+            // 第4行：选择快捷方式（只留名称与替换按钮；目标 id 不再显示）。
             cell.textLabel.text = @"选择快捷方式";
-            cell.detailTextLabel.text = [self targetSummary];
-            cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+            cell.detailTextLabel.text = nil;
             cell.accessoryType = UITableViewCellAccessoryNone;
-            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
             cell.imageView.image = nil;
-            cell.accessoryView = nil;
+            // 替换按钮挂 accessoryView（1.1.9-62 里被后面的 nil 覆盖导致不显示，这里修掉）。
+            UIButton *replace = [cell.contentView viewWithTag:66];
+            if (!replace) {
+                replace = [UIButton buttonWithType:UIButtonTypeSystem];
+                replace.tag = 66;
+                replace.frame = CGRectMake(0.0, 0.0, 64.0, 34.0);
+                [replace setTitle:@"替换" forState:UIControlStateNormal];
+                replace.titleLabel.font = [UIFont boldSystemFontOfSize:15.0];
+                replace.backgroundColor = [UIColor secondarySystemFillColor];
+                replace.layer.cornerRadius = 10.0;
+                [replace addTarget:self action:@selector(replaceTapped) forControlEvents:UIControlEventTouchUpInside];
+            }
+            cell.accessoryView = replace;
             break;
         }
         default:
@@ -1823,13 +1888,13 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    if (section == 0) return @"名称与图标会同步到控制中心磁贴；替换会保留原槽位位置。";
-    return @"删除后子页面与控制中心磁贴一起消失。";
+    if (section == 0) return @"修改需点右上角「保存」才会生效；替换会保留原槽位位置。";
+    return nil;
 }
 
 // MARK: 动作
 
-// 第2行：改名。
+// 第2行：改名（暂存，保存生效）。
 - (void)renameTapped {
     NSDictionary *entry = [self entry];
     if (!entry) return;
@@ -1837,36 +1902,102 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
                                                                    message:nil
                                                             preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.text = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+        field.text = [_pendingName length] ? _pendingName
+                   : ([entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"");
         field.placeholder = @"名称";
     }];
     __weak typeof(self) weakSelf = self;
-    [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         UITextField *field = alert.textFields.firstObject;
-        NSString *name = field.text ?: @"";
-        if (!name.length) return;
-        [strongSelf mutateEntry:^(NSMutableDictionary *updated) {
-            updated[@"name"] = name;
-        }];
-        strongSelf.title = name;
+        strongSelf->_pendingName = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        [strongSelf refreshTitle];
         [strongSelf->_table reloadData];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-// 第3行「选择」按钮：进图标选择页。
+// 第3行「选择」按钮：进图标选择页（选择后暂存，保存生效）。
 - (void)pickIconTapped {
     ERLinkIconPickerController *picker = [[ERLinkIconPickerController alloc] init];
     picker.pickerDelegate = self;
     [self.navigationController pushViewController:picker animated:YES];
 }
 
-// 第3行输入框：手输符号名，回车/失焦生效（清空 = 恢复默认图标）。
-- (void)iconFieldEdited:(UITextField *)field {
-    NSString *symbol = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    [self applySymbolOverride:symbol];
+// 第3行输入框：手输符号名（暂存，保存生效；清空 = 恢复默认图标）。
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+    if (textField.tag != 61) return;
+    _pendingSymbol = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    _pendingSymbolSet = YES;
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+
+// 右上角「保存」：把暂存的修改一次写入（名称/图标两处同步）。
+- (void)saveTapped {
+    [self.view endEditing:YES];
+    if (!_pendingName.length && !_pendingSymbolSet) return;
+    NSString *newName = _pendingName;
+    NSString *newSymbol = _pendingSymbol;
+    BOOL symbolSet = _pendingSymbolSet;
+    if (symbolSet && newSymbol.length && ![UIImage systemImageNamed:newSymbol]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"符号不可用"
+                                                                       message:[NSString stringWithFormat:@"系统里没有名为 %@ 的 SF 符号。", newSymbol]
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    [self mutateEntry:^(NSMutableDictionary *updated) {
+        if (newName.length) updated[@"name"] = newName;
+        if (symbolSet) {
+            if (newSymbol.length) {
+                updated[@"symbolOverride"] = newSymbol;
+            } else {
+                [updated removeObjectForKey:@"symbolOverride"];
+            }
+        }
+    }];
+    _pendingName = nil;
+    _pendingSymbol = nil;
+    _pendingSymbolSet = NO;
+    [self refreshTitle];
+    [_table reloadData];
+    ERLinkLog(@"customize: 保存 %@ name=%@ symbol=%@", _uuid, newName, symbolSet ? newSymbol : @"(unchanged)");
+}
+
+// 左下「恢复默认」：名称与图标还原到创建时的样式（清掉图标覆盖）。
+- (void)restoreTapped {
+    NSDictionary *entry = [self entry];
+    if (!entry) return;
+    NSString *defaultName = [entry[@"defaultName"] isKindOfClass:[NSString class]] ? entry[@"defaultName"] : @"";
+    NSString *defaultKind = [entry[@"defaultIconKind"] isKindOfClass:[NSString class]] ? entry[@"defaultIconKind"] : @"";
+    NSString *defaultValue = [entry[@"defaultIconValue"] isKindOfClass:[NSString class]] ? entry[@"defaultIconValue"] : @"";
+    if (!defaultName.length) {
+        // 没有存档（老条目）：把当前值当存档，等效于只清掉图标覆盖。
+        defaultName = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+        defaultKind = [entry[@"iconKind"] isKindOfClass:[NSString class]] ? entry[@"iconKind"] : @"";
+        defaultValue = [entry[@"iconValue"] isKindOfClass:[NSString class]] ? entry[@"iconValue"] : @"";
+    }
+    NSString *name = defaultName;
+    NSString *kind = defaultKind;
+    NSString *value = defaultValue;
+    [self mutateEntry:^(NSMutableDictionary *updated) {
+        if (name.length) updated[@"name"] = name;
+        if (kind.length) updated[@"iconKind"] = kind;
+        if (value.length) updated[@"iconValue"] = value;
+        [updated removeObjectForKey:@"symbolOverride"];
+    }];
+    _pendingName = nil;
+    _pendingSymbol = nil;
+    _pendingSymbolSet = NO;
+    [self refreshTitle];
+    [_table reloadData];
+    ERLinkLog(@"customize: 恢复默认 %@", _uuid);
 }
 
 // 第4行「替换」按钮：复用添加流程（原位换目标，槽位不动）。
@@ -1877,9 +2008,9 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     [self.navigationController pushViewController:controller animated:YES];
 }
 
-// 卡片2：删除（确认后删除条目，控制中心磁贴由对账路径同步移除）。
+// 右下「删除快捷动作」：确认后删除条目，控制中心磁贴由对账路径同步移除。
 - (void)deleteTapped {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"删除快捷方式"
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"删除快捷动作"
                                                                    message:@"子页面与控制中心磁贴都会被删除。"
                                                             preferredStyle:UIAlertControllerStyleAlert];
     __weak typeof(self) weakSelf = self;
@@ -1913,6 +2044,11 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
 
 // 原位修改当前条目并持久化（子页面与控制中心同步）。
 - (void)mutateEntry:(void (^)(NSMutableDictionary *updated))mutate {
+    [self mutateEntryQuiet:mutate];
+}
+
+// 同 mutateEntry，但静默版本供首次存档用（行为一致，留名区分意图）。
+- (void)mutateEntryQuiet:(void (^)(NSMutableDictionary *updated))mutate {
     NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
     for (NSUInteger index = 0; index < catalog.count; index++) {
         NSDictionary *entry = catalog[index];
@@ -1932,38 +2068,12 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     ERLinkPersistCatalog(catalog);
 }
 
-// 应用图标覆盖（symbolOverride；空串 = 清除覆盖恢复默认）。
-- (void)applySymbolOverride:(NSString *)symbol {
-    symbol = [symbol isKindOfClass:[NSString class]] ? [symbol stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] : @"";
-    if (symbol.length && ![UIImage systemImageNamed:symbol]) {
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"符号不可用"
-                                                                       message:[NSString stringWithFormat:@"系统里没有名为 %@ 的 SF 符号。", symbol]
-                                                                preferredStyle:UIAlertControllerStyleAlert];
-        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
-        [self presentViewController:alert animated:YES completion:nil];
-        return;
-    }
-    [self mutateEntry:^(NSMutableDictionary *updated) {
-        if (symbol.length) {
-            updated[@"symbolOverride"] = symbol;
-        } else {
-            [updated removeObjectForKey:@"symbolOverride"];
-        }
-    }];
-    [_table reloadData];
-}
-
-// MARK: UITextFieldDelegate
-
-- (BOOL)textFieldShouldReturn:(UITextField *)textField {
-    [textField resignFirstResponder];
-    return YES;
-}
-
 // MARK: ERLinkIconPickerDelegate
 
 - (void)iconPickerDidPickSymbol:(NSString *)symbolName {
-    [self applySymbolOverride:symbolName];
+    _pendingSymbol = [symbolName isKindOfClass:[NSString class]] ? symbolName : @"";
+    _pendingSymbolSet = YES;
+    [_table reloadData];
 }
 
 @end
