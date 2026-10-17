@@ -26659,6 +26659,10 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         scItem = [[itemCls alloc] init];
                         ((void (*)(id, SEL, id))objc_msgSend)(scItem, @selector(setType:), shortcutType);
                         ((void (*)(id, SEL, id))objc_msgSend)(scItem, @selector(setLocalizedTitle:), name);
+                        // 1.1.9-52：对齐真实样本 —— localizedSubtitle 为空串（非 null）
+                        SEL subSel = NSSelectorFromString(@"setLocalizedSubtitle:");
+                        if ([scItem respondsToSelector:subSel])
+                            ((void (*)(id, SEL, id))objc_msgSend)(scItem, subSel, @"");
                     }
                     // info = BSMutableSettings{ shortcutItem: scItem }
                     // 1.1.9-41：BSSettings 的写入方法实际为 setObject:forSetting:（P.Helper.BSMS）
@@ -26744,6 +26748,41 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                                             [[NSProcessInfo processInfo] processIdentifier]);
                         }
                     }
+                    // 1.1.9-52：长按桌面抓包实锤 —— 真实系统调用的 action 带
+                    // responder: <_BSActionResponder; active: YES>（SpringBoard 内部
+                    // 构造、无 mach port）。-47/-50b/-51 的深层硬崩即 action 缺
+                    // responder、处理器回调时崩溃。补建并挂接。
+                    id responder = nil;
+                    NSString *respHow = @"none";
+                    Class respCls = NSClassFromString(@"_BSActionResponder");
+                    if (respCls) {
+                        responder = [[respCls alloc] init];
+                        if (responder) {
+                            respHow = @"init";
+                            for (NSString *m in @[@"activate", @"begin", @"start"]) {
+                                SEL aSel = NSSelectorFromString(m);
+                                if ([responder respondsToSelector:aSel]) {
+                                    ((void (*)(id, SEL))objc_msgSend)(responder, aSel);
+                                    respHow = [NSString stringWithFormat:@"init+%@", m];
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if (responder && action) {
+                        BOOL attached = NO;
+                        for (NSString *m in @[@"setResponder:", @"_setResponder:", @"setPrivateResponder:"]) {
+                            SEL rSel = NSSelectorFromString(m);
+                            if ([action respondsToSelector:rSel]) {
+                                ((void (*)(id, SEL, id))objc_msgSend)(action, rSel, responder);
+                                respHow = [NSString stringWithFormat:@"%@%@", respHow, m];
+                                attached = YES; break;
+                            }
+                        }
+                        if (!attached) respHow = [respHow stringByAppendingString:@"(no-attach-sel)"];
+                    }
+                    ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
+                                 [NSString stringWithFormat:@"resp=%d(%@)", responder != nil, respHow]);
                     ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
                                  [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d(%@) origin=%d",
                                   scItem != nil, info != nil, action != nil, actHow, settings != nil, setHow, origin != nil]);
