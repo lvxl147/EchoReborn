@@ -2195,11 +2195,12 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
             UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
             [NSLayoutConstraint activateConstraints:@[
                 // 顺序：标签(margins.leading) → 预览 → 输入框 → 选择按钮(margins.trailing)。
-                [preview.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor constant:56.0],
+                // 预览锚定「图标」文字尾部，两侧间距恒等（都是 10pt）。
+                [preview.leadingAnchor constraintEqualToAnchor:cell.textLabel.trailingAnchor constant:10.0],
                 [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [preview.widthAnchor constraintEqualToConstant:34.0],
                 [preview.heightAnchor constraintEqualToConstant:34.0],
-                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:6.0],
+                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:10.0],
                 [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [field.heightAnchor constraintEqualToConstant:34.0],
                 [pick.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
@@ -2292,7 +2293,13 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
                 }
             }
             iconField.text = current;
-            preview.image = ERLinkCellIcon(entry);
+            // 1.1.9-67：预览实时反映未保存的图标（暂存值合成临时条目再渲染）。
+            NSMutableDictionary *previewEntry = [entry mutableCopy] ?: [NSMutableDictionary dictionary];
+            if (_pendingSymbolSet) {
+                if (_pendingSymbol.length) previewEntry[@"symbolOverride"] = _pendingSymbol;
+                else [previewEntry removeObjectForKey:@"symbolOverride"];
+            }
+            preview.image = ERLinkCellIcon(previewEntry);
             cell.detailTextLabel.text = nil;
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.accessoryView = nil;
