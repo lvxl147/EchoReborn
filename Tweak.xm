@@ -19,6 +19,7 @@
 #import <crt_externs.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
+#import <mach-o/dyld.h>
 #import <AVFoundation/AVFoundation.h>
 #include <dlfcn.h>
 
@@ -26584,31 +26585,43 @@ static NSArray *ERAct2ClsList(void) {
     return list;
 }
 
+// 1.1.9-56d：按镜像探测替代全量扫描（-56b/-56c 全量 objc_copyClassList 扫描在
+// SpringBoard 引导后 8s 必崩：-55 无探测稳定，56b/56c 均在探测窗口内崩）。
+// 只扫 SpringBoard 主程序 + 非 System 的 dylib（即各 tweak 注入镜像，含乌贼手势），
+// objc_copyClassNamesForImage 仅列类名，objc_lookUpClass 不触发 +initialize。
 static void ERAct2ProbeImpl(void) {
     @try {
         SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
-        unsigned int count = 0;
-        ERAddDiagSet(@"Diag.P.Act2.Start", @"scan-begin");
-        Class *classes = objc_copyClassList(&count);
-        ERAddDiagSet(@"Diag.P.Act2.Start", [NSString stringWithFormat:@"copied=%u", count]);
+        ERAddDiagSet(@"Diag.P.Act2.Start", @"begin");
         NSMutableArray *hits = [NSMutableArray array];
-        unsigned int checked = 0;
-        for (unsigned int i = 0; i < count; i++) {
-            Class c = classes[i];
-            if (!c) continue;
-            // 纯 C 查找，不触发 +initialize
-            if (class_getInstanceMethod(c, actSel) || class_getClassMethod(c, actSel)) {
-                [hits addObject:NSStringFromClass(c)];
-                // 命中即时落盘，崩溃也不丢
-                ERAddDiagSet(@"Diag.P.Act2.Hit", NSStringFromClass(c));
+        unsigned int n = _dyld_image_count();
+        unsigned int scanned = 0;
+        for (unsigned int i = 0; i < n; i++) {
+            const char *p = _dyld_get_image_name(i);
+            if (!p) continue;
+            NSString *path = [NSString stringWithUTF8String:p];
+            BOOL isMain = (i == 0);
+            BOOL isSys  = [path containsString:@"/System/Library"] || [path containsString:@"/usr/lib"] || [path containsString:@"/usr/local"];
+            BOOL isDylib = [path hasSuffix:@".dylib"];
+            if (!(isMain || (isDylib && !isSys))) continue;
+            unsigned int cn = 0;
+            const char **names = objc_copyClassNamesForImage(p, &cn);
+            ERAddDiagSet(@"Diag.P.Act2.Img", [NSString stringWithFormat:@"#%u %s ncls=%u", i, path.lastPathComponent.UTF8String, cn]);
+            for (unsigned int j = 0; j < cn; j++) {
+                Class c = objc_lookUpClass(names[j]);
+                if (!c) continue;
+                if (class_getInstanceMethod(c, actSel) || class_getClassMethod(c, actSel)) {
+                    NSString *cn2 = [NSString stringWithFormat:@"%s", names[j]];
+                    [hits addObject:cn2];
+                    ERAddDiagSet(@"Diag.P.Act2.Hit", cn2);
+                }
             }
-            checked++;
-            if ((checked % 2000) == 0)
-                ERAddDiagSet(@"Diag.P.Act2.Scan", [NSString stringWithFormat:@"%u/%u hits=%lu", checked, count, (unsigned long)hits.count]);
+            if (names) free(names);
+            scanned++;
+            ERAddDiagSet(@"Diag.P.Act2.Scan", [NSString stringWithFormat:@"imgs=%u/%u hits=%lu", scanned, n, (unsigned long)hits.count]);
         }
-        free(classes);
         ERAddDiagSet(@"Diag.P.Act2.Done",
-                     [NSString stringWithFormat:@"checked=%u hits=%lu %@", count, (unsigned long)hits.count, [hits componentsJoinedByString:@","]]);
+                     [NSString stringWithFormat:@"imgs=%u hits=%lu %@", scanned, (unsigned long)hits.count, [hits componentsJoinedByString:@","]]);
     } @catch (NSException *e) {
         ERAddDiagSet(@"Diag.P.Act2.EXC", e.name);
     }
