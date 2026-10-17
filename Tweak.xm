@@ -26539,33 +26539,8 @@ static void ERBSInjectSettingsMethods(void) {
             class_addMethod(cls, items[i].sel, items[i].imp, items[i].enc);
 }
 
-// 1.1.9-54 方案 B：appShortcut → URL Scheme 映射。伪造系统动作（-39..-53）已证实
-// 无法绕过 responder/XPC 编码问题，改用稳定 openURL 通道。内置常见映射，
-// 用户可经 prefs 键 AppShortcutURLMap（dict，键 "bundleId|type" 或 "type"）扩展。
-static NSString *ERAppShortcutMappedURL(NSString *bundleId, NSString *type) {
-    if (![bundleId isKindOfClass:[NSString class]] || !bundleId.length) return nil;
-    NSString *key = [NSString stringWithFormat:@"%@|%@", bundleId, type ?: @""];
-    @try {
-        CFPropertyListRef v = CFPreferencesCopyAppValue((CFStringRef)@"AppShortcutURLMap",
-                                                        (CFStringRef)@"com.strive.echoreborn.preferences");
-        if (v) {
-            NSDictionary *m = CFBridgingRelease(v);
-            if ([m isKindOfClass:[NSDictionary class]]) {
-                NSString *u = m[key] ?: m[type];
-                if ([u isKindOfClass:[NSString class]] && u.length) return u;
-            }
-        }
-    } @catch (NSException *e) {}
-    static NSDictionary *builtin = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        builtin = @{
-            @"com.tencent.mqq|qr": @"mqqapi://qrcode/scan_qrcode?version=1&generalAction=scan",
-        };
-    });
-    NSString *u = builtin[key];
-    return ([u isKindOfClass:[NSString class]] && u.length) ? u : nil;
-}
+// 1.1.9-58：应用户要求，URL Scheme 映射（1.1.9-54 方案 B，含内置 QQ 扫一扫
+// 映射与 AppShortcutURLMap prefs 扩展）全部移除。快捷方式磁贴不走 URL 通道。
 
 // 1.1.9-56：修正版全类探测 —— 找出响应 activateShortcut:withBundleIdentifier:
 // forIconView: 的全部类。class_getInstanceMethod / class_getClassMethod 为纯 C
@@ -26871,22 +26846,7 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".act2"],
                              [NSString stringWithFormat:@"EXC %@ %@", aex.name, aex.reason ?: @""]);
             }
-            // 1.1.9-54 方案 B：appShortcut → URL Scheme 映射直达（走已验证稳定的
-            // openURL 通道；未收录的应用回退后续层即"打开应用"）
-            {
-                NSString *mapURL = ERAppShortcutMappedURL(entry[@"bundleId"], shortcutType);
-                if (mapURL) {
-                    NSURL *mu = [NSURL URLWithString:mapURL];
-                    if (mu) {
-                        BOOL ok = ERRunLinkOpenURL(mu);
-                        ERAddDiagSet([diagKey stringByAppendingString:@".map"],
-                                     [NSString stringWithFormat:@"%@ %@", mapURL, ok ? @"YES" : @"NO"]);
-                        if (ok) return YES;
-                    }
-                } else {
-                    ERAddDiagSet([diagKey stringByAppendingString:@".map"], @"no-match");
-                }
-            }
+            // 1.1.9-58：URL 映射层已按用户要求移除。
             // 1.1.9-54：-39..-53 的系统动作伪造调用（直调 MainWS / 服务层携带
             // 自建 action）已证实因 responder/XPC 编码不可伪造而反复硬崩，全线停用。
             static BOOL _erShortcutSysDisabled = YES;
