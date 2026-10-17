@@ -183,6 +183,10 @@ static void ERLinkPersistCatalog(NSArray<NSDictionary *> *catalog) {
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
                                          (__bridge CFStringRef)kERLinkReloadNotification,
                                          NULL, NULL, YES);
+    // 1.1.9-62：槽位磁贴 bundle 只监听 ReloadPrefs —— 改名/改图标后让它立即重绘。
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         CFSTR("com.strive.echoreborn/ReloadPrefs"),
+                                         NULL, NULL, YES);
     ERLinkLog(@"catalog: 保存 %lu 条快捷方式", (unsigned long)catalog.count);
 }
 
@@ -225,7 +229,11 @@ static NSDictionary *ERLinkResolveIcon(NSDictionary *entry) {
     UIImage *image = nil;
     BOOL full = NO;
 
-    if ([kind isEqualToString:@"app"]) {
+    // 1.1.9-62：自定义页设置的图标覆盖（symbolOverride）优先 —— 子页面与磁贴两处同步。
+    NSString *overrideSymbol = [entry[@"symbolOverride"] isKindOfClass:[NSString class]] ? entry[@"symbolOverride"] : @"";
+    if (overrideSymbol.length) image = [UIImage systemImageNamed:overrideSymbol];
+
+    if (!image && [kind isEqualToString:@"app"]) {
         image = ERLinkAppIconImage(value);
         if (image) full = YES;
     } else if ([kind isEqualToString:@"image"]) {
@@ -519,6 +527,60 @@ static NSDictionary *ERLinkMakeAppEntry(NSString *bundleId, NSString *name) {
     return entry;
 }
 
+// 1.1.9-62：条目类型的中文名（自定义页「类型」行只读显示）。
+static NSString *ERLinkTypeDisplay(NSDictionary *entry) {
+    NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
+    if ([type isEqualToString:@"app"]) return @"打开应用";
+    if ([type isEqualToString:@"appShortcut"]) return @"App 快捷方式";
+    if ([type isEqualToString:@"link"]) return @"链接";
+    return type.length ? type : @"未知";
+}
+
+// 1.1.9-62：用新条目的目标字段替换旧条目。保留旧条目的 uuid（槽位绑定不变，
+// 控制中心磁贴原位换目标）、用户改过的名称与图标覆盖（symbolOverride）。
+// freshEntry 来自添加流程的 ERLinkMakeApp* 工厂（带新 uuid，丢弃即可）。
+static BOOL ERLinkReplaceEntry(NSString *uuid, NSDictionary *freshEntry) {
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return NO;
+    if (![freshEntry isKindOfClass:[NSDictionary class]]) return NO;
+    NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
+    BOOL found = NO;
+    for (NSUInteger index = 0; index < catalog.count; index++) {
+        NSDictionary *entry = catalog[index];
+        if (![entry[@"uuid"] isKindOfClass:[NSString class]] ||
+            ![entry[@"uuid"] isEqualToString:uuid]) continue;
+        found = YES;
+        NSMutableDictionary *updated = [freshEntry mutableCopy] ?: [NSMutableDictionary dictionary];
+        updated[@"uuid"] = uuid;                                   // 槽位绑定保持
+        NSString *oldName = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+        if (oldName.length) updated[@"name"] = oldName;            // 名称保留用户改过的
+        NSString *oldOverride = [entry[@"symbolOverride"] isKindOfClass:[NSString class]] ? entry[@"symbolOverride"] : @"";
+        if (oldOverride.length) updated[@"symbolOverride"] = oldOverride;  // 图标覆盖保留
+        // 重渲染图标（目标变了，App 图标剪影要跟着换）。
+        updated[@"iconKind"] = freshEntry[@"iconKind"] ?: @"app";
+        updated[@"iconValue"] = freshEntry[@"iconValue"] ?: @"";
+        NSString *file = ERLinkWriteRenderedIcon(updated);
+        if (file) {
+            updated[@"iconFile"] = file;
+            updated[@"iconFull"] = @([ERLinkResolveIcon(updated)[@"full"] boolValue]);
+        }
+        catalog[index] = updated;
+        break;
+    }
+    if (found) ERLinkPersistCatalog(catalog);
+    return found;
+}
+
+// 1.1.9-62：替换完成后优先弹回自定义页（导航栈里有就回到那里）。
+static void ERLinkPopBackToCustomize(UIViewController *from) {
+    NSArray<UIViewController *> *stack = from.navigationController.viewControllers;
+    for (UIViewController *controller in stack) {
+        if ([controller isKindOfClass:NSClassFromString(@"ERLinkCustomizeController")]) {
+            [from.navigationController popToViewController:controller animated:YES];
+            return;
+        }
+    }
+    [from.navigationController popToRootViewControllerAnimated:YES];
+}
 // 取一个 App 的快捷方式列表（@{type,title}）：
 // ① SpringBoard 发布的快照（静态+动态，最全）；② 兜底读 App Info.plist 的静态项。
 static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) {
@@ -606,6 +668,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // 「添加链接」弹窗里正在编辑的那一份（从文件/相册导入图标时要用）
 @property (nonatomic, strong) UIAlertController *pendingAlert;
 @property (nonatomic, copy) NSString *pendingIconFile;
+// 1.1.9-62：替换模式 —— 非空时选中目标不新增条目，而是原位替换该 uuid 的条目。
+@property (nonatomic, copy) NSString *replaceUUID;
 - (instancetype)initWithExisting:(NSArray<NSDictionary *> *)existing;
 @end
 
@@ -616,7 +680,25 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 @property (nonatomic, copy) NSString *appBundleId;
 @property (nonatomic, copy) NSString *appName;
 @property (nonatomic, strong) NSArray<NSDictionary *> *shortcutItems;
+// 1.1.9-62：替换模式（由添加页透传）—— 点条目不新增，而是替换该 uuid 的条目。
+@property (nonatomic, copy) NSString *replaceUUID;
 - (instancetype)initWithAppBundleId:(NSString *)bundleId name:(NSString *)name;
+@end
+
+// 1.1.9-62：自定义快捷方式页（点主列表某行进入；实现在本文件末尾）。
+// 卡片1：第1行 类型（只读）｜第2行 名称（改名，两处同步）｜
+//        第3行 图标（输入框 + 选择按钮，symbolOverride 两处同步）｜
+//        第4行 选择快捷方式（替换按钮 → 复用添加流程原位换目标）。
+// 卡片2：删除快捷方式（红色，确认后连子页面与控制中心一起清）。
+@protocol ERLinkIconPickerDelegate;
+@interface ERLinkIconPickerController : PSViewController <UITableViewDataSource, UISearchBarDelegate>
+@property (nonatomic, weak) id<ERLinkIconPickerDelegate> pickerDelegate;
+@end
+@protocol ERLinkIconPickerDelegate <NSObject>
+- (void)iconPickerDidPickSymbol:(NSString *)symbolName;
+@end
+@interface ERLinkCustomizeController : PSViewController <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate, ERLinkIconPickerDelegate>
+- (instancetype)initWithUUID:(NSString *)uuid;
 @end
 
 @interface ERLinkController () <UITableViewDataSource, UITableViewDelegate>
@@ -738,7 +820,17 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     ERLinkLog(@"linkPane: 删除 %@", uuid ?: @"-");
 }
 
-- (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(__unused NSIndexPath *)indexPath {
+- (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    // 1.1.9-62：点击某条快捷方式 → 进入自定义页。
+    if (indexPath.row >= (NSInteger)self.links.count) return;
+    NSDictionary *entry = self.links[indexPath.row];
+    NSString *uuid = [entry[@"uuid"] isKindOfClass:[NSString class]] ? entry[@"uuid"] : @"";
+    if (!uuid.length) return;
+    ERLinkCustomizeController *controller = [[ERLinkCustomizeController alloc] initWithUUID:uuid];
+    NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+    controller.title = name.length ? name : @"自定义快捷方式";
+    [self.navigationController pushViewController:controller animated:YES];
 }
 
 @end
@@ -845,6 +937,12 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // MARK: - 保存一条快捷方式
 
 - (void)saveEntry:(NSDictionary *)entry {
+    if (self.replaceUUID.length) {
+        // 1.1.9-62：替换模式 —— 原位换目标（uuid/name/symbolOverride 保留），回到发起替换的页面。
+        ERLinkReplaceEntry(self.replaceUUID, entry);
+        ERLinkPopBackToCustomize(self);
+        return;
+    }
     NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy];
     if (!catalog) catalog = [NSMutableArray array];
     [catalog addObject:entry];
@@ -1108,6 +1206,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     ERLinkAppDetailController *detail =
         [[ERLinkAppDetailController alloc] initWithAppBundleId:app[@"bundleId"]
                                                           name:app[@"name"]];
+    detail.replaceUUID = self.replaceUUID;   // 1.1.9-62：替换模式透传
     [self.navigationController pushViewController:detail animated:YES];
 }
 
@@ -1287,6 +1386,24 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    // 1.1.9-62：替换模式 —— 头部行换成「打开 App」目标，条目行换成对应快捷方式，
+    // 原位替换后直接弹回自定义页，不走对号增删逻辑。
+    if (self.replaceUUID.length) {
+        NSDictionary *fresh = nil;
+        if (indexPath.row == 0) {
+            fresh = ERLinkMakeAppEntry(self.appBundleId, self.appName);
+        } else if (indexPath.row <= (NSInteger)self.shortcutItems.count) {
+            NSDictionary *item = self.shortcutItems[(NSUInteger)(indexPath.row - 1)];
+            NSString *type = [item[@"type"] isKindOfClass:[NSString class]] ? item[@"type"] : @"";
+            if (!type.length) return;
+            fresh = ERLinkMakeAppShortcutEntry(self.appBundleId, self.appName, type, item[@"title"]);
+        } else {
+            return;
+        }
+        ERLinkReplaceEntry(self.replaceUUID, fresh);
+        ERLinkPopBackToCustomize(self);
+        return;
+    }
     if (indexPath.row == 0) {
         // 头部行：添加/取消「打开 App」。
         NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
@@ -1323,6 +1440,530 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         ERLinkLog(@"appDetail: 添加 %@ / %@", self.appBundleId, type);
     }
     [tableView reloadData];
+}
+
+@end
+
+// MARK: - 图标选择页（1.1.9-62 · keyboardX 风格：搜索 + SF 符号网格）
+
+// 内置符号池：常用 SF Symbols（可搜索；系统不存在的符号会被自动过滤掉）。
+static NSArray<NSString *> *ERLinkSymbolCatalog(void) {
+    static NSArray<NSString *> *catalog = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        catalog = @[
+            // 通用 / 方向
+            @"link", @"globe", @"house", @"house.fill", @"magnifyingglass", @"gear", @"gearshape.fill",
+            @"star", @"star.fill", @"heart", @"heart.fill", @"bookmark", @"bookmark.fill",
+            @"flag", @"flag.fill", @"pin", @"pin.fill", @"mappin", @"mappin.circle.fill",
+            // 通信 / 社交
+            @"message", @"message.fill", @"phone", @"phone.fill", @"envelope", @"envelope.fill",
+            @"bubble.left", @"bubble.left.fill", @"bubble.right.fill", @"person", @"person.fill",
+            @"person.2", @"person.2.fill", @"person.crop.circle", @"person.crop.circle.fill",
+            @"at", @"mic", @"mic.fill", @"video", @"video.fill", @"phone.arrow.up.right.fill",
+            // 工具 / 系统
+            @"bolt", @"bolt.fill", @"wand.and.stars", @"sparkles", @"timer", @"timer.circle.fill",
+            @"alarm", @"stopwatch", @"calendar", @"clock", @"clock.fill", @"bell", @"bell.fill",
+            @"tray", @"tray.fill", @"archivebox", @"archivebox.fill", @"doc", @"doc.fill",
+            @"doc.text", @"doc.text.fill", @"note.text", @"folder", @"folder.fill",
+            @"clipboard", @"paperplane", @"paperplane.fill", @"square.and.pencil",
+            @"pencil", @"pencil.tip", @"eraser", @"scissors", @"ruler", @"wrench",
+            @"wrench.and.screwdriver", @"hammer", @"paintbrush", @"paintbrush.fill",
+            // 媒体
+            @"play", @"play.fill", @"pause.fill", @"stop.fill", @"forward.fill", @"backward.fill",
+            @"music.note", @"music.note.list", @"headphones", @"speaker.wave.2.fill",
+            @"waveform", @"waveform.circle.fill", @"tv", @"tv.fill", @"video.circle.fill",
+            @"camera", @"camera.fill", @"photo", @"photo.fill", @"photo.on.rectangle",
+            @"movieclapper", @"movieclapper.fill", @"radio", @"podcast", @"gamecontroller",
+            @"gamecontroller.fill",
+            // 网络 / 存储
+            @"wifi", @"wifi.circle.fill", @"antenna.radiowaves.left.and.right",
+            @"antenna.radiowaves.left.and.right.circle.fill", @"arrow.up.arrow.down",
+            @"arrow.triangle.2.circlepath", @"arrow.triangle.swap", @"cloud", @"cloud.fill",
+            @"externaldrive", @"externaldrive.fill", @"internaldrive.fill", @"tray.full.fill",
+            @"externaldrive.badge.icloud", @"icloud", @"icloud.fill",
+            // 安全 / 系统
+            @"lock", @"lock.fill", @"lock.open.fill", @"key", @"key.fill", @"shield",
+            @"shield.fill", @"checkmark.shield.fill", @"exclamationmark.shield.fill",
+            @"checkmark.circle", @"checkmark.circle.fill", @"xmark.circle.fill",
+            @"exclamationmark.triangle.fill", @"info.circle", @"questionmark.circle",
+            @"power", @"power.circle.fill", @"moon", @"moon.fill", @"sun.max", @"sun.max.fill",
+            @"eye", @"eye.fill", @"eye.slash.fill", @"hand.raised.fill", @"faceid",
+            // 金融 / 数据
+            @"creditcard", @"creditcard.fill", @"banknote", @"banknote.fill", @"yensign.circle.fill",
+            @"chart.bar", @"chart.bar.fill", @"chart.line.uptrend.xyaxis", @"chart.pie.fill",
+            @"list.bullet", @"list.number", @"tablecells", @"square.grid.2x2.fill",
+            @"square.grid.3x3.fill", @"rectangle.grid.1x2.fill", @"text.justify",
+            // 生活方式
+            @"cart", @"cart.fill", @"bag", @"bag.fill", @"tag", @"tag.fill", @"gift", @"gift.fill",
+            @"cup.and.saucer", @"cup.and.saucer.fill", @"fork.knife", @"fork.knife.circle.fill",
+            @"car", @"car.fill", @"bus.fill", @"airplane", @"airplane.circle.fill", @"bicycle",
+            @"figure.walk", @"figure.run", @"sportscourt.fill", @"dumbbell.fill",
+            @"leaf", @"leaf.fill", @"tree.fill", @"drop", @"drop.fill", @"flame", @"flame.fill",
+            @"snowflake", @"wind", @"thermometer.sun.fill", @"smiley", @"smiley.fill",
+            @"plus.circle.fill", @"minus.circle.fill", @"xmark.circle", @"arrow.up.circle.fill",
+            @"arrow.down.circle.fill", @"arrow.right.circle.fill", @"arrow.left.circle.fill",
+            @"bolt.circle.fill", @"wifi.router.fill", @"app.fill", @"app.badge.fill",
+            @"square.stack.3d.up.fill", @"rectangle.stack.fill", @"circle.grid.3x3.fill",
+            @"battery.100.bolt", @"lightbulb.fill", @"flashlight.on.fill", @"printer.fill",
+            @"touchid", @"text.bubble.fill", @"globe.asia.australia.fill", @"build.2.fill",
+        ];
+    });
+    return catalog;
+}
+
+static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
+
+@implementation ERLinkIconPickerController {
+    UITableView *_table;
+    UISearchBar *_searchBar;
+    NSArray<NSString *> *_available;
+    NSArray<NSString *> *_filtered;
+}
+
+- (void)loadView {
+    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    [self.view addSubview:table];
+    _table = table;
+
+    UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0.0, 0.0, CGRectGetWidth(self.view.bounds), 56.0)];
+    bar.delegate = self;
+    bar.placeholder = @"搜索符号（如 wifi / bolt / music）";
+    bar.searchBarStyle = UISearchBarStyleMinimal;
+    bar.showsCancelButton = NO;
+    bar.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(table.bounds), 56.0);
+    [bar layoutIfNeeded];
+    table.tableHeaderView = bar;
+    _searchBar = bar;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"选择图标";
+    // 只保留当前系统能渲染的符号。
+    NSMutableArray<NSString *> *available = [NSMutableArray array];
+    for (NSString *name in ERLinkSymbolCatalog()) {
+        if ([UIImage systemImageNamed:name]) [available addObject:name];
+    }
+    _available = available;
+    _filtered = available;
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
+    NSString *needle = searchText.lowercaseString;
+    if (!needle.length) {
+        _filtered = _available;
+    } else {
+        NSMutableArray<NSString *> *result = [NSMutableArray array];
+        for (NSString *name in _available) {
+            if ([name.lowercaseString containsString:needle]) [result addObject:name];
+        }
+        _filtered = result;
+    }
+    [_table reloadData];
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+    [searchBar resignFirstResponder];
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+    return (NSInteger)_filtered.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kERLinkIconPickerCell];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:kERLinkIconPickerCell];
+    NSString *name = _filtered[(NSUInteger)indexPath.row];
+    cell.textLabel.text = name;
+    cell.textLabel.textColor = UIColor.labelColor;
+    cell.textLabel.font = [UIFont systemFontOfSize:12.0];
+    // 40×40 预览：蓝色符号（选择页里看得清；磁贴上会按规则画成白色前景）。
+    cell.imageView.image = [UIImage systemImageNamed:name];
+    cell.imageView.tintColor = [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0];
+    cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if ((NSUInteger)indexPath.row >= _filtered.count) return;
+    NSString *name = _filtered[(NSUInteger)indexPath.row];
+    if ([self.pickerDelegate respondsToSelector:@selector(iconPickerDidPickSymbol:)]) {
+        [self.pickerDelegate iconPickerDidPickSymbol:name];
+    }
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+@end
+
+// MARK: - 自定义快捷方式页（1.1.9-62）
+
+@implementation ERLinkCustomizeController {
+    UITableView *_table;
+    NSString *_uuid;
+    UITextField *_iconField;
+}
+
+- (instancetype)initWithUUID:(NSString *)uuid {
+    self = [super init];
+    if (!self) return nil;
+    _uuid = [uuid isKindOfClass:[NSString class]] ? uuid : @"";
+    return self;
+}
+
+- (void)loadView {
+    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    [self.view addSubview:table];
+    _table = table;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    // 「替换」回来后刷新标题与内容。
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self refreshTitle];
+    [_table reloadData];
+}
+
+- (void)refreshTitle {
+    NSDictionary *entry = [self entry];
+    NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+    self.title = name.length ? name : @"自定义快捷方式";
+}
+
+- (NSDictionary *)entry {
+    for (NSDictionary *entry in ERLinkStoredCatalog()) {
+        if ([entry[@"uuid"] isKindOfClass:[NSString class]] &&
+            [entry[@"uuid"] isEqualToString:_uuid]) return entry;
+    }
+    return nil;
+}
+
+// 目标描述（第4行副标题）：App/快捷方式 → App 名称 + 快捷方式；链接 → url。
+- (NSString *)targetSummary {
+    NSDictionary *entry = [self entry];
+    if (!entry) return @"";
+    NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
+    if ([type isEqualToString:@"link"]) {
+        NSString *url = [entry[@"url"] isKindOfClass:[NSString class]] ? entry[@"url"] : @"";
+        return url.length ? url : @"未设置";
+    }
+    NSString *bundle = [entry[@"bundleId"] isKindOfClass:[NSString class]] ? entry[@"bundleId"] : @"";
+    NSString *shortcutType = [entry[@"shortcutType"] isKindOfClass:[NSString class]] ? entry[@"shortcutType"] : @"";
+    if (shortcutType.length) return [NSString stringWithFormat:@"%@ · %@", bundle, shortcutType];
+    return bundle.length ? bundle : @"未设置";
+}
+
+// MARK: Table
+
+- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
+    return 2;
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
+    return section == 0 ? 4 : 1;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(__unused NSInteger)section {
+    return section == 0 ? @"快捷方式信息" : nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    NSDictionary *entry = [self entry] ?: @{};
+    static NSString *plainId = @"ERLinkCustomPlain";
+    static NSString *iconId = @"ERLinkCustomIcon";
+    static NSString *replaceId = @"ERLinkCustomReplace";
+    static NSString *deleteId = @"ERLinkCustomDelete";
+
+    NSString *identifier = plainId;
+    if (indexPath.section == 0 && indexPath.row == 2) identifier = iconId;
+    if (indexPath.section == 0 && indexPath.row == 3) identifier = replaceId;
+    if (indexPath.section == 1) identifier = deleteId;
+
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    BOOL iconRow = [identifier isEqualToString:iconId];
+    BOOL replaceRow = [identifier isEqualToString:replaceId];
+    BOOL deleteRow = [identifier isEqualToString:deleteId];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
+        if (iconRow) {
+            // 输入框 + 选择按钮装在同一个 accessoryView 容器里，避免与 detail 文本重叠。
+            UIView *container = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 196.0, 30.0)];
+            UITextField *field = [[UITextField alloc] initWithFrame:CGRectMake(0.0, 0.0, 148.0, 30.0)];
+            field.placeholder = @"SF 符号名";
+            field.textAlignment = NSTextAlignmentRight;
+            field.font = [UIFont systemFontOfSize:14.0];
+            field.clearButtonMode = UITextFieldViewModeWhileEditing;
+            field.returnKeyType = UIReturnKeyDone;
+            field.autocorrectionType = UITextAutocorrectionTypeNo;
+            field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            field.delegate = self;
+            [field addTarget:self action:@selector(iconFieldEdited:) forControlEvents:UIControlEventEditingDidEnd];
+            [container addSubview:field];
+            _iconField = field;
+            UIButton *pick = [UIButton buttonWithType:UIButtonTypeSystem];
+            pick.frame = CGRectMake(152.0, 0.0, 44.0, 30.0);
+            [pick setTitle:@"选择" forState:UIControlStateNormal];
+            [pick addTarget:self action:@selector(pickIconTapped) forControlEvents:UIControlEventTouchUpInside];
+            [container addSubview:pick];
+            cell.accessoryView = container;
+        } else if (replaceRow) {
+            UIButton *replace = [UIButton buttonWithType:UIButtonTypeSystem];
+            replace.frame = CGRectMake(0.0, 0.0, 48.0, 30.0);
+            [replace setTitle:@"替换" forState:UIControlStateNormal];
+            [replace addTarget:self action:@selector(replaceTapped) forControlEvents:UIControlEventTouchUpInside];
+            cell.accessoryView = replace;
+        } else if (deleteRow) {
+            UIButton *delete = [UIButton buttonWithType:UIButtonTypeSystem];
+            delete.frame = CGRectMake(0.0, 0.0, 160.0, 34.0);
+            [delete setTitle:@"删除快捷方式" forState:UIControlStateNormal];
+            [delete setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
+            [delete addTarget:self action:@selector(deleteTapped) forControlEvents:UIControlEventTouchUpInside];
+            delete.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:delete];
+            [NSLayoutConstraint activateConstraints:@[
+                [delete.centerXAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor],
+                [delete.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [delete.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor],
+                [delete.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
+            ]];
+        }
+    }
+    if (deleteRow) {
+        cell.textLabel.text = nil;
+        cell.detailTextLabel.text = nil;
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        return cell;
+    }
+
+    switch (indexPath.section == 0 ? indexPath.row : 4) {
+        case 0: {
+            // 第1行：类型（只读）。
+            cell.textLabel.text = @"类型";
+            cell.detailTextLabel.text = ERLinkTypeDisplay(entry);
+            cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.imageView.image = nil;
+            cell.accessoryView = nil;
+            break;
+        }
+        case 1: {
+            // 第2行：名称（点击弹窗改名）。
+            cell.textLabel.text = @"名称";
+            NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+            cell.detailTextLabel.text = name.length ? name : @"未命名";
+            cell.detailTextLabel.textColor = UIColor.labelColor;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+            cell.imageView.image = nil;
+            cell.accessoryView = nil;
+            break;
+        }
+        case 2: {
+            // 第3行：图标（输入框 + 选择按钮）。
+            cell.textLabel.text = @"图标";
+            NSString *override = [entry[@"symbolOverride"] isKindOfClass:[NSString class]] ? entry[@"symbolOverride"] : @"";
+            if (!override.length) {
+                NSString *kind = [entry[@"iconKind"] isKindOfClass:[NSString class]] ? entry[@"iconKind"] : @"";
+                if ([kind isEqualToString:@"symbol"]) {
+                    override = [entry[@"iconValue"] isKindOfClass:[NSString class]] ? entry[@"iconValue"] : @"";
+                }
+            }
+            _iconField.text = override;
+            cell.detailTextLabel.text = nil;
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.imageView.image = ERLinkCellIcon(entry);
+            cell.imageView.layer.cornerRadius = 9.0;
+            cell.imageView.clipsToBounds = YES;
+            break;
+        }
+        case 3: {
+            // 第4行：选择快捷方式（替换按钮）。
+            cell.textLabel.text = @"选择快捷方式";
+            cell.detailTextLabel.text = [self targetSummary];
+            cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.imageView.image = nil;
+            cell.accessoryView = nil;
+            break;
+        }
+        default:
+            break;
+    }
+    return cell;
+}
+
+- (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section != 0 || indexPath.row != 1) return;
+    [self renameTapped];
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(NSInteger)section {
+    if (section == 0) return @"名称与图标会同步到控制中心磁贴；替换会保留原槽位位置。";
+    return @"删除后子页面与控制中心磁贴一起消失。";
+}
+
+// MARK: 动作
+
+// 第2行：改名。
+- (void)renameTapped {
+    NSDictionary *entry = [self entry];
+    if (!entry) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"修改名称"
+                                                                   message:nil
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
+        field.placeholder = @"名称";
+    }];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        UITextField *field = alert.textFields.firstObject;
+        NSString *name = field.text ?: @"";
+        if (!name.length) return;
+        [strongSelf mutateEntry:^(NSMutableDictionary *updated) {
+            updated[@"name"] = name;
+        }];
+        strongSelf.title = name;
+        [strongSelf->_table reloadData];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+// 第3行「选择」按钮：进图标选择页。
+- (void)pickIconTapped {
+    ERLinkIconPickerController *picker = [[ERLinkIconPickerController alloc] init];
+    picker.pickerDelegate = self;
+    [self.navigationController pushViewController:picker animated:YES];
+}
+
+// 第3行输入框：手输符号名，回车/失焦生效（清空 = 恢复默认图标）。
+- (void)iconFieldEdited:(UITextField *)field {
+    NSString *symbol = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    [self applySymbolOverride:symbol];
+}
+
+// 第4行「替换」按钮：复用添加流程（原位换目标，槽位不动）。
+- (void)replaceTapped {
+    ERLinkAddController *controller = [[ERLinkAddController alloc] initWithExisting:ERLinkStoredCatalog()];
+    controller.replaceUUID = _uuid;
+    controller.title = @"替换";
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+// 卡片2：删除（确认后删除条目，控制中心磁贴由对账路径同步移除）。
+- (void)deleteTapped {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"删除快捷方式"
+                                                                   message:@"子页面与控制中心磁贴都会被删除。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        [strongSelf deleteEntry];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)deleteEntry {
+    NSMutableArray<NSDictionary *> *remaining = [NSMutableArray array];
+    for (NSDictionary *entry in ERLinkStoredCatalog()) {
+        if ([entry[@"uuid"] isKindOfClass:[NSString class]] &&
+            [entry[@"uuid"] isEqualToString:_uuid]) {
+            NSString *iconFile = [entry[@"iconFile"] isKindOfClass:[NSString class]] ? entry[@"iconFile"] : @"";
+            if (iconFile.length) {
+                [[NSFileManager defaultManager] removeItemAtPath:ERLinkLocalImagePath(iconFile) error:nil];
+            }
+            continue;
+        }
+        [remaining addObject:entry];
+    }
+    ERLinkPersistCatalog(remaining);
+    ERLinkLog(@"customize: 删除 %@", _uuid);
+    [self.navigationController popToRootViewControllerAnimated:YES];
+}
+
+// MARK: 数据变更
+
+// 原位修改当前条目并持久化（子页面与控制中心同步）。
+- (void)mutateEntry:(void (^)(NSMutableDictionary *updated))mutate {
+    NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
+    for (NSUInteger index = 0; index < catalog.count; index++) {
+        NSDictionary *entry = catalog[index];
+        if (![entry[@"uuid"] isKindOfClass:[NSString class]] ||
+            ![entry[@"uuid"] isEqualToString:_uuid]) continue;
+        NSMutableDictionary *updated = [entry mutableCopy] ?: [NSMutableDictionary dictionary];
+        if (mutate) mutate(updated);
+        // 图标相关字段变了就重渲染成品 PNG（文件名不变，磁贴直接读新图）。
+        NSString *file = ERLinkWriteRenderedIcon(updated);
+        if (file) {
+            updated[@"iconFile"] = file;
+            updated[@"iconFull"] = @([ERLinkResolveIcon(updated)[@"full"] boolValue]);
+        }
+        catalog[index] = updated;
+        break;
+    }
+    ERLinkPersistCatalog(catalog);
+}
+
+// 应用图标覆盖（symbolOverride；空串 = 清除覆盖恢复默认）。
+- (void)applySymbolOverride:(NSString *)symbol {
+    symbol = [symbol isKindOfClass:[NSString class]] ? [symbol stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] : @"";
+    if (symbol.length && ![UIImage systemImageNamed:symbol]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"符号不可用"
+                                                                       message:[NSString stringWithFormat:@"系统里没有名为 %@ 的 SF 符号。", symbol]
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    [self mutateEntry:^(NSMutableDictionary *updated) {
+        if (symbol.length) {
+            updated[@"symbolOverride"] = symbol;
+        } else {
+            [updated removeObjectForKey:@"symbolOverride"];
+        }
+    }];
+    [_table reloadData];
+}
+
+// MARK: UITextFieldDelegate
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+
+// MARK: ERLinkIconPickerDelegate
+
+- (void)iconPickerDidPickSymbol:(NSString *)symbolName {
+    [self applySymbolOverride:symbolName];
 }
 
 @end
