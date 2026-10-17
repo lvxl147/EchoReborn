@@ -26661,6 +26661,54 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
             }
+            // 1.1.9-55：乌贼手势（SquidGesturePro）逆向实锤 —— 它调用
+            // activateShortcut:withBundleIdentifier:forIconView:，宿主对象为
+            // iconManager（SBIconController.iconManager）。-37 全类探测漏扫该类
+            // （筛选词 IconController 未命中 SBIconManager）。此层最优先尝试。
+            @try {
+                Class iconCtlCls = NSClassFromString(@"SBIconController");
+                id iconCtl = (iconCtlCls && [iconCtlCls respondsToSelector:@selector(sharedInstance)])
+                    ? ((id (*)(id, SEL))objc_msgSend)(iconCtlCls, @selector(sharedInstance)) : nil;
+                SEL mgrSel = NSSelectorFromString(@"iconManager");
+                id mgr = (iconCtl && [iconCtl respondsToSelector:mgrSel])
+                    ? ((id (*)(id, SEL))objc_msgSend)(iconCtl, mgrSel) : nil;
+                if (!mgr) {
+                    Class mgrCls = NSClassFromString(@"SBIconManager");
+                    for (NSString *acc in @[@"sharedInstance", @"sharedService"]) {
+                        SEL aSel = NSSelectorFromString(acc);
+                        if (mgrCls && [mgrCls respondsToSelector:aSel]) {
+                            mgr = ((id (*)(id, SEL))objc_msgSend)(mgrCls, aSel);
+                            if (mgr) break;
+                        }
+                    }
+                }
+                SEL actSel2 = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                if (mgr && [mgr respondsToSelector:actSel2]) {
+                    Class itemCls2 = NSClassFromString(@"SBSApplicationShortcutItem");
+                    id scItem2 = nil;
+                    if (itemCls2) {
+                        scItem2 = [[itemCls2 alloc] init];
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem2, @selector(setType:), shortcutType);
+                        ((void (*)(id, SEL, id))objc_msgSend)(scItem2, @selector(setLocalizedTitle:), name);
+                        SEL subSel2 = NSSelectorFromString(@"setLocalizedSubtitle:");
+                        if ([scItem2 respondsToSelector:subSel2])
+                            ((void (*)(id, SEL, id))objc_msgSend)(scItem2, subSel2, @"");
+                    }
+                    if (scItem2) {
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act2"], @"mgr-try");
+                        ((void (*)(id, SEL, id, id, id))objc_msgSend)
+                            (mgr, actSel2, scItem2, entry[@"bundleId"], (id)nil);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".act2"], @"mgr-sent");
+                        return YES;
+                    }
+                } else {
+                    ERAddDiagSet([diagKey stringByAppendingString:@".act2"],
+                                 mgr ? @"mgr-no-sel" : @"no-mgr");
+                }
+            } @catch (NSException *aex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".act2"],
+                             [NSString stringWithFormat:@"EXC %@ %@", aex.name, aex.reason ?: @""]);
+            }
             // 1.1.9-54 方案 B：appShortcut → URL Scheme 映射直达（走已验证稳定的
             // openURL 通道；未收录的应用回退后续层即"打开应用"）
             {
