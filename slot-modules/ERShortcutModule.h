@@ -403,11 +403,18 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
         } else if ([entryType isEqualToString:@"app"]) {
             symbol = @"square.grid.2x2.fill";
             self.linkImage = nil;
+        } else if ([entryType isEqualToString:@"script"]) {
+            // 1.1.9-68：脚本条目默认大括号符号（创建脚本页可自定义）。
+            if (!symbol || !([symbol length] && [UIImage systemImageNamed:symbol])) {
+                symbol = @"curlybraces";
+                self.linkImage = nil;
+            }
         }
         self.symbolName = symbol;
         _runLabel.text = [entryType isEqualToString:@"link"] ? @"一键直达"
                        : [entryType isEqualToString:@"appShortcut"] ? @"快捷跳转"
                        : [entryType isEqualToString:@"app"] ? @"打开应用"
+                       : [entryType isEqualToString:@"script"] ? @"运行脚本"
                        : @"点击运行";
     } else {
         self.symbolName = ERShortcutSymbolForRecord(record);
