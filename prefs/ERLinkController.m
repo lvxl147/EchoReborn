@@ -533,6 +533,7 @@ static NSString *ERLinkTypeDisplay(NSDictionary *entry) {
     if ([type isEqualToString:@"app"]) return @"打开应用";
     if ([type isEqualToString:@"appShortcut"]) return @"App 快捷方式";
     if ([type isEqualToString:@"link"]) return @"链接";
+    if ([type isEqualToString:@"script"]) return @"脚本";
     return type.length ? type : @"未知";
 }
 
@@ -704,10 +705,16 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 @interface ERLinkCustomizeController : PSViewController <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate, ERLinkIconPickerDelegate>
 - (instancetype)initWithUUID:(NSString *)uuid;
 @end
+// 1.1.9-68：创建脚本页（keyboardX 脚本编辑器样式：名称/图标/脚本源码多行框）。
+@interface ERLinkScriptController : PSViewController <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate, ERLinkIconPickerDelegate>
+@property (nonatomic, copy) NSString *replaceUUID; // 替换模式（原位换目标）
+@end
 
 @interface ERLinkController () <UITableViewDataSource, UITableViewDelegate>
 @property (nonatomic, strong) UITableView *linkTableView;
 @property (nonatomic, strong) NSArray<NSDictionary *> *links;
+// 1.1.9-68：按类型归组的 4 张卡片（打开应用/快捷方式/URL链接/脚本）。
+@property (nonatomic, strong) NSArray<NSDictionary *> *linkSections;
 @end
 
 @implementation ERLinkController
@@ -745,7 +752,32 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)reloadLinks {
     self.links = ERLinkCatalogForDisplay();
+    // 1.1.9-68：按类型归组 —— 顺序固定：打开应用 / 快捷方式 / URL链接 / 脚本。
+    NSMutableArray<NSDictionary *> *apps = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *appShortcuts = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *urlLinks = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *scripts = [NSMutableArray array];
+    for (NSDictionary *entry in self.links) {
+        NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
+        if ([type isEqualToString:@"app"]) [apps addObject:entry];
+        else if ([type isEqualToString:@"appShortcut"]) [appShortcuts addObject:entry];
+        else if ([type isEqualToString:@"script"]) [scripts addObject:entry];
+        else [urlLinks addObject:entry];
+    }
+    self.linkSections = @[
+        @{@"title": @"打开应用", @"entries": apps},
+        @{@"title": @"快捷方式", @"entries": appShortcuts},
+        @{@"title": @"URL链接", @"entries": urlLinks},
+        @{@"title": @"脚本", @"entries": scripts},
+    ];
     [self.linkTableView reloadData];
+}
+
+// 取某张卡片里的条目数组。
+- (NSArray<NSDictionary *> *)entriesForSection:(NSInteger)section {
+    if (section < 0 || section >= (NSInteger)self.linkSections.count) return @[];
+    NSArray *entries = self.linkSections[(NSUInteger)section][@"entries"];
+    return [entries isKindOfClass:[NSArray class]] ? entries : @[];
 }
 
 - (void)addLink:(__unused UIBarButtonItem *)sender {
@@ -757,15 +789,25 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // MARK: - Table
 
 - (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
-    return 1;
+    return 4;   // 1.1.9-68：打开应用 / 快捷方式 / URL链接 / 脚本。
 }
 
 - (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
-    return self.links.count ? (NSInteger)self.links.count : 1;
+    NSInteger count = (NSInteger)[self entriesForSection:section].count;
+    return count > 0 ? count : 1;   // 空卡片显示一行引导文字。
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(__unused NSInteger)section {
-    return [NSString stringWithFormat:@"快捷方式（%lu）", (unsigned long)self.links.count];
+    NSArray *titles = @[@"打开应用", @"快捷方式", @"URL链接", @"脚本"];
+    NSString *title = section >= 0 && section < 4 ? titles[(NSUInteger)section] : @"";
+    return [NSString stringWithFormat:@"%@（%lu）", title, (unsigned long)[self entriesForSection:section].count];
+}
+
+- (NSDictionary *)entryForIndexPath:(NSIndexPath *)indexPath {
+    NSArray<NSDictionary *> *list = [self entriesForSection:indexPath.section];
+    NSUInteger index = (NSUInteger)indexPath.row;
+    if (index >= list.count) return nil;
+    return list[index];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -773,27 +815,37 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:identifier];
 
-    if (self.links.count == 0) {
-        // 空状态：引导去点右上角的「添加」——那个按钮在主页上，所以这句话也只能放主页。
-        cell.textLabel.text = @"点击右上角添加快捷方式";
+    NSDictionary *entry = [self entryForIndexPath:indexPath];
+    if (!entry) {
+        // 空卡片：引导去点右上角的「添加」。
+        cell.textLabel.text = @"点右上角「添加」创建";
         cell.textLabel.textColor = UIColor.secondaryLabelColor;
+        cell.textLabel.font = [UIFont systemFontOfSize:14.0];
         cell.detailTextLabel.text = nil;
+        cell.imageView.image = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        cell.userInteractionEnabled = YES;
+        cell.userInteractionEnabled = NO;
         return cell;
     }
     cell.userInteractionEnabled = YES;
     cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.font = [UIFont systemFontOfSize:17.0];
 
-    NSDictionary *entry = self.links[indexPath.row];
-    cell.textLabel.text = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"快捷方式";
+    cell.textLabel.text = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"快捷动作";
     cell.textLabel.textColor = UIColor.labelColor;
     cell.imageView.image = ERLinkCellIcon(entry);
     cell.imageView.layer.cornerRadius = 9.0;
     cell.imageView.clipsToBounds = YES;
-    NSString *detail = [entry[@"type"] isEqualToString:@"app"] || [entry[@"type"] isEqualToString:@"appShortcut"]
-        ? entry[@"bundleId"] : entry[@"url"];
+    NSString *entryType = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
+    NSString *detail;
+    if ([entryType isEqualToString:@"script"]) {
+        detail = @"脚本";
+    } else if ([entryType isEqualToString:@"app"] || [entryType isEqualToString:@"appShortcut"]) {
+        detail = entry[@"bundleId"];
+    } else {
+        detail = entry[@"url"];
+    }
     if (![detail isKindOfClass:[NSString class]] || !detail.length) detail = @"";
     cell.detailTextLabel.text = detail;
     cell.detailTextLabel.textColor = UIColor.labelColor;
@@ -803,21 +855,22 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 // 左滑删除（快捷指令那边是「移出显示列表」，这边直接删掉条目本身）。
 - (BOOL)tableView:(__unused UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
-    return self.links.count > 0 && indexPath.row < (NSInteger)self.links.count;
+    return [self entryForIndexPath:indexPath] != nil;
 }
 
 - (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
                                             forRowAtIndexPath:(NSIndexPath *)indexPath {
     if (editingStyle != UITableViewCellEditingStyleDelete) return;
-    if (indexPath.row >= (NSInteger)self.links.count) return;
+    NSDictionary *entry = [self entryForIndexPath:indexPath];
+    if (!entry) return;
+    NSString *uuid = [entry[@"uuid"] isKindOfClass:[NSString class]] ? entry[@"uuid"] : @"";
     NSMutableArray<NSDictionary *> *remaining = [self.links mutableCopy];
-    NSString *uuid = self.links[indexPath.row][@"uuid"];
-    [remaining removeObjectAtIndex:indexPath.row];
+    [remaining removeObject:entry];
     ERLinkPersistCatalog(remaining);
     self.links = remaining;
-    [tableView reloadData];
+    [self reloadLinks];
     // 顺手把渲染好的图标文件删掉，别在日志目录里堆垃圾。
-    if ([uuid isKindOfClass:[NSString class]] && uuid.length) {
+    if (uuid.length) {
         [[NSFileManager defaultManager] removeItemAtPath:ERLinkLocalImagePath([uuid stringByAppendingPathExtension:@"png"])
                                                    error:nil];
     }
@@ -826,14 +879,14 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    // 1.1.9-62：点击某条快捷方式 → 进入自定义页。
-    if (indexPath.row >= (NSInteger)self.links.count) return;
-    NSDictionary *entry = self.links[indexPath.row];
+    // 1.1.9-62：点击某条快捷动作 → 进入自定义页。
+    NSDictionary *entry = [self entryForIndexPath:indexPath];
+    if (!entry) return;
     NSString *uuid = [entry[@"uuid"] isKindOfClass:[NSString class]] ? entry[@"uuid"] : @"";
     if (!uuid.length) return;
     ERLinkCustomizeController *controller = [[ERLinkCustomizeController alloc] initWithUUID:uuid];
     NSString *name = [entry[@"name"] isKindOfClass:[NSString class]] ? entry[@"name"] : @"";
-    controller.title = name.length ? name : @"自定义快捷方式";
+    controller.title = name.length ? name : @"自定义快捷动作";
     [self.navigationController pushViewController:controller animated:YES];
 }
 
@@ -1130,24 +1183,25 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // MARK: - Table
 
 - (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
-    // 1.1.9-17：三张卡片 —— ① 创建链接（独立卡）② 有快捷方式 ③ 其他应用。
-    return 3;
+    // 1.1.9-68：四张卡片 —— ① 创建链接 ② 创建脚本 ③ 有快捷方式 ④ 其他应用。
+    return 4;
 }
 
 - (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    if (section == 0) return 1;   // 「创建链接」独占一张卡
-    if (section == 1) return (NSInteger)self.withShortcuts.count;
+    if (section == 0 || section == 1) return 1;   // 「创建链接」「创建脚本」各占一张卡
+    if (section == 2) return (NSInteger)self.withShortcuts.count;
     return (NSInteger)self.withoutShortcuts.count;
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
     if (section == 0) return @"创建链接";
-    if (section == 1) return [NSString stringWithFormat:@"有快捷方式（%lu）", (unsigned long)self.withShortcuts.count];
+    if (section == 1) return @"创建脚本";
+    if (section == 2) return [NSString stringWithFormat:@"有快捷方式（%lu）", (unsigned long)self.withShortcuts.count];
     return [NSString stringWithFormat:@"其他应用（%lu）", (unsigned long)self.withoutShortcuts.count];
 }
 
 - (NSDictionary *)appForIndexPath:(NSIndexPath *)indexPath {
-    NSArray<NSDictionary *> *list = (indexPath.section == 1) ? self.withShortcuts : self.withoutShortcuts;
+    NSArray<NSDictionary *> *list = (indexPath.section == 2) ? self.withShortcuts : self.withoutShortcuts;
     NSUInteger index = (NSUInteger)indexPath.row;
     if (index >= list.count) return nil;
     return list[index];
@@ -1165,6 +1219,20 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         cell.detailTextLabel.text = @"自定义网址或 URL Scheme";
         cell.detailTextLabel.textColor = UIColor.labelColor;
         cell.imageView.image = ERLinkGlyphTile(@"plus.circle.fill", 0xFF3B82F6LL);
+        cell.imageView.layer.cornerRadius = 9.0;
+        cell.imageView.clipsToBounds = YES;
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        cell.userInteractionEnabled = YES;
+        return cell;
+    }
+    if (indexPath.section == 1) {
+        // 1.1.9-68：「创建脚本」卡片（keyboardX 脚本编辑样式，默认大括号图标）。
+        cell.textLabel.text = @"创建脚本";
+        cell.textLabel.textColor = UIColor.labelColor;
+        cell.detailTextLabel.text = @"JavaScript 脚本，点磁贴运行";
+        cell.detailTextLabel.textColor = UIColor.labelColor;
+        cell.imageView.image = ERLinkGlyphTile(@"curlybraces", 0xFF34C759LL);
         cell.imageView.layer.cornerRadius = 9.0;
         cell.imageView.clipsToBounds = YES;
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -1204,6 +1272,13 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         [self presentCreateLink];
         return;
     }
+    if (indexPath.section == 1) {
+        // 1.1.9-68：进脚本编辑页。
+        ERLinkScriptController *script = [[ERLinkScriptController alloc] init];
+        script.replaceUUID = self.replaceUUID;   // 替换模式透传
+        [self.navigationController pushViewController:script animated:YES];
+        return;
+    }
     NSDictionary *app = [self appForIndexPath:indexPath];
     if (!app) return;
     // 点击 App → 进入该 App 的详情页，在详情页里打对号添加/取消。
@@ -1216,9 +1291,182 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 @end
 
-// MARK: - App 详情页（该 App 的真实快捷方式：主屏 Quick Actions）
+// MARK: - 创建脚本页（1.1.9-68：keyboardX 脚本编辑器样式）
 
-@implementation ERLinkAppDetailController
+@implementation ERLinkScriptController {
+    UITableView *_table;
+    UITextField *_nameField;
+    UITextView *_scriptView;
+    NSString *_iconSymbol;   // 默认 curlybraces（大括号），可进图标库自定义
+}
+
+- (void)loadView {
+    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    table.keyboardDismissMode = UIScrollViewKeyboardDismissModeInteractive;
+    [self.view addSubview:table];
+    _table = table;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    self.title = @"创建脚本";
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    if (!_iconSymbol) _iconSymbol = @"curlybraces";
+    // 右上角「保存」——与快捷方式添加流程一致（替换模式同样支持）。
+    UIBarButtonItem *save = [[UIBarButtonItem alloc] initWithTitle:@"保存"
+                                                             style:UIBarButtonItemStyleDone
+                                                            target:self
+                                                            action:@selector(saveTapped)];
+    self.navigationItem.rightBarButtonItem = save;
+}
+
+// MARK: Table（卡片1：名称 / 图标；卡片2：脚本源码）
+
+- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
+    return 2;
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+    return section == 0 ? 2 : 1;
+}
+
+- (CGFloat)tableView:(__unused UITableView *)tableView heightForRowAtIndexPath:(NSIndexPath *)indexPath {
+    return (indexPath.section == 1) ? 220.0 : 44.0;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
+    return section == 1 ? @"点控制中心磁贴时执行。脚本里可用 openURL(\"链接\") 打开网址或 URL Scheme。默认图标为大括号，可在「图标」行自定义。" : nil;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *fieldId = @"ERScriptField";
+    static NSString *iconId = @"ERScriptIcon";
+    static NSString *scriptId = @"ERScriptSource";
+    NSString *identifier = indexPath.section == 0 ? (indexPath.row == 0 ? fieldId : iconId) : scriptId;
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) {
+        cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
+        if ([identifier isEqualToString:fieldId]) {
+            cell.textLabel.text = @"名称";
+            UITextField *field = [[UITextField alloc] initWithFrame:CGRectZero];
+            field.placeholder = @"脚本";
+            field.textAlignment = NSTextAlignmentRight;
+            field.font = [UIFont systemFontOfSize:16.0];
+            field.clearButtonMode = UITextFieldViewModeWhileEditing;
+            field.returnKeyType = UIReturnKeyDone;
+            field.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:field];
+            [NSLayoutConstraint activateConstraints:@[
+                [field.leadingAnchor constraintEqualToAnchor:cell.contentView.layoutMarginsGuide.leadingAnchor constant:110.0],
+                [field.trailingAnchor constraintEqualToAnchor:cell.contentView.layoutMarginsGuide.trailingAnchor],
+                [field.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor],
+                [field.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
+            ]];
+            _nameField = field;
+        } else if ([identifier isEqualToString:iconId]) {
+            cell.textLabel.text = @"图标";
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        } else {
+            // 脚本源码：整行多行编辑框（keyboardX 的 payload box 样式）。
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            UITextView *view = [[UITextView alloc] initWithFrame:CGRectZero];
+            view.font = [UIFont fontWithName:@"Menlo-Regular" size:13.0] ?: [UIFont monospacedSystemFontOfSize:13.0 weight:UIFontWeightRegular];
+            view.textColor = UIColor.labelColor;
+            view.backgroundColor = UIColor.clearColor;
+            view.autocorrectionType = UITextAutocorrectionTypeNo;
+            view.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            view.smartQuotesType = UITextSmartQuotesTypeNo;
+            view.textContainerInset = UIEdgeInsetsMake(10.0, 12.0, 10.0, 12.0);
+            view.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:view];
+            [NSLayoutConstraint activateConstraints:@[
+                [view.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor],
+                [view.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor],
+                [view.leadingAnchor constraintEqualToAnchor:cell.contentView.leadingAnchor],
+                [view.trailingAnchor constraintEqualToAnchor:cell.contentView.trailingAnchor],
+            ]];
+            _scriptView = view;
+        }
+    }
+    if ([identifier isEqualToString:iconId]) {
+        cell.imageView.image = [UIImage systemImageNamed:_iconSymbol];
+        cell.imageView.tintColor = UIColor.labelColor;
+        NSString *current = _iconSymbol ?: @"curlybraces";
+        cell.detailTextLabel.text = current;
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    }
+    return cell;
+}
+
+- (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section == 0 && indexPath.row == 1) {
+        // 图标行 → 进图标库（与快捷方式同一套选择器）。
+        ERLinkIconPickerController *picker = [[ERLinkIconPickerController alloc] init];
+        picker.pickerDelegate = self;
+        picker.selectedSymbol = _iconSymbol ?: @"";
+        [self.navigationController pushViewController:picker animated:YES];
+    }
+}
+
+// MARK: 图标选择回调
+
+- (void)iconPickerDidPickSymbol:(NSString *)symbolName {
+    _iconSymbol = [symbolName isKindOfClass:[NSString class]] && symbolName.length ? symbolName : @"curlybraces";
+    [_table reloadData];
+}
+
+// MARK: 保存
+
+- (void)saveTapped {
+    [_nameField resignFirstResponder];
+    [_scriptView resignFirstResponder];
+    NSString *name = [_nameField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (!name.length) name = @"脚本";
+    NSString *script = _scriptView.text ?: @"";
+    if (![script stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].length) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"脚本源码为空"
+                                                                       message:@"请先在「脚本源码」框里写入 JavaScript 代码。"
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    NSMutableDictionary *entry = [NSMutableDictionary dictionary];
+    entry[@"uuid"] = [[NSUUID UUID] UUIDString];
+    entry[@"name"] = name;
+    entry[@"type"] = @"script";
+    entry[@"script"] = script;
+    entry[@"iconKind"] = @"symbol";
+    entry[@"iconValue"] = _iconSymbol ?: @"curlybraces";
+    entry[@"color"] = @(0xFF34C759LL);
+    NSString *file = ERLinkWriteRenderedIcon(entry);
+    if (file) {
+        entry[@"iconFile"] = file;
+        entry[@"iconFull"] = @([ERLinkResolveIcon(entry)[@"full"] boolValue]);
+    }
+    if (self.replaceUUID.length) {
+        // 替换模式：原位换目标（uuid/名称/图标覆盖保留），回到发起替换的页面。
+        ERLinkReplaceEntry(self.replaceUUID, entry);
+        ERLinkPopBackToCustomize(self);
+        return;
+    }
+    NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
+    [catalog addObject:entry];
+    ERLinkPersistCatalog(catalog);
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+@end
+
+// MARK: - App 详情页（该 App 的真实快捷方式：主屏 Quick Actions）@implementation ERLinkAppDetailController
 {
     UITableView *_detailTable;
 }
