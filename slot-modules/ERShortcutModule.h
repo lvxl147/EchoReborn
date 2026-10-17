@@ -392,7 +392,12 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
         NSString *kind = [record[@"iconKind"] isKindOfClass:[NSString class]] ? record[@"iconKind"] : @"";
         NSString *preferred = [record[@"iconValue"] isKindOfClass:[NSString class]] ? record[@"iconValue"] : @"";
         NSString *symbol = ([kind isEqualToString:@"symbol"] && preferred.length && [UIImage systemImageNamed:preferred]) ? preferred : @"link";
-        if ([entryType isEqualToString:@"appShortcut"]) {
+        // 1.1.9-62：自定义页设置的图标覆盖（symbolOverride）优先于类型固定符号 ——
+        // 设置页改图标，磁贴与子页面两处同步生效。
+        NSString *overrideSymbol = [record[@"symbolOverride"] isKindOfClass:[NSString class]] ? record[@"symbolOverride"] : @"";
+        if (overrideSymbol.length && [UIImage systemImageNamed:overrideSymbol]) {
+            symbol = overrideSymbol;
+        } else if ([entryType isEqualToString:@"appShortcut"]) {
             symbol = @"bolt.fill";
             self.linkImage = nil;
         } else if ([entryType isEqualToString:@"app"]) {
