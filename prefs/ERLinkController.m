@@ -1466,7 +1466,9 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 @end
 
-// MARK: - App 详情页（该 App 的真实快捷方式：主屏 Quick Actions）@implementation ERLinkAppDetailController
+// MARK: - App 详情页（该 App 的真实快捷方式：主屏 Quick Actions）
+
+@implementation ERLinkAppDetailController
 {
     UITableView *_detailTable;
 }
