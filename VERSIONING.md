@@ -85,3 +85,4 @@
 | 168 | 1.1.9-43 | -42 点磁贴即安全模式（roothide 无崩溃日志可查）：裸 NSDictionary 直调 trusted 入口必崩（只吃 FBSOpenApplicationOptions 对象）。改为运行时找 optionsWithDictionary:/initWithDictionary: 构造真对象，找不到一律跳过该层；探测补 FBSOpenApplicationOptions 类+实例方法表（P.Helper.FBSOpts*）。版本 1.1.9-43/1001119。 |
 | 169 | 1.1.9-44 | -43 探测：FBSOpenApplicationOptions 无类构造器，实例有 setDictionary:；BSProcessHandle 类方法 processHandle 存在（origin 构造已通）。trOpts 改 alloc init + setDictionary:（兜底 initWithDictionary:），找不到照旧跳过。版本 1.1.9-44/1001120。 |
 | 170 | 1.1.9-45 | 1001121 | trusted 调用两项修正：result 回调不再传 nil（-44 实锤进入 MainWS 处理器后崩溃，真实调用均带结果块）；settings 改为内层 BSMutableSettings{fromTrusted=Yes} + 运行时探测包裹（setSettings:/setBackingSettings: 等），诊断 .tr 增加 setHow 与 result |
+| 171 | 1.1.9-46 | 1001122 | -45 实锤：trusted 调用抛 NSInvalidArgumentException 被 @catch 拦截（不再崩溃）。-46 在 EXC 诊断里追加 reason 与 callStackSymbols 前 8 帧（.stk0..7），定位非法参数 |
