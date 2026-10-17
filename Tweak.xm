@@ -6712,6 +6712,116 @@ static NSString *ERLinkSlotIdentifierForAddingUUID(NSString *uuid) {
 }
 
 // ---------------------------------------------------------------------------
+// 1.1.9-61：统一删除（SpringBoard 侧对账）。
+// 设置进程左滑删除 / 自定义页删除只写 LinkCatalog 并广播 ReloadLinks；
+// 之前槽位绑定（LinkSlotAssignments）和已放置的磁贴没人清理，控制中心留下
+// 一个点不动的死磁贴。这里在收到 ReloadLinks 后：
+//   ① 清掉指向已消失条目的槽位绑定；
+//   ② 撤掉对应磁贴的持久化布局（与编辑模式删除按钮 erRemoveTappedCore 同一
+//      套数据：duplicate families / grid origins / sizes）；
+//   ③ 让现存覆盖层重建磁贴层级。
+static void ERLinkReloadCallback(CFNotificationCenterRef center, void *observer,
+                                 CFStringRef name, const void *object, CFDictionaryRef userInfo);
+
+static void ERLinkReconcileAfterCatalogChange(void) {
+    @try {
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+        // ① 目录里现存的 uuid 集合。
+        NSMutableSet<NSString *> *alive = [NSMutableSet set];
+        for (NSDictionary *entry in ERLinkCatalogRecords()) {
+            NSString *uuid = entry[@"uuid"];
+            if ([uuid isKindOfClass:[NSString class]] && uuid.length) [alive addObject:uuid];
+        }
+        // ② 槽位绑定里找失效项。
+        CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey, kERPrefsDomain);
+        NSMutableDictionary<NSString *, NSString *> *assignments = [NSMutableDictionary dictionary];
+        if (value) {
+            if (CFGetTypeID(value) == CFDictionaryGetTypeID()) {
+                NSDictionary *stored = (__bridge NSDictionary *)value;
+                for (NSString *key in stored) {
+                    id entry = stored[key];
+                    if ([key isKindOfClass:[NSString class]] && [entry isKindOfClass:[NSString class]]) assignments[key] = entry;
+                }
+            }
+            CFRelease(value);
+        }
+        NSMutableArray<NSString *> *retireSlots = [NSMutableArray array];
+        for (NSString *key in assignments) {
+            if (![alive containsObject:assignments[key]]) [retireSlots addObject:key];
+        }
+        if (!retireSlots.count) return;
+        for (NSString *key in retireSlots) [assignments removeObjectForKey:key];
+        CFPreferencesSetAppValue((__bridge CFStringRef)kERLinkSlotAssignmentsKey,
+                                 (__bridge CFPropertyListRef)[assignments copy], kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+        ERAddDiagSet(@"LinkReconcile.retired", retireSlots);
+        // ③ 撤磁贴持久化数据。
+        BOOL changed = NO;
+        for (NSString *slotKey in retireSlots) {
+            NSInteger slot = slotKey.integerValue;
+            if (slot < 1 || slot > (NSInteger)kERShortcutSlotCount) continue;
+            NSString *identifier = ERShortcutSlotIdentifier(slot);
+            if (![identifier isKindOfClass:[NSString class]] || !identifier.length) continue;
+            if (gERDuplicateFamilies[identifier]) {
+                [gERDuplicateFamilies removeObjectForKey:identifier];
+                [gERCustomOrigins removeObjectForKey:identifier];
+                [gERCustomSizes removeObjectForKey:identifier];
+                [gERNativeLayoutRects removeObjectForKey:identifier];
+                [gERBaseLayoutSizes removeObjectForKey:identifier];
+                changed = YES;
+                continue;
+            }
+            // 非重复家族路径（排在启用列表里的模块）：从启用列表摘除。
+            id coordinatorClass = NSClassFromString(@"EchoRebornCoordinator");
+            if (!coordinatorClass || ![coordinatorClass respondsToSelector:@selector(shared)]) continue;
+            id coordinator = ((id (*)(id, SEL))objc_msgSend)(coordinatorClass, @selector(shared));
+            if (![coordinator respondsToSelector:@selector(enabledModuleIdentifiers)]) continue;
+            if (![coordinator respondsToSelector:@selector(saveEnabledModuleIdentifiers:)]) continue;
+            NSArray *current = ((id (*)(id, SEL))objc_msgSend)(coordinator, @selector(enabledModuleIdentifiers));
+            if (![current isKindOfClass:[NSArray class]] || ![current containsObject:identifier]) continue;
+            NSMutableArray *updated = [current mutableCopy];
+            [updated removeObject:identifier];
+            ((void (*)(id, SEL, id))objc_msgSend)(coordinator, @selector(saveEnabledModuleIdentifiers:), updated);
+        }
+        if (changed) {
+            ERSaveDuplicateFamilies();
+            ERSaveGridPreferences();
+        }
+        // ④ 现存覆盖层重建。
+        UIViewController *overlay = gOverlayControllers.allObjects.anyObject;
+        id coordinatorClass = NSClassFromString(@"EchoRebornCoordinator");
+        id coordinator = nil;
+        if (coordinatorClass && [coordinatorClass respondsToSelector:@selector(shared)]) {
+            coordinator = ((id (*)(id, SEL))objc_msgSend)(coordinatorClass, @selector(shared));
+        }
+        SEL syncSel = @selector(syncOwnedDuplicateModulesForOverlay:);
+        SEL normSel = @selector(normalizePagedLayoutForOverlay:);
+        if (overlay && coordinator) {
+            if ([coordinator respondsToSelector:syncSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(coordinator, syncSel, overlay);
+            }
+            if ([coordinator respondsToSelector:normSel]) {
+                ((void (*)(id, SEL, id))objc_msgSend)(coordinator, normSel, overlay);
+            }
+            SEL editSel = @selector(setEditPresentation:forOverlay:animated:);
+            if (gEditModeActive && [coordinator respondsToSelector:editSel]) {
+                ((void (*)(id, SEL, BOOL, id, BOOL))objc_msgSend)(coordinator, editSel, YES, overlay, NO);
+            }
+        }
+    } @catch (NSException *exception) {
+        ERAddDiagSet(@"LinkReconcile.error", [NSString stringWithFormat:@"%@: %@", exception.name, exception.reason ?: @""]);
+    }
+}
+
+static void ERLinkReloadCallback(CFNotificationCenterRef center, void *observer,
+                                 CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    // ReloadLinks 在每次目录保存（含添加）时都会广播；没有失效绑定就直接返回。
+    dispatch_async(dispatch_get_main_queue(), ^{
+        ERLinkReconcileAfterCatalogChange();
+    });
+}
+
+// ---------------------------------------------------------------------------
 // 0.5.4: running a shortcut without bringing the Shortcuts app to the front.
 //
 // `shortcuts://run-shortcut?name=` is a *foreground* URL: opening it activates
@@ -32124,6 +32234,8 @@ static void ERSMSInstallHooks(void) {
         // 1.1.9-19：槽位 bundle 的快捷方式磁贴点击 -> 广播 RunLink；本进程读
         // LinkRunRequest 并按条目类型执行（链接 / App / App 快捷方式）。
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERLinkRunRequested, (__bridge CFStringRef)kERLinkRunNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+        // 1.1.9-61：快捷方式目录变化（含左滑/自定义页删除）→ 统一对账槽位绑定与磁贴。
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERLinkReloadCallback, CFSTR("com.strive.echoreborn/ReloadLinks"), NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         // 1.1.9-5：设置页请求 App 快捷方式（主屏 Quick Actions）目录 → SpringBoard 扫描发布。
         CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(), NULL, ERAppShortcutCatalogRequested, (__bridge CFStringRef)kERAppShortcutRequestNotification, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
         // 启动后先自发扫一次，让目录尽早可用。
