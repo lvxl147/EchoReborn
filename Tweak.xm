@@ -26492,12 +26492,50 @@ static BOOL ERRunLinkOpenApp(NSString *bundleId, NSDictionary *extraOptions) {
     return NO;
 }
 
-// 1.1.9-48：-46 栈实锤处理器会向 activationSettings 调 boolForActivationSetting:，
-// 该方法仅 SBActivationSettings 实现；但我们传 SBActivationSettings 会进深层硬崩。
-// 方案：传 BSMutableSettings 并在运行时注入该方法的实现，让调用通过校验。
+// 1.1.9-48/50：处理链对 activationSettings 与 options 都按 bs_* 方法族读取
+//（boolForActivationSetting: / bs_boolForKey: …），而 iOS 17 的 BSMutableSettings
+// 与 FBSOpenApplicationOptions 都未实现这些方法。方案：运行时注入方法族，
+// 实现从 objc_setAssociatedObject 挂在实例上的字典精确取值。
+static NSString * const ERBSAssocKey = @"er_bs_dict";
+static id er_bsDict(id self) { return objc_getAssociatedObject(self, ERBSAssocKey); }
+static void er_bsAttach(id obj, NSDictionary *dict) {
+    objc_setAssociatedObject(obj, ERBSAssocKey, dict, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+}
 static BOOL er_bsBoolForActivationSetting(id self, SEL _cmd, id setting) {
-    // 信任通道：SpringBoard 进程内我们只在自己发起的直调里用它，一律返回 YES
-    return YES;
+    id dict = er_bsDict(self);
+    id v = dict ? [dict objectForKey:setting] : nil;
+    return v ? [v boolValue] : YES;   // 信任通道缺省放行
+}
+static BOOL er_bsBoolForKey(id self, SEL _cmd, id key) {
+    id dict = er_bsDict(self);
+    id v = dict ? [dict objectForKey:key] : nil;
+    return v ? [v boolValue] : NO;
+}
+static id er_bsObjectForKey(id self, SEL _cmd, id key) {
+    id dict = er_bsDict(self);
+    return dict ? [dict objectForKey:key] : nil;
+}
+static id er_bsStringForKey(id self, SEL _cmd, id key) {
+    id dict = er_bsDict(self);
+    id v = dict ? [dict objectForKey:key] : nil;
+    return [v isKindOfClass:[NSString class]] ? v : nil;
+}
+
+static void ERBSInjectSettingsMethods(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
+    Class cls = NSClassFromString(@"BSMutableSettings");
+    if (!cls) return;
+    struct { SEL sel; IMP imp; } items[] = {
+        { NSSelectorFromString(@"boolForActivationSetting:"), (IMP)er_bsBoolForActivationSetting },
+        { NSSelectorFromString(@"bs_boolForKey:"),            (IMP)er_bsBoolForKey },
+        { NSSelectorFromString(@"bs_objectForKey:"),          (IMP)er_bsObjectForKey },
+        { NSSelectorFromString(@"bs_stringForKey:"),          (IMP)er_bsStringForKey },
+    };
+    for (NSUInteger i = 0; i < sizeof(items)/sizeof(items[0]); i++)
+        if (!class_getInstanceMethod(cls, items[i].sel))
+            class_addMethod(cls, items[i].sel, items[i].imp, "@@:@");
 }
 
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
@@ -26664,20 +26702,13 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                     // 让调用通过校验继续。
                     id settings = nil;
                     NSString *setHow = @"none";
-                    static BOOL _erBSPatchDone = NO;
-                    if (!_erBSPatchDone) {
-                        _erBSPatchDone = YES;
-                        Class patchCls = NSClassFromString(@"BSMutableSettings");
-                        if (patchCls && !class_getInstanceMethod(patchCls, NSSelectorFromString(@"boolForActivationSetting:"))) {
-                            class_addMethod(patchCls, NSSelectorFromString(@"boolForActivationSetting:"),
-                                            (IMP)er_bsBoolForActivationSetting, "B@:@");
-                        }
-                    }
+                    ERBSInjectSettingsMethods();
                     {
                         Class bsSetCls2 = NSClassFromString(@"BSMutableSettings");
                         settings = bsSetCls2 ? [[bsSetCls2 alloc] init] : nil;
                         if (settings) {
-                            setHow = @"BSMutableSettings+patch";
+                            setHow = @"BSMutableSettings+bs*";
+                            er_bsAttach(settings, @{@"fromTrustedSystemServiceRequest": @YES});
                             if ([settings respondsToSelector:setSetting])
                                 ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setSetting, @YES, @"fromTrustedSystemServiceRequest");
                             else if ([settings respondsToSelector:setObj])
@@ -26727,6 +26758,7 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                             trOpts = [[bsOptsCls alloc] init];
                             if (trOpts) {
                                 optsHow = @"BSMutableSettings";
+                                er_bsAttach(trOpts, trOptsDict);
                                 SEL bsSet = NSSelectorFromString(@"setObject:forSetting:");
                                 if ([trOpts respondsToSelector:bsSet]) {
                                     ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, scItem, @"__ApplicationShortcutItem");
