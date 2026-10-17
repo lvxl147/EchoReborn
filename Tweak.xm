@@ -31754,8 +31754,108 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
 %end
 %end
 
+#pragma mark - 自动复制验证码（1.1.9-60 · keyboardX/TypeX 同款思路复刻，仅自研实现）
+// SpringBoard 侧挂 BBServer 通知发布，过滤 com.apple.MobileSMS 分区，提取验证码写入剪贴板。
+// 只读已核对 ABI 的对象 getter（返回类型必须为对象），缺失/变更时自动禁用对应字段，不崩。
+static NSString *ERSMSObjStr(id o, NSString *prop) {
+    if (!o) return nil;
+    SEL s = NSSelectorFromString(prop);
+    if (![o respondsToSelector:s]) return nil;
+    NSMethodSignature *sig = [o methodSignatureForSelector:s];
+    if (!sig || sig.numberOfArguments != 2 || sig.methodReturnType[0] != '@') return nil;
+    @try {
+        id v = ((id (*)(id, SEL))objc_msgSend)(o, s);
+        return [v isKindOfClass:[NSString class]] ? [v copy] : nil;
+    } @catch (__unused NSException *e) { return nil; }
+}
+static NSString *ERExtractSMSCode(NSString *text) {
+    if (![text isKindOfClass:[NSString class]] || text.length == 0 || text.length > 4096) return nil;
+    static NSRegularExpression *keywords, *numbers;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        keywords = [NSRegularExpression regularExpressionWithPattern:
+            @"验证码|驗證碼|校验码|校驗碼|动态码|動態碼|动态密码|動態密碼|一次性密码|一次性密碼|(?<![a-zA-Z])(?:verification\\s*code|security\\s*code|authentication\\s*code|one[- ]time\\s*(?:code|password)|passcode|otp)(?![a-zA-Z])"
+            options:NSRegularExpressionCaseInsensitive error:NULL];
+        numbers = [NSRegularExpression regularExpressionWithPattern:
+            @"(?<![0-9A-Za-z])[0-9]{4,8}(?![0-9A-Za-z])" options:0 error:NULL];
+    });
+    NSRange all = NSMakeRange(0, text.length);
+    if (![keywords firstMatchInString:text options:0 range:all]) return nil;
+    for (NSTextCheckingResult *m in [numbers matchesInString:text options:0 range:all]) {
+        NSRange r = m.range;
+        // 排除小数/日期片段：数字后紧跟 '.' 或 '-' 且后续仍是数字
+        if (r.location + r.length < text.length) {
+            unichar nx = [text characterAtIndex:r.location + r.length];
+            if (nx == '.' || nx == '-') continue;
+        }
+        NSString *code = [text substringWithRange:r];
+        // 排除年份数字
+        if ([code integerValue] >= 1900 && [code integerValue] <= 2100) continue;
+        return code;
+    }
+    return nil;
+}
+static NSString *ERSMSLastID = nil;
+static void ERSMSCaptureBulletin(id bulletin, NSString *explicitSection) {
+    @try {
+        if (!ERPreferenceBool(@"SMSCodeCopyEnabled", NO)) return;
+        NSString *section = explicitSection ?: ERSMSObjStr(bulletin, @"sectionID");
+        if (![section isEqualToString:@"com.apple.MobileSMS"]) return;
+        NSString *text = ERSMSObjStr(bulletin, @"message");
+        if (!text.length || text.length > 4096) return;
+        NSString *mid = ERSMSObjStr(bulletin, @"recordID")
+            ?: ERSMSObjStr(bulletin, @"publisherBulletinID")
+            ?: ERSMSObjStr(bulletin, @"bulletinID");
+        if (!mid.length) return;
+        if ([mid isEqualToString:ERSMSLastID]) return; // 同一条只复制一次
+        NSString *code = ERExtractSMSCode(text);
+        if (!code) return;
+        ERSMSLastID = [mid copy];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            @try {
+                [[UIPasteboard generalPasteboard] setItems:@[@{@"public.utf8-plain-text": code}]
+                    options:@{UIPasteboardOptionLocalOnly: @YES,
+                              UIPasteboardOptionExpirationDate: [NSDate dateWithTimeIntervalSinceNow:180]}];
+                ERLogInfo(@"[SMSCode] copied %@", code);
+            } @catch (__unused NSException *e) {}
+        });
+    } @catch (__unused NSException *e) {}
+}
+%group ERSMSPublish
+%hook BBServer
+- (void)publishBulletin:(id)bulletin destinations:(unsigned long long)destinations {
+    ERSMSCaptureBulletin(bulletin, nil);
+    %orig;
+}
+- (void)publishBulletinRequest:(id)bulletin destinations:(unsigned long long)destinations {
+    ERSMSCaptureBulletin(bulletin, nil);
+    %orig;
+}
+- (void)_publishBulletinRequest:(id)bulletin forSectionID:(id)section forDestinations:(unsigned long long)destinations {
+    ERSMSCaptureBulletin(bulletin, [section isKindOfClass:[NSString class]] ? section : nil);
+    %orig;
+}
+%end
+%end
+static void ERSMSInstallHooks(void) {
+    static BOOL installed = NO;
+    if (installed) return;
+    if (!objc_getClass("BBServer")) {
+        static NSInteger retries = 0;
+        if (retries++ < 3) {
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ ERSMSInstallHooks(); });
+        }
+        return;
+    }
+    %init(ERSMSPublish);
+    installed = YES;
+    ERLogInfo(@"[SMSCode] BBServer hooks installed");
+}
+
 %ctor {
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
+    ERSMSInstallHooks(); // 1.1.9-60：自动复制验证码（SpringBoard 侧 BBServer 钩子）
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
     ERAct2Probe();       // 1.1.9-56：修正版探测（纯 C method 查找，无死角扫 activateShortcut:...）
