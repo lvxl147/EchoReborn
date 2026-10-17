@@ -26765,7 +26765,14 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                     ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"no-ws-or-sel");
                 }
             } @catch (NSException *tex) {
-                ERAddDiagSet([diagKey stringByAppendingString:@".tr"], [NSString stringWithFormat:@"EXC %@", tex.name]);
+                // 1.1.9-46：-45 捕获到 NSInvalidArgumentException —— 记录 reason 与调用栈，
+                // 定位处理器认为哪个参数非法。
+                ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
+                             [NSString stringWithFormat:@"EXC %@ | %@",
+                              tex.name, tex.reason ?: @"(no-reason)"]);
+                NSArray *st = tex.callStackSymbols;
+                for (NSUInteger i = 0; i < 8 && i < st.count; i++)
+                    ERAddDiagSet([diagKey stringByAppendingFormat:@".stk%lu", (unsigned long)i], st[i]);
             }
             // 1.1.9-29 第二层：iOS 17 的桌面快捷菜单激活接口（Actra 同款）——
             // activateShortcutForApplication:type:userInfo:completion: 直接吃
