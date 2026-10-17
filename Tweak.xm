@@ -26642,59 +26642,36 @@ static void ERAct2Probe(void) {
 static void ERWFProbeImpl(void) {
     @try {
         ERAddDiagSet(@"Diag.P.WF.Start", @"begin");
-        NSMutableArray *hits = [NSMutableArray array];
-        unsigned int n = _dyld_image_count();
-        unsigned int scanned = 0;
-        for (unsigned int i = 0; i < n; i++) {
-            const char *p = _dyld_get_image_name(i);
-            if (!p) continue;
-            NSString *path = [NSString stringWithUTF8String:p];
-            BOOL isMain = (i == 0);
-            BOOL isSys  = [path containsString:@"/System/Library"] || [path containsString:@"/usr/lib"] || [path containsString:@"/usr/local"];
-            BOOL isDylib = [path hasSuffix:@".dylib"];
-            // 1.1.9-57b：WorkflowKit / VoiceShortcutClient 是系统框架但含 runWorkflow 调用面，加入白名单
-            BOOL isWFK = [path containsString:@"WorkflowKit"] || [path containsString:@"VoiceShortcut"];
-            if (!(isMain || (isDylib && !isSys) || isWFK)) continue;
-            unsigned int cn = 0;
-            const char **names = objc_copyClassNamesForImage(p, &cn);
-            for (unsigned int j = 0; j < cn; j++) {
-                Class c = objc_lookUpClass(names[j]);
-                if (!c) continue;
-                NSString *cls = [NSString stringWithFormat:@"%s", names[j]];
-                unsigned int mc = 0;
-                Method *ms = class_copyMethodList(c, &mc);
-                for (unsigned int m = 0; m < mc; m++) {
-                    SEL s = method_getName(ms[m]);
-                    NSString *sn = NSStringFromSelector(s);
-                    if ([sn containsString:@"unWorkflow"] || [sn containsString:@"hortcutRun"] ||
-                        ([sn containsString:@"un"] && [sn containsString:@"hortcut"])) {
-                        NSString *rec = [NSString stringWithFormat:@"%@.%@", cls, sn];
-                        [hits addObject:rec];
-                        ERAddDiagSet(@"Diag.P.WF.Hit", rec);
-                    }
-                }
-                if (ms) free(ms);
-                // 类方法同样扫一遍（WFWorkflowRunnerClient 可能是类方法入口）
-                ms = class_copyMethodList(object_getClass(c), &mc);
-                for (unsigned int m = 0; m < mc; m++) {
-                    SEL s = method_getName(ms[m]);
-                    NSString *sn = NSStringFromSelector(s);
-                    if ([sn containsString:@"unWorkflow"] || [sn containsString:@"hortcutRun"]) {
-                        NSString *rec = [NSString stringWithFormat:@"%@(+)%@", cls, sn];
-                        [hits addObject:rec];
-                        ERAddDiagSet(@"Diag.P.WF.Hit", rec);
-                    }
-                }
-                if (ms) free(ms);
+        // 1.1.9-58：SpringBoard 未加载 WorkflowKit（57/57b imgs=5 证实），主动 dlopen 后
+        // 把关键类完整方法表倒出来（不过滤），照抄快面板 runWorkflow 调用链。
+        void *wf = dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+        void *vs = dlopen("/System/Library/PrivateFrameworks/VoiceShortcutClient.framework/VoiceShortcutClient", RTLD_LAZY);
+        ERAddDiagSet(@"Diag.P.WF.Dl", [NSString stringWithFormat:@"wf=%d vs=%d", wf != NULL, vs != NULL]);
+        NSArray *want = @[@"WFWorkflowRunnerClient", @"WFWorkflowRunRequest", @"WFWorkflowRunningContext",
+                          @"WFWorkflowDatabaseRunDescriptor", @"SBShortcutsService", @"VCSVoiceShortcutClient",
+                          @"VoiceShortcutClient", @"WFApplication"];
+        for (NSString *clsName in want) {
+            Class c = objc_getClass(clsName.UTF8String);
+            if (!c) { ERAddDiagSet([NSString stringWithFormat:@"Diag.P.WF.C.%@", clsName], @"absent"); continue; }
+            NSMutableArray *sels = [NSMutableArray array];
+            unsigned int mc = 0;
+            Method *ms = class_copyMethodList(object_getClass(c), &mc); // 类方法
+            for (unsigned int m = 0; m < mc; m++) [sels addObject:[NSString stringWithFormat:@"(+)%@", NSStringFromSelector(method_getName(ms[m]))]];
+            if (ms) free(ms);
+            ms = class_copyMethodList(c, &mc); // 实例方法
+            for (unsigned int m = 0; m < mc; m++) [sels addObject:NSStringFromSelector(method_getName(ms[m]))];
+            if (ms) free(ms);
+            NSString *j = [sels componentsJoinedByString:@";"];
+            // 分段落盘，单键不超限
+            for (NSUInteger seg = 0, idx = 0; idx < j.length || seg == 0; seg++, idx += 2700) {
+                NSUInteger len = MIN((NSUInteger)2700, j.length - idx);
+                if (len <= 0) break;
+                ERAddDiagSet([NSString stringWithFormat:@"Diag.P.WF.C.%@.%lu", clsName, (unsigned long)seg],
+                             [j substringWithRange:NSMakeRange(idx, len)]);
             }
-            if (names) free(names);
-            scanned++;
-            ERAddDiagSet(@"Diag.P.WF.Scan", [NSString stringWithFormat:@"imgs=%u/%u hits=%lu", scanned, n, (unsigned long)hits.count]);
+            ERAddDiagSet([NSString stringWithFormat:@"Diag.P.WF.C.%@", clsName], [NSString stringWithFormat:@"sels=%lu", (unsigned long)sels.count]);
         }
-        NSString *joined = [hits componentsJoinedByString:@";"];
-        if (joined.length > 2800) joined = [joined substringToIndex:2800];
-        ERAddDiagSet(@"Diag.P.WF.Done",
-                     [NSString stringWithFormat:@"imgs=%u hits=%lu %@", scanned, (unsigned long)hits.count, joined]);
+        ERAddDiagSet(@"Diag.P.WF.Done", @"dlopen-dump-done");
     } @catch (NSException *e) {
         ERAddDiagSet(@"Diag.P.WF.EXC", e.name);
     }
