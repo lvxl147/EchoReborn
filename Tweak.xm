@@ -26492,6 +26492,14 @@ static BOOL ERRunLinkOpenApp(NSString *bundleId, NSDictionary *extraOptions) {
     return NO;
 }
 
+// 1.1.9-48：-46 栈实锤处理器会向 activationSettings 调 boolForActivationSetting:，
+// 该方法仅 SBActivationSettings 实现；但我们传 SBActivationSettings 会进深层硬崩。
+// 方案：传 BSMutableSettings 并在运行时注入该方法的实现，让调用通过校验。
+static BOOL er_bsBoolForActivationSetting(id self, SEL _cmd, id setting) {
+    // 信任通道：SpringBoard 进程内我们只在自己发起的直调里用它，一律返回 YES
+    return YES;
+}
+
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
@@ -26648,42 +26656,28 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                             }
                         }
                     }
-                    // settings = SBActivationSettings
-                    // 1.1.9-47：-46 栈实锤 —— 处理器对 activationSettings 调
-                    // boolForActivationSetting:（仅 SBActivationSettings 实现，传
-                    // BSMutableSettings 会 unrecognized selector）。回退为直接传
-                    // SBActivationSettings（-44 的类型），配合 -45 的真实 result 块；
-                    // 信任标记仍尽力写入，同时转储含 Activation 的方法名辅助诊断。
+                    // settings = BSMutableSettings + 运行时补 boolForActivationSetting:
+                    // 1.1.9-48：-47 实锤 —— 传真正的 SBActivationSettings 会让处理器走
+                    // 进 @try 拦不住的深层代码（硬崩、诊断连盘都没来得及落）。改回 -46 的
+                    // BSMutableSettings（该路线只卡在 boolForActivationSetting: 一个选择
+                    // 器上），在运行时用 class_addMethod 给 BSMutableSettings 补上该方法，
+                    // 让调用通过校验继续。
                     id settings = nil;
                     NSString *setHow = @"none";
-                    Class actSetCls = NSClassFromString(@"SBActivationSettings");
-                    if (actSetCls) {
-                        settings = [[actSetCls alloc] init];
-                        if (settings) {
-                            setHow = @"SBActivationSettings";
-                            if ([settings respondsToSelector:setSetting])
-                                ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setSetting, @YES, @"fromTrustedSystemServiceRequest");
-                            else if ([settings respondsToSelector:setObj])
-                                ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setObj, @YES, @"fromTrustedSystemServiceRequest");
-                            if (actSetCls == NSClassFromString(@"SBActivationSettings")) {
-                                NSMutableString *meths = [NSMutableString string];
-                                unsigned int cnt = 0; Method *ml = class_copyMethodList(object_getClass(settings), &cnt);
-                                for (unsigned int i = 0; i < cnt; i++) {
-                                    NSString *mn = NSStringFromSelector(method_getName(ml[i]));
-                                    if ([mn localizedCaseInsensitiveContainsString:@"ctivat"])
-                                        [meths appendFormat:@"%@ ", mn];
-                                }
-                                free(ml);
-                                if (meths.length) ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
-                                    [NSString stringWithFormat:@"actSet-methods %@", meths]);
-                            }
+                    static BOOL _erBSPatchDone = NO;
+                    if (!_erBSPatchDone) {
+                        _erBSPatchDone = YES;
+                        Class patchCls = NSClassFromString(@"BSMutableSettings");
+                        if (patchCls && !class_getInstanceMethod(patchCls, NSSelectorFromString(@"boolForActivationSetting:"))) {
+                            class_addMethod(patchCls, NSSelectorFromString(@"boolForActivationSetting:"),
+                                            (IMP)er_bsBoolForActivationSetting, "B@:@");
                         }
                     }
-                    if (!settings) {
+                    {
                         Class bsSetCls2 = NSClassFromString(@"BSMutableSettings");
                         settings = bsSetCls2 ? [[bsSetCls2 alloc] init] : nil;
                         if (settings) {
-                            setHow = @"inner-fallback";
+                            setHow = @"BSMutableSettings+patch";
                             if ([settings respondsToSelector:setSetting])
                                 ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setSetting, @YES, @"fromTrustedSystemServiceRequest");
                             else if ([settings respondsToSelector:setObj])
