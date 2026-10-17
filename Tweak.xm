@@ -26716,22 +26716,35 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         //（该入口只吃 FBSOpenApplicationOptions 对象）。必须运行时找到字典
                         // 构造器（optionsWithDictionary:/initWithDictionary:）建出真对象才
                         // 调用；找不到一律跳过本层，绝不用裸字典。
+                        // 1.1.9-49：-48 栈实锤 —— 处理器对 options 对象调 bs_boolForKey:
+                        //（BSSettings 系列方法），而我们 alloc init 的 FBSOpenApplicationOptions
+                        // 没实现它。处理链全程按 bs_* 读取 → options 直接用 BSMutableSettings
+                        // 传（天生实现全套 bs_* 方法），四键以 setting 名写入。
                         id trOpts = nil;
-                        Class optsCls = NSClassFromString(@"FBSOpenApplicationOptions");
                         NSString *optsHow = @"no-cls";
-                        if (optsCls) {
-                            // 1.1.9-44：P.Helper.FBSOpts 探测 —— 无类构造器，实例方法有
-                            // setDictionary:（alloc init 后塞字典）；另试 initWithDictionary:。
-                            trOpts = [[optsCls alloc] init];
-                            SEL setDict = NSSelectorFromString(@"setDictionary:");
-                            if (trOpts && [trOpts respondsToSelector:setDict]) {
-                                ((void (*)(id, SEL, id))objc_msgSend)(trOpts, setDict, trOptsDict);
-                                optsHow = @"init+setDictionary:";
-                            } else {
-                                SEL initDict = NSSelectorFromString(@"initWithDictionary:");
-                                if ([optsCls instancesRespondToSelector:initDict]) {
-                                    trOpts = ((id (*)(id, SEL, id))objc_msgSend)([optsCls alloc], initDict, trOptsDict);
-                                    optsHow = @"initWithDictionary:";
+                        Class bsOptsCls = NSClassFromString(@"BSMutableSettings");
+                        if (bsOptsCls) {
+                            trOpts = [[bsOptsCls alloc] init];
+                            if (trOpts) {
+                                optsHow = @"BSMutableSettings";
+                                SEL bsSet = NSSelectorFromString(@"setObject:forSetting:");
+                                if ([trOpts respondsToSelector:bsSet]) {
+                                    ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, scItem, @"__ApplicationShortcutItem");
+                                    ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @0, @"__ActivateSuspended");
+                                    ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @"SBSLaunchOriginShortcutItem", @"__LaunchOrigin");
+                                    ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @1, @"__PromptUnlockDevice");
+                                }
+                            }
+                        }
+                        if (!trOpts) {
+                            // 兜底：仍尝试 FBSOpenApplicationOptions（-44 路线）
+                            Class optsCls = NSClassFromString(@"FBSOpenApplicationOptions");
+                            if (optsCls) {
+                                trOpts = [[optsCls alloc] init];
+                                SEL setDict = NSSelectorFromString(@"setDictionary:");
+                                if (trOpts && [trOpts respondsToSelector:setDict]) {
+                                    ((void (*)(id, SEL, id))objc_msgSend)(trOpts, setDict, trOptsDict);
+                                    optsHow = @"init+setDictionary:";
                                 } else {
                                     trOpts = nil;
                                 }
