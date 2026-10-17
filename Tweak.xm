@@ -26584,32 +26584,36 @@ static NSArray *ERAct2ClsList(void) {
     return list;
 }
 
+static void ERAct2ProbeImpl(void) {
+    @try {
+        SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+        unsigned int count = 0;
+        Class *classes = objc_copyClassList(&count);
+        NSMutableArray *hits = [NSMutableArray array];
+        unsigned int checked = 0;
+        for (unsigned int i = 0; i < count; i++) {
+            Class c = classes[i];
+            // 纯 C 查找，不触发 +initialize
+            if (class_getInstanceMethod(c, actSel) || class_getClassMethod(c, actSel)) {
+                [hits addObject:NSStringFromClass(c)];
+            }
+            checked++;
+            if ((checked % 20000) == 0)
+                ERAddDiagSet(@"Diag.P.Act2.Scan", [NSString stringWithFormat:@"%u/%u hits=%lu", checked, count, (unsigned long)hits.count]);
+        }
+        free(classes);
+        ERAddDiagSet(@"Diag.P.Act2.Done",
+                     [NSString stringWithFormat:@"checked=%u hits=%lu %@", count, (unsigned long)hits.count, [hits componentsJoinedByString:@","]]);
+    } @catch (NSException *e) {
+        ERAddDiagSet(@"Diag.P.Act2.EXC", e.name);
+    }
+}
+
 static void ERAct2Probe(void) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
-                   dispatch_get_global_queue(DISPATCH_PRIORITY_DEFAULT, 0), ^{
+                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
-            @try {
-                SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
-                unsigned int count = 0;
-                Class *classes = objc_copyClassList(&count);
-                NSMutableArray *hits = [NSMutableArray array];
-                unsigned int checked = 0;
-                for (unsigned int i = 0; i < count; i++) {
-                    Class c = classes[i];
-                    // 纯 C 查找，不触发 +initialize
-                    if (class_getInstanceMethod(c, actSel) || class_getClassMethod(c, actSel)) {
-                        [hits addObject:NSStringFromClass(c)];
-                    }
-                    checked++;
-                    if ((checked % 20000) == 0)
-                        ERAddDiagSet(@"Diag.P.Act2.Scan", [NSString stringWithFormat:@"%u/%u hits=%lu", checked, count, (unsigned long)hits.count]);
-                }
-                free(classes);
-                ERAddDiagSet(@"Diag.P.Act2.Done",
-                             [NSString stringWithFormat:@"checked=%u hits=%lu %@", count, (unsigned long)hits.count, [hits componentsJoinedByString:@","]]);
-            } @catch (NSException *e) {
-                ERAddDiagSet(@"Diag.P.Act2.EXC", e.name);
-            }
+            ERAct2ProbeImpl();
         }
     });
 }
