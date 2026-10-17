@@ -88,3 +88,4 @@
 | 171 | 1.1.9-46 | 1001122 | -45 实锤：trusted 调用抛 NSInvalidArgumentException 被 @catch 拦截（不再崩溃）。-46 在 EXC 诊断里追加 reason 与 callStackSymbols 前 8 帧（.stk0..7），定位非法参数 |
 | 172 | 1.1.9-47 | 1001123 | -46 栈实锤：处理器对 activationSettings 调 boolForActivationSetting:（仅 SBActivationSettings 实现），传 BSMutableSettings 抛 unrecognized selector。-47 改回直接传 SBActivationSettings（-44 类型）+ -45 的真实 result 块，二者合并；并转储 SBActivationSettings 含 ctivat 的方法名（.tr actSet-methods） |
 | 173 | 1.1.9-48 | 1001124 | -47 实锤：传 SBActivationSettings 时处理器越过校验进入深层代码硬崩（@try 拦不住、诊断未落盘）。-48 改回 -46 的 BSMutableSettings + 运行时 class_addMethod 注入 boolForActivationSetting:（er_bsBoolForActivationSetting，恒 YES），让调用通过校验继续 |
+| 174 | 1.1.9-49 | 1001125 | -48 栈实锤：boolForActivationSetting: 注入放行后，处理器对 options 调 bs_boolForKey:（BSSettings 系），FBSOpenApplicationOptions 未实现。-49 options 改用 BSMutableSettings 传四键（bs_* 全套），FBSOpenApplicationOptions 路线降为兜底 |
