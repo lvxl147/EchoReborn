@@ -93,3 +93,4 @@
 | 176 | 1.1.9-50b | 1001127 | -50 编译失败修复：objc_get/setAssociatedObject 的 key 改为 static char（const void*）；BOOL 返回值方法类型编码修正为 B@:@。逻辑与 -50 一致 |
 | 177 | 1.1.9-51 | 1001128 | 全链复盘：__ApplicationShortcutItem 键只存在于我们自己的调用；真实调用（Actra）用 __Actions+action。-51 options 切 __Actions=@[UIHandleApplicationShortcutAction(info=shortcutItem)]，action 构造补 _setInfo: 尝试；__ApplicationShortcutItem 降为 action 缺失时兜底 |
 | 178 | 1.1.9-52 | 1001129 | 长按桌面抓包实锤：真实调用 action 带 responder<_BSActionResponder active:YES>（SpringBoard 内构造、无 mach port），origin 即 SpringBoard 自身。-52 构建 _BSActionResponder（alloc init + activate/begin/start）并经 setResponder:/_setResponder: 挂到 action；scItem 补 setLocalizedSubtitle:@""；诊断新增 resp= |
+| 179 | 1.1.9-53 | 1001130 | 用户选定方案 A：直调 MainWS 彻底停用（-39..-52 反复深层硬崩根因 = 进程内伪造 action 缺系统侧 responder 通道）。-53 改走 Actra 实测的服务层：FBSSystemService openApplication:options:withResult: + 真 FBSOpenApplicationOptions 携带 __Actions（BSAction 安全编码可穿透），编码失败服务层报错不崩桌面 |
