@@ -1880,27 +1880,21 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
     _grid.frame = CGRectMake(0.0, top, width, bottom - top);
 }
 
-// 后台读取系统符号目录（CoreGlyphs / SFSymbols 资源），批量验证后回主线程刷新。
+// 读取系统符号目录（CoreGlyphs / SFSymbols 资源）。1.1.9-66：不再全量逐一验证
+// （5000+ 次 systemImageNamed 是 1~2 秒延迟的来源），无效符号由保存时校验兜底。
 - (void)loadCatalogInBackground {
     BOOL gridMode = self.categoryNames.count > 0;
-    NSArray<NSDictionary *> *gridCategory = self.categoryNames;
+    NSArray *gridCategory = self.categoryNames;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSArray<NSString *> *dirs = ERLinkSymbolResourceDirectories();
         NSArray<NSString *> *candidates = ERLinkSystemSymbolCandidates(dirs);
-        // 32 个一批验证（systemImageNamed），批间小睡，避免卡住导航。
-        NSMutableArray<NSString *> *valid = [NSMutableArray array];
-        for (NSUInteger i = 0; i < candidates.count; i += 32) {
-            NSRange range = NSMakeRange(i, MIN((NSUInteger)32, candidates.count - i));
-            for (NSString *name in [candidates subarrayWithRange:range]) {
-                if ([UIImage systemImageNamed:name]) [valid addObject:name];
-            }
-            [NSThread sleepForTimeInterval:0.004];
-        }
-        // 目录读取失败时退回内置小池，页面不至于空白。
-        NSArray<NSString *> *all = valid.count ? valid : ERLinkSymbolCatalog();
-        if (!valid.count) {
+        NSArray<NSString *> *all = candidates;
+        if (!candidates.count) {
+            // 目录读取失败时退回内置小池（逐个验证，量小无感）。
             NSMutableArray<NSString *> *checked = [NSMutableArray array];
-            for (NSString *name in all) if ([UIImage systemImageNamed:name]) [checked addObject:name];
+            for (NSString *name in ERLinkSymbolCatalog()) {
+                if ([UIImage systemImageNamed:name]) [checked addObject:name];
+            }
             all = checked;
         }
         NSArray<NSDictionary *> *cats = gridMode ? @[] : ERLinkSymbolCategories(dirs, [NSOrderedSet orderedSetWithArray:all]);
@@ -1908,14 +1902,13 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
             self->_allNames = all;
             self->_categories = cats;
             if (gridMode) {
-                // 网格模式：范围限定在传入的分类里（过滤掉系统渲染不出的）。
-                NSSet<NSString *> *available = [NSSet setWithArray:all];
+                // 网格模式：范围 = 传入的分类名单（原样使用，不再过滤）。
                 NSMutableOrderedSet<NSString *> *scope = [NSMutableOrderedSet orderedSet];
                 for (id item in gridCategory) {
                     NSString *name = nil;
                     if ([item isKindOfClass:[NSString class]]) name = item;
                     else if ([item isKindOfClass:[NSDictionary class]]) name = item[@"name"];
-                    if ([name isKindOfClass:[NSString class]] && [available containsObject:name]) [scope addObject:name];
+                    if ([name isKindOfClass:[NSString class]]) [scope addObject:name];
                 }
                 self->_scopeNames = scope.array;
             } else {
@@ -2031,7 +2024,16 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
     if ([self.pickerDelegate respondsToSelector:@selector(iconPickerDidPickSymbol:)]) {
         [self.pickerDelegate iconPickerDidPickSymbol:name];
     }
-    [self.navigationController popViewControllerAnimated:YES];
+    // 1.1.9-66：选完直接回到「快捷动作信息」页（跳过图标库根页）。
+    UINavigationController *nav = self.navigationController;
+    for (NSInteger i = (NSInteger)nav.viewControllers.count - 1; i >= 0; i--) {
+        UIViewController *vc = nav.viewControllers[(NSUInteger)i];
+        if ([vc isKindOfClass:[ERLinkCustomizeController class]]) {
+            [nav popToViewController:vc animated:YES];
+            return;
+        }
+    }
+    [nav popViewControllerAnimated:YES];
 }
 
 @end
@@ -2197,7 +2199,7 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
                 [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [preview.widthAnchor constraintEqualToConstant:34.0],
                 [preview.heightAnchor constraintEqualToConstant:34.0],
-                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:10.0],
+                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:6.0],
                 [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [field.heightAnchor constraintEqualToConstant:34.0],
                 [pick.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
