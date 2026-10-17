@@ -26690,7 +26690,16 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                                 ((void (*)(id, SEL, id))objc_msgSend)(action, setInfo, info);
                                 actHow = @"init+setInfo:";
                             } else if (action && info) {
-                                actHow = @"init(no-info)";
+                                // 1.1.9-51：补试 _setInfo:，并把 info 以关联字典挂上，
+                                // 应对处理器经 bs_* 读取 action info 的情况
+                                SEL setInfo2 = NSSelectorFromString(@"_setInfo:");
+                                if ([action respondsToSelector:setInfo2]) {
+                                    ((void (*)(id, SEL, id))objc_msgSend)(action, setInfo2, info);
+                                    actHow = @"init+_setInfo:";
+                                } else {
+                                    er_bsAttach(action, info ? @{ @"__er_info": info } : @{});
+                                    actHow = @"init(no-info)";
+                                }
                             }
                         }
                     }
@@ -26739,10 +26748,22 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                                  [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d(%@) origin=%d",
                                   scItem != nil, info != nil, action != nil, actHow, settings != nil, setHow, origin != nil]);
                     if (scItem && settings && origin) {
-                        NSDictionary *trOptsDict = @{@"__ApplicationShortcutItem": scItem,
-                                                     @"__ActivateSuspended": @0,
-                                                     @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
-                                                     @"__PromptUnlockDevice": @1};
+                        // 1.1.9-51：全链复盘 —— __ApplicationShortcutItem 键只出现在我们自己的
+                        // 调用里；真实系统调用（含 Actra 米家直达）都用 __Actions 数组 + 预构建
+                        // action（UIHandleApplicationShortcutAction 等）。-47/-50b 的深层硬崩
+                        // 即处理器无法消化这个它不认识的载荷。切换 __Actions 路线：
+                        NSDictionary *trOptsDict = nil;
+                        if (action) {
+                            trOptsDict = @{@"__Actions": @[action],
+                                           @"__ActivateSuspended": @0,
+                                           @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
+                                           @"__PromptUnlockDevice": @1};
+                        } else {
+                            trOptsDict = @{@"__ApplicationShortcutItem": scItem,
+                                           @"__ActivateSuspended": @0,
+                                           @"__LaunchOrigin": @"SBSLaunchOriginShortcutItem",
+                                           @"__PromptUnlockDevice": @1};
+                        }
                         // 1.1.9-43：-42 裸 NSDictionary 直调 trusted 入口 → 点击进安全模式
                         //（该入口只吃 FBSOpenApplicationOptions 对象）。必须运行时找到字典
                         // 构造器（optionsWithDictionary:/initWithDictionary:）建出真对象才
@@ -26761,7 +26782,10 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                                 er_bsAttach(trOpts, trOptsDict);
                                 SEL bsSet = NSSelectorFromString(@"setObject:forSetting:");
                                 if ([trOpts respondsToSelector:bsSet]) {
-                                    ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, scItem, @"__ApplicationShortcutItem");
+                                    if (action)
+                                        ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @[action], @"__Actions");
+                                    else
+                                        ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, scItem, @"__ApplicationShortcutItem");
                                     ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @0, @"__ActivateSuspended");
                                     ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @"SBSLaunchOriginShortcutItem", @"__LaunchOrigin");
                                     ((void (*)(id, SEL, id, id))objc_msgSend)(trOpts, bsSet, @1, @"__PromptUnlockDevice");
