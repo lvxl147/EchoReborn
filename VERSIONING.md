@@ -99,3 +99,4 @@
 | 182 | 1.1.9-56 | 1001133 | -55 实锤 iconManager 不响应 activateShortcut:...。-56 修正版探测 ERAct2Probe：ctor 后 3s 用 class_getInstanceMethod/class_getClassMethod（纯 C，不触发 +initialize，避开 -31 崩溃源）扫全部类找该选择器响应者（Diag.P.Act2.Done）；运行层对候选类（含 SBShortcutItemSimulator）试 sharedInstance 系并直调，诊断 .act2 |
 | 183 | 1.1.9-56b | 1001134 | -56 编译修复：探测体抽成普通 C 函数 ERAct2ProbeImpl（老 clang 在 block 内 @try 捕获变量有 bug），优先级常量改 DISPATCH_QUEUE_PRIORITY_DEFAULT。逻辑不变 |
 | 184 | 1.1.9-56c | 1001135 | 探测加固：Start/Scan(每2000类)/Hit(命中即时落盘)诊断；空类跳过；延迟 3s→8s 避开启动高峰。首次 CI roothide job 因 GitHub API 网络超时失败(非编译错)，已重跑成功；-56b 装机后不稳已回滚 -55 |
+| 185 | 1.1.9-56d | 1001136 | 按镜像探测替代全量扫描：56b/56c 全量 objc_copyClassList 扫描在 SpringBoard 引导后必崩（-55 无探测稳定；设备上无 .ips 崩溃日志可查）。改为 objc_copyClassNamesForImage 只扫 SpringBoard 主程序+非系统 dylib（tweak 注入镜像），objc_lookUpClass 不触发 +initialize；Img/Scan/Hit 分步落盘 |
