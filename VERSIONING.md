@@ -89,3 +89,4 @@
 | 172 | 1.1.9-47 | 1001123 | -46 栈实锤：处理器对 activationSettings 调 boolForActivationSetting:（仅 SBActivationSettings 实现），传 BSMutableSettings 抛 unrecognized selector。-47 改回直接传 SBActivationSettings（-44 类型）+ -45 的真实 result 块，二者合并；并转储 SBActivationSettings 含 ctivat 的方法名（.tr actSet-methods） |
 | 173 | 1.1.9-48 | 1001124 | -47 实锤：传 SBActivationSettings 时处理器越过校验进入深层代码硬崩（@try 拦不住、诊断未落盘）。-48 改回 -46 的 BSMutableSettings + 运行时 class_addMethod 注入 boolForActivationSetting:（er_bsBoolForActivationSetting，恒 YES），让调用通过校验继续 |
 | 174 | 1.1.9-49 | 1001125 | -48 栈实锤：boolForActivationSetting: 注入放行后，处理器对 options 调 bs_boolForKey:（BSSettings 系），FBSOpenApplicationOptions 未实现。-49 options 改用 BSMutableSettings 传四键（bs_* 全套），FBSOpenApplicationOptions 路线降为兜底 |
+| 175 | 1.1.9-50 | 1001126 | -49 栈实锤：BSMutableSettings 也没有 bs_boolForKey:（bs_* 族在 iOS 17 两个类上都缺）。-50 注入完整 bs_* 方法族（boolForActivationSetting:/bs_boolForKey:/bs_objectForKey:/bs_stringForKey:），实现从关联字典取值；settings 与 options 都挂各自字典 |
