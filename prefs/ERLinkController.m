@@ -691,8 +691,10 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 //        第4行 选择快捷方式（替换按钮 → 复用添加流程原位换目标）。
 // 卡片2：删除快捷方式（红色，确认后连子页面与控制中心一起清）。
 @protocol ERLinkIconPickerDelegate;
-@interface ERLinkIconPickerController : PSViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
+// 1.1.9-64：keyboardX DXPSFSymbolPickerController 风格 —— 导航栏搜索 + 1~4 列网格。
+@interface ERLinkIconPickerController : PSViewController <UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UISearchResultsUpdating>
 @property (nonatomic, weak) id<ERLinkIconPickerDelegate> pickerDelegate;
+@property (nonatomic, copy) NSString *selectedSymbol; // 进入时高亮当前图标
 @end
 @protocol ERLinkIconPickerDelegate <NSObject>
 - (void)iconPickerDidPickSymbol:(NSString *)symbolName;
@@ -1512,42 +1514,156 @@ static NSArray<NSString *> *ERLinkSymbolCatalog(void) {
     return catalog;
 }
 
-static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
+static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
+
+// 1.1.9-64：keyboardX 风格网格磁贴 —— 圆角 12 底块 + 32pt 符号 + 底部小字名称 + 选中蓝对勾。
+@interface ERSymbolTileCell : UICollectionViewCell
+@property (nonatomic, strong) UILabel *nameLabel;
+@property (nonatomic, strong) UIImageView *symbolView;
+@property (nonatomic, strong) UIImageView *checkView;
+@end
+
+@implementation ERSymbolTileCell
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (!self) return nil;
+    UIView *tile = [[UIView alloc] initWithFrame:CGRectZero];
+    tile.tag = 80;
+    tile.backgroundColor = [UIColor tertiarySystemFillColor];
+    tile.layer.cornerRadius = 12.0;
+    tile.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.contentView addSubview:tile];
+
+    UIImageView *symbol = [[UIImageView alloc] initWithFrame:CGRectZero];
+    symbol.tag = 81;
+    symbol.contentMode = UIViewContentModeScaleAspectFit;
+    symbol.tintColor = UIColor.labelColor;
+    symbol.translatesAutoresizingMaskIntoConstraints = NO;
+    [tile addSubview:symbol];
+
+    UILabel *name = [[UILabel alloc] initWithFrame:CGRectZero];
+    name.tag = 82;
+    name.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    name.adjustsFontSizeToFitWidth = YES;
+    name.minimumScaleFactor = 0.7;
+    name.textAlignment = NSTextAlignmentCenter;
+    name.textColor = UIColor.secondaryLabelColor;
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    [tile addSubview:name];
+
+    UIImageView *check = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:@"checkmark.circle.fill"]];
+    check.tag = 83;
+    check.tintColor = UIColor.systemBlueColor;
+    check.translatesAutoresizingMaskIntoConstraints = NO;
+    [tile addSubview:check];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [tile.topAnchor constraintEqualToAnchor:self.contentView.topAnchor constant:4.0],
+        [tile.bottomAnchor constraintEqualToAnchor:self.contentView.bottomAnchor constant:-4.0],
+        [tile.leadingAnchor constraintEqualToAnchor:self.contentView.leadingAnchor constant:4.0],
+        [tile.trailingAnchor constraintEqualToAnchor:self.contentView.trailingAnchor constant:-4.0],
+        [symbol.centerXAnchor constraintEqualToAnchor:tile.centerXAnchor],
+        [symbol.topAnchor constraintEqualToAnchor:tile.topAnchor constant:12.0],
+        [symbol.widthAnchor constraintEqualToConstant:32.0],
+        [symbol.heightAnchor constraintEqualToConstant:32.0],
+        [name.topAnchor constraintEqualToAnchor:symbol.bottomAnchor constant:6.0],
+        [name.leadingAnchor constraintEqualToAnchor:tile.leadingAnchor constant:3.0],
+        [name.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-3.0],
+        [check.topAnchor constraintEqualToAnchor:tile.topAnchor constant:4.0],
+        [check.trailingAnchor constraintEqualToAnchor:tile.trailingAnchor constant:-4.0],
+        [check.widthAnchor constraintEqualToConstant:19.0],
+        [check.heightAnchor constraintEqualToConstant:19.0],
+    ]];
+    _nameLabel = name;
+    _symbolView = symbol;
+    _checkView = check;
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    // 底块高度不足时收窄间距，保证 4 列窄磁贴也能放下。
+    UIView *tile = [self.contentView viewWithTag:80];
+    UIImageView *symbol = [self.contentView viewWithTag:81];
+    UILabel *name = [self.contentView viewWithTag:82];
+    CGFloat h = CGRectGetHeight(tile.frame);
+    if (h < 64.0) {
+        symbol.transform = CGAffineTransformMakeScale(0.8, 0.8);
+        name.font = [UIFont systemFontOfSize:9.0];
+    } else {
+        symbol.transform = CGAffineTransformIdentity;
+        name.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
+    }
+}
+
+@end
 
 @implementation ERLinkIconPickerController {
-    UITableView *_table;
-    UISearchBar *_searchBar;
+    UICollectionView *_grid;
+    UISegmentedControl *_columns;
+    UISearchController *_search;
     NSArray<NSString *> *_available;
     NSArray<NSString *> *_filtered;
+    NSInteger _columnCount;
 }
 
 - (void)loadView {
     self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+    self.view.backgroundColor = [UIColor systemBackgroundColor];
 
-    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
-    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    table.dataSource = self;
-    table.delegate = self;
-    [self.view addSubview:table];
-    _table = table;
+    // 列数记忆（keyboardX：静态 DXPPreferredSymbolColumns）。
+    NSNumber *saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"ERLinkPreferredSymbolColumns"];
+    _columnCount = saved.integerValue >= 1 && saved.integerValue <= 4 ? saved.integerValue : 3;
 
-    UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0.0, 0.0, CGRectGetWidth(self.view.bounds), 56.0)];
-    bar.delegate = self;
-    bar.placeholder = @"搜索符号（如 wifi / bolt / music）";
-    bar.searchBarStyle = UISearchBarStyleMinimal;
-    bar.showsCancelButton = NO;
-    bar.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(table.bounds), 56.0);
-    [bar layoutIfNeeded];
-    table.tableHeaderView = bar;
-    _searchBar = bar;
+    UICollectionViewFlowLayout *layout = [[UICollectionViewFlowLayout alloc] init];
+    layout.minimumInteritemSpacing = 6.0;
+    layout.minimumLineSpacing = 10.0;
+    UICollectionView *grid = [[UICollectionView alloc] initWithFrame:self.view.bounds collectionViewLayout:layout];
+    grid.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    grid.backgroundColor = UIColor.systemBackgroundColor;
+    grid.dataSource = self;
+    grid.delegate = self;
+    grid.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    [grid registerClass:ERSymbolTileCell.class forCellWithReuseIdentifier:kERLinkSymbolGridCell];
+    [self.view addSubview:grid];
+    _grid = grid;
+
+    // 列数切换条固定在网格上方（页面底部，避开导航栏搜索）。
+    UISegmentedControl *columns = [[UISegmentedControl alloc] initWithItems:@[@"1列", @"2列", @"3列", @"4列"]];
+    columns.selectedSegmentIndex = (NSInteger)_columnCount - 1;
+    [columns addTarget:self action:@selector(columnsChanged:) forControlEvents:UIControlEventValueChanged];
+    columns.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.view addSubview:columns];
+    [NSLayoutConstraint activateConstraints:@[
+        [columns.leadingAnchor constraintEqualToAnchor:self.view.layoutMarginsGuide.leadingAnchor],
+        [columns.trailingAnchor constraintEqualToAnchor:self.view.layoutMarginsGuide.trailingAnchor],
+        [columns.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-10.0],
+        [columns.heightAnchor constraintEqualToConstant:32.0],
+    ]];
+    _columns = columns;
+    _columns.translatesAutoresizingMaskIntoConstraints = YES;
+    _grid.translatesAutoresizingMaskIntoConstraints = YES;
+    grid.frame = self.view.bounds;
+    grid.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"选择图标";
-    // 只保留当前系统能渲染的符号。
+    self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    // keyboardX：搜索挂在 navigationItem（裸 UISearchBar 在 Settings 进程里不响应）。
+    UISearchController *search = [[UISearchController alloc] initWithSearchResultsController:nil];
+    search.searchResultsUpdater = self;
+    search.hidesNavigationBarDuringPresentation = NO;
+    search.obscuresBackgroundDuringPresentation = NO;
+    search.definesPresentationContext = YES;
+    search.searchBar.placeholder = @"搜索符号（如 wifi / bolt / music）";
+    self.navigationItem.searchController = search;
+    _search = search;
+
+    // 只保留当前系统能渲染的符号（内置目录 + 逐一验证）。
     NSMutableArray<NSString *> *available = [NSMutableArray array];
     for (NSString *name in ERLinkSymbolCatalog()) {
         if ([UIImage systemImageNamed:name]) [available addObject:name];
@@ -1556,8 +1672,22 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     _filtered = available;
 }
 
-- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
-    NSString *needle = searchText.lowercaseString;
+- (void)viewDidLayoutSubviews {
+    [super viewDidLayoutSubviews];
+    CGFloat top = CGRectGetMaxY(self.navigationController.navigationBar.frame);
+    if (top < 60.0) top = 60.0;
+    CGFloat bottom = CGRectGetMinY(_columns.frame) - 10.0;
+    _grid.frame = CGRectMake(0.0, top, CGRectGetWidth(self.view.bounds), bottom - top);
+}
+
+- (void)columnsChanged:(UISegmentedControl *)sender {
+    _columnCount = sender.selectedSegmentIndex + 1;
+    [[NSUserDefaults standardUserDefaults] setObject:@(_columnCount) forKey:@"ERLinkPreferredSymbolColumns"];
+    [(UICollectionViewFlowLayout *)_grid.collectionViewLayout invalidateLayout];
+}
+
+- (void)updateSearchResultsForSearchController:(__unused UISearchController *)searchController {
+    NSString *needle = _search.searchBar.text.lowercaseString;
     if (!needle.length) {
         _filtered = _available;
     } else {
@@ -1567,33 +1697,40 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
         }
         _filtered = result;
     }
-    [_table reloadData];
+    [_grid reloadData];
 }
 
-- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
-    [searchBar resignFirstResponder];
-}
-
-- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+- (NSInteger)collectionView:(__unused UICollectionView *)collectionView numberOfItemsInSection:(__unused NSInteger)section {
     return (NSInteger)_filtered.count;
 }
 
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:kERLinkIconPickerCell];
-    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:kERLinkIconPickerCell];
+- (UICollectionViewCell *)collectionView:(UICollectionView *)collectionView cellForItemAtIndexPath:(NSIndexPath *)indexPath {
+    ERSymbolTileCell *cell = [collectionView dequeueReusableCellWithReuseIdentifier:kERLinkSymbolGridCell forIndexPath:indexPath];
     NSString *name = _filtered[(NSUInteger)indexPath.row];
-    cell.textLabel.text = name;
-    cell.textLabel.textColor = UIColor.labelColor;
-    cell.textLabel.font = [UIFont systemFontOfSize:12.0];
-    // 40×40 预览：蓝色符号（选择页里看得清；磁贴上会按规则画成白色前景）。
-    cell.imageView.image = [UIImage systemImageNamed:name];
-    cell.imageView.tintColor = [UIColor colorWithRed:0.11 green:0.60 blue:0.97 alpha:1.0];
-    cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
+    UIImageConfiguration *config = [UIImageSymbolConfiguration configurationWithPointSize:32.0];
+    cell.symbolView.image = [UIImage systemImageNamed:name withConfiguration:config];
+    cell.nameLabel.text = name;
+    BOOL selected = [name isEqualToString:self.selectedSymbol];
+    cell.checkView.hidden = !selected;
     return cell;
 }
 
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+- (CGSize)collectionView:(__unused UICollectionView *)collectionView layout:(UICollectionViewFlowLayout *)layout sizeForItemAtIndexPath:(__unused NSIndexPath *)indexPath {
+    CGFloat width = CGRectGetWidth(_grid.frame);
+    if (width <= 0.0) width = 320.0;
+    CGFloat inset = 10.0;
+    CGFloat spacing = 6.0;
+    CGFloat itemW = (width - inset * 2.0 - spacing * (_columnCount - 1)) / _columnCount;
+    CGFloat itemH = _columnCount == 1 ? 64.0 : 76.0;
+    return CGSizeMake(itemW, itemH);
+}
+
+- (UIEdgeInsets)collectionView:(__unused UICollectionView *)collectionView layout:(__unused UICollectionViewFlowLayout *)layout insetForSectionAtIndex:(__unused NSInteger)section {
+    return UIEdgeInsetsMake(10.0, 10.0, 10.0, 10.0);
+}
+
+- (void)collectionView:(UICollectionView *)collectionView didSelectItemAtIndexPath:(NSIndexPath *)indexPath {
+    [collectionView deselectItemAtIndexPath:indexPath animated:YES];
     if ((NSUInteger)indexPath.row >= _filtered.count) return;
     NSString *name = _filtered[(NSUInteger)indexPath.row];
     if ([self.pickerDelegate respondsToSelector:@selector(iconPickerDidPickSymbol:)]) {
@@ -1722,14 +1859,16 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
     if (!cell) {
         cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
         if (iconRow) {
-            // 1.1.9-63 版式：名称「图标」在最左，输入框居中放大，「选择」在其右，
-            // 图标预览在最右端。全部用约束挂在 contentView 上。
+            // 1.1.9-64 版式（参考天气模块城市选择 ERWeatherCityCell，绿色改蓝色）：
+            // 顺序：图标（标签最左）→ 图标预览 → 输入框（无边框）→ 选择按钮。
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.backgroundColor = UIColor.clearColor;
+            cell.contentView.backgroundColor = UIColor.clearColor;
             UITextField *field = [[UITextField alloc] initWithFrame:CGRectZero];
             field.placeholder = @"SF 符号名";
             field.textAlignment = NSTextAlignmentLeft;
-            field.font = [UIFont systemFontOfSize:15.0];
-            field.borderStyle = UITextBorderStyleRoundedRect;
+            field.font = [UIFont systemFontOfSize:16.0];
+            field.borderStyle = UITextBorderStyleNone;
             field.clearButtonMode = UITextFieldViewModeWhileEditing;
             field.returnKeyType = UIReturnKeyDone;
             field.autocorrectionType = UITextAutocorrectionTypeNo;
@@ -1739,10 +1878,15 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
             field.translatesAutoresizingMaskIntoConstraints = NO;
             [cell.contentView addSubview:field];
             _iconField = field;
-            UIButton *pick = [UIButton buttonWithType:UIButtonTypeSystem];
+            UIButton *pick = [UIButton buttonWithType:UIButtonTypeCustom];
             pick.tag = 62;
             [pick setTitle:@"选择" forState:UIControlStateNormal];
-            pick.titleLabel.font = [UIFont boldSystemFontOfSize:15.0];
+            pick.titleLabel.font = [UIFont systemFontOfSize:15.0];
+            [pick setTitleColor:UIColor.systemBlueColor forState:UIControlStateNormal];
+            pick.layer.cornerRadius = 6.0;
+            pick.layer.borderWidth = 1.0;
+            pick.layer.borderColor = UIColor.systemBlueColor.CGColor;
+            pick.clipsToBounds = YES;
             [pick addTarget:self action:@selector(pickIconTapped) forControlEvents:UIControlEventTouchUpInside];
             pick.translatesAutoresizingMaskIntoConstraints = NO;
             [cell.contentView addSubview:pick];
@@ -1755,23 +1899,29 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
             [cell.contentView addSubview:preview];
             UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
             [NSLayoutConstraint activateConstraints:@[
-                // 输入框从「图标」标签右侧一直撑到「选择」按钮 —— 宽度最大化。
-                [field.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor constant:72.0],
-                [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
-                [field.heightAnchor constraintEqualToConstant:34.0],
-                [preview.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+                // 顺序：标签(margins.leading) → 预览 → 输入框 → 选择按钮(margins.trailing)。
+                [preview.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor constant:64.0],
                 [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [preview.widthAnchor constraintEqualToConstant:34.0],
                 [preview.heightAnchor constraintEqualToConstant:34.0],
-                [pick.trailingAnchor constraintEqualToAnchor:preview.leadingAnchor constant:-10.0],
+                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:10.0],
+                [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [field.heightAnchor constraintEqualToConstant:34.0],
+                [pick.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
                 [pick.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
-                [pick.widthAnchor constraintEqualToConstant:56.0],
-                [pick.heightAnchor constraintEqualToConstant:34.0],
+                [pick.widthAnchor constraintEqualToConstant:45.0],
+                [pick.heightAnchor constraintEqualToConstant:29.0],
                 [field.trailingAnchor constraintEqualToAnchor:pick.leadingAnchor constant:-10.0],
             ]];
         } else if (actionsRow) {
-            // 1.1.9-63：左右两个半宽卡片 —— 左「恢复默认」/ 右「删除快捷动作」。
+            // 1.1.9-64：去掉卡片大背景（cell 透明），只留左右两个自带背景的按钮。
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.backgroundColor = UIColor.clearColor;
+            cell.contentView.backgroundColor = UIColor.clearColor;
+            cell.backgroundView = [[UIView alloc] init];
+            cell.backgroundView.backgroundColor = UIColor.clearColor;
+            cell.selectedBackgroundView = [[UIView alloc] init];
+            cell.selectedBackgroundView.backgroundColor = UIColor.clearColor;
             UIButton *restore = [UIButton buttonWithType:UIButtonTypeSystem];
             restore.tag = 64;
             [restore setTitle:@"恢复默认" forState:UIControlStateNormal];
@@ -1861,15 +2011,19 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
             cell.imageView.image = nil;
             // 替换按钮挂 accessoryView（1.1.9-62 里被后面的 nil 覆盖导致不显示，这里修掉）。
+            // 1.1.9-64：样式与第3行「选择」一致（天气城市选择风、蓝色边框）。
             UIButton *replace = [cell.contentView viewWithTag:66];
             if (!replace) {
-                replace = [UIButton buttonWithType:UIButtonTypeSystem];
+                replace = [UIButton buttonWithType:UIButtonTypeCustom];
                 replace.tag = 66;
-                replace.frame = CGRectMake(0.0, 0.0, 64.0, 34.0);
+                replace.frame = CGRectMake(0.0, 0.0, 45.0, 29.0);
                 [replace setTitle:@"替换" forState:UIControlStateNormal];
-                replace.titleLabel.font = [UIFont boldSystemFontOfSize:15.0];
-                replace.backgroundColor = [UIColor secondarySystemFillColor];
-                replace.layer.cornerRadius = 10.0;
+                replace.titleLabel.font = [UIFont systemFontOfSize:15.0];
+                [replace setTitleColor:UIColor.systemBlueColor forState:UIControlStateNormal];
+                replace.layer.cornerRadius = 6.0;
+                replace.layer.borderWidth = 1.0;
+                replace.layer.borderColor = UIColor.systemBlueColor.CGColor;
+                replace.clipsToBounds = YES;
                 [replace addTarget:self action:@selector(replaceTapped) forControlEvents:UIControlEventTouchUpInside];
             }
             cell.accessoryView = replace;
@@ -1922,6 +2076,7 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
 - (void)pickIconTapped {
     ERLinkIconPickerController *picker = [[ERLinkIconPickerController alloc] init];
     picker.pickerDelegate = self;
+    picker.selectedSymbol = _iconField.text ?: @"";
     [self.navigationController pushViewController:picker animated:YES];
 }
 
@@ -2073,6 +2228,7 @@ static NSString *const kERLinkIconPickerCell = @"ERLinkIconPickerCell";
 - (void)iconPickerDidPickSymbol:(NSString *)symbolName {
     _pendingSymbol = [symbolName isKindOfClass:[NSString class]] ? symbolName : @"";
     _pendingSymbolSet = YES;
+    _iconField.text = _pendingSymbol;
     [_table reloadData];
 }
 
