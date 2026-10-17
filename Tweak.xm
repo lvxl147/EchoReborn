@@ -6723,6 +6723,9 @@ static NSString *ERLinkSlotIdentifierForAddingUUID(NSString *uuid) {
 static void ERLinkReloadCallback(CFNotificationCenterRef center, void *observer,
                                  CFStringRef name, const void *object, CFDictionaryRef userInfo);
 
+// ERAddDiagSet 定义在文件后段，此处先声明（诊断键写入共享偏好域）。
+static void ERAddDiagSet(NSString *key, id value);
+
 static void ERLinkReconcileAfterCatalogChange(void) {
     @try {
         CFPreferencesAppSynchronize(kERPrefsDomain);
@@ -6788,7 +6791,7 @@ static void ERLinkReconcileAfterCatalogChange(void) {
             ERSaveGridPreferences();
         }
         // ④ 现存覆盖层重建。
-        UIViewController *overlay = gOverlayControllers.allObjects.anyObject;
+        UIViewController *overlay = gOverlayControllers.anyObject;
         id coordinatorClass = NSClassFromString(@"EchoRebornCoordinator");
         id coordinator = nil;
         if (coordinatorClass && [coordinatorClass respondsToSelector:@selector(shared)]) {
