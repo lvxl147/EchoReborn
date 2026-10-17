@@ -1556,7 +1556,7 @@ static void ERLinkCollectSymbolNames(id object, NSMutableOrderedSet<NSString *> 
             } else if ([entry isKindOfClass:[NSDictionary class]]) {
                 for (NSString *key in @[@"name", @"symbol", @"Name"]) {
                     id value = entry[key];
-                    if ([value isKindOfClass:[NSString class]] && value.length) {
+                    if ([value isKindOfClass:[NSString class]] && ((NSString *)value).length) {
                         ERLinkAppendName(value, names);
                         break;
                     }
@@ -1694,7 +1694,7 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
         NSString *title = nil;
         for (NSString *key in @[@"title", @"name", @"label"]) {
             id value = meta[key];
-            if ([value isKindOfClass:[NSString class]] && value.length) { title = value; break; }
+            if ([value isKindOfClass:[NSString class]] && ((NSString *)value).length) { title = value; break; }
         }
         if (!title.length) title = titles[identifier] ?: identifier;
         NSString *icon = nil;
