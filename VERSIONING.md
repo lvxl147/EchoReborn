@@ -100,3 +100,4 @@
 | 183 | 1.1.9-56b | 1001134 | -56 编译修复：探测体抽成普通 C 函数 ERAct2ProbeImpl（老 clang 在 block 内 @try 捕获变量有 bug），优先级常量改 DISPATCH_QUEUE_PRIORITY_DEFAULT。逻辑不变 |
 | 184 | 1.1.9-56c | 1001135 | 探测加固：Start/Scan(每2000类)/Hit(命中即时落盘)诊断；空类跳过；延迟 3s→8s 避开启动高峰。首次 CI roothide job 因 GitHub API 网络超时失败(非编译错)，已重跑成功；-56b 装机后不稳已回滚 -55 |
 | 185 | 1.1.9-56d | 1001136 | 按镜像探测替代全量扫描：56b/56c 全量 objc_copyClassList 扫描在 SpringBoard 引导后必崩（-55 无探测稳定；设备上无 .ips 崩溃日志可查）。改为 objc_copyClassNamesForImage 只扫 SpringBoard 主程序+非系统 dylib（tweak 注入镜像），objc_lookUpClass 不触发 +initialize；Img/Scan/Hit 分步落盘 |
+| 186 | 1.1.9-57 | 1001137 | A 路结案：56d 按镜像探测 hits=0——iOS17 全镜像（SpringBoard 主程序+全部 tweak dylib）无 activateShortcut:withBundleIdentifier:forIconView: 响应者，系统直启路径确认封死，乌贼同款调用亦死代码。转快捷指令方案（快面板同款 WorkflowKit：WFWorkflowRunRequest+WFWorkflowRunnerClient runWorkflow:title:）。-57 新增 ERWFProbe：安全按镜像扫主程序+tweak dylib，列出方法名含 unWorkflow/hortcutRun 的 类:方法（Diag.P.WF.*，11s 延迟） |
