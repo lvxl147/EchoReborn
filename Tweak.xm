@@ -26588,17 +26588,22 @@ static void ERAct2ProbeImpl(void) {
     @try {
         SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
         unsigned int count = 0;
+        ERAddDiagSet(@"Diag.P.Act2.Start", @"scan-begin");
         Class *classes = objc_copyClassList(&count);
+        ERAddDiagSet(@"Diag.P.Act2.Start", [NSString stringWithFormat:@"copied=%u", count]);
         NSMutableArray *hits = [NSMutableArray array];
         unsigned int checked = 0;
         for (unsigned int i = 0; i < count; i++) {
             Class c = classes[i];
+            if (!c) continue;
             // 纯 C 查找，不触发 +initialize
             if (class_getInstanceMethod(c, actSel) || class_getClassMethod(c, actSel)) {
                 [hits addObject:NSStringFromClass(c)];
+                // 命中即时落盘，崩溃也不丢
+                ERAddDiagSet(@"Diag.P.Act2.Hit", NSStringFromClass(c));
             }
             checked++;
-            if ((checked % 20000) == 0)
+            if ((checked % 2000) == 0)
                 ERAddDiagSet(@"Diag.P.Act2.Scan", [NSString stringWithFormat:@"%u/%u hits=%lu", checked, count, (unsigned long)hits.count]);
         }
         free(classes);
@@ -26610,7 +26615,7 @@ static void ERAct2ProbeImpl(void) {
 }
 
 static void ERAct2Probe(void) {
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)),
                    dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
         @autoreleasepool {
             ERAct2ProbeImpl();
