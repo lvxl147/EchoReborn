@@ -26646,6 +26646,20 @@ static void ERWFProbeImpl(void) {
             }
             ERAddDiagSet([NSString stringWithFormat:@"Diag.P.WF.C.%@", clsName], [NSString stringWithFormat:@"sels=%lu", (unsigned long)sels.count]);
         }
+        // 1.1.9-59：SBIconView 定向诊断（TypeX 走的就是它的类方法）
+        @try {
+            Class ivc = NSClassFromString(@"SBIconView");
+            SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+            NSMethodSignature *sig = [ivc methodSignatureForSelector:actSel];
+            ERAddDiagSet(@"Diag.P.QA.Done", [NSString stringWithFormat:
+                @"cls=%d inst=%d args=%lu ret=%s",
+                ivc ? [ivc respondsToSelector:actSel] : -1,
+                ivc ? [ivc instancesRespondToSelector:actSel] : -1,
+                (unsigned long)(sig ? sig.numberOfArguments : 0),
+                sig && sig.methodReturnType ? sig.methodReturnType : "?"]);
+        } @catch (NSException *qe) {
+            ERAddDiagSet(@"Diag.P.QA.Done", [NSString stringWithFormat:@"EXC %@", qe.name]);
+        }
         ERAddDiagSet(@"Diag.P.WF.Done", @"dlopen-dump-done");
     } @catch (NSException *e) {
         ERAddDiagSet(@"Diag.P.WF.EXC", e.name);
@@ -26659,6 +26673,44 @@ static void ERWFProbe(void) {
             ERWFProbeImpl();
         }
     });
+}
+
+// 1.1.9-59：TypeX/keyboardX 同款快捷方式激活（仅查看其实现后照抄调用方式）。
+// 差异点：① 调 SBIconView 的类方法 +activateShortcut:withBundleIdentifier:forIconView:
+// （此前我们只试过 iconManager 实例方法）；② 传 SBApplicationController 里该 App
+// 当前的真实 shortcut item 对象（dynamic 优先，static 兜底），不伪造 item。
+static id ERQAReadObj(id o, NSString *prop) {
+    if (!o) return nil;
+    SEL s = NSSelectorFromString(prop);
+    if (![o respondsToSelector:s]) return nil;
+    @try { return ((id (*)(id, SEL))objc_msgSend)(o, s); } @catch (__unused NSException *e) { return nil; }
+}
+static NSString *ERQAReadStr(id o, NSString *prop) {
+    id v = ERQAReadObj(o, prop);
+    return [v isKindOfClass:[NSString class]] ? v : nil;
+}
+// 返回命中的真实 item（bundleId+type 匹配），App 对象类名写入 outCls
+static id ERQAFindRealItem(NSString *bundleId, NSString *type, NSString **outCls) {
+    if (outCls) *outCls = nil;
+    Class accCls = NSClassFromString(@"SBApplicationController");
+    id ac = (accCls && [accCls respondsToSelector:@selector(sharedInstance)])
+        ? ((id (*)(id, SEL))objc_msgSend)(accCls, @selector(sharedInstance)) : nil;
+    SEL appSel = NSSelectorFromString(@"applicationWithBundleIdentifier:");
+    id app = (ac && [ac respondsToSelector:appSel]) ? ((id (*)(id, SEL, id))objc_msgSend)(ac, appSel, bundleId) : nil;
+    if (!app) return nil;
+    if (outCls) *outCls = NSStringFromClass([app class]);
+    NSMutableArray *groups = [NSMutableArray array];
+    id dyn = ERQAReadObj(app, @"dynamicApplicationShortcutItems");
+    if ([dyn isKindOfClass:[NSArray class]]) [groups addObjectsFromArray:dyn];
+    id info = ERQAReadObj(app, @"info");
+    id st = ERQAReadObj(info, @"staticApplicationShortcutItems");
+    if (![st isKindOfClass:[NSArray class]]) st = ERQAReadObj(app, @"staticApplicationShortcutItems");
+    if ([st isKindOfClass:[NSArray class]]) [groups addObjectsFromArray:st];
+    for (id item in groups) {
+        NSString *t = ERQAReadStr(item, @"type");
+        if ([t isEqualToString:type]) return item;
+    }
+    return nil;
 }
 
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
@@ -26755,6 +26807,31 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                 ERAddDiagSet([diagKey stringByAppendingString:@".sc"],
                              [NSString stringWithFormat:@"deepURL %@ %@", deepURL, ok ? @"YES" : @"NO"]);
                 return ok;
+            }
+            // 1.1.9-59：TypeX 同款层（最优先）——SBIconView 类方法 + 真实 item。
+            @try {
+                NSString *appClsName = nil;
+                id realItem = ERQAFindRealItem(entry[@"bundleId"], shortcutType, &appClsName);
+                ERAddDiagSet([diagKey stringByAppendingString:@".qa"],
+                             [NSString stringWithFormat:@"item=%@ app=%@", realItem ? @"YES" : @"NO", appClsName ?: @"nil"]);
+                if (realItem) {
+                    Class ivc = NSClassFromString(@"SBIconView");
+                    SEL actSel = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+                    NSMethodSignature *sig = [ivc methodSignatureForSelector:actSel];
+                    if (ivc && [ivc respondsToSelector:actSel] && sig && sig.numberOfArguments == 5) {
+                        ERAddDiagSet([diagKey stringByAppendingString:@".qa"], @"try");
+                        ((void (*)(id, SEL, id, id, id))objc_msgSend)(ivc, actSel, realItem, entry[@"bundleId"], (id)nil);
+                        ERAddDiagSet([diagKey stringByAppendingString:@".qa"], @"sent");
+                        return YES;
+                    }
+                    ERAddDiagSet([diagKey stringByAppendingString:@".qa"],
+                                 [NSString stringWithFormat:@"no-cls-sel args=%lu ret=%s",
+                                  (unsigned long)(sig ? sig.numberOfArguments : 0),
+                                  sig && sig.methodReturnType ? sig.methodReturnType : "?"]);
+                }
+            } @catch (NSException *qex) {
+                ERAddDiagSet([diagKey stringByAppendingString:@".qa"],
+                             [NSString stringWithFormat:@"EXC %@ %@", qex.name, qex.reason ?: @""]);
             }
             // 1.1.9-56：-55 实锤 iconManager 不响应 activateShortcut:...。修正版全类
             // 探测（结果由 ctor 后 3 秒的后台探测写入 ERAct2ClsList）：用
