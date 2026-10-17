@@ -26636,6 +26636,77 @@ static void ERAct2Probe(void) {
     });
 }
 
+// 1.1.9-57：WF 探测 —— 扫 SpringBoard 主程序 + tweak dylib，列出所有方法名含
+// "unWorkflow"（覆盖 runWorkflow/_runWorkflow）或 "hortcutRun"/"unWorkflow" 的
+// 类:方法，找快面板同款 runWorkflow 调用面。同 56d 安全姿势（按镜像+lookUpClass）。
+static void ERWFProbeImpl(void) {
+    @try {
+        ERAddDiagSet(@"Diag.P.WF.Start", @"begin");
+        NSMutableArray *hits = [NSMutableArray array];
+        unsigned int n = _dyld_image_count();
+        unsigned int scanned = 0;
+        for (unsigned int i = 0; i < n; i++) {
+            const char *p = _dyld_get_image_name(i);
+            if (!p) continue;
+            NSString *path = [NSString stringWithUTF8String:p];
+            BOOL isMain = (i == 0);
+            BOOL isSys  = [path containsString:@"/System/Library"] || [path containsString:@"/usr/lib"] || [path containsString:@"/usr/local"];
+            BOOL isDylib = [path hasSuffix:@".dylib"];
+            if (!(isMain || (isDylib && !isSys))) continue;
+            unsigned int cn = 0;
+            const char **names = objc_copyClassNamesForImage(p, &cn);
+            for (unsigned int j = 0; j < cn; j++) {
+                Class c = objc_lookUpClass(names[j]);
+                if (!c) continue;
+                NSString *cls = [NSString stringWithFormat:@"%s", names[j]];
+                unsigned int mc = 0;
+                Method *ms = class_copyMethodList(c, &mc);
+                for (unsigned int m = 0; m < mc; m++) {
+                    SEL s = method_getName(ms[m]);
+                    NSString *sn = NSStringFromSelector(s);
+                    if ([sn containsString:@"unWorkflow"] || [sn containsString:@"hortcutRun"] ||
+                        ([sn containsString:@"un"] && [sn containsString:@"hortcut"])) {
+                        NSString *rec = [NSString stringWithFormat:@"%@.%@", cls, sn];
+                        [hits addObject:rec];
+                        ERAddDiagSet(@"Diag.P.WF.Hit", rec);
+                    }
+                }
+                if (ms) free(ms);
+                // 类方法同样扫一遍（WFWorkflowRunnerClient 可能是类方法入口）
+                ms = class_copyMethodList(object_getClass(c), &mc);
+                for (unsigned int m = 0; m < mc; m++) {
+                    SEL s = method_getName(ms[m]);
+                    NSString *sn = NSStringFromSelector(s);
+                    if ([sn containsString:@"unWorkflow"] || [sn containsString:@"hortcutRun"]) {
+                        NSString *rec = [NSString stringWithFormat:@"%@(+)%@", cls, sn];
+                        [hits addObject:rec];
+                        ERAddDiagSet(@"Diag.P.WF.Hit", rec);
+                    }
+                }
+                if (ms) free(ms);
+            }
+            if (names) free(names);
+            scanned++;
+            ERAddDiagSet(@"Diag.P.WF.Scan", [NSString stringWithFormat:@"imgs=%u/%u hits=%lu", scanned, n, (unsigned long)hits.count]);
+        }
+        NSString *joined = [hits componentsJoinedByString:@";"];
+        if (joined.length > 2800) joined = [joined substringToIndex:2800];
+        ERAddDiagSet(@"Diag.P.WF.Done",
+                     [NSString stringWithFormat:@"imgs=%u hits=%lu %@", scanned, (unsigned long)hits.count, joined]);
+    } @catch (NSException *e) {
+        ERAddDiagSet(@"Diag.P.WF.EXC", e.name);
+    }
+}
+
+static void ERWFProbe(void) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(11 * NSEC_PER_SEC)),
+                   dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        @autoreleasepool {
+            ERWFProbeImpl();
+        }
+    });
+}
+
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
     if (![entry isKindOfClass:[NSDictionary class]]) return NO;
     NSString *type = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
@@ -31672,6 +31743,7 @@ static void ERAppShortcutDiagSet(NSString *step, id value);
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
     ERAct2Probe();       // 1.1.9-56：修正版探测（纯 C method 查找，无死角扫 activateShortcut:...）
+    ERWFProbe();         // 1.1.9-57：按镜像探测 runWorkflow 类:方法（快面板同款）
     %init(ERJumpTrace);  // 1.1.9-34：跳转追踪（纯日志）
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
