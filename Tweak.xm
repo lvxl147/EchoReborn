@@ -26847,21 +26847,39 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         }
                         ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
                                      [NSString stringWithFormat:@"opts=%d(%@)", trOpts != nil, optsHow]);
-                        if (trOpts) {
-                            // 1.1.9-45：-44 实锤 —— 调用已进入 MainWS trusted 处理器内部后
-                            // SpringBoard 崩溃（tr=try 无 sent）。两个修正：
-                            // ① result 回调不再传 nil（真实调用均带结果块，处理器可能
-                            //   无条件调用 → 对 nil block 调用即崩）；
-                            // ② settings 换成带内层 BSMutableSettings 的构造（见上）。
-                            void (^resultBlk)(id) = ^(id res) {
-                                ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
-                                             [NSString stringWithFormat:@"result %@", res]);
-                            };
-                            ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"try");
-                            ((void (*)(id, SEL, id, id, id, id, void (^)(id)))objc_msgSend)
-                                (ws, trustedSel, entry[@"bundleId"], trOpts, settings, origin, resultBlk);
-                            ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"sent");
-                            return YES;
+                        // 1.1.9-53：直调 MainWS 路线（-39..-52）在 action 缺系统侧
+                        // responder 的场景下反复深层硬崩，彻底停用。改走 Actra 实测的
+                        // 服务层调用：FBSSystemService.openApplication:options:withResult:，
+                        // options 用真 FBSOpenApplicationOptions 携带 __Actions（BSAction
+                        // 数组走 BSSecureCoding 编码，Actra 抓包证实可完整穿透到 MainWS）；
+                        // 编码/参数不合法时服务层返回错误，绝不崩桌面。
+                        if (action) {
+                            Class sysCls = NSClassFromString(@"FBSSystemService");
+                            SEL sysSel2 = NSSelectorFromString(@"openApplication:options:withResult:");
+                            id sysSvc = (sysCls && [sysCls respondsToSelector:@selector(sharedService)])
+                                ? ((id (*)(id, SEL))objc_msgSend)(sysCls, @selector(sharedService)) : nil;
+                            Class fboCls = NSClassFromString(@"FBSOpenApplicationOptions");
+                            id svcOpts = nil;
+                            if (fboCls) {
+                                svcOpts = [[fboCls alloc] init];
+                                SEL sdSel = NSSelectorFromString(@"setDictionary:");
+                                if (svcOpts && [svcOpts respondsToSelector:sdSel])
+                                    ((void (*)(id, SEL, id))objc_msgSend)(svcOpts, sdSel, trOptsDict);
+                                else
+                                    svcOpts = nil;
+                            }
+                            if (sysSvc && svcOpts && [sysSvc respondsToSelector:sysSel2]) {
+                                void (^svcRes)(id) = ^(id err) {
+                                    ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
+                                                 [NSString stringWithFormat:@"svc-result %@", err]);
+                                };
+                                ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"svc-try");
+                                ((void (*)(id, SEL, id, id, void (^)(id)))objc_msgSend)
+                                    (sysSvc, sysSel2, entry[@"bundleId"], svcOpts, svcRes);
+                                ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"svc-sent");
+                                return YES;
+                            }
+                            ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"svc-unavailable");
                         }
                     }
                 } else {
