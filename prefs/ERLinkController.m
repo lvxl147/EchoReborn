@@ -691,7 +691,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 //        第4行 选择快捷方式（替换按钮 → 复用添加流程原位换目标）。
 // 卡片2：删除快捷方式（红色，确认后连子页面与控制中心一起清）。
 @protocol ERLinkIconPickerDelegate;
-@interface ERLinkIconPickerController : PSViewController <UITableViewDataSource, UISearchBarDelegate>
+@interface ERLinkIconPickerController : PSViewController <UITableViewDataSource, UITableViewDelegate, UISearchBarDelegate>
 @property (nonatomic, weak) id<ERLinkIconPickerDelegate> pickerDelegate;
 @end
 @protocol ERLinkIconPickerDelegate <NSObject>
