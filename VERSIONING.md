@@ -104,3 +104,4 @@
 | 187 | 1.1.9-57b | 1001138 | WF 探测白名单扩展：57 结果 imgs=5 hits=0 是因 WorkflowKit/VoiceShortcutClient 属系统框架被过滤；本轮把这两个镜像加入扫描白名单，拿 runWorkflow 确切方法签名 |
 | 188 | 1.1.9-58 | 1001139 | 57b imgs=5 证实 SpringBoard 未加载 WorkflowKit（懒加载）。-58 改为主动 dlopen WorkflowKit+VoiceShortcutClient，直接倒 WFWorkflowRunnerClient/WFWorkflowRunRequest/WFWorkflowRunningContext/WFWorkflowDatabaseRunDescriptor/SBShortcutsService/VCSVoiceShortcutClient/VoiceShortcutClient/WFApplication 完整方法表（Diag.P.WF.C.<类名>.<段>） |
 | 189 | 1.1.9-58b | 1001140 | 按用户要求移除全部 URL 映射（-54 方案B：内置 QQ 扫一扫 mqqapi 映射 + AppShortcutURLMap prefs 扩展 + 调用点）。快捷方式磁贴不再走 URL 通道；WorkflowKit 方法表探测保留（-58） |
+| 190 | 1.1.9-59 | 1001141 | 查看 keyboardX(TypeX) 实现：快捷方式动作 = SBApplicationController 取真实 item（dynamic/static 按 type 匹配）→ 调 SBIconView 类方法 activateShortcut:withBundleIdentifier:forIconView:（respondsToSelector+签名守卫）。-59 照抄：新增最优先 QA 层（.qa 诊断）+ ctor 定向诊断 Diag.P.QA。未用其任何代码，仅复刻调用方式 |
