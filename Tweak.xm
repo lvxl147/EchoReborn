@@ -26496,10 +26496,10 @@ static BOOL ERRunLinkOpenApp(NSString *bundleId, NSDictionary *extraOptions) {
 //（boolForActivationSetting: / bs_boolForKey: …），而 iOS 17 的 BSMutableSettings
 // 与 FBSOpenApplicationOptions 都未实现这些方法。方案：运行时注入方法族，
 // 实现从 objc_setAssociatedObject 挂在实例上的字典精确取值。
-static NSString * const ERBSAssocKey = @"er_bs_dict";
-static id er_bsDict(id self) { return objc_getAssociatedObject(self, ERBSAssocKey); }
+static char kERBSAssocKey;
+static id er_bsDict(id self) { return objc_getAssociatedObject(self, &kERBSAssocKey); }
 static void er_bsAttach(id obj, NSDictionary *dict) {
-    objc_setAssociatedObject(obj, ERBSAssocKey, dict, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    objc_setAssociatedObject(obj, &kERBSAssocKey, dict, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 static BOOL er_bsBoolForActivationSetting(id self, SEL _cmd, id setting) {
     id dict = er_bsDict(self);
@@ -26527,15 +26527,15 @@ static void ERBSInjectSettingsMethods(void) {
     done = YES;
     Class cls = NSClassFromString(@"BSMutableSettings");
     if (!cls) return;
-    struct { SEL sel; IMP imp; } items[] = {
-        { NSSelectorFromString(@"boolForActivationSetting:"), (IMP)er_bsBoolForActivationSetting },
-        { NSSelectorFromString(@"bs_boolForKey:"),            (IMP)er_bsBoolForKey },
-        { NSSelectorFromString(@"bs_objectForKey:"),          (IMP)er_bsObjectForKey },
-        { NSSelectorFromString(@"bs_stringForKey:"),          (IMP)er_bsStringForKey },
+    struct { SEL sel; IMP imp; const char *enc; } items[] = {
+        { NSSelectorFromString(@"boolForActivationSetting:"), (IMP)er_bsBoolForActivationSetting, "B@:@" },
+        { NSSelectorFromString(@"bs_boolForKey:"),            (IMP)er_bsBoolForKey,               "B@:@" },
+        { NSSelectorFromString(@"bs_objectForKey:"),          (IMP)er_bsObjectForKey,             "@@:@" },
+        { NSSelectorFromString(@"bs_stringForKey:"),          (IMP)er_bsStringForKey,             "@@:@" },
     };
     for (NSUInteger i = 0; i < sizeof(items)/sizeof(items[0]); i++)
         if (!class_getInstanceMethod(cls, items[i].sel))
-            class_addMethod(cls, items[i].sel, items[i].imp, "@@:@");
+            class_addMethod(cls, items[i].sel, items[i].imp, items[i].enc);
 }
 
 static BOOL ERRunLinkEntry(NSDictionary *entry) {
