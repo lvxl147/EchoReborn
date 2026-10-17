@@ -691,10 +691,12 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 //        第4行 选择快捷方式（替换按钮 → 复用添加流程原位换目标）。
 // 卡片2：删除快捷方式（红色，确认后连子页面与控制中心一起清）。
 @protocol ERLinkIconPickerDelegate;
-// 1.1.9-64：keyboardX DXPSFSymbolPickerController 风格 —— 导航栏搜索 + 1~4 列网格。
-@interface ERLinkIconPickerController : PSViewController <UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UISearchResultsUpdating>
+// 1.1.9-65：keyboardX 风格 —— 根页面=分类列表（图标库），点分类进入网格；顶部导航栏搜索。
+@interface ERLinkIconPickerController : PSViewController <UITableViewDataSource, UITableViewDelegate, UICollectionViewDataSource, UICollectionViewDelegate, UICollectionViewDelegateFlowLayout, UISearchResultsUpdating>
 @property (nonatomic, weak) id<ERLinkIconPickerDelegate> pickerDelegate;
 @property (nonatomic, copy) NSString *selectedSymbol; // 进入时高亮当前图标
+@property (nonatomic, copy) NSArray *categoryNames; // 非空 = 网格模式（该分类的符号名）
+@property (nonatomic, copy) NSString *categoryTitle;                // 网格模式标题
 @end
 @protocol ERLinkIconPickerDelegate <NSObject>
 - (void)iconPickerDidPickSymbol:(NSString *)symbolName;
@@ -725,7 +727,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"快捷方式";
+    self.title = @"快捷动作";
     [self reloadLinks];
 
     UIBarButtonItem *add = [[UIBarButtonItem alloc] initWithTitle:@"添加"
@@ -1516,6 +1518,196 @@ static NSArray<NSString *> *ERLinkSymbolCatalog(void) {
 
 static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
 
+#pragma mark - 系统符号目录（移植 keyboardX DXPSFSymbolCatalog 的读取逻辑）
+
+static NSArray<NSString *> *ERLinkSymbolResourceDirectories(void) {
+    NSMutableOrderedSet<NSString *> *directories = [NSMutableOrderedSet orderedSet];
+    for (NSString *root in @[
+        @"/System/Library/CoreServices/CoreGlyphs.bundle",
+        @"/System/Library/PrivateFrameworks/CoreGlyphs.framework/CoreGlyphs.bundle",
+        @"/System/Library/PrivateFrameworks/SFSymbols.framework",
+    ]) {
+        [directories addObject:root];
+        [directories addObject:[root stringByAppendingPathComponent:@"Resources"]];
+        NSString *resolved = [NSBundle bundleWithPath:root].resourcePath;
+        if (resolved.length) [directories addObject:resolved];
+    }
+    return directories.array;
+}
+
+static id ERLinkReadCatalogPlist(NSString *path) {
+    NSData *data = [NSData dataWithContentsOfFile:path];
+    return data.length ? [NSPropertyListSerialization propertyListWithData:data
+        options:NSPropertyListImmutable format:NULL error:NULL] : nil;
+}
+
+static void ERLinkAppendName(id value, NSMutableOrderedSet<NSString *> *names) {
+    if (![value isKindOfClass:[NSString class]]) return;
+    NSString *name = [value stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (name.length) [names addObject:name];
+}
+
+static void ERLinkCollectSymbolNames(id object, NSMutableOrderedSet<NSString *> *names, NSUInteger depth) {
+    if (depth > 8) return;
+    if ([object isKindOfClass:[NSArray class]]) {
+        for (id entry in object) {
+            if ([entry isKindOfClass:[NSString class]]) {
+                ERLinkAppendName(entry, names);
+            } else if ([entry isKindOfClass:[NSDictionary class]]) {
+                for (NSString *key in @[@"name", @"symbol", @"Name"]) {
+                    id value = entry[key];
+                    if ([value isKindOfClass:[NSString class]] && value.length) {
+                        ERLinkAppendName(value, names);
+                        break;
+                    }
+                }
+            }
+        }
+    } else if ([object isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *dict = object;
+        if (dict[@"names"] || dict[@"symbols"]) {
+            for (NSString *key in @[@"names", @"symbols"]) {
+                id value = dict[key];
+                if ([value isKindOfClass:[NSArray class]] || [value isKindOfClass:[NSDictionary class]]) {
+                    ERLinkCollectSymbolNames(value, names, depth + 1);
+                }
+            }
+            return;
+        }
+        NSMutableArray<NSString *> *keys = [NSMutableArray array];
+        for (NSString *key in dict) {
+            if ([key isKindOfClass:[NSString class]] && ![key hasPrefix:@"CF"] &&
+                ![key isEqualToString:@"version"] && ![key isEqualToString:@"year_to_release"]) {
+                [keys addObject:key];
+            }
+        }
+        [keys sortUsingSelector:@selector(compare:)];
+        for (NSString *key in keys) ERLinkAppendName(key, names);
+    }
+}
+
+// 全量候选符号名（symbol_order.plist + name_availability.plist；未验证）。
+static NSArray<NSString *> *ERLinkSystemSymbolCandidates(NSArray<NSString *> *directories) {
+    NSMutableOrderedSet<NSString *> *names = [NSMutableOrderedSet orderedSet];
+    NSMutableSet<NSString *> *visited = [NSMutableSet set];
+    for (NSString *fileName in @[@"symbol_order.plist", @"name_availability.plist"]) {
+        for (NSString *directory in directories) {
+            if (![directory isKindOfClass:[NSString class]] || !directory.length) continue;
+            NSString *path = [[directory stringByAppendingPathComponent:fileName] stringByStandardizingPath];
+            if ([visited containsObject:path]) continue;
+            [visited addObject:path];
+            id object = ERLinkReadCatalogPlist(path);
+            NSMutableOrderedSet<NSString *> *fileNames = [NSMutableOrderedSet orderedSet];
+            ERLinkCollectSymbolNames(object, fileNames, 0);
+            if (!fileNames.count) continue;
+            [names addObjectsFromArray:fileNames.array];
+        }
+    }
+    return names.array;
+}
+
+static void ERLinkCollectCategoryDefs(id object, NSMutableOrderedSet<NSString *> *order,
+                                      NSMutableDictionary<NSString *, NSDictionary *> *defs) {
+    if ([object isKindOfClass:[NSDictionary class]]) {
+        id categories = object[@"categories"];
+        if ([categories isKindOfClass:[NSArray class]]) object = categories;
+    }
+    if (![object isKindOfClass:[NSArray class]]) return;
+    for (id entry in object) {
+        if (![entry isKindOfClass:[NSDictionary class]]) continue;
+        id key = entry[@"key"];
+        if (![key isKindOfClass:[NSString class]]) continue;
+        NSString *identifier = [key stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        if (!identifier.length) continue;
+        [order addObject:identifier];
+        if (!defs[identifier]) defs[identifier] = entry;
+    }
+}
+
+// 分类列表：@{key, title, icon, names}。顺序：全部 → 多色 → Variable Color → 系统分类。
+static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *directories,
+                                                       NSOrderedSet<NSString *> *validNames) {
+    NSMutableOrderedSet<NSString *> *order = [NSMutableOrderedSet orderedSet];
+    NSMutableDictionary<NSString *, NSDictionary *> *defs = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSString *, NSMutableOrderedSet<NSString *> *> *membership = [NSMutableDictionary dictionary];
+    NSMutableSet<NSString *> *visited = [NSMutableSet set];
+    for (NSString *directory in directories) {
+        if (![directory isKindOfClass:[NSString class]] || !directory.length) continue;
+        for (NSString *fileName in @[@"categories.plist", @"symbol_categories.plist"]) {
+            NSString *path = [[directory stringByAppendingPathComponent:fileName] stringByStandardizingPath];
+            if ([visited containsObject:path]) continue;
+            [visited addObject:path];
+            id object = ERLinkReadCatalogPlist(path);
+            if ([fileName isEqualToString:@"categories.plist"]) {
+                ERLinkCollectCategoryDefs(object, order, defs);
+                continue;
+            }
+            if (![object isKindOfClass:[NSDictionary class]]) continue;
+            if ([object[@"symbols"] isKindOfClass:[NSDictionary class]]) object = object[@"symbols"];
+            for (NSString *name in validNames) {
+                id cats = object[name];
+                if ([cats isKindOfClass:[NSDictionary class]]) cats = cats[@"categories"];
+                if (![cats isKindOfClass:[NSArray class]]) continue;
+                NSMutableOrderedSet<NSString *> *ids = membership[name];
+                if (!ids) ids = [NSMutableOrderedSet orderedSet];
+                for (id identifier in cats) ERLinkAppendName(identifier, ids);
+                if (ids.count) membership[name] = ids;
+            }
+        }
+    }
+    NSMutableDictionary<NSString *, NSMutableArray<NSString *> *> *groups = [NSMutableDictionary dictionary];
+    for (NSString *name in validNames) {
+        for (NSString *identifier in membership[name]) {
+            if (!groups[identifier]) groups[identifier] = [NSMutableArray array];
+            [groups[identifier] addObject:name];
+        }
+    }
+    NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+    [result addObject:@{@"key": @"all", @"title": @"全部", @"icon": @"square.grid.2x2", @"names": validNames.array}];
+    // 分类标题做一次中文映射（系统 plist 里多为英文标识符）。
+    NSDictionary *titles = @{
+        @"multicolor": @"多色", @"variable": @"Variablecolor",
+        @"communication": @"通信", @"weather": @"天气",
+        @"object_and_tools": @"物品与工具", @"objects_and_tools": @"物品与工具",
+        @"devices": @"设备", @"camera_and_photos": @"相机与照片",
+        @"games": @"游戏", @"connectivity": @"连接",
+        @"transportation": @"交通", @"automotive": @"汽车",
+        @"accessibility": @"辅助功能", @"privacy_and_security": @"隐私与安全",
+        @"health": @"健康", @"fitness": @"健身", @"editing": @"编辑",
+        @"keyboard": @"键盘", @"maps": @"地图", @"media": @"媒体",
+        @"mess_and_symbols": @"信息与符号", @"math": @"数学",
+        @"money": @"金钱", @"nature": @"自然", @"dates_and_times": @"日期与时间",
+        @"home": @"家庭", @"sound": @"声音", @"sports": @"运动",
+        @"time": @"时间", @"text_formatting": @"文本格式",
+    };
+    NSMutableOrderedSet<NSString *> *displayOrder = [NSMutableOrderedSet orderedSetWithArray:@[@"multicolor", @"variable"]];
+    for (NSString *identifier in order) {
+        if (![identifier isEqualToString:@"whatsnew"] && ![identifier isEqualToString:@"all"]) [displayOrder addObject:identifier];
+    }
+    for (NSString *identifier in [[groups allKeys] sortedArrayUsingSelector:@selector(compare:)]) {
+        if (![identifier isEqualToString:@"whatsnew"] && ![identifier isEqualToString:@"all"]) [displayOrder addObject:identifier];
+    }
+    for (NSString *identifier in displayOrder) {
+        NSArray *names = groups[identifier];
+        if (!names.count) continue;
+        NSDictionary *meta = defs[identifier];
+        NSString *title = nil;
+        for (NSString *key in @[@"title", @"name", @"label"]) {
+            id value = meta[key];
+            if ([value isKindOfClass:[NSString class]] && value.length) { title = value; break; }
+        }
+        if (!title.length) title = titles[identifier] ?: identifier;
+        NSString *icon = nil;
+        id iconValue = meta[@"icon"];
+        if ([iconValue isKindOfClass:[NSString class]]) icon = iconValue;
+        if (!icon.length) icon = @"tag";
+        [result addObject:@{@"key": identifier, @"title": title, @"icon": icon, @"names": names}];
+    }
+    return result;
+}
+
+#pragma mark - 网格磁贴 cell
+
 // 1.1.9-64：keyboardX 风格网格磁贴 —— 圆角 12 底块 + 32pt 符号 + 底部小字名称 + 选中蓝对勾。
 @interface ERSymbolTileCell : UICollectionViewCell
 @property (nonatomic, strong) UILabel *nameLabel;
@@ -1600,10 +1792,13 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
 @end
 
 @implementation ERLinkIconPickerController {
+    UITableView *_table;                    // 根模式：分类列表
     UICollectionView *_grid;
-    UISegmentedControl *_columns;
+    UISegmentedControl *_columns;           // 网格模式：1~4 列
     UISearchController *_search;
-    NSArray<NSString *> *_available;
+    NSArray<NSDictionary *> *_categories;   // 根模式：分类数组（key/title/icon/names）
+    NSArray<NSString *> *_allNames;         // 全部可用符号（已逐一验证）
+    NSArray<NSString *> *_scopeNames;       // 当前网格范围（网格模式=分类内，根模式=全部）
     NSArray<NSString *> *_filtered;
     NSInteger _columnCount;
 }
@@ -1613,7 +1808,18 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
     self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     self.view.backgroundColor = [UIColor systemBackgroundColor];
 
-    // 列数记忆（keyboardX：静态 DXPPreferredSymbolColumns）。
+    BOOL gridMode = self.categoryNames.count > 0;
+
+    // 分类列表（根模式；keyboardX：首页 = 分类表，搜索时整个目录出网格）。
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStylePlain];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    table.hidden = gridMode;
+    [self.view addSubview:table];
+    _table = table;
+
+    // 列数记忆。
     NSNumber *saved = [[NSUserDefaults standardUserDefaults] objectForKey:@"ERLinkPreferredSymbolColumns"];
     _columnCount = saved.integerValue >= 1 && saved.integerValue <= 4 ? saved.integerValue : 3;
 
@@ -1626,58 +1832,100 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
     grid.dataSource = self;
     grid.delegate = self;
     grid.keyboardDismissMode = UIScrollViewKeyboardDismissModeOnDrag;
+    grid.hidden = !gridMode;
     [grid registerClass:ERSymbolTileCell.class forCellWithReuseIdentifier:kERLinkSymbolGridCell];
     [self.view addSubview:grid];
     _grid = grid;
 
-    // 列数切换条固定在网格上方（页面底部，避开导航栏搜索）。
-    UISegmentedControl *columns = [[UISegmentedControl alloc] initWithItems:@[@"1列", @"2列", @"3列", @"4列"]];
-    columns.selectedSegmentIndex = (NSInteger)_columnCount - 1;
-    [columns addTarget:self action:@selector(columnsChanged:) forControlEvents:UIControlEventValueChanged];
-    columns.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:columns];
-    [NSLayoutConstraint activateConstraints:@[
-        [columns.leadingAnchor constraintEqualToAnchor:self.view.layoutMarginsGuide.leadingAnchor],
-        [columns.trailingAnchor constraintEqualToAnchor:self.view.layoutMarginsGuide.trailingAnchor],
-        [columns.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-10.0],
-        [columns.heightAnchor constraintEqualToConstant:32.0],
-    ]];
-    _columns = columns;
-    _columns.translatesAutoresizingMaskIntoConstraints = YES;
-    _grid.translatesAutoresizingMaskIntoConstraints = YES;
-    grid.frame = self.view.bounds;
-    grid.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    if (gridMode) {
+        UISegmentedControl *columns = [[UISegmentedControl alloc] initWithItems:@[@"1列", @"2列", @"3列", @"4列"]];
+        columns.selectedSegmentIndex = (NSInteger)_columnCount - 1;
+        [columns addTarget:self action:@selector(columnsChanged:) forControlEvents:UIControlEventValueChanged];
+        columns.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.view addSubview:columns];
+        [NSLayoutConstraint activateConstraints:@[
+            [columns.leadingAnchor constraintEqualToAnchor:self.view.layoutMarginsGuide.leadingAnchor],
+            [columns.trailingAnchor constraintEqualToAnchor:self.view.layoutMarginsGuide.trailingAnchor],
+            [columns.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor constant:-10.0],
+            [columns.heightAnchor constraintEqualToConstant:32.0],
+        ]];
+        _columns = columns;
+    }
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = @"选择图标";
     self.navigationItem.largeTitleDisplayMode = UINavigationItemLargeTitleDisplayModeNever;
+    self.title = self.categoryTitle.length ? self.categoryTitle : @"图标库";
     // keyboardX：搜索挂在 navigationItem（裸 UISearchBar 在 Settings 进程里不响应）。
     UISearchController *search = [[UISearchController alloc] initWithSearchResultsController:nil];
     search.searchResultsUpdater = self;
     search.hidesNavigationBarDuringPresentation = NO;
     search.obscuresBackgroundDuringPresentation = NO;
     search.definesPresentationContext = YES;
-    search.searchBar.placeholder = @"搜索符号（如 wifi / bolt / music）";
+    search.searchBar.placeholder = @"搜索图标名";
     self.navigationItem.searchController = search;
     _search = search;
-
-    // 只保留当前系统能渲染的符号（内置目录 + 逐一验证）。
-    NSMutableArray<NSString *> *available = [NSMutableArray array];
-    for (NSString *name in ERLinkSymbolCatalog()) {
-        if ([UIImage systemImageNamed:name]) [available addObject:name];
-    }
-    _available = available;
-    _filtered = available;
+    [self loadCatalogInBackground];
 }
 
 - (void)viewDidLayoutSubviews {
     [super viewDidLayoutSubviews];
     CGFloat top = CGRectGetMaxY(self.navigationController.navigationBar.frame);
     if (top < 60.0) top = 60.0;
-    CGFloat bottom = CGRectGetMinY(_columns.frame) - 10.0;
-    _grid.frame = CGRectMake(0.0, top, CGRectGetWidth(self.view.bounds), bottom - top);
+    CGFloat width = CGRectGetWidth(self.view.bounds);
+    CGFloat height = CGRectGetHeight(self.view.bounds);
+    _table.frame = CGRectMake(0.0, 0.0, width, height);
+    CGFloat bottom = _columns ? (CGRectGetMinY(_columns.frame) - 10.0) : height;
+    _grid.frame = CGRectMake(0.0, top, width, bottom - top);
+}
+
+// 后台读取系统符号目录（CoreGlyphs / SFSymbols 资源），批量验证后回主线程刷新。
+- (void)loadCatalogInBackground {
+    BOOL gridMode = self.categoryNames.count > 0;
+    NSArray<NSDictionary *> *gridCategory = self.categoryNames;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSArray<NSString *> *dirs = ERLinkSymbolResourceDirectories();
+        NSArray<NSString *> *candidates = ERLinkSystemSymbolCandidates(dirs);
+        // 32 个一批验证（systemImageNamed），批间小睡，避免卡住导航。
+        NSMutableArray<NSString *> *valid = [NSMutableArray array];
+        for (NSUInteger i = 0; i < candidates.count; i += 32) {
+            NSRange range = NSMakeRange(i, MIN((NSUInteger)32, candidates.count - i));
+            for (NSString *name in [candidates subarrayWithRange:range]) {
+                if ([UIImage systemImageNamed:name]) [valid addObject:name];
+            }
+            [NSThread sleepForTimeInterval:0.004];
+        }
+        // 目录读取失败时退回内置小池，页面不至于空白。
+        NSArray<NSString *> *all = valid.count ? valid : ERLinkSymbolCatalog();
+        if (!valid.count) {
+            NSMutableArray<NSString *> *checked = [NSMutableArray array];
+            for (NSString *name in all) if ([UIImage systemImageNamed:name]) [checked addObject:name];
+            all = checked;
+        }
+        NSArray<NSDictionary *> *cats = gridMode ? @[] : ERLinkSymbolCategories(dirs, [NSOrderedSet orderedSetWithArray:all]);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self->_allNames = all;
+            self->_categories = cats;
+            if (gridMode) {
+                // 网格模式：范围限定在传入的分类里（过滤掉系统渲染不出的）。
+                NSSet<NSString *> *available = [NSSet setWithArray:all];
+                NSMutableOrderedSet<NSString *> *scope = [NSMutableOrderedSet orderedSet];
+                for (id item in gridCategory) {
+                    NSString *name = nil;
+                    if ([item isKindOfClass:[NSString class]]) name = item;
+                    else if ([item isKindOfClass:[NSDictionary class]]) name = item[@"name"];
+                    if ([name isKindOfClass:[NSString class]] && [available containsObject:name]) [scope addObject:name];
+                }
+                self->_scopeNames = scope.array;
+            } else {
+                self->_scopeNames = all;
+            }
+            self->_filtered = self->_scopeNames;
+            [self->_table reloadData];
+            [self->_grid reloadData];
+        });
+    });
 }
 
 - (void)columnsChanged:(UISegmentedControl *)sender {
@@ -1689,16 +1937,63 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
 - (void)updateSearchResultsForSearchController:(__unused UISearchController *)searchController {
     NSString *needle = _search.searchBar.text.lowercaseString;
     if (!needle.length) {
-        _filtered = _available;
+        _filtered = _scopeNames;
+        // 根模式：清空搜索回到分类列表。
+        if (!self.categoryNames.count) {
+            _table.hidden = NO;
+            _grid.hidden = YES;
+        }
     } else {
         NSMutableArray<NSString *> *result = [NSMutableArray array];
-        for (NSString *name in _available) {
+        for (NSString *name in _scopeNames) {
             if ([name.lowercaseString containsString:needle]) [result addObject:name];
         }
         _filtered = result;
+        // 根模式：搜索时整个目录以网格展示（keyboardX 行为）。
+        if (!self.categoryNames.count) {
+            _table.hidden = YES;
+            _grid.hidden = NO;
+        }
     }
     [_grid reloadData];
 }
+
+#pragma mark 分类列表（根模式）
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+    return (NSInteger)_categories.count;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *cellId = @"ERLinkCategoryCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:cellId];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:cellId];
+    NSDictionary *meta = _categories.count > (NSUInteger)indexPath.row ? _categories[(NSUInteger)indexPath.row] : @{};
+    UIImage *icon = [UIImage systemImageNamed:meta[@"icon"]];
+    if (!icon) icon = [UIImage systemImageNamed:@"tag"];
+    cell.imageView.image = icon;
+    cell.imageView.tintColor = UIColor.labelColor;
+    cell.textLabel.text = meta[@"title"];
+    cell.textLabel.font = [UIFont systemFontOfSize:17.0];
+    cell.detailTextLabel.text = [NSString stringWithFormat:@"%lu", (unsigned long)[meta[@"names"] count]];
+    cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if ((NSUInteger)indexPath.row >= _categories.count) return;
+    NSDictionary *meta = _categories[(NSUInteger)indexPath.row];
+    ERLinkIconPickerController *grid = [[ERLinkIconPickerController alloc] init];
+    grid.pickerDelegate = self.pickerDelegate;
+    grid.selectedSymbol = self.selectedSymbol;
+    grid.categoryNames = meta[@"names"];
+    grid.categoryTitle = meta[@"title"];
+    [self.navigationController pushViewController:grid animated:YES];
+}
+
+#pragma mark 网格
 
 - (NSInteger)collectionView:(__unused UICollectionView *)collectionView numberOfItemsInSection:(__unused NSInteger)section {
     return (NSInteger)_filtered.count;
@@ -1838,7 +2133,7 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(__unused NSInteger)section {
-    return section == 0 ? @"快捷方式信息" : nil;
+    return section == 0 ? @"快捷动作信息" : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1862,8 +2157,6 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
             // 1.1.9-64 版式（参考天气模块城市选择 ERWeatherCityCell，绿色改蓝色）：
             // 顺序：图标（标签最左）→ 图标预览 → 输入框（无边框）→ 选择按钮。
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
-            cell.backgroundColor = UIColor.clearColor;
-            cell.contentView.backgroundColor = UIColor.clearColor;
             UITextField *field = [[UITextField alloc] initWithFrame:CGRectZero];
             field.placeholder = @"SF 符号名";
             field.textAlignment = NSTextAlignmentLeft;
@@ -1900,7 +2193,7 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
             UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
             [NSLayoutConstraint activateConstraints:@[
                 // 顺序：标签(margins.leading) → 预览 → 输入框 → 选择按钮(margins.trailing)。
-                [preview.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor constant:64.0],
+                [preview.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor constant:56.0],
                 [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [preview.widthAnchor constraintEqualToConstant:34.0],
                 [preview.heightAnchor constraintEqualToConstant:34.0],
@@ -2192,7 +2485,16 @@ static NSString *const kERLinkSymbolGridCell = @"ERLinkSymbolGridCell";
     }
     ERLinkPersistCatalog(remaining);
     ERLinkLog(@"customize: 删除 %@", _uuid);
-    [self.navigationController popToRootViewControllerAnimated:YES];
+    // 1.1.9-65：删除后回到「快捷方式」子页面（列表页），而不是插件根页面。
+    UINavigationController *nav = self.navigationController;
+    for (NSInteger i = (NSInteger)nav.viewControllers.count - 1; i >= 0; i--) {
+        UIViewController *vc = nav.viewControllers[(NSUInteger)i];
+        if ([vc isKindOfClass:[ERLinkController class]]) {
+            [nav popToViewController:vc animated:YES];
+            return;
+        }
+    }
+    [nav popViewControllerAnimated:YES];
 }
 
 // MARK: 数据变更
