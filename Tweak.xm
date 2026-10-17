@@ -26648,16 +26648,46 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                             }
                         }
                     }
-                    // settings = SBActivationSettings（BSMutableSettings 子类），塞信任标记
+                    // settings = SBActivationSettings{ BSMutableSettings{ fromTrusted=Yes } }
+                    // 1.1.9-45：-44 实锤 —— 我们的 SBActivationSettings 落到 MainWS 时是
+                    // "(empty)"（内层没包上），而所有真实调用都有内层 BSMutableSettings。
+                    // 修正：先建内层 BSMutableSettings 写入信任标记，再尝试运行时探测的
+                    // 包裹方法（setSettings:/setBackingSettings:/setMutableSettings:）；
+                    // 全部失败则直接把内层 BSMutableSettings 当 activationSettings 传
+                    //（处理器对它做的也是 BSSettings 系列读取）。
                     id settings = nil;
+                    NSString *setHow = @"none";
                     Class actSetCls = NSClassFromString(@"SBActivationSettings");
-                    if (!actSetCls) actSetCls = NSClassFromString(@"BSMutableSettings");
-                    if (actSetCls) {
-                        settings = [[actSetCls alloc] init];
-                        if (settings && [settings respondsToSelector:setSetting])
-                            ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setSetting, @YES, @"fromTrustedSystemServiceRequest");
-                        else if (settings && [settings respondsToSelector:setObj])
-                            ((void (*)(id, SEL, id, id))objc_msgSend)(settings, setObj, @YES, @"fromTrustedSystemServiceRequest");
+                    Class bsSetCls2 = NSClassFromString(@"BSMutableSettings");
+                    id inner = bsSetCls2 ? [[bsSetCls2 alloc] init] : nil;
+                    if (inner) {
+                        if ([inner respondsToSelector:setSetting])
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(inner, setSetting, @YES, @"fromTrustedSystemServiceRequest");
+                        else if ([inner respondsToSelector:setObj])
+                            ((void (*)(id, SEL, id, id))objc_msgSend)(inner, setObj, @YES, @"fromTrustedSystemServiceRequest");
+                        setHow = @"inner-ok";
+                    }
+                    if (actSetCls && inner) {
+                        id wrapped = [[actSetCls alloc] init];
+                        BOOL wrappedOk = NO;
+                        if (wrapped) {
+                            for (NSString *m in @[@"setSettings:", @"setBackingSettings:", @"setMutableSettings:", @"setSettingsDictionary:"]) {
+                                SEL wSel = NSSelectorFromString(m);
+                                if ([wrapped respondsToSelector:wSel]) {
+                                    ((void (*)(id, SEL, id))objc_msgSend)(wrapped, wSel, inner);
+                                    settings = wrapped; setHow = [NSString stringWithFormat:@"wrap(%@)", m];
+                                    wrappedOk = YES; break;
+                                }
+                            }
+                            if (!wrappedOk && [wrapped respondsToSelector:setSetting]) {
+                                ((void (*)(id, SEL, id, id))objc_msgSend)(wrapped, setSetting, @YES, @"fromTrustedSystemServiceRequest");
+                                settings = wrapped; setHow = @"wrap(direct-set)";
+                            }
+                        }
+                        if (!settings) { settings = inner; setHow = @"inner-only"; }
+                    } else {
+                        settings = inner;
+                        setHow = @"inner-fallback";
                     }
                     // origin = 当前进程（SpringBoard）的 BSProcessHandle
                     //（1.1.9-41：BProcessHandle 类不存在，JT 日志里实为 BSProcessHandle）
@@ -26680,8 +26710,8 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         }
                     }
                     ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
-                                 [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d origin=%d",
-                                  scItem != nil, info != nil, action != nil, actHow, settings != nil, origin != nil]);
+                                 [NSString stringWithFormat:@"parts item=%d info=%d action=%d(%@) settings=%d(%@) origin=%d",
+                                  scItem != nil, info != nil, action != nil, actHow, settings != nil, setHow, origin != nil]);
                     if (scItem && settings && origin) {
                         NSDictionary *trOptsDict = @{@"__ApplicationShortcutItem": scItem,
                                                      @"__ActivateSuspended": @0,
@@ -26715,9 +26745,18 @@ static BOOL ERRunLinkEntry(NSDictionary *entry) {
                         ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
                                      [NSString stringWithFormat:@"opts=%d(%@)", trOpts != nil, optsHow]);
                         if (trOpts) {
+                            // 1.1.9-45：-44 实锤 —— 调用已进入 MainWS trusted 处理器内部后
+                            // SpringBoard 崩溃（tr=try 无 sent）。两个修正：
+                            // ① result 回调不再传 nil（真实调用均带结果块，处理器可能
+                            //   无条件调用 → 对 nil block 调用即崩）；
+                            // ② settings 换成带内层 BSMutableSettings 的构造（见上）。
+                            void (^resultBlk)(id) = ^(id res) {
+                                ERAddDiagSet([diagKey stringByAppendingString:@".tr"],
+                                             [NSString stringWithFormat:@"result %@", res]);
+                            };
                             ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"try");
-                            ((void (*)(id, SEL, id, id, id, id, id))objc_msgSend)
-                                (ws, trustedSel, entry[@"bundleId"], trOpts, settings, origin, (id)nil);
+                            ((void (*)(id, SEL, id, id, id, id, void (^)(id)))objc_msgSend)
+                                (ws, trustedSel, entry[@"bundleId"], trOpts, settings, origin, resultBlk);
                             ERAddDiagSet([diagKey stringByAppendingString:@".tr"], @"sent");
                             return YES;
                         }
