@@ -103,6 +103,34 @@
 		<dict>
 			<key>cell</key>
 			<string>PSGroupCell</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>erIcon</key>
+			<string>doc.text.viewfinder</string>
+			<key>erIconColor</key>
+			<string>blue</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>doc.text.viewfinder</string>
+				<string>text.badge.checkmark</string>
+				<string>doc.on.clipboard</string>
+			</array>
+			<key>key</key>
+			<string>SMSCodeCopyEnabled</string>
+			<key>label</key>
+			<string>自动复制验证码</string>
+		</dict>
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
 			<key>footerText</key>
 			<string>隐藏系统自带的那块锁屏音乐组件（iOS 17 上属于 MediaRemoteUI / MRU 系，封面 + 歌名 + 播放键那一块）。开启后锁屏不会再出现系统音乐条，避免和本插件自己的音乐胶囊重复显示。这一项与「底部组件 → 音乐胶囊」的总开关互不影响：只想藏系统的、不放自己的胶囊也可以。</string>
 			<key>label</key>
