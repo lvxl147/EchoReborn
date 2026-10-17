@@ -91,3 +91,4 @@
 | 174 | 1.1.9-49 | 1001125 | -48 栈实锤：boolForActivationSetting: 注入放行后，处理器对 options 调 bs_boolForKey:（BSSettings 系），FBSOpenApplicationOptions 未实现。-49 options 改用 BSMutableSettings 传四键（bs_* 全套），FBSOpenApplicationOptions 路线降为兜底 |
 | 175 | 1.1.9-50 | 1001126 | -49 栈实锤：BSMutableSettings 也没有 bs_boolForKey:（bs_* 族在 iOS 17 两个类上都缺）。-50 注入完整 bs_* 方法族（boolForActivationSetting:/bs_boolForKey:/bs_objectForKey:/bs_stringForKey:），实现从关联字典取值；settings 与 options 都挂各自字典 |
 | 176 | 1.1.9-50b | 1001127 | -50 编译失败修复：objc_get/setAssociatedObject 的 key 改为 static char（const void*）；BOOL 返回值方法类型编码修正为 B@:@。逻辑与 -50 一致 |
+| 177 | 1.1.9-51 | 1001128 | 全链复盘：__ApplicationShortcutItem 键只存在于我们自己的调用；真实调用（Actra）用 __Actions+action。-51 options 切 __Actions=@[UIHandleApplicationShortcutAction(info=shortcutItem)]，action 构造补 _setInfo: 尝试；__ApplicationShortcutItem 降为 action 缺失时兜底 |
