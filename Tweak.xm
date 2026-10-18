@@ -784,6 +784,9 @@ static void ERDIRestoreSuppressedLayers(UIWindow *win);    // 1.0.9-181 · 形�
 
 static BOOL ERDIEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyDynamicIslandLiquidGlassEnabled"); } // 1.0.9-109 · 去掉总开关；液态玻璃直接成为 DI 玻璃门控（打开液态玻璃=给灵动岛加玻璃）
 static BOOL ERDIHideEnabled(void) { return ERGlassSwitchEnabled(@"LiquidifyHideDynamicIslandEnabled"); }
+// 1.1.9-72 · 旧的「win.hidden 收起」隐藏路径整体退役（用户实测不生效，且会与
+// 新的 DynamicNotLand 移植打架）。历史调用点全部改查这个恒假桩，保留代码现场。
+static BOOL ERDILegacyHideEnabled(void) { return NO; }
 
 // 1.0.9-116 · 关联键：记录文字原色 / 已加玻璃标记（关闭开关时恢复）
 static void *kERDITextOriginalKey = &kERDITextOriginalKey;
@@ -1111,7 +1114,7 @@ static void ERApplyDynamicIslandGlass(UIWindow *win) {
     //   隐藏开 → 只隐藏窗口，**绝不创建玻璃**（也不再走后面的查找/创建流程）
     //   隐藏关 → 恢复显示；玻璃是否创建由【灵动岛】开关决定
     // 1.0.9-109 · **隐藏与玻璃解耦**：隐藏只在【空闲】时收起；使用中不收起、且照常建玻璃。
-    if (ERDIHideEnabled()) {
+    if (ERDILegacyHideEnabled()) {
         if (!win) return;
         if (ERDIisIdle(win)) {
             if (!win.hidden) { win.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛(感叹号 Pill)"); }
@@ -2842,7 +2845,7 @@ static void ERDIEventPollTick(void) {
 static void ERDISwizzlePackageClass(Class cls, NSString *label) {
     if (!cls) return;
     void (^applyBlock)(UIView *view) = ^(UIView *view) {
-        if (ERDIHideEnabled()) {
+        if (ERDILegacyHideEnabled()) {
             UIWindow *w = view.window;
             if (w) {
                 if (ERDIisIdle(w)) { if (!w.hidden) { w.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛"); } }
@@ -2921,7 +2924,7 @@ static void ERInstallDynamicIslandHooks(void) {
             // 之前只写了 `hidden = YES`，开关关掉后没有恢复 → 窗口可能一直处于隐藏态
             // （这正是你担心的"灵动岛被关掉了"）。现在两个方向都处理，并打日志。
             ERSafeSwizzleLayout(cls, @selector(layoutSubviews), ^(UIView *view) {
-                if (ERDIHideEnabled()) {
+                if (ERDILegacyHideEnabled()) {
                     UIWindow *w = view.window;
                     if (w) {
                         if (ERDIisIdle(w)) { if (!w.hidden) { w.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛"); } }
@@ -2934,7 +2937,7 @@ static void ERInstallDynamicIslandHooks(void) {
                 @catch (__unused NSException *e) {}
             });
             ERSafeSwizzleLayout(cls, @selector(didMoveToWindow), ^(UIView *view) {
-                if (ERDIHideEnabled()) {
+                if (ERDILegacyHideEnabled()) {
                     UIWindow *w = view.window;
                     if (w) {
                         if (ERDIisIdle(w)) { if (!w.hidden) { w.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛(didMoveToWindow)"); } }
@@ -3858,16 +3861,12 @@ static void ERDITimerScan(void) {
     }
 
     // 1.0.9-109 · **隐藏与玻璃解耦**：隐藏只在【空闲】时收起；使用中不收起、且照常加玻璃。
+    // 1.1.9-72 · win.hidden 收起路径退役（改走 ERDynamicIslandHide 组的
+    // DynamicNotLand 移植）；这里只负责把旧路径隐藏过的窗口恢复出来。
     BOOL idle = ERDIisIdle(foundWindow);
-    if (diHide) {
-        if (idle) {
-            if (!foundWindow.hidden) { foundWindow.hidden = YES; ERLogInfo(@"DI-HIDE 空闲→收起灵动岛(感叹号 Pill)"); }
-            return;   // 空闲+隐藏：收起，不加玻璃
-        }
-        if (foundWindow.hidden) { foundWindow.hidden = NO; ERLogInfo(@"DI-HIDE 使用中→恢复正常系统状态"); }
-        // 使用中：继续 → 加玻璃
-    } else if (foundWindow.hidden) {
-        foundWindow.hidden = NO; ERLogInfo(@"DI-HIDE 开关关闭→恢复灵动岛显示");
+    if (foundWindow.hidden) {
+        foundWindow.hidden = NO;
+        ERLogInfo(@"DI-HIDE 旧路径退役→恢复灵动岛显示");
     }
 
     // 1.0.9-155 · **轮询铺玻璃退役**：玻璃改由 ERDIInstallPackageViewHooks 的事件驱动
@@ -32038,6 +32037,167 @@ static void ERSMSInstallHooks(void) {
     ERLogInfo(@"[SMSCode] BBServer hooks installed");
 }
 
+// ---------------------------------------------------------------------------
+// 1.1.9-72 · 隐藏灵动岛（移植 verygenericname/DynamicNotLand，MIT）。
+// 原理：系统灵动岛的黑胶囊是 _SBGainMapView（backboardd gain-map 合成）。
+// ① 把系统 gain map 视图的 layer 换成假层（FakeGainMapLayer），backboardd 就
+//    不再绘制岛的黑胶囊；② 在根窗口放一个 1×1 的黑色真 gain map 视图占住
+//    物理开孔；③ hook SBSystemApertureController 的 containsAnyContent: 回调：
+//    空闲（无活动）→ gain map 透明度渐隐为 0（岛收成原生小感叹号 Pill）；
+//    有任何活动 → 恢复 1.0（系统原有样式）。
+// 与原项目不同：这里不做 %ctor 静态开关，全部运行时按「隐藏灵动岛」开关
+// （LiquidifyHideDynamicIslandEnabled）门控，关闭开关时所有 hook 直接走 %orig。
+// ---------------------------------------------------------------------------
+
+@interface _SBGainMapView : UIView
+@end
+@interface _SBSystemApertureGainMapView : UIView
+@end
+@interface _SBSystemApertureMagiciansCurtainView : UIView
+@end
+@interface SBFTouchPassThroughView : UIView
+@end
+@interface SBSystemApertureContainerView : UIView
+@end
+@interface CALayer (ERDIDocumented)
+@property (atomic, assign) NSUInteger disableUpdateMask;
+@end
+
+@interface ERFakeGainMapLayer : CALayer
+@property (nonatomic, assign) NSString *renderMode;
+@end
+@implementation ERFakeGainMapLayer
+@end
+
+static UIView *erDIMainGainMapView = nil;    // 岛本体黑胶囊（_SBGainMapView）
+static UIView *erDIFrontGainMapView = nil;   // 前景层（SBFTouchPassThroughView.subviews[2]）
+static BOOL erDIIslandInUse = YES;           // 系统回调：岛当前有无活动内容
+static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放行标记
+
+%group ERDynamicIslandHide
+
+%hook SpringBoard
+- (void)applicationDidFinishLaunching:(UIApplication *)application {
+    %orig;
+    if (!ERDIHideEnabled()) return;
+    UIWindow *rootWindow = nil;
+    for (UIWindow *window in application.windows) {
+        if ([window isKindOfClass:%c(SBRootSceneWindow)]) { rootWindow = window; break; }
+    }
+    if (!rootWindow) return;
+    // 先放行一次真 layerClass 给占位视图（与上游一致的时序把戏）。
+    erDIBackboarddMap = YES;
+    UIView *cover = [[_SBGainMapView alloc] initWithFrame:CGRectMake(-1.3, -0.9, 1, 1)];
+    cover.userInteractionEnabled = NO;
+    [rootWindow addSubview:cover];
+    if (erDIMainGainMapView) erDIMainGainMapView.layer.opacity = 0.0;   // 初始隐藏
+    ERLogInfo(@"DI-DNL 移植生效：占位视图已布防，岛空闲时收成感叹号 Pill");
+}
+%end
+
+%hook SBSystemApertureController
+- (void)systemApertureViewController:(id)vc containsAnyContent:(BOOL)contains {
+    %orig;
+    erDIIslandInUse = contains;
+    if (!erDIMainGainMapView && !erDIFrontGainMapView) return;
+    if (!ERDIHideEnabled()) {
+        // 开关已关：无条件恢复系统原样。
+        erDIMainGainMapView.layer.opacity = 1.0;
+        erDIFrontGainMapView.layer.opacity = 1.0;
+        return;
+    }
+    if (contains == NO) {
+        [UIView animateWithDuration:0.3 animations:^{
+            erDIMainGainMapView.layer.opacity = 0.0;
+            erDIFrontGainMapView.layer.opacity = 0.0;
+        }];
+    } else {
+        erDIMainGainMapView.layer.opacity = 1.0;
+        erDIFrontGainMapView.layer.opacity = 1.0;
+    }
+}
+%end
+
+%hook SBSystemApertureViewController
++ (id)_sharedFeedbackGenerator {
+    if (ERDIHideEnabled() && erDIIslandInUse == NO) return nil;
+    return %orig;
+}
+- (BOOL)_handleImpactFeedbackAction:(id)arg1 {
+    if (ERDIHideEnabled() && erDIIslandInUse == NO) return NO;
+    return %orig;
+}
+%end
+
+%hook _SBGainMapView
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = %orig(frame);
+    if (self) self.backgroundColor = [UIColor blackColor];
+    return self;
+}
+- (void)layoutSubviews {
+    %orig;
+    static BOOL once = NO;
+    if (once == NO) {
+        if ([self.superview isMemberOfClass:%c(_SBSystemApertureGainMapView)]) {
+            once = YES;
+            erDIMainGainMapView = self;
+            CGAffineTransform transform = self.transform;
+            transform.d = 1.01;
+            self.transform = transform;
+            ERLogInfo(@"DI-DNL 已锁定岛本体 gain map：%@", NSStringFromClass(self.class));
+        }
+    }
+}
++ (Class)layerClass {
+    if (erDIBackboarddMap == YES) {
+        erDIBackboarddMap = NO;
+        return %orig;
+    }
+    return [ERFakeGainMapLayer class];
+}
+%end
+
+%hook _SBSystemApertureMagiciansCurtainView
+- (void)layoutSubviews {
+    if (ERDIHideEnabled()) {
+        [self removeFromSuperview];
+        return;
+    }
+    %orig;
+}
+%end
+
+%hook SBSystemApertureContainerView
+- (void)setFrame:(CGRect)frame {
+    // 隐藏中（空闲）时不让系统把容器撑回全尺寸 —— 岛保持在收起状态。
+    if (ERDIHideEnabled() && erDIIslandInUse == NO) return;
+    %orig(frame);
+}
+%end
+
+%end
+
+// 前景层引用（保留系统阴影；上游 NoShadow 分支不移植）。
+%group ERDynamicIslandFrontRef
+%hook SBFTouchPassThroughView
+- (void)layoutSubviews {
+    %orig;
+    static BOOL once = NO;
+    if (once == NO) {
+        if (self.subviews.count == 4) {
+            UIView *candidate = self.subviews[2];
+            if ([candidate isKindOfClass:%c(UIView)]) {
+                once = YES;
+                erDIFrontGainMapView = candidate;
+                ERLogInfo(@"DI-DNL 已锁定前景 gain map");
+            }
+        }
+    }
+}
+%end
+%end
+
 %ctor {
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
     ERSMSInstallHooks(); // 1.1.9-60：自动复制验证码（SpringBoard 侧 BBServer 钩子）
@@ -32046,6 +32206,10 @@ static void ERSMSInstallHooks(void) {
     ERAct2Probe();       // 1.1.9-56：修正版探测（纯 C method 查找，无死角扫 activateShortcut:...）
     ERWFProbe();         // 1.1.9-57：按镜像探测 runWorkflow 类:方法（快面板同款）
     %init(ERJumpTrace);  // 1.1.9-34：跳转追踪（纯日志）
+    // 1.1.9-72：灵动岛隐藏（DynamicNotLand 移植）——hook 组无条件安装，
+    // 每个 hook 内部运行时按「隐藏灵动岛」开关门控。
+    %init(ERDynamicIslandHide);
+    %init(ERDynamicIslandFrontRef);
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
     ERLogInfo(@"ER-CTOR-START ver=1.0.9-109 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
