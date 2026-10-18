@@ -671,6 +671,9 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 @property (nonatomic, copy) NSString *pendingIconFile;
 // 1.1.9-62：替换模式 —— 非空时选中目标不新增条目，而是原位替换该 uuid 的条目。
 @property (nonatomic, copy) NSString *replaceUUID;
+// 1.1.9-69：替换暂存 —— 设置了该 block 时不直接写盘，把新条目交给调用方暂存，
+// 由「保存」按钮统一落盘（自定义页的替换改为保存制）。
+@property (nonatomic, copy) void (^replaceStageHandler)(NSDictionary *freshEntry);
 - (instancetype)initWithExisting:(NSArray<NSDictionary *> *)existing;
 @end
 
@@ -683,6 +686,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 @property (nonatomic, strong) NSArray<NSDictionary *> *shortcutItems;
 // 1.1.9-62：替换模式（由添加页透传）—— 点条目不新增，而是替换该 uuid 的条目。
 @property (nonatomic, copy) NSString *replaceUUID;
+// 1.1.9-69：同上 —— 暂存版替换回调（不直接写盘）。
+@property (nonatomic, copy) void (^replaceStageHandler)(NSDictionary *freshEntry);
 - (instancetype)initWithAppBundleId:(NSString *)bundleId name:(NSString *)name;
 @end
 
@@ -995,6 +1000,12 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)saveEntry:(NSDictionary *)entry {
     if (self.replaceUUID.length) {
+        // 1.1.9-69：暂存版替换（自定义页发起）—— 不写盘，交给「保存」统一落盘。
+        if (self.replaceStageHandler) {
+            self.replaceStageHandler(entry);
+            ERLinkPopBackToCustomize(self);
+            return;
+        }
         // 1.1.9-62：替换模式 —— 原位换目标（uuid/name/symbolOverride 保留），回到发起替换的页面。
         ERLinkReplaceEntry(self.replaceUUID, entry);
         ERLinkPopBackToCustomize(self);
@@ -1218,7 +1229,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         cell.textLabel.textColor = UIColor.labelColor;
         cell.detailTextLabel.text = @"自定义网址或 URL Scheme";
         cell.detailTextLabel.textColor = UIColor.labelColor;
-        cell.imageView.image = ERLinkGlyphTile(@"plus.circle.fill", 0xFF3B82F6LL);
+        cell.imageView.image = ERLinkGlyphTile(@"plus.circle.fill", 0x3B82F6FF);
         cell.imageView.layer.cornerRadius = 9.0;
         cell.imageView.clipsToBounds = YES;
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -1232,7 +1243,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         cell.textLabel.textColor = UIColor.labelColor;
         cell.detailTextLabel.text = @"JavaScript 脚本，点磁贴运行";
         cell.detailTextLabel.textColor = UIColor.labelColor;
-        cell.imageView.image = ERLinkGlyphTile(@"curlybraces", 0xFF34C759LL);
+        cell.imageView.image = ERLinkGlyphTile(@"curlybraces", 0x30B0C7FF);
         cell.imageView.layer.cornerRadius = 9.0;
         cell.imageView.clipsToBounds = YES;
         cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
@@ -1446,14 +1457,19 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     entry[@"script"] = script;
     entry[@"iconKind"] = @"symbol";
     entry[@"iconValue"] = _iconSymbol ?: @"curlybraces";
-    entry[@"color"] = @(0xFF34C759LL);
+    entry[@"color"] = @(0x30B0C7FFLL);
     NSString *file = ERLinkWriteRenderedIcon(entry);
     if (file) {
         entry[@"iconFile"] = file;
         entry[@"iconFull"] = @([ERLinkResolveIcon(entry)[@"full"] boolValue]);
     }
     if (self.replaceUUID.length) {
-        // 替换模式：原位换目标（uuid/名称/图标覆盖保留），回到发起替换的页面。
+        // 1.1.9-69：暂存版替换（自定义页发起）—— 不写盘，交给「保存」统一落盘。
+        if (self.replaceStageHandler) {
+            self.replaceStageHandler(entry);
+            ERLinkPopBackToCustomize(self);
+            return;
+        }
         ERLinkReplaceEntry(self.replaceUUID, entry);
         ERLinkPopBackToCustomize(self);
         return;
@@ -1652,6 +1668,12 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
             if (!type.length) return;
             fresh = ERLinkMakeAppShortcutEntry(self.appBundleId, self.appName, type, item[@"title"]);
         } else {
+            return;
+        }
+        // 1.1.9-69：暂存版替换（自定义页发起）—— 不写盘，交给「保存」统一落盘。
+        if (self.replaceStageHandler) {
+            self.replaceStageHandler(fresh);
+            ERLinkPopBackToCustomize(self);
             return;
         }
         ERLinkReplaceEntry(self.replaceUUID, fresh);
@@ -2298,6 +2320,9 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
     NSString *_pendingName;
     NSString *_pendingSymbol;   // 与 _pendingSymbolSet 搭配：Set=YES 表示改过图标
     BOOL _pendingSymbolSet;
+    // 1.1.9-69：暂存的替换目标（选择快捷方式 → 保存才落盘替换）。
+    NSDictionary *_pendingReplace;
+    BOOL _pendingReplaceSet;
 }
 
 - (instancetype)initWithUUID:(NSString *)uuid {
@@ -2445,12 +2470,12 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
             UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
             [NSLayoutConstraint activateConstraints:@[
                 // 顺序：标签(margins.leading) → 预览 → 输入框 → 选择按钮(margins.trailing)。
-                // 预览锚定「图标」文字尾部，两侧间距恒等（都是 10pt）。
-                [preview.leadingAnchor constraintEqualToAnchor:cell.textLabel.trailingAnchor constant:10.0],
+                // 预览锚定「图标」文字尾部，两侧间距恒等（1.1.9-69：10 → 20pt）。
+                [preview.leadingAnchor constraintEqualToAnchor:cell.textLabel.trailingAnchor constant:20.0],
                 [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [preview.widthAnchor constraintEqualToConstant:34.0],
                 [preview.heightAnchor constraintEqualToConstant:34.0],
-                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:10.0],
+                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:20.0],
                 [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
                 [field.heightAnchor constraintEqualToConstant:34.0],
                 [pick.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
@@ -2507,9 +2532,12 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
 
     switch (indexPath.section == 0 ? indexPath.row : 4) {
         case 0: {
-            // 第1行：类型（只读）。
+            // 第1行：类型（只读；替换暂存时预览新类型）。
             cell.textLabel.text = @"类型";
-            cell.detailTextLabel.text = ERLinkTypeDisplay(entry);
+            NSDictionary *typeEntry = (_pendingReplaceSet && _pendingReplace) ? _pendingReplace : entry;
+            cell.detailTextLabel.text = ERLinkTypeDisplay(typeEntry);
+            if (_pendingReplaceSet && _pendingReplace) cell.detailTextLabel.text =
+                [NSString stringWithFormat:@"%@（待保存）", ERLinkTypeDisplay(typeEntry)];
             cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -2546,8 +2574,14 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
             // 1.1.9-67：预览实时反映未保存的图标（暂存值合成临时条目再渲染）。
             NSMutableDictionary *previewEntry = [entry mutableCopy] ?: [NSMutableDictionary dictionary];
             if (_pendingSymbolSet) {
-                if (_pendingSymbol.length) previewEntry[@"symbolOverride"] = _pendingSymbol;
-                else [previewEntry removeObjectForKey:@"symbolOverride"];
+                if (_pendingSymbol.length) {
+                    previewEntry[@"symbolOverride"] = _pendingSymbol;
+                    // 1.1.9-69：去掉旧渲染 PNG（否则 iconFile 优先级更高，预览永远是旧图）。
+                    [previewEntry removeObjectForKey:@"iconFile"];
+                    [previewEntry removeObjectForKey:@"iconFull"];
+                } else {
+                    [previewEntry removeObjectForKey:@"symbolOverride"];
+                }
             }
             preview.image = ERLinkCellIcon(previewEntry);
             cell.detailTextLabel.text = nil;
@@ -2644,10 +2678,10 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
     return YES;
 }
 
-// 右上角「保存」：把暂存的修改一次写入（名称/图标两处同步）。
+// 右上角「保存」：把暂存的修改一次写入（名称/图标/替换目标三类）。
 - (void)saveTapped {
     [self.view endEditing:YES];
-    if (!_pendingName.length && !_pendingSymbolSet) return;
+    if (!_pendingName.length && !_pendingSymbolSet && !_pendingReplaceSet) return;
     NSString *newName = _pendingName;
     NSString *newSymbol = _pendingSymbol;
     BOOL symbolSet = _pendingSymbolSet;
@@ -2659,6 +2693,12 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
+    // 1.1.9-69：先落盘替换目标（ERLinkReplaceEntry 保留 uuid/名称/图标覆盖）。
+    if (_pendingReplaceSet && _pendingReplace) {
+        ERLinkReplaceEntry(_uuid, _pendingReplace);
+    }
+    _pendingReplace = nil;
+    _pendingReplaceSet = NO;
     [self mutateEntry:^(NSMutableDictionary *updated) {
         if (newName.length) updated[@"name"] = newName;
         if (symbolSet) {
@@ -2702,16 +2742,27 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
     _pendingName = nil;
     _pendingSymbol = nil;
     _pendingSymbolSet = NO;
+    _pendingReplace = nil;
+    _pendingReplaceSet = NO;
     [self refreshTitle];
     [_table reloadData];
     ERLinkLog(@"customize: 恢复默认 %@", _uuid);
 }
 
 // 第4行「替换」按钮：复用添加流程（原位换目标，槽位不动）。
+// 1.1.9-69：选中的新目标只暂存，点右上角「保存」才真正替换。
 - (void)replaceTapped {
     ERLinkAddController *controller = [[ERLinkAddController alloc] initWithExisting:ERLinkStoredCatalog()];
     controller.replaceUUID = _uuid;
     controller.title = @"替换";
+    __weak typeof(self) weakSelf = self;
+    controller.replaceStageHandler = ^(NSDictionary *freshEntry) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf->_pendingReplace = [freshEntry isKindOfClass:[NSDictionary class]] ? freshEntry : nil;
+        strongSelf->_pendingReplaceSet = YES;
+        [strongSelf->_table reloadData];
+    };
     [self.navigationController pushViewController:controller animated:YES];
 }
 
