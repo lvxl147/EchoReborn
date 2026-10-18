@@ -76,8 +76,12 @@ static void ERPrefsLog(NSString *format, ...) {
 
 @implementation ERRootListController
 
+// 1.2.0-4：面包屑（实现在 ERGestureController.m，bundle 构造函数已装好崩溃记录器）
+extern void ERGPrefsLog(NSString *format, ...);
+
 - (NSArray *)specifiers {
     if (!_specifiers) {
+        ERGPrefsLog(@"root specifiers build start");
         NSMutableArray *specifiers = [NSMutableArray arrayWithArray:[self loadSpecifiersFromPlistName:@"Root" target:self]];
 
         // 1.0.7-2：「系统增强」入口行改为 **PSLinkCell + detail 类对象**。
@@ -105,11 +109,15 @@ static void ERPrefsLog(NSString *format, ...) {
             }
         }
         PSSpecifier *systemEntry = [self erSystemEnhanceEntrySpecifier];
+        ERGPrefsLog(@"root specifiers: systemIndex=%lu count=%lu", (unsigned long)systemIndex, (unsigned long)specifiers.count);
         if (systemIndex != NSNotFound) {
             // 1.2.0-1：「手势管理」入口行插在「系统增强」上方 —— 与系统增强共用同一张
             // 卡片（不插组分隔，直接排在同组前一格），同样走 detail 推入的原生机制。
-            [specifiers insertObject:[self erGestureEntrySpecifier] atIndex:systemIndex];
+            PSSpecifier *gestureEntry = [self erGestureEntrySpecifier];
+            ERGPrefsLog(@"root specifiers: gesture entry built %@", gestureEntry);
+            [specifiers insertObject:gestureEntry atIndex:systemIndex];
             [specifiers replaceObjectAtIndex:systemIndex + 1 withObject:systemEntry];
+            ERGPrefsLog(@"root specifiers: gesture row inserted at %lu", (unsigned long)systemIndex);
         } else {
             NSUInteger siriIndex = NSNotFound;
             for (NSUInteger index = 0; index < specifiers.count; index++) {
@@ -146,6 +154,7 @@ static void ERPrefsLog(NSString *format, ...) {
         if (footerCell) [footer setProperty:footerCell forKey:@"cellClass"];
         [footer setProperty:ERVersionFooterText() forKey:ERVersionFooterTextKey];
         [specifiers addObject:footer];
+        ERGPrefsLog(@"root specifiers build done count=%lu", (unsigned long)specifiers.count);
         _specifiers = specifiers;
     }
     return _specifiers;
@@ -328,6 +337,7 @@ static void ERPrefsLog(NSString *format, ...) {
 
 // 1.2.0-1：「手势管理」入口行（桌面胶囊手势子页），构造方式与系统增强行完全一致。
 - (PSSpecifier *)erGestureEntrySpecifier {
+    ERGPrefsLog(@"erGestureEntrySpecifier begin");
     PSSpecifier *entry = [PSSpecifier preferenceSpecifierNamed:@"手势管理"
                                                         target:self
                                                            set:NULL
@@ -340,6 +350,7 @@ static void ERPrefsLog(NSString *format, ...) {
                                                 @"手",
                                                 @"teal")
                 forKey:@"iconImage"];
+    ERGPrefsLog(@"erGestureEntrySpecifier done");
     return entry;
 }
 
