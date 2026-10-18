@@ -14,6 +14,8 @@ static NSString *const kERShortcutRescanNotification = @"com.strive.echoreborn/R
 // 1.1.9-70 · 每条快捷指令的显示覆盖（改名/改图标），键是快捷指令 uuid：
 // { "<uuid>": { "name": "显示名", "symbolOverride": "sf.symbol.name" } }。
 static NSString *const kERShortcutOverridesKey = @"ShortcutOverrides";
+// 1.1.9-70 · 槽位绑定（与磁贴侧 ERShortcutModule.h 同键）：{"3": "<uuid>"}。
+static NSString *const kERShortcutSlotAssignmentsKey = @"ShortcutSlotAssignments";
 
 // Where SpringBoard publishes what it fetched. Same directory as the
 // diagnostics log, chosen because SpringBoard and this bundle run as `mobile`
@@ -51,17 +53,14 @@ static NSString *ERShortcutIconDirectory(void) {
 
 static void ERShortcutLog(NSString *format, ...);
 
-// 1.1.9-70 · 快捷指令信息页：改名 / 改图标（右上角「保存」才落盘，与快捷方式
-// 信息页同一套交互习惯）。覆盖按 uuid 存进 ShortcutOverrides，磁贴侧
-// （ERShortcutModule.h）与列表同读这份键，保存后广播 ReloadPrefs 同步刷新。
+// 1.1.9-70 · 快捷指令信息页：改名 / 改图标 / 替换（右上角「保存」才落盘，
+// 与快捷方式信息页同一套交互习惯）。覆盖按 uuid 存进 ShortcutOverrides，
+// 磁贴侧（ERShortcutModule.h）与列表同读这份键，保存后广播 ReloadPrefs 同步刷新。
 // 完整 @interface 需在主页 didSelect 使用之前（-Werror 下 @class 不够）。
-@interface ERShortcutInfoController : PSViewController <UITableViewDataSource, UITableViewDelegate>
+@interface ERShortcutInfoController : PSViewController <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate>
 @property (nonatomic, strong) UITableView *infoTableView;
 @property (nonatomic, strong) NSDictionary *record;
 @property (nonatomic, copy) NSString *shortcutUUID;
-@property (nonatomic, copy) NSString *pendingName;      // nil = 未改
-@property (nonatomic, copy) NSString *pendingSymbol;    // nil = 未改；@"" = 清除覆盖
-@property (nonatomic, assign) BOOL pendingSymbolSet;
 - (instancetype)initWithShortcut:(NSDictionary *)shortcut;
 @end
 
@@ -694,8 +693,29 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 
 @end
 
-// 1.1.9-70 · 信息页实现（接口声明在文件前部）。
-@implementation ERShortcutInfoController
+// 1.1.9-70 · 信息页实现（接口声明在文件前部）。1.1.9-71 起版式与交互完全
+// 对齐「快捷动作信息」页：类型/名称/图标/选择快捷指令 四行卡片 + 底部
+// 「恢复默认 / 删除快捷指令」按钮，全部改动只暂存，点右上角「保存」才落盘。
+// 替换列表（选择快捷指令）控制器与回调协议。
+@protocol ERShortcutReplaceDelegate <NSObject>
+@optional
+- (void)shortcutReplaceDidPickUUID:(NSString *)uuid name:(NSString *)name;
+@end
+
+@interface ERShortcutReplaceController : PSViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, weak) id<ERShortcutReplaceDelegate> replaceDelegate;
+@end
+
+@implementation ERShortcutInfoController {
+    UITableView *_table;
+    NSString *_pendingName;        // 改名暂存（nil = 未改）
+    BOOL _pendingNameReset;        // 「恢复默认」暂存：保存时移除名称覆盖
+    NSString *_pendingSymbol;      // 图标覆盖暂存（@"" = 恢复默认图标）
+    BOOL _pendingSymbolSet;
+    NSString *_pendingReplaceUUID; // 替换目标暂存（槽位原位换绑）
+    NSString *_pendingReplaceName;
+    BOOL _pendingReplaceSet;
+}
 
 - (instancetype)initWithShortcut:(NSDictionary *)shortcut {
     if ((self = [super init])) {
@@ -703,6 +723,13 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
         _shortcutUUID = [_record[@"uuid"] isKindOfClass:[NSString class]] ? _record[@"uuid"] : @"";
     }
     return self;
+}
+
+// 导航栏中央标题：暂存名优先（与快捷动作信息页一致）。
+- (void)refreshTitle {
+    NSString *name = _pendingName.length ? _pendingName
+                    : ([_record[@"name"] isKindOfClass:[NSString class]] ? _record[@"name"] : @"");
+    self.title = name.length ? name : @"快捷指令信息";
 }
 
 - (void)loadView {
@@ -715,11 +742,12 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     table.delegate = self;
     [self.view addSubview:table];
     self.infoTableView = table;
+    _table = table;
 }
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    if (!self.title.length) self.title = @"快捷指令信息";
+    [self refreshTitle];
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc] initWithTitle:@"保存"
                                          style:UIBarButtonItemStyleDone
@@ -729,17 +757,61 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    [self.infoTableView reloadData];
+    [self refreshTitle];
+    [_table reloadData];
 }
 
-// MARK: - Table（卡片：名称 / 图标）
+// 已保存的显示覆盖（名称/图标）。
+- (NSDictionary *)savedOverride {
+    NSDictionary *overrides = ERShortcutOverridesRead();
+    id override = overrides[self.shortcutUUID];
+    return [override isKindOfClass:[NSDictionary class]] ? override : @{};
+}
+
+// 当前生效的显示名（暂存 > 已保存覆盖 > 快捷指令原名）。
+- (NSString *)displayName {
+    if (_pendingName.length) return _pendingName;
+    NSString *saved = self.savedOverride[@"name"];
+    if ([saved isKindOfClass:[NSString class]] && saved.length) return saved;
+    NSString *name = [_record[@"name"] isKindOfClass:[NSString class]] ? _record[@"name"] : @"";
+    return name.length ? name : @"未命名";
+}
+
+// 图标行预览：合成临时记录再渲染（暂存符号优先，暂存时剔除 iconFile 旧图）。
+- (UIImage *)previewImage {
+    NSMutableDictionary *merged = [_record mutableCopy] ?: [NSMutableDictionary dictionary];
+    if (_pendingSymbolSet) {
+        if (_pendingSymbol.length) {
+            merged[@"symbolOverride"] = _pendingSymbol;
+            [merged removeObjectForKey:@"iconFile"];
+            [merged removeObjectForKey:@"iconFull"];
+        } else {
+            [merged removeObjectForKey:@"symbolOverride"];
+        }
+    } else {
+        NSString *saved = self.savedOverride[@"symbolOverride"];
+        if ([saved isKindOfClass:[NSString class]] && saved.length) merged[@"symbolOverride"] = saved;
+        else [merged removeObjectForKey:@"symbolOverride"];
+    }
+    return ERShortcutCellIcon(merged);
+}
+
+// MARK: - Table（卡片1：类型/名称/图标/选择快捷指令；卡片2：恢复默认/删除）
 
 - (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
-    return 1;
+    return 2;
 }
 
 - (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
-    return 2;
+    return section == 0 ? 4 : 1;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForHeaderInSection:(__unused NSInteger)section {
+    return section == 0 ? @"快捷指令信息" : nil;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
+    return section == 0 ? @"修改需点右上角「保存」才会生效；替换会保留原槽位位置。" : nil;
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -747,123 +819,477 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
 
-    if (indexPath.row == 0) {
-        cell.textLabel.text = @"名称";
-        NSString *name = self.pendingName.length ? self.pendingName
-                        : ([self.record[@"name"] isKindOfClass:[NSString class]] ? self.record[@"name"] : @"");
-        cell.detailTextLabel.text = name.length ? name : @"未命名";
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
-    } else {
-        cell.textLabel.text = @"图标";
-        NSString *symbol = self.pendingSymbolSet ? self.pendingSymbol : nil;
-        if ([symbol isKindOfClass:[NSString class]] && symbol.length) {
-            cell.detailTextLabel.text = symbol;
-        } else if (self.pendingSymbolSet) {
-            cell.detailTextLabel.text = @"默认";
-        } else {
-            NSDictionary *overrides = ERShortcutOverridesRead();
-            NSDictionary *override = [overrides[self.shortcutUUID] isKindOfClass:[NSDictionary class]] ? overrides[self.shortcutUUID] : nil;
-            NSString *saved = [override[@"symbolOverride"] isKindOfClass:[NSString class]] ? override[@"symbolOverride"] : nil;
-            cell.detailTextLabel.text = saved.length ? saved : @"默认";
+    if (indexPath.section == 1) {
+        // 底部动作行（透明背景 + 两个按钮），版式与快捷动作信息页一致。
+        cell.textLabel.text = nil;
+        cell.detailTextLabel.text = nil;
+        cell.imageView.image = nil;
+        cell.accessoryType = UITableViewCellAccessoryNone;
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        cell.backgroundColor = UIColor.clearColor;
+        cell.backgroundView = nil;
+        cell.selectedBackgroundView = nil;
+        UIButton *restore = [cell.contentView viewWithTag:164];
+        if (!restore) {
+            restore = [UIButton buttonWithType:UIButtonTypeSystem];
+            restore.tag = 164;
+            [restore setTitle:@"恢复默认" forState:UIControlStateNormal];
+            [restore setTitleColor:UIColor.systemBlueColor forState:UIControlStateNormal];
+            restore.titleLabel.font = [UIFont systemFontOfSize:15.0];
+            restore.backgroundColor = [UIColor secondarySystemFillColor];
+            restore.layer.cornerRadius = 10.0;
+            [restore addTarget:self action:@selector(restoreTapped) forControlEvents:UIControlEventTouchUpInside];
+            restore.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:restore];
         }
-        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
-        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+        UIButton *delete = [cell.contentView viewWithTag:165];
+        if (!delete) {
+            delete = [UIButton buttonWithType:UIButtonTypeSystem];
+            delete.tag = 165;
+            [delete setTitle:@"删除快捷指令" forState:UIControlStateNormal];
+            [delete setTitleColor:UIColor.systemRedColor forState:UIControlStateNormal];
+            delete.titleLabel.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightMedium];
+            delete.backgroundColor = [UIColor colorWithRed:1.0 green:0.23 blue:0.19 alpha:0.14];
+            delete.layer.cornerRadius = 10.0;
+            [delete addTarget:self action:@selector(deleteTapped) forControlEvents:UIControlEventTouchUpInside];
+            delete.translatesAutoresizingMaskIntoConstraints = NO;
+            [cell.contentView addSubview:delete];
+        }
+        UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
+        [NSLayoutConstraint activateConstraints:@[
+            [restore.leadingAnchor constraintEqualToAnchor:margins.leadingAnchor],
+            [restore.trailingAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor constant:-6.0],
+            [restore.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:4.0],
+            [restore.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-4.0],
+            [delete.leadingAnchor constraintEqualToAnchor:cell.contentView.centerXAnchor constant:6.0],
+            [delete.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+            [delete.topAnchor constraintEqualToAnchor:cell.contentView.topAnchor constant:4.0],
+            [delete.bottomAnchor constraintEqualToAnchor:cell.contentView.bottomAnchor constant:-4.0],
+        ]];
+        return cell;
     }
-    cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+
+    switch (indexPath.row) {
+        case 0: {
+            // 第1行：类型（固定「快捷指令」；替换暂存时提示待保存）。
+            cell.textLabel.text = @"类型";
+            cell.detailTextLabel.text = _pendingReplaceSet ? @"快捷指令（待保存）" : @"快捷指令";
+            cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.imageView.image = nil;
+            break;
+        }
+        case 1: {
+            // 第2行：名称（点击弹窗改名 → 暂存，保存生效）。
+            cell.textLabel.text = @"名称";
+            cell.detailTextLabel.text = [self displayName];
+            cell.detailTextLabel.textColor = UIColor.labelColor;
+            cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+            cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+            cell.imageView.image = nil;
+            break;
+        }
+        case 2: {
+            // 第3行：图标（名称在左，图标本体+输入框居中，选择按钮在最右）。
+            cell.textLabel.text = @"图标";
+            cell.detailTextLabel.text = nil;
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleNone;
+            cell.imageView.image = nil;
+            UIImageView *preview = [cell.contentView viewWithTag:163];
+            if (!preview) {
+                preview = [[UIImageView alloc] initWithFrame:CGRectMake(0.0, 0.0, 34.0, 34.0)];
+                preview.tag = 163;
+                preview.contentMode = UIViewContentModeScaleAspectFit;
+                preview.layer.cornerRadius = 8.0;
+                preview.clipsToBounds = YES;
+                preview.translatesAutoresizingMaskIntoConstraints = NO;
+                [cell.contentView addSubview:preview];
+            }
+            preview.image = [self previewImage];
+            UITextField *field = [cell.contentView viewWithTag:161];
+            if (!field) {
+                field = [[UITextField alloc] initWithFrame:CGRectZero];
+                field.tag = 161;
+                field.borderStyle = UITextBorderStyleNone;
+                field.font = [UIFont systemFontOfSize:16.0];
+                field.placeholder = @"SF 符号名";
+                field.autocorrectionType = UITextAutocorrectionTypeNo;
+                field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+                field.clearButtonMode = UITextFieldViewModeWhileEditing;
+                field.delegate = self;
+                field.translatesAutoresizingMaskIntoConstraints = NO;
+                [cell.contentView addSubview:field];
+            }
+            NSString *symbol = _pendingSymbolSet ? _pendingSymbol : nil;
+            if (![symbol isKindOfClass:[NSString class]] || !symbol.length) {
+                NSString *saved = self.savedOverride[@"symbolOverride"];
+                symbol = ([saved isKindOfClass:[NSString class]] && saved.length) ? saved : @"";
+            }
+            field.text = symbol;
+            UIButton *pick = [cell.contentView viewWithTag:162];
+            if (!pick) {
+                pick = [UIButton buttonWithType:UIButtonTypeCustom];
+                pick.tag = 162;
+                pick.frame = CGRectMake(0.0, 0.0, 45.0, 29.0);
+                [pick setTitle:@"选择" forState:UIControlStateNormal];
+                pick.titleLabel.font = [UIFont systemFontOfSize:14.0];
+                [pick setTitleColor:UIColor.systemBlueColor forState:UIControlStateNormal];
+                pick.layer.cornerRadius = 6.0;
+                pick.layer.borderWidth = 1.0;
+                pick.layer.borderColor = UIColor.systemBlueColor.CGColor;
+                pick.clipsToBounds = YES;
+                [pick addTarget:self action:@selector(pickIconTapped) forControlEvents:UIControlEventTouchUpInside];
+                pick.translatesAutoresizingMaskIntoConstraints = NO;
+                [cell.contentView addSubview:pick];
+            }
+            UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
+            [NSLayoutConstraint activateConstraints:@[
+                [preview.leadingAnchor constraintEqualToAnchor:cell.textLabel.trailingAnchor constant:20.0],
+                [preview.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [preview.widthAnchor constraintEqualToConstant:34.0],
+                [preview.heightAnchor constraintEqualToConstant:34.0],
+                [field.leadingAnchor constraintEqualToAnchor:preview.trailingAnchor constant:20.0],
+                [field.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [pick.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+                [pick.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [pick.widthAnchor constraintEqualToConstant:45.0],
+                [pick.heightAnchor constraintEqualToConstant:29.0],
+                [field.trailingAnchor constraintLessThanOrEqualToAnchor:pick.leadingAnchor constant:-8.0],
+            ]];
+            break;
+        }
+        case 3: {
+            // 第4行：选择快捷指令（替换按钮；暂存时右侧显示新目标）。
+            cell.textLabel.text = @"选择快捷指令";
+            cell.detailTextLabel.text = _pendingReplaceSet
+                ? [NSString stringWithFormat:@"%@（待保存）", _pendingReplaceName ?: @""]
+                : nil;
+            cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+            cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+            cell.accessoryType = UITableViewCellAccessoryNone;
+            cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+            cell.imageView.image = nil;
+            UIButton *replace = [cell.contentView viewWithTag:166];
+            if (!replace) {
+                replace = [UIButton buttonWithType:UIButtonTypeCustom];
+                replace.tag = 166;
+                replace.frame = CGRectMake(0.0, 0.0, 45.0, 29.0);
+                [replace setTitle:@"替换" forState:UIControlStateNormal];
+                replace.titleLabel.font = [UIFont systemFontOfSize:14.0];
+                [replace setTitleColor:UIColor.systemBlueColor forState:UIControlStateNormal];
+                replace.layer.cornerRadius = 6.0;
+                replace.layer.borderWidth = 1.0;
+                replace.layer.borderColor = UIColor.systemBlueColor.CGColor;
+                replace.clipsToBounds = YES;
+                [replace addTarget:self action:@selector(replaceTapped) forControlEvents:UIControlEventTouchUpInside];
+                replace.translatesAutoresizingMaskIntoConstraints = NO;
+                [cell.contentView addSubview:replace];
+            }
+            UILayoutGuide *margins = cell.contentView.layoutMarginsGuide;
+            [NSLayoutConstraint activateConstraints:@[
+                [replace.trailingAnchor constraintEqualToAnchor:margins.trailingAnchor],
+                [replace.centerYAnchor constraintEqualToAnchor:cell.contentView.centerYAnchor],
+                [replace.widthAnchor constraintEqualToConstant:45.0],
+                [replace.heightAnchor constraintEqualToConstant:29.0],
+            ]];
+            break;
+        }
+        default:
+            break;
+    }
     return cell;
 }
 
-- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
-    return @"修改需点右上角「保存」才会生效；只改这块磁贴的显示，快捷指令本体不受影响。";
-}
-
 - (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [self.infoTableView deselectRowAtIndexPath:indexPath animated:YES];
-    if (indexPath.row == 0) [self renameTapped];
-    else [self pickIconTapped];
+    [_table deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.section != 0) return;
+    if (indexPath.row == 1) [self renameTapped];
+    else if (indexPath.row == 3) [self replaceTapped];
 }
 
-// MARK: - 动作
+// MARK: - 动作（全部只暂存，保存才落盘）
 
+// 第2行：改名（暂存）。
 - (void)renameTapped {
-    NSString *current = self.pendingName.length ? self.pendingName
-                       : ([self.record[@"name"] isKindOfClass:[NSString class]] ? self.record[@"name"] : @"");
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"修改名称" message:nil preferredStyle:UIAlertControllerStyleAlert];
     [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-        field.text = current;
+        field.text = [self displayName];
         field.placeholder = @"名称";
     }];
     __weak typeof(self) weakSelf = self;
     [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         __strong typeof(weakSelf) strongSelf = weakSelf;
         UITextField *field = alert.textFields.firstObject;
-        strongSelf.pendingName = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        [strongSelf.infoTableView reloadData];
+        strongSelf->_pendingName = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        strongSelf->_pendingNameReset = NO;
+        [strongSelf refreshTitle];
+        [strongSelf->_table reloadData];
     }]];
     [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-// 图标：复用快捷方式那套图标库（ERLinkIconPickerController 在同一个
-// PreferenceBundle 里，运行时取类，避免跨编译单元的头依赖）。
+// 第3行「选择」：进图标库（复用快捷方式那套 ERLinkIconPickerController，
+// 同一个 PreferenceBundle 内运行时取类，避免跨编译单元头依赖）。
 - (void)pickIconTapped {
+    [self.view endEditing:YES];
     Class pickerClass = NSClassFromString(@"ERLinkIconPickerController");
     if (!pickerClass) {
         ERShortcutLog(@"shortcutInfo: ERLinkIconPickerController 不可用");
         return;
     }
     UIViewController *picker = [[pickerClass alloc] init];
-    NSString *current = nil;
-    if (self.pendingSymbolSet) current = self.pendingSymbol;
-    if (!current) {
-        NSDictionary *overrides = ERShortcutOverridesRead();
-        NSDictionary *override = [overrides[self.shortcutUUID] isKindOfClass:[NSDictionary class]] ? overrides[self.shortcutUUID] : nil;
-        current = [override[@"symbolOverride"] isKindOfClass:[NSString class]] ? override[@"symbolOverride"] : nil;
+    NSString *current = _pendingSymbolSet ? _pendingSymbol : nil;
+    if (![current isKindOfClass:[NSString class]] || !current.length) {
+        NSString *saved = self.savedOverride[@"symbolOverride"];
+        current = ([saved isKindOfClass:[NSString class]] && saved.length) ? saved : @"";
     }
-    [picker setValue:current ?: @"" forKey:@"selectedSymbol"];
+    [picker setValue:current forKey:@"selectedSymbol"];
     [picker setValue:self forKey:@"pickerDelegate"];
     [self.navigationController pushViewController:picker animated:YES];
 }
 
-// 图标库回调（ERLinkIconPickerDelegate）。清空选择 = 恢复默认图标。
+// 图标库回调。清空选择 = 暂存为恢复默认图标。
 - (void)iconPickerDidPickSymbol:(NSString *)name {
-    self.pendingSymbol = [name isKindOfClass:[NSString class]]
-                         ? [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
-                         : @"";
-    self.pendingSymbolSet = YES;
-    [self.infoTableView reloadData];
+    _pendingSymbol = [name isKindOfClass:[NSString class]]
+                     ? [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                     : @"";
+    _pendingSymbolSet = YES;
+    [_table reloadData];
 }
 
-// 右上角「保存」：把名称/图标覆盖写进 ShortcutOverrides 并广播刷新。
+// 第3行输入框：手输符号名（暂存；清空 = 恢复默认图标）。
+- (void)textFieldDidEndEditing:(UITextField *)textField {
+    if (textField.tag != 161) return;
+    _pendingSymbol = [textField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    _pendingSymbolSet = YES;
+    [_table reloadData];
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    [textField resignFirstResponder];
+    return YES;
+}
+
+// 第4行「替换」：进快捷指令选择列表，点某条暂存为新目标（槽位原位换绑）。
+- (void)replaceTapped {
+    ERShortcutReplaceController *controller = [[ERShortcutReplaceController alloc] init];
+    controller.replaceDelegate = self;
+    controller.title = @"选择快捷指令";
+    [self.navigationController pushViewController:controller animated:YES];
+}
+
+- (void)shortcutReplaceDidPickUUID:(NSString *)uuid name:(NSString *)name {
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
+    if ([uuid isEqualToString:_shortcutUUID]) return;   // 选了自己 = 没换
+    _pendingReplaceUUID = uuid;
+    _pendingReplaceName = [name isKindOfClass:[NSString class]] && name.length ? name : uuid;
+    _pendingReplaceSet = YES;
+    [_table reloadData];
+}
+
+// 左下「恢复默认」：暂存为还原原名 + 清图标覆盖；未保存的替换一并撤销。
+- (void)restoreTapped {
+    _pendingName = nil;
+    _pendingNameReset = YES;
+    _pendingSymbol = @"";
+    _pendingSymbolSet = YES;
+    _pendingReplaceUUID = nil;
+    _pendingReplaceName = nil;
+    _pendingReplaceSet = NO;
+    [self refreshTitle];
+    [_table reloadData];
+    ERShortcutLog(@"shortcutInfo: 暂存恢复默认 %@", _shortcutUUID);
+}
+
+// 右下「删除快捷指令」：确认后立即生效（移出显示列表 + 解绑槽位 + 清覆盖）。
+- (void)deleteTapped {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"删除快捷指令"
+                                                                   message:@"从显示列表移除并解绑控制中心槽位；快捷指令本体不受影响，可再从「添加」加回来。"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(__unused UIAlertAction *action) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSString *uuid = strongSelf->_shortcutUUID;
+        if (!uuid.length) return;
+        // ① 移出显示列表。
+        NSMutableSet<NSString *> *visible = [NSMutableSet set];
+        for (id entry in [strongSelf storedArrayForKey:kERShortcutVisibleKey]) {
+            if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) [visible addObject:entry];
+        }
+        [visible removeObject:uuid];
+        ERShortcutPersistVisible(visible, 0);
+        // ② 解绑槽位。
+        id assignments = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
+                                                                         (__bridge CFStringRef)kERShortcutPrefsDomain);
+        if ([assignments isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *updated = [(NSDictionary *)assignments mutableCopy];
+            BOOL changed = NO;
+            for (NSString *key in updated.allKeys) {
+                if ([updated[key] isKindOfClass:[NSString class]] &&
+                    [(NSString *)updated[key] isEqualToString:uuid]) {
+                    [updated removeObjectForKey:key];
+                    changed = YES;
+                }
+            }
+            if (changed) {
+                CFPreferencesSetAppValue((__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
+                                         (__bridge CFPropertyListRef)updated,
+                                         (__bridge CFStringRef)kERShortcutPrefsDomain);
+                CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+            }
+        }
+        // ③ 清显示覆盖。
+        NSMutableDictionary *overrides = [ERShortcutOverridesRead() mutableCopy] ?: [NSMutableDictionary dictionary];
+        if (overrides[uuid]) {
+            [overrides removeObjectForKey:uuid];
+            ERShortcutOverridesWrite(overrides);
+        }
+        ERShortcutLog(@"shortcutInfo: 删除快捷指令 %@", uuid);
+        [strongSelf.navigationController popViewControllerAnimated:YES];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+// 右上角「保存」：一次落盘（名称/图标覆盖 + 槽位换绑）。
 - (void)saveTapped {
-    if (!self.pendingName.length && !self.pendingSymbolSet) {
+    [self.view endEditing:YES];
+    if (!_pendingName.length && !_pendingNameReset && !_pendingSymbolSet && !_pendingReplaceSet) {
         [self.navigationController popViewControllerAnimated:YES];
         return;
     }
-    if (self.pendingSymbolSet && self.pendingSymbol.length && ![UIImage systemImageNamed:self.pendingSymbol]) {
+    if (_pendingSymbolSet && _pendingSymbol.length && ![UIImage systemImageNamed:_pendingSymbol]) {
         UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"符号不可用"
-                                                                       message:[NSString stringWithFormat:@"系统里没有名为 %@ 的 SF 符号。", self.pendingSymbol]
+                                                                       message:[NSString stringWithFormat:@"系统里没有名为 %@ 的 SF 符号。", _pendingSymbol]
                                                                 preferredStyle:UIAlertControllerStyleAlert];
         [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
+    // ① 名称/图标覆盖。
     NSMutableDictionary *overrides = [ERShortcutOverridesRead() mutableCopy] ?: [NSMutableDictionary dictionary];
-    id existingOverride = overrides[self.shortcutUUID];
+    id existingOverride = overrides[_shortcutUUID];
     NSMutableDictionary *override = [existingOverride isKindOfClass:[NSDictionary class]]
                                     ? [existingOverride mutableCopy] : [NSMutableDictionary dictionary];
-    if (![override isKindOfClass:[NSMutableDictionary class]]) override = [NSMutableDictionary dictionary];
-    if (self.pendingName.length) override[@"name"] = self.pendingName;
-    else [override removeObjectForKey:@"name"];
-    if (self.pendingSymbolSet) {
-        if (self.pendingSymbol.length) override[@"symbolOverride"] = self.pendingSymbol;
-        else [override removeObjectForKey:@"symbolOverride"];   // 清空 = 恢复默认图标
+    if (_pendingNameReset) [override removeObjectForKey:@"name"];
+    else if (_pendingName.length) override[@"name"] = _pendingName;
+    if (_pendingSymbolSet) {
+        if (_pendingSymbol.length) override[@"symbolOverride"] = _pendingSymbol;
+        else [override removeObjectForKey:@"symbolOverride"];
     }
-    if (override.count) overrides[self.shortcutUUID] = override;
-    else [overrides removeObjectForKey:self.shortcutUUID];
+    if (override.count) overrides[_shortcutUUID] = override;
+    else [overrides removeObjectForKey:_shortcutUUID];
     ERShortcutOverridesWrite(overrides);
+    // ② 槽位原位换绑（该 uuid 占用的每个槽位都改绑到新指令，尺寸/位置不动）。
+    if (_pendingReplaceSet && _pendingReplaceUUID.length) {
+        id assignments = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
+                                                                         (__bridge CFStringRef)kERShortcutPrefsDomain);
+        if ([assignments isKindOfClass:[NSDictionary class]]) {
+            NSMutableDictionary *updated = [(NSDictionary *)assignments mutableCopy];
+            BOOL changed = NO;
+            for (NSString *key in updated.allKeys) {
+                if ([updated[key] isKindOfClass:[NSString class]] &&
+                    [(NSString *)updated[key] isEqualToString:_shortcutUUID]) {
+                    updated[key] = _pendingReplaceUUID;
+                    changed = YES;
+                }
+            }
+            if (changed) {
+                CFPreferencesSetAppValue((__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
+                                         (__bridge CFPropertyListRef)updated,
+                                         (__bridge CFStringRef)kERShortcutPrefsDomain);
+                CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+                ERShortcutLog(@"shortcutInfo: 槽位换绑 %@ → %@", _shortcutUUID, _pendingReplaceUUID);
+            }
+        }
+    }
+    [self.navigationController popViewControllerAnimated:YES];
+}
+
+@end
+
+// 1.1.9-70 · 替换列表：展示扫描到的全部快捷指令，点一条回调给信息页暂存。
+@implementation ERShortcutReplaceController {
+    UITableView *_table;
+    NSArray<NSDictionary *> *_items;
+}
+
+- (void)loadView {
+    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    [self.view addSubview:table];
+    _table = table;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    if (!self.title.length) self.title = @"选择快捷指令";
+    NSString *path = [kERShortcutSnapshotDirectory stringByAppendingPathComponent:kERShortcutSnapshotFileName];
+    NSDictionary *payload = [NSDictionary dictionaryWithContentsOfFile:path];
+    NSArray *shortcuts = [payload isKindOfClass:[NSDictionary class]] ? payload[@"shortcuts"] : nil;
+    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
+    for (NSDictionary *shortcut in [shortcuts isKindOfClass:[NSArray class]] ? shortcuts : @[]) {
+        if (![shortcut isKindOfClass:[NSDictionary class]]) continue;
+        NSString *uuid = shortcut[@"uuid"];
+        if (![uuid isKindOfClass:[NSString class]] || !uuid.length) continue;
+        [items addObject:shortcut];
+    }
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+        NSString *ln = [left[@"name"] isKindOfClass:[NSString class]] ? left[@"name"] : @"";
+        NSString *rn = [right[@"name"] isKindOfClass:[NSString class]] ? right[@"name"] : @"";
+        return [ln localizedCaseInsensitiveCompare:rn];
+    }];
+    _items = items;
+}
+
+- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
+    return 1;
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+    return (NSInteger)_items.count;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
+    return _items.count ? @"点击一条即可替换为该快捷指令，返回后点右上角「保存」生效。" : @"没有扫描到快捷指令。回到上一页会自动重新扫描。";
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier = @"ERShortcutReplaceCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
+    NSDictionary *shortcut = _items[(NSUInteger)indexPath.row];
+    NSString *name = [shortcut[@"name"] isKindOfClass:[NSString class]] && ((NSString *)shortcut[@"name"]).length
+                     ? shortcut[@"name"] : shortcut[@"uuid"];
+    cell.textLabel.text = name;
+    cell.textLabel.textColor = UIColor.labelColor;
+    cell.textLabel.font = [UIFont systemFontOfSize:17.0];
+    cell.imageView.image = ERShortcutCellIcon(shortcut);
+    cell.imageView.layer.cornerRadius = 9.0;
+    cell.imageView.clipsToBounds = YES;
+    cell.accessoryType = UITableViewCellAccessoryNone;
+    return cell;
+}
+
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    if ((NSUInteger)indexPath.row >= _items.count) return;
+    NSDictionary *shortcut = _items[(NSUInteger)indexPath.row];
+    if ([self.replaceDelegate respondsToSelector:@selector(shortcutReplaceDidPickUUID:name:)]) {
+        NSString *name = [shortcut[@"name"] isKindOfClass:[NSString class]] && ((NSString *)shortcut[@"name"]).length
+                         ? shortcut[@"name"] : shortcut[@"uuid"];
+        [self.replaceDelegate shortcutReplaceDidPickUUID:shortcut[@"uuid"] name:name];
+    }
     [self.navigationController popViewControllerAnimated:YES];
 }
 
