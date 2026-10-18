@@ -181,6 +181,7 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     UILabel     *_title;
     UIImageView *_icon;
     UIButton    *_valueButton;
+    UIImageView *_chevron;
 }
 
 // 1.2.0-1 · 闪退根因：PSListController 实例化 cellClass 用的入口是**三参版**
@@ -231,6 +232,16 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
            forControlEvents:UIControlEventTouchUpInside];
     [self.contentView addSubview:_valueButton];
 
+    // 1.2.0-7 · 下拉框箭头：独立 SF Symbol（chevron.down），尺寸放大到原字符 ⌄ 的
+    // 约 1.5 倍，且在按钮内垂直水平居中于右侧固定槽位（不再跟文字基线走）。
+    UIImageSymbolConfiguration *chevCfg = [UIImageSymbolConfiguration
+        configurationWithPointSize:15.0 weight:UIImageSymbolWeightSemibold];
+    UIImage *chev = [UIImage systemImageNamed:@"chevron.down" withConfiguration:chevCfg];
+    _chevron = [[UIImageView alloc] initWithImage:chev];
+    _chevron.tintColor = [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0];
+    _chevron.contentMode = UIViewContentModeCenter;
+    [_valueButton addSubview:_chevron];
+
     // specifier 若不是从 init 进来（某些版本走 refresh 才给），refresh 时已兜底关联。
     NSString *key = [self _erGestureKey];
     if (key.length) [self _erRefreshValue];
@@ -239,13 +250,24 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGFloat h = self.contentView.bounds.size.height;
-    _icon.frame = CGRectMake(16, (h - 27) / 2.0, 27, 27);
+    // 1.2.0-7 · 图标与标题的左边距跟系统 layoutMargins 走（绝对定位 16 在不同机型
+    // 上会比系统行"多出来一点"），标题起点 = 图标右缘 + 12。
+    CGFloat left = self.contentView.layoutMargins.left;
+    _icon.frame = CGRectMake(left, (h - 27) / 2.0, 27, 27);
 
-    CGSize vs = [_valueButton sizeThatFits:CGSizeMake(160, 30)];
-    CGFloat w = MIN(vs.width + 4, 160);
-    _valueButton.frame = CGRectMake(self.contentView.bounds.size.width - w - 16,
-                                    (h - 30) / 2.0, w, 30);
-    CGFloat textX = 56;
+    CGFloat chevW = 16.0;
+    CGSize ts = [_title.text sizeWithAttributes:@{NSFontAttributeName: _title.font}];
+    CGFloat pad = 10.0;
+    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 6.0, 76.0), 170.0);
+    CGFloat btnH = 30.0;
+    CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
+    _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
+
+    // 按钮内部：文字居左（pad 起，titleEdgeInsets 右侧给箭头让位），箭头独立居中于右侧槽位。
+    [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
+    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);
+
+    CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);
 }
@@ -280,9 +302,11 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     NSString *key = [self _erGestureKey];
     if (!key.length) return;
     NSString *text = ERGestureValueText(ERGestureReadValue(key));
-    [_valueButton setTitle:[text stringByAppendingString:@"  ⌄"] forState:UIControlStateNormal];
+    // 1.2.0-7 · 箭头不再拼进标题字符串（字符 ⌄ 小且随基线偏移），独立 _chevron 渲染。
+    [_valueButton setTitle:text forState:UIControlStateNormal];
     [_valueButton setTitleColor:[UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0]
                        forState:UIControlStateNormal];
+    [self setNeedsLayout];
 }
 
 - (void)_erValueTapped {
@@ -442,9 +466,9 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
         ERGPrefsLog(@"specifiers build start");
         NSMutableArray *specs = [NSMutableArray array];
 
-        // ---- 卡片1 · 搜索胶囊 ----
+        // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
         PSSpecifier *g1 = [PSSpecifier groupSpecifierWithName:@"搜索胶囊"];
-        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页；单击搜索不受影响。"
+        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响；「无动作」保持系统默认行为，选择某页后，触发对应滑动的瞬间直接跳到该页。"
                  forKey:@"footerText"];
         [specs addObject:g1];
         [specs addObject:[self erSwitchNamed:@"搜索胶囊手势"
@@ -452,18 +476,12 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                       symbols:@[@"hand.tap", @"hand.point.up.left.fill", @"cursorarrow.click"]
                                        color:@"teal"
                                       defVal:NO]];
-
-        // ---- 卡片2 · 手势设置 ----
-        PSSpecifier *g2 = [PSSpecifier groupSpecifierWithName:@"手势设置"];
-        [g2 setProperty:@"「无动作」保持系统默认行为；选择某页后，触发对应滑动的瞬间直接跳到该页。"
-                 forKey:@"footerText"];
-        [specs addObject:g2];
         [specs addObject:[self erGestureNamed:@"上滑胶囊" key:@"HomeScreen.SearchPill.GestureUp"   symbol:@"arrow.up"    color:@"blue"]];
         [specs addObject:[self erGestureNamed:@"下滑胶囊" key:@"HomeScreen.SearchPill.GestureDown" symbol:@"arrow.down"  color:@"indigo"]];
         [specs addObject:[self erGestureNamed:@"左滑胶囊" key:@"HomeScreen.SearchPill.GestureLeft" symbol:@"arrow.left"  color:@"teal"]];
         [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"purple"]];
 
-        // ---- 卡片3 · 震动反馈 ----
+        // ---- 卡片2 · 震动反馈 ----
         PSSpecifier *g3 = [PSSpecifier groupSpecifierWithName:@"震动反馈"];
         [g3 setProperty:@"手势触发成功时的触感反馈，强度分轻 / 中 / 重三档。"
                  forKey:@"footerText"];
@@ -515,6 +533,11 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                                      detail:Nil
                                                        cell:PSSwitchCell
                                                        edit:Nil];
+    // 1.2.0-7 · 图标修复：iOS 17.2 原生 PSSwitchCell 不渲染 specifier 的 iconImage
+    //（1.1.8-7 同款教训），必须换 bundle 里现成的 ERModuleIconSwitchCell（refresh 时
+    // 显式把 iconImage 写进 imageView）。cellClass 同 1.2.0-6 教训传**类对象**。
+    Class swCell = NSClassFromString(@"ERModuleIconSwitchCell");
+    if (swCell) [sw setProperty:swCell forKey:@"cellClass"];
     [sw setProperty:key forKey:@"key"];
     [sw setProperty:kERGestureSuite forKey:@"defaults"];
     [sw setProperty:@(defVal) forKey:@"default"];
@@ -585,7 +608,8 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
     [super viewDidLoad];
     ERGPrefsLog(@"viewDidLoad title=%@ specifiers=%lu", self.title,
                 (unsigned long)self.specifiers.count);
-    self.title = @"桌面胶囊手势";
+    // 1.2.0-7：页面标题与入口行文字统一为「手势管理」（只改显示文字）。
+    self.title = @"手势管理";
 }
 
 @end
