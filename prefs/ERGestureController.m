@@ -5,6 +5,8 @@
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 #import <notify.h>
+#import <execinfo.h>
+#import <signal.h>
 
 // 1.2.0-1 · 桌面胶囊手势子页（设计定稿 2026-10-18）：
 //   卡片1 搜索胶囊总开关；卡片2 上/下/左/右滑四行（下拉框选 无动作/第n页）；
@@ -183,6 +185,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 - (instancetype)initWithStyle:(UITableViewCellStyle)style
               reuseIdentifier:(NSString *)reuseIdentifier
                     specifier:(PSSpecifier *)specifier {
+    ERGPrefsLog(@"value cell init spec=%@ key=%@",
+                NSStringFromClass(specifier.class) ?: @"?",
+                [specifier propertyForKey:@"erGestureKey"] ?: @"?");
     self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier];
     if (!self) return nil;
     if (specifier) {
@@ -293,12 +298,96 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 
 @implementation ERGestureController
 
+// ---- 1.2.0-3 · 自带崩溃记录器 ----
+// 设备上 CrashReporter 目录不存在（系统 .ips 一个都拿不到），"点手势管理闪退"
+// 已经盲修了一版还崩。这里把命运掌握在自己手里：
+//   · 关键步骤面包屑 → /var/mobile/Documents/EchoReborn-prefs.log（设置 App 以
+//     mobile 身份可写，与主插件的日志导出目录同一出处）
+//   · NSSetUncaughtExceptionHandler + SIGABRT/SIGSEGV/SIGBUS/SIGILL 信号处理器
+//     → /var/mobile/Documents/EchoReborn-crash.txt（异常名/原因 + 符号化调用栈）
+static void ERGPrefsLog(NSString *format, ...) {
+    @try {
+        va_list args;
+        va_start(args, format);
+        NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+        va_end(args);
+        NSString *line = [NSString stringWithFormat:@"%@ %@\n",
+                          [NSDateFormatter localizedStringFromDate:[NSDate date]
+                                                         dateStyle:NSDateFormatterNoStyle
+                                                         timeStyle:NSDateFormatterMediumStyle],
+                          message];
+        NSString *path = @"/var/mobile/Documents/EchoReborn-prefs.log";
+        NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
+        if (!h) {
+            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            return;
+        }
+        @try {
+            [h seekToEndOfFile];
+            [h writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
+        } @catch (__unused NSException *e) {}
+        [h closeFile];
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERGCrashWrite(NSString *header) {
+    @try {
+        void *frames[64];
+        int n = backtrace(frames, 64);
+        char **syms = backtrace_symbols(frames, n);
+        NSMutableString *text = [NSMutableString stringWithFormat:
+            @"==== %@ %@ ====\n", [NSDate date].description, header];
+        for (int i = 0; i < n; i++) {
+            [text appendFormat:@"%s\n", syms[i]];
+        }
+        if (syms) free(syms);
+        NSString *path = @"/var/mobile/Documents/EchoReborn-crash.txt";
+        NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
+        NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
+        if (!h) {
+            [data writeToFile:path atomically:YES];
+            return;
+        }
+        [h seekToEndOfFile];
+        [h writeData:data];
+        [h closeFile];
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERGSignalHandler(int sig) {
+    ERGCrashWrite([NSString stringWithFormat:@"SIGNAL %d", sig]);
+    // 恢复默认处置并重发，让系统照常终止（不拦死进程）。
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+static void ERGSignalHandler(int sig);
+static void ERGUncaughtHandler(NSException *exception);
+
+static void ERGInstallCrashReporter(void) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSSetUncaughtExceptionHandler(&ERGUncaughtHandler);
+        signal(SIGABRT, ERGSignalHandler);
+        signal(SIGSEGV, ERGSignalHandler);
+        signal(SIGBUS,  ERGSignalHandler);
+        signal(SIGILL,  ERGSignalHandler);
+        ERGPrefsLog(@"crash reporter installed");
+    });
+}
+
+static void ERGUncaughtHandler(NSException *exception) {
+    ERGCrashWrite([NSString stringWithFormat:@"EXCEPTION %@ -- %@\n%@",
+                   exception.name, exception.reason, exception.callStackSymbols]);
+}
+
 - (NSBundle *)bundle {
     return [NSBundle bundleForClass:[self class]];
 }
 
 - (NSArray *)specifiers {
     if (!_specifiers) {
+        ERGPrefsLog(@"specifiers build start");
         NSMutableArray *specs = [NSMutableArray array];
 
         // ---- 卡片1 · 搜索胶囊 ----
@@ -355,6 +444,7 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
         [specs addObject:seg];
 
         _specifiers = specs;
+        ERGPrefsLog(@"specifiers build done count=%lu", (unsigned long)specs.count);
     }
     return _specifiers;
 }
@@ -421,11 +511,21 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     notify_post(kERGestureReload.UTF8String);
 }
 
-- (instancetype)initForSpecifier:(__unused PSSpecifier *)specifier { return [self init]; }
-- (instancetype)initWithSpecifier:(__unused PSSpecifier *)specifier { return [self init]; }
+- (instancetype)initForSpecifier:(__unused PSSpecifier *)specifier {
+    ERGPrefsLog(@"controller initForSpecifier");
+    ERGInstallCrashReporter();
+    return [self init];
+}
+- (instancetype)initWithSpecifier:(__unused PSSpecifier *)specifier {
+    ERGPrefsLog(@"controller initWithSpecifier");
+    ERGInstallCrashReporter();
+    return [self init];
+}
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    ERGPrefsLog(@"viewDidLoad title=%@ specifiers=%lu", self.title,
+                (unsigned long)self.specifiers.count);
     self.title = @"桌面胶囊手势";
 }
 
