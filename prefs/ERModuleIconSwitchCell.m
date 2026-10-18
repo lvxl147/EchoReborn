@@ -42,7 +42,16 @@ static void ERMICApplyLayout(UITableViewCell *cell) {
     if (!cell) return;
 
     UISwitch *toggle = ERMICFindSwitch(cell.contentView) ?: ERMICFindSwitch(cell);
-    if (!toggle) return;
+    if (!toggle) {
+        // 1.2.0-9 · 一次性诊断：开关压根没建出来还是被挪走了
+        static BOOL sERMICDiagOnce = NO;
+        if (!sERMICDiagOnce) {
+            sERMICDiagOnce = YES;
+            NSLog(@"[ERMICS] DIAG no UISwitch found cls=%@ subviews=%lu",
+                  NSStringFromClass(cell.class), (unsigned long)cell.subviews.count);
+        }
+        return;
+    }
 
     CGRect bounds = cell.contentView.bounds;
     if (CGRectIsEmpty(bounds)) bounds = cell.bounds;
@@ -53,13 +62,21 @@ static void ERMICApplyLayout(UITableViewCell *cell) {
     if (available <= 80.0) return;
 
     // ---- 开关保持在最右（基类通常已放好；没放好就按系统默认尺寸贴右）----
+    // 1.2.0-9 · 修「开关消失」：frame 是相对 toggle.superview 的坐标，而 bounds
+    // 用的是 contentView —— superview 不是 contentView/cell 时（iOS 17.2 可能嵌
+    // 中间容器）必须 convertRect 换算，否则开关会被挪出屏幕外。
     CGSize switchSize = toggle.bounds.size;
     if (switchSize.width < 1.0) switchSize = toggle.intrinsicContentSize;
     if (switchSize.width < 1.0) switchSize = CGSizeMake(51.0, 31.0);
-    toggle.frame = CGRectMake(width - kERMICTrailingInset - switchSize.width,
-                              CGRectGetMidY(bounds) - switchSize.height * 0.5,
-                              switchSize.width,
-                              switchSize.height);
+    CGRect toggleTarget = CGRectMake(width - kERMICTrailingInset - switchSize.width,
+                                     CGRectGetMidY(bounds) - switchSize.height * 0.5,
+                                     switchSize.width,
+                                     switchSize.height);
+    if (toggle.superview && toggle.superview != cell.contentView && toggle.superview != cell) {
+        toggle.frame = [cell.contentView convertRect:toggleTarget toView:toggle.superview];
+    } else {
+        toggle.frame = toggleTarget;
+    }
 
     // ---- 图标贴左（iconImage 由 refresh 显式写入）----
     UIImageView *icon = cell.imageView;
