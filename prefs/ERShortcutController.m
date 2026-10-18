@@ -699,7 +699,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 // 替换列表（选择快捷指令）控制器与回调协议。
 @protocol ERShortcutReplaceDelegate <NSObject>
 @optional
-- (void)shortcutReplaceDidPickUUID:(NSString *)uuid name:(NSString *)name;
+- (void)shortcutReplaceDidPickShortcut:(NSDictionary *)shortcut;
 @end
 
 @interface ERShortcutReplaceController : PSViewController <UITableViewDataSource, UITableViewDelegate>
@@ -716,8 +716,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     BOOL _pendingNameReset;        // 「恢复默认」暂存：保存时移除名称覆盖
     NSString *_pendingSymbol;      // 图标覆盖暂存（@"" = 恢复默认图标）
     BOOL _pendingSymbolSet;
-    NSString *_pendingReplaceUUID; // 替换目标暂存（槽位原位换绑）
-    NSString *_pendingReplaceName;
+    NSDictionary *_pendingReplaceRecord; // 替换目标暂存（整条记录，槽位原位换绑）
     BOOL _pendingReplaceSet;
 }
 
@@ -772,8 +771,12 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     return [override isKindOfClass:[NSDictionary class]] ? override : @{};
 }
 
-// 当前生效的显示名（暂存 > 已保存覆盖 > 快捷指令原名）。
+// 当前生效的显示名（替换暂存 > 改名暂存 > 已保存覆盖 > 快捷指令原名）。
 - (NSString *)displayName {
+    if (_pendingReplaceSet) {
+        NSString *rn = [_pendingReplaceRecord[@"name"] isKindOfClass:[NSString class]] ? _pendingReplaceRecord[@"name"] : @"";
+        if (rn.length) return rn;
+    }
     if (_pendingName.length) return _pendingName;
     NSString *saved = self.savedOverride[@"name"];
     if ([saved isKindOfClass:[NSString class]] && saved.length) return saved;
@@ -781,9 +784,10 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     return name.length ? name : @"未命名";
 }
 
-// 图标行预览：合成临时记录再渲染（暂存符号优先，暂存时剔除 iconFile 旧图）。
+// 图标行预览：合成临时记录再渲染（替换暂存以新目标为底；暂存符号剔除 iconFile 旧图）。
 - (UIImage *)previewImage {
-    NSMutableDictionary *merged = [_record mutableCopy] ?: [NSMutableDictionary dictionary];
+    NSDictionary *base = (_pendingReplaceSet && _pendingReplaceRecord.count) ? _pendingReplaceRecord : _record;
+    NSMutableDictionary *merged = [base mutableCopy] ?: [NSMutableDictionary dictionary];
     if (_pendingSymbolSet) {
         if (_pendingSymbol.length) {
             merged[@"symbolOverride"] = _pendingSymbol;
@@ -822,6 +826,14 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     static NSString *identifier = @"ERShortcutInfoCell";
     UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
     if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
+
+    // 1.1.9-72 · 复用清理：这一页不同行共用 identifier，且动作行/图标行会往
+    // contentView 里加子视图（tag 161..166）。不复用清理的话，滚动或重载后
+    // 「恢复默认/删除」按钮会叠到「类型」行上（用户截图的布局错乱）。
+    for (NSInteger tag = 161; tag <= 166; tag++) {
+        UIView *stale = [cell.contentView viewWithTag:tag];
+        if (stale) [stale removeFromSuperview];
+    }
 
     if (indexPath.section == 1) {
         // 底部动作行（透明背景 + 两个按钮），版式与快捷动作信息页一致。
@@ -966,13 +978,10 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
             break;
         }
         case 3: {
-            // 第4行：选择快捷指令（替换按钮；暂存时右侧显示新目标）。
+            // 第4行：选择快捷指令（替换按钮；待保存提示统一放「类型」行，与快捷方式一致）。
             cell.textLabel.text = @"选择快捷指令";
-            cell.detailTextLabel.text = _pendingReplaceSet
-                ? [NSString stringWithFormat:@"%@（待保存）", _pendingReplaceName ?: @""]
-                : nil;
+            cell.detailTextLabel.text = nil;
             cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
-            cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleDefault;
             cell.imageView.image = nil;
@@ -1086,11 +1095,11 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     [self.navigationController pushViewController:controller animated:YES];
 }
 
-- (void)shortcutReplaceDidPickUUID:(NSString *)uuid name:(NSString *)name {
-    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
-    if ([uuid isEqualToString:_shortcutUUID]) return;   // 选了自己 = 没换
-    _pendingReplaceUUID = uuid;
-    _pendingReplaceName = [name isKindOfClass:[NSString class]] && name.length ? name : uuid;
+- (void)shortcutReplaceDidPickShortcut:(NSDictionary *)shortcut {
+    if (![shortcut isKindOfClass:[NSDictionary class]]) return;
+    NSString *uuid = [shortcut[@"uuid"] isKindOfClass:[NSString class]] ? shortcut[@"uuid"] : @"";
+    if (!uuid.length || [uuid isEqualToString:_shortcutUUID]) return;   // 选了自己 = 没换
+    _pendingReplaceRecord = shortcut;
     _pendingReplaceSet = YES;
     [_table reloadData];
 }
@@ -1101,8 +1110,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     _pendingNameReset = YES;
     _pendingSymbol = @"";
     _pendingSymbolSet = YES;
-    _pendingReplaceUUID = nil;
-    _pendingReplaceName = nil;
+    _pendingReplaceRecord = nil;
     _pendingReplaceSet = NO;
     [self refreshTitle];
     [_table reloadData];
@@ -1177,9 +1185,12 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
         [self presentViewController:alert animated:YES completion:nil];
         return;
     }
-    // ① 名称/图标覆盖。
+    // ① 名称/图标覆盖。覆盖按 uuid 存；替换时以**新目标**为键（设置页列表与
+    // 磁贴都按绑定 uuid 读覆盖），旧 uuid 的覆盖清掉（旧指令回到默认显示）。
+    NSString *targetUUID = (_pendingReplaceSet && [_pendingReplaceRecord[@"uuid"] isKindOfClass:[NSString class]])
+                           ? _pendingReplaceRecord[@"uuid"] : _shortcutUUID;
     NSMutableDictionary *overrides = [ERShortcutOverridesRead() mutableCopy] ?: [NSMutableDictionary dictionary];
-    id existingOverride = overrides[_shortcutUUID];
+    id existingOverride = overrides[targetUUID];
     NSMutableDictionary *override = [existingOverride isKindOfClass:[NSDictionary class]]
                                     ? [existingOverride mutableCopy] : [NSMutableDictionary dictionary];
     if (_pendingNameReset) [override removeObjectForKey:@"name"];
@@ -1188,11 +1199,14 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
         if (_pendingSymbol.length) override[@"symbolOverride"] = _pendingSymbol;
         else [override removeObjectForKey:@"symbolOverride"];
     }
-    if (override.count) overrides[_shortcutUUID] = override;
-    else [overrides removeObjectForKey:_shortcutUUID];
+    if (override.count) overrides[targetUUID] = override;
+    else [overrides removeObjectForKey:targetUUID];
+    if (_pendingReplaceSet && ![targetUUID isEqualToString:_shortcutUUID]) {
+        [overrides removeObjectForKey:_shortcutUUID];   // 旧指令回到默认显示
+    }
     ERShortcutOverridesWrite(overrides);
     // ② 槽位原位换绑（该 uuid 占用的每个槽位都改绑到新指令，尺寸/位置不动）。
-    if (_pendingReplaceSet && _pendingReplaceUUID.length) {
+    if (_pendingReplaceSet && targetUUID.length && ![targetUUID isEqualToString:_shortcutUUID]) {
         id assignments = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
                                                                          (__bridge CFStringRef)kERShortcutPrefsDomain);
         if ([assignments isKindOfClass:[NSDictionary class]]) {
@@ -1201,7 +1215,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
             for (NSString *key in updated.allKeys) {
                 if ([updated[key] isKindOfClass:[NSString class]] &&
                     [(NSString *)updated[key] isEqualToString:_shortcutUUID]) {
-                    updated[key] = _pendingReplaceUUID;
+                    updated[key] = targetUUID;
                     changed = YES;
                 }
             }
@@ -1210,7 +1224,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
                                          (__bridge CFPropertyListRef)updated,
                                          (__bridge CFStringRef)kERShortcutPrefsDomain);
                 CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
-                ERShortcutLog(@"shortcutInfo: 槽位换绑 %@ → %@", _shortcutUUID, _pendingReplaceUUID);
+                ERShortcutLog(@"shortcutInfo: 槽位换绑 %@ → %@", _shortcutUUID, targetUUID);
             }
         }
     }
@@ -1243,11 +1257,20 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     NSString *path = [kERShortcutSnapshotDirectory stringByAppendingPathComponent:kERShortcutSnapshotFileName];
     NSDictionary *payload = [NSDictionary dictionaryWithContentsOfFile:path];
     NSArray *shortcuts = [payload isKindOfClass:[NSDictionary class]] ? payload[@"shortcuts"] : nil;
+    // 1.1.9-72 · 只列「未显示控制项」：已在快捷指令子页面显示列表里的不出现
+    // （替换是把槽位换绑到一条新指令，那本条就不该还在显示列表里占着）。
+    NSMutableSet<NSString *> *visible = [NSMutableSet set];
+    id storedVisible = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutVisibleKey,
+                                                                       (__bridge CFStringRef)kERShortcutPrefsDomain);
+    for (id entry in [storedVisible isKindOfClass:[NSArray class]] ? (NSArray *)storedVisible : @[]) {
+        if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) [visible addObject:entry];
+    }
     NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
     for (NSDictionary *shortcut in [shortcuts isKindOfClass:[NSArray class]] ? shortcuts : @[]) {
         if (![shortcut isKindOfClass:[NSDictionary class]]) continue;
         NSString *uuid = shortcut[@"uuid"];
         if (![uuid isKindOfClass:[NSString class]] || !uuid.length) continue;
+        if ([visible containsObject:uuid]) continue;
         [items addObject:shortcut];
     }
     [items sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
@@ -1267,7 +1290,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 }
 
 - (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
-    return _items.count ? @"点击一条即可替换为该快捷指令，返回后点右上角「保存」生效。" : @"没有扫描到快捷指令。回到上一页会自动重新扫描。";
+    return _items.count ? @"只列出未显示的快捷指令。点击一条即可替换，返回后点右上角「保存」生效。" : @"没有未显示的快捷指令。可先在「添加」里取消勾选，或回到上一页重新扫描。";
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -1291,10 +1314,8 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     [tableView deselectRowAtIndexPath:indexPath animated:YES];
     if ((NSUInteger)indexPath.row >= _items.count) return;
     NSDictionary *shortcut = _items[(NSUInteger)indexPath.row];
-    if ([self.replaceDelegate respondsToSelector:@selector(shortcutReplaceDidPickUUID:name:)]) {
-        NSString *name = [shortcut[@"name"] isKindOfClass:[NSString class]] && ((NSString *)shortcut[@"name"]).length
-                         ? shortcut[@"name"] : shortcut[@"uuid"];
-        [self.replaceDelegate shortcutReplaceDidPickUUID:shortcut[@"uuid"] name:name];
+    if ([self.replaceDelegate respondsToSelector:@selector(shortcutReplaceDidPickShortcut:)]) {
+        [self.replaceDelegate shortcutReplaceDidPickShortcut:shortcut];
     }
     [self.navigationController popViewControllerAnimated:YES];
 }
