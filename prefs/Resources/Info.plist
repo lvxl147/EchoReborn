@@ -13,9 +13,9 @@
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.1.9-44</string>
+	<string>1.1.9-73</string>
 	<key>CFBundleVersion</key>
-	<string>1001154</string>
+	<string>1001155</string>
 	<key>NSPrincipalClass</key>
 	<string>ERRootListController</string>
 </dict>
