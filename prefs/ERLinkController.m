@@ -713,6 +713,8 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 // 1.1.9-68：创建脚本页（keyboardX 脚本编辑器样式：名称/图标/脚本源码多行框）。
 @interface ERLinkScriptController : PSViewController <UITableViewDataSource, UITableViewDelegate, UITextFieldDelegate, ERLinkIconPickerDelegate>
 @property (nonatomic, copy) NSString *replaceUUID; // 替换模式（原位换目标）
+// 1.1.9-69：替换暂存回调（不直接写盘，交给「保存」统一落盘）。
+@property (nonatomic, copy) void (^replaceStageHandler)(NSDictionary *freshEntry);
 @end
 
 @interface ERLinkController () <UITableViewDataSource, UITableViewDelegate>
@@ -1473,8 +1475,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         ERLinkReplaceEntry(self.replaceUUID, entry);
         ERLinkPopBackToCustomize(self);
         return;
-    }
-    NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
+    }    NSMutableArray<NSDictionary *> *catalog = [ERLinkStoredCatalog() mutableCopy] ?: [NSMutableArray array];
     [catalog addObject:entry];
     ERLinkPersistCatalog(catalog);
     [self.navigationController popViewControllerAnimated:YES];
