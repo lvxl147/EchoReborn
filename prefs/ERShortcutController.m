@@ -706,6 +706,10 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 @property (nonatomic, weak) id<ERShortcutReplaceDelegate> replaceDelegate;
 @end
 
+// 信息页实现替换回调（协议声明在上方）。
+@interface ERShortcutInfoController () <ERShortcutReplaceDelegate>
+@end
+
 @implementation ERShortcutInfoController {
     UITableView *_table;
     NSString *_pendingName;        // 改名暂存（nil = 未改）
@@ -1118,7 +1122,9 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
         if (!uuid.length) return;
         // ① 移出显示列表。
         NSMutableSet<NSString *> *visible = [NSMutableSet set];
-        for (id entry in [strongSelf storedArrayForKey:kERShortcutVisibleKey]) {
+        id storedVisible = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutVisibleKey,
+                                                                           (__bridge CFStringRef)kERShortcutPrefsDomain);
+        for (id entry in [storedVisible isKindOfClass:[NSArray class]] ? (NSArray *)storedVisible : @[]) {
             if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) [visible addObject:entry];
         }
         [visible removeObject:uuid];
