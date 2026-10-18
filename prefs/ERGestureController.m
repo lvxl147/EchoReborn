@@ -310,6 +310,22 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 //   · NSSetUncaughtExceptionHandler + SIGABRT/SIGSEGV/SIGBUS/SIGILL 信号处理器
 //     → /var/mobile/Documents/EchoReborn-crash.txt（异常名/原因 + 符号化调用栈）
 // 注意：不能加 static——ERRootListController.m 的面包屑要跨文件链接它（1.2.0-4 链接错误教训）。
+// 1.2.0-5：写文件多路径兜底——实测 1.2.0-4 构造函数代码在设备 bundle 里存在、
+// SSH mobile 可写 Documents，但 Preferences 进程一个字节都没写出来，判定为
+// Preferences 进程沙盒拦截。改为逐路径尝试：Documents → /var/tmp → 进程沙盒 tmp，
+// 全部失败时把 errno 记到控制台（NSLog 也在系统日志里可见）。
+static NSArray *ERGLogPaths(void) {
+    static NSArray *paths;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString *doc = @"/var/mobile/Documents/EchoReborn-prefs.log";
+        NSString *vartmp = @"/var/tmp/EchoReborn-prefs.log";
+        NSString *sandbox = [NSTemporaryDirectory() stringByAppendingPathComponent:@"EchoReborn-prefs.log"];
+        paths = @[doc, vartmp, sandbox];
+    });
+    return paths;
+}
+
 void ERGPrefsLog(NSString *format, ...) {
     @try {
         va_list args;
@@ -321,17 +337,34 @@ void ERGPrefsLog(NSString *format, ...) {
                                                          dateStyle:NSDateFormatterNoStyle
                                                          timeStyle:NSDateFormatterMediumStyle],
                           message];
-        NSString *path = @"/var/mobile/Documents/EchoReborn-prefs.log";
-        NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
-        if (!h) {
-            [line writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
-            return;
+        NSData *data = [line dataUsingEncoding:NSUTF8StringEncoding];
+        BOOL wrote = NO;
+        NSString *errDesc = @"";
+        for (NSString *path in ERGLogPaths()) {
+            NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
+            if (h) {
+                @try {
+                    [h seekToEndOfFile];
+                    [h writeData:data];
+                    [h closeFile];
+                    wrote = YES;
+                    break;
+                } @catch (NSException *e) {
+                    errDesc = [NSString stringWithFormat:@"%@: %@", path, e.reason];
+                }
+            } else {
+                NSError *err = nil;
+                if ([data writeToFile:path options:NSDataWritingAtomic error:&err]) {
+                    wrote = YES;
+                    break;
+                }
+                errDesc = [NSString stringWithFormat:@"%@: %@ (errno %d)", path, err.localizedDescription, errno];
+            }
         }
-        @try {
-            [h seekToEndOfFile];
-            [h writeData:[line dataUsingEncoding:NSUTF8StringEncoding]];
-        } @catch (__unused NSException *e) {}
-        [h closeFile];
+        if (!wrote) {
+            NSLog(@"[ERGPrefs] log write FAILED: %@", errDesc);
+            NSLog(@"[ERGPrefs] %@", line);
+        }
     } @catch (__unused NSException *e) {}
 }
 
@@ -346,16 +379,25 @@ void ERGCrashWrite(NSString *header) {
             [text appendFormat:@"%s\n", syms[i]];
         }
         if (syms) free(syms);
-        NSString *path = @"/var/mobile/Documents/EchoReborn-crash.txt";
-        NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
+        // 与 ERGPrefsLog 同款多路径兜底（Documents → /var/tmp → 沙盒 tmp）
         NSData *data = [text dataUsingEncoding:NSUTF8StringEncoding];
-        if (!h) {
-            [data writeToFile:path atomically:YES];
-            return;
+        NSArray *paths = @[@"/var/mobile/Documents/EchoReborn-crash.txt",
+                           @"/var/tmp/EchoReborn-crash.txt",
+                           [[NSTemporaryDirectory() stringByAppendingPathComponent:@"EchoReborn-crash.txt"] copy]];
+        for (NSString *path in paths) {
+            NSFileHandle *h = [NSFileHandle fileHandleForWritingAtPath:path];
+            if (h) {
+                @try {
+                    [h seekToEndOfFile];
+                    [h writeData:data];
+                    [h closeFile];
+                    return;
+                } @catch (NSException *e) {}
+            } else if ([data writeToFile:path options:NSDataWritingAtomic error:nil]) {
+                return;
+            }
         }
-        [h seekToEndOfFile];
-        [h writeData:data];
-        [h closeFile];
+        NSLog(@"[ERGPrefs] crash write FAILED all paths:\n%@", text);
     } @catch (__unused NSException *e) {}
 }
 
