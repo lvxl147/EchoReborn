@@ -9,6 +9,7 @@
 #import "ERBottomComponentsController.h"
 #import "ERSiriController.h"
 #import "ERSystemEnhanceController.h"
+#import "ERGestureController.h"
 #import "ERUIHelpers.h"
 #import <Preferences/PSSpecifier.h>
 #import <objc/message.h>
@@ -105,7 +106,10 @@ static void ERPrefsLog(NSString *format, ...) {
         }
         PSSpecifier *systemEntry = [self erSystemEnhanceEntrySpecifier];
         if (systemIndex != NSNotFound) {
-            [specifiers replaceObjectAtIndex:systemIndex withObject:systemEntry];
+            // 1.2.0-1：「手势管理」入口行插在「系统增强」上方 —— 与系统增强共用同一张
+            // 卡片（不插组分隔，直接排在同组前一格），同样走 detail 推入的原生机制。
+            [specifiers insertObject:[self erGestureEntrySpecifier] atIndex:systemIndex];
+            [specifiers replaceObjectAtIndex:systemIndex + 1 withObject:systemEntry];
         } else {
             NSUInteger siriIndex = NSNotFound;
             for (NSUInteger index = 0; index < specifiers.count; index++) {
@@ -320,6 +324,23 @@ static void ERPrefsLog(NSString *format, ...) {
     if (!controller) return;
     controller.title = @"iOS27 Siri";
     [self.navigationController pushViewController:controller animated:YES];
+}
+
+// 1.2.0-1：「手势管理」入口行（桌面胶囊手势子页），构造方式与系统增强行完全一致。
+- (PSSpecifier *)erGestureEntrySpecifier {
+    PSSpecifier *entry = [PSSpecifier preferenceSpecifierNamed:@"手势管理"
+                                                        target:self
+                                                           set:NULL
+                                                           get:NULL
+                                                        detail:ERGestureController.class
+                                                          cell:PSLinkCell
+                                                        edit:Nil];
+    [entry setProperty:ERImageIconWithFallbacks(@[@"hand.tap", @"hand.point.up.left.fill", @"cursorarrow.click"],
+                                                nil,
+                                                @"手",
+                                                @"teal")
+                forKey:@"iconImage"];
+    return entry;
 }
 
 // 1.0.7-2：系统增强入口行的代码构造（见 -specifiers 里的说明）。
