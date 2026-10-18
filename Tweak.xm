@@ -32110,10 +32110,10 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
         return;
     }
     if (contains == NO) {
-        [UIView animateWithDuration:0.3 animations:^{
-            erDIMainGainMapView.layer.opacity = 0.0;
-            erDIFrontGainMapView.layer.opacity = 0.0;
-        }];
+        // 1.1.9-73 · 瞬时收起：去掉 0.3s 渐隐动画（用户要求无延迟瞬间变化；
+        // 剩余的观感延迟来自系统 containsAnyContent 的活动结束判定，属系统节奏）。
+        erDIMainGainMapView.layer.opacity = 0.0;
+        erDIFrontGainMapView.layer.opacity = 0.0;
     } else {
         erDIMainGainMapView.layer.opacity = 1.0;
         erDIFrontGainMapView.layer.opacity = 1.0;
