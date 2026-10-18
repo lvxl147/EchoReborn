@@ -198,7 +198,12 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     _valueButton.layer.borderWidth = 1.0;
     _valueButton.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.25].CGColor;
     _valueButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
+    // -Werror 下压制 iOS15 弃用告警：UIButtonConfiguration 不适用（自绘描边样式），
+    // 这里就是要用老式 contentEdgeInsets 做内边距。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 10, 5, 10);
+#pragma clang diagnostic pop
     [_valueButton addTarget:self action:@selector(_erValueTapped)
            forControlEvents:UIControlEventTouchUpInside];
     [self.contentView addSubview:_valueButton];
