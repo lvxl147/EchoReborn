@@ -5857,7 +5857,7 @@ static NSArray<NSString *> *ERDefaultCategoryOrder(void) {
     // 不会留下空标题。
     return @[@"辅助功能", @"拍摄", @"时钟", @"连接", @"显示", @"专注", @"家庭",
              @"媒体", @"备忘录", @"语音备忘录", @"钱包", @"实用工具",
-             @"快捷指令", @"快捷方式", @"第三方插件"];
+             @"快捷指令", @"打开应用", @"快捷动作", @"URL链接", @"脚本", @"第三方插件"];
 }
 
 static NSArray<NSString *> *ERCategoryOrder(void) {
@@ -7538,7 +7538,7 @@ static NSString *ERFriendlyNameForIdentifier(NSString *identifier) {
         if (linkRecord) {
             NSString *name = linkRecord[@"name"];
             if ([name isKindOfClass:[NSString class]] && name.length) return name;
-            return @"快捷方式";
+            return @"快捷动作";
         }
     }
     if (ERShortcutIdentifierIsShortcut(identifier)) {
@@ -8081,10 +8081,20 @@ static BOOL ERIdentifierIsEchoRebornOwned(NSString *identifier) {
 }
 
 static NSString *ERCategoryForIdentifier(NSString *identifier) {
-    // 1.1.9-19：槽位绑定到 LinkCatalog 条目 → 「快捷方式」分类（须在快捷指令
-    // 判断之前，因为槽位标识符是同一个前缀）。
+    // 1.1.9-19：槽位绑定到 LinkCatalog 条目 → 按条目类型分到四个自研分类
+    // （打开应用 / 快捷动作 / URL链接 / 脚本；1.1.9-69 从单一「快捷方式」拆分，
+    // 须在快捷指令判断之前，因为槽位标识符是同一个前缀）。
     NSInteger linkSlotProbe = ERShortcutSlotIndexFromIdentifier(identifier);
-    if (linkSlotProbe > 0 && ERLinkRecordForSlot(linkSlotProbe)) return @"快捷方式";
+    if (linkSlotProbe > 0) {
+        NSDictionary *linkRecord = ERLinkRecordForSlot(linkSlotProbe);
+        if (linkRecord) {
+            NSString *entryType = [linkRecord[@"type"] isKindOfClass:[NSString class]] ? linkRecord[@"type"] : @"";
+            if ([entryType isEqualToString:@"app"]) return @"打开应用";
+            if ([entryType isEqualToString:@"appShortcut"]) return @"快捷动作";
+            if ([entryType isEqualToString:@"script"]) return @"脚本";
+            return @"URL链接";
+        }
+    }
     if (ERShortcutIdentifierIsShortcut(identifier)) return @"快捷指令";
     NSString *lower = identifier.lowercaseString;
     NSArray<NSArray *> *categories = @[
@@ -17889,21 +17899,26 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
             @"bundleURL": (id)NSNull.null,
         }];
     }
-    // 1.1.9-19 · 快捷方式（LinkCatalog）与快捷指令同一套槽位机制：设置页里
-    // 用户添加的每一条（打开 App / App 快捷方式 / 链接）都在这里认领槽位后
-    // 进入「快捷方式」分类，排在「第三方插件」之前。
+    // 1.1.9-19 · 快捷动作（LinkCatalog）与快捷指令同一套槽位机制：设置页里
+    // 用户添加的每一条（打开 App / App 快捷方式 / 链接 / 脚本）都在这里认领槽位
+    // 后进入对应分类（1.1.9-69 按类型拆成四个分类），排在「第三方插件」之前。
     NSUInteger hiddenLinks = 0;
     for (NSDictionary *entry in ERLinkCatalogRecords()) {
         NSString *uuid = entry[@"uuid"];
         NSString *name = entry[@"name"];
-        if (![name isKindOfClass:[NSString class]] || !name.length) name = @"快捷方式";
+        if (![name isKindOfClass:[NSString class]] || !name.length) name = @"快捷动作";
+        NSString *entryType = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
+        NSString *entryCategory = [entryType isEqualToString:@"app"] ? @"打开应用"
+                                : [entryType isEqualToString:@"appShortcut"] ? @"快捷动作"
+                                : [entryType isEqualToString:@"script"] ? @"脚本"
+                                : @"URL链接";
         NSString *slotIdentifier = ERLinkSlotIdentifierForAddingUUID(uuid);
         if (!slotIdentifier) continue;   // 32 个槽位都被占满
         if ([present containsObject:slotIdentifier]) { hiddenLinks++; continue; }
         [catalog addObject:@{
             @"identifier": slotIdentifier,
             @"name": name,
-            @"category": @"快捷方式",
+            @"category": entryCategory,
             @"added": @NO,
             @"allowsMultiple": @NO,
             @"instanceCount": @0,
@@ -17919,7 +17934,9 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     NSUInteger linkCount = 0;
     for (NSDictionary *entry in catalog) {
         if ([entry[@"category"] isEqualToString:@"快捷指令"]) shortcutCount++;
-        if ([entry[@"category"] isEqualToString:@"快捷方式"]) linkCount++;
+        if ([entry[@"category"] isEqualToString:@"快捷动作"] ||
+            [entry[@"category"] isEqualToString:@"URL链接"] ||
+            [entry[@"category"] isEqualToString:@"脚本"]) linkCount++;
     }
     ERLogInfo(@"catalog: %lu selectable control(s) (%lu shortcut(s), %lu link(s); %lu fetched but not enabled in Settings), %lu hidden as already added",
                (unsigned long)catalog.count, (unsigned long)shortcutCount, (unsigned long)linkCount,
