@@ -295,11 +295,20 @@ static void ERShortcutLog(NSString *format, ...) {
     }
 }
 
+// 1.1.9-73 · 「选择模式」回调协议提前到这里声明：添加页被复用为替换选择页时，
+// 点条目不走「加入显示列表」，而是回调给快捷指令信息页暂存替换。
+@protocol ERShortcutReplaceDelegate <NSObject>
+@optional
+- (void)shortcutReplaceDidPickShortcut:(NSDictionary *)shortcut;
+@end
+
 // MARK: - 添加子页面
 //
 // 1.1.8-18 · 未显示的那批快捷指令单独拆到这里：顶部搜索框 + 未显示控制项列表，
 // 点一条就加入显示列表并弹回主页。加入/移除的逻辑都在，只是主页先不挂交互
 // （用户后面还有别的需求），所以这里也只做「加入」这一个方向。
+// 1.1.9-73 · 新增 pickMode：替换选择也走这个页面（搜索框/标题/行样式与添加页
+// 完全一致），点条目回调 pickDelegate 并弹回，不写显示列表。
 @interface ERShortcutAddController : PSViewController <UITableViewDataSource,
                                                        UITableViewDelegate,
                                                        UISearchBarDelegate>
@@ -309,6 +318,8 @@ static void ERShortcutLog(NSString *format, ...) {
 @property (nonatomic, copy) NSString *searchText;
 @property (nonatomic, strong) UISearchBar *searchBar;
 @property (nonatomic, strong) UITableView *addTableView;
+@property (nonatomic, assign) BOOL pickMode;
+@property (nonatomic, weak) id<ERShortcutReplaceDelegate> pickDelegate;
 - (instancetype)initWithShortcuts:(NSArray<NSDictionary *> *)shortcuts
                     visibleUUIDs:(NSSet<NSString *> *)visibleUUIDs;
 @end
@@ -697,16 +708,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 // 对齐「快捷动作信息」页：类型/名称/图标/选择快捷指令 四行卡片 + 底部
 // 「恢复默认 / 删除快捷指令」按钮，全部改动只暂存，点右上角「保存」才落盘。
 // 替换列表（选择快捷指令）控制器与回调协议。
-@protocol ERShortcutReplaceDelegate <NSObject>
-@optional
-- (void)shortcutReplaceDidPickShortcut:(NSDictionary *)shortcut;
-@end
-
-@interface ERShortcutReplaceController : PSViewController <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, weak) id<ERShortcutReplaceDelegate> replaceDelegate;
-@end
-
-// 信息页实现替换回调（协议声明在上方）。
+// 信息页实现替换回调（协议声明在文件前部 ERShortcutAddController 上方）。
 @interface ERShortcutInfoController () <ERShortcutReplaceDelegate>
 @end
 
@@ -823,9 +825,21 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *identifier = @"ERShortcutInfoCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
+    // 1.1.9-73 · 卡片行与底部按钮行拆开复用标识：按钮行会把 cell 背景清成透明
+    // （backgroundView = nil），同一个标识复用回「类型」行时背景回不来——
+    // 这就是「点完选择/替换，第一行背景消失」的根因。
+    static NSString *cardIdentifier = @"ERShortcutInfoCardCell";
+    static NSString *actionIdentifier = @"ERShortcutInfoActionCell";
+    NSString *reuseId = indexPath.section == 1 ? actionIdentifier : cardIdentifier;
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:reuseId];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:reuseId];
+    // 卡片行背景保险：任何来源复用过来都强制补回卡片底色（inset grouped 卡片）。
+    if (indexPath.section == 0 && cell.backgroundView == nil) {
+        UIView *card = [[UIView alloc] init];
+        card.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
+        card.layer.cornerRadius = 10.0;
+        cell.backgroundView = card;
+    }
 
     // 1.1.9-72 · 复用清理：这一页不同行共用 identifier，且动作行/图标行会往
     // contentView 里加子视图（tag 161..166）。不复用清理的话，滚动或重载后
@@ -887,9 +901,11 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 
     switch (indexPath.row) {
         case 0: {
-            // 第1行：类型（固定「快捷指令」；替换暂存时提示待保存）。
+            // 第1行：类型。1.1.9-73 · 改名/改图标/替换任意一项有暂存都提示待保存，
+            // 与快捷方式信息页一致。
+            BOOL pending = _pendingReplaceSet || _pendingName.length || _pendingNameReset || _pendingSymbolSet;
             cell.textLabel.text = @"类型";
-            cell.detailTextLabel.text = _pendingReplaceSet ? @"快捷指令（待保存）" : @"快捷指令";
+            cell.detailTextLabel.text = pending ? @"快捷指令（待保存）" : @"快捷指令";
             cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;
@@ -1087,10 +1103,22 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     return YES;
 }
 
-// 第4行「替换」：进快捷指令选择列表，点某条暂存为新目标（槽位原位换绑）。
+// 第4行「替换」：1.1.9-73 · 不再单独写选择页，直接复用「添加」页
+// （搜索框 + 「未显示控制项（N）」标题 + 同款行样式），选模式点条目回调暂存。
 - (void)replaceTapped {
-    ERShortcutReplaceController *controller = [[ERShortcutReplaceController alloc] init];
-    controller.replaceDelegate = self;
+    NSString *path = [kERShortcutSnapshotDirectory stringByAppendingPathComponent:kERShortcutSnapshotFileName];
+    NSDictionary *payload = [NSDictionary dictionaryWithContentsOfFile:path];
+    NSArray *shortcuts = [payload isKindOfClass:[NSDictionary class]] ? payload[@"shortcuts"] : @[];
+    NSMutableSet<NSString *> *visible = [NSMutableSet set];
+    id storedVisible = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutVisibleKey,
+                                                                       (__bridge CFStringRef)kERShortcutPrefsDomain);
+    for (id entry in [storedVisible isKindOfClass:[NSArray class]] ? (NSArray *)storedVisible : @[]) {
+        if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) [visible addObject:entry];
+    }
+    ERShortcutAddController *controller = [[ERShortcutAddController alloc] initWithShortcuts:shortcuts
+                                                                                visibleUUIDs:visible];
+    controller.pickMode = YES;
+    controller.pickDelegate = self;
     controller.title = @"选择快捷指令";
     [self.navigationController pushViewController:controller animated:YES];
 }
@@ -1228,94 +1256,18 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
             }
         }
     }
-    [self.navigationController popViewControllerAnimated:YES];
-}
-
-@end
-
-// 1.1.9-70 · 替换列表：展示扫描到的全部快捷指令，点一条回调给信息页暂存。
-@implementation ERShortcutReplaceController {
-    UITableView *_table;
-    NSArray<NSDictionary *> *_items;
-}
-
-- (void)loadView {
-    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
-    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
-    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
-    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    table.dataSource = self;
-    table.delegate = self;
-    [self.view addSubview:table];
-    _table = table;
-}
-
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    if (!self.title.length) self.title = @"选择快捷指令";
-    NSString *path = [kERShortcutSnapshotDirectory stringByAppendingPathComponent:kERShortcutSnapshotFileName];
-    NSDictionary *payload = [NSDictionary dictionaryWithContentsOfFile:path];
-    NSArray *shortcuts = [payload isKindOfClass:[NSDictionary class]] ? payload[@"shortcuts"] : nil;
-    // 1.1.9-72 · 只列「未显示控制项」：已在快捷指令子页面显示列表里的不出现
-    // （替换是把槽位换绑到一条新指令，那本条就不该还在显示列表里占着）。
-    NSMutableSet<NSString *> *visible = [NSMutableSet set];
-    id storedVisible = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutVisibleKey,
-                                                                       (__bridge CFStringRef)kERShortcutPrefsDomain);
-    for (id entry in [storedVisible isKindOfClass:[NSArray class]] ? (NSArray *)storedVisible : @[]) {
-        if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) [visible addObject:entry];
-    }
-    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
-    for (NSDictionary *shortcut in [shortcuts isKindOfClass:[NSArray class]] ? shortcuts : @[]) {
-        if (![shortcut isKindOfClass:[NSDictionary class]]) continue;
-        NSString *uuid = shortcut[@"uuid"];
-        if (![uuid isKindOfClass:[NSString class]] || !uuid.length) continue;
-        if ([visible containsObject:uuid]) continue;
-        [items addObject:shortcut];
-    }
-    [items sortUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
-        NSString *ln = [left[@"name"] isKindOfClass:[NSString class]] ? left[@"name"] : @"";
-        NSString *rn = [right[@"name"] isKindOfClass:[NSString class]] ? right[@"name"] : @"";
-        return [ln localizedCaseInsensitiveCompare:rn];
-    }];
-    _items = items;
-}
-
-- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
-    return 1;
-}
-
-- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
-    return (NSInteger)_items.count;
-}
-
-- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
-    return _items.count ? @"只列出未显示的快捷指令。点击一条即可替换，返回后点右上角「保存」生效。" : @"没有未显示的快捷指令。可先在「添加」里取消勾选，或回到上一页重新扫描。";
-}
-
-- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
-    static NSString *identifier = @"ERShortcutReplaceCell";
-    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
-    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:identifier];
-    NSDictionary *shortcut = _items[(NSUInteger)indexPath.row];
-    NSString *name = [shortcut[@"name"] isKindOfClass:[NSString class]] && ((NSString *)shortcut[@"name"]).length
-                     ? shortcut[@"name"] : shortcut[@"uuid"];
-    cell.textLabel.text = name;
-    cell.textLabel.textColor = UIColor.labelColor;
-    cell.textLabel.font = [UIFont systemFontOfSize:17.0];
-    cell.imageView.image = ERShortcutCellIcon(shortcut);
-    cell.imageView.layer.cornerRadius = 9.0;
-    cell.imageView.clipsToBounds = YES;
-    cell.accessoryType = UITableViewCellAccessoryNone;
-    return cell;
-}
-
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    if ((NSUInteger)indexPath.row >= _items.count) return;
-    NSDictionary *shortcut = _items[(NSUInteger)indexPath.row];
-    if ([self.replaceDelegate respondsToSelector:@selector(shortcutReplaceDidPickShortcut:)]) {
-        [self.replaceDelegate shortcutReplaceDidPickShortcut:shortcut];
+    // ③ 1.1.9-73 · 替换时同步显示列表：旧指令移出、新指令顶上，设置页列表
+    // 立刻显示新目标的名字和图标（此前只换槽位，列表还渲染旧记录）。
+    if (_pendingReplaceSet && targetUUID.length && ![targetUUID isEqualToString:_shortcutUUID]) {
+        NSMutableSet<NSString *> *visible = [NSMutableSet set];
+        id storedVisible = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutVisibleKey,
+                                                                           (__bridge CFStringRef)kERShortcutPrefsDomain);
+        for (id entry in [storedVisible isKindOfClass:[NSArray class]] ? (NSArray *)storedVisible : @[]) {
+            if ([entry isKindOfClass:[NSString class]] && ((NSString *)entry).length) [visible addObject:entry];
+        }
+        [visible removeObject:_shortcutUUID];
+        [visible addObject:targetUUID];
+        ERShortcutPersistVisible(visible, 0);
     }
     [self.navigationController popViewControllerAnimated:YES];
 }
@@ -1467,7 +1419,10 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     if (store.length) [lines addObject:[NSString stringWithFormat:@"数据库：%@", store]];
     NSString *detail = ERShortcutDiscoveryDetail(payload);
     if (detail.length) [lines addObject:detail];
-    [lines addObject:@"点一下某条即可加入「显示控制项」，修改立即生效。"];
+    // 1.1.9-73 · 选择模式（替换）下最后一句换成替换说明。
+    [lines addObject:self.pickMode
+        ? @"点一下某条即可替换，返回后点右上角「保存」生效。"
+        : @"点一下某条即可加入「显示控制项」，修改立即生效。"];
     return [lines componentsJoinedByString:@"\n"];
 }
 
@@ -1510,6 +1465,17 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     if (indexPath.row >= (NSInteger)self.filtered.count) return;
     NSString *uuid = self.filtered[indexPath.row][@"uuid"];
     if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
+
+    // 1.1.9-73 · 选择模式（被替换流程复用）：点条目回调信息页暂存替换并弹回，
+    // 不写显示列表。
+    if (self.pickMode) {
+        NSDictionary *shortcut = self.filtered[indexPath.row];
+        if ([self.pickDelegate respondsToSelector:@selector(shortcutReplaceDidPickShortcut:)]) {
+            [self.pickDelegate shortcutReplaceDidPickShortcut:shortcut];
+        }
+        [self.navigationController popViewControllerAnimated:YES];
+        return;
+    }
 
     [self.visibleUUIDs addObject:uuid];
     // 立刻写库 + 唤醒 SpringBoard，控制中心的「添加控制项」面板马上就能看到。
