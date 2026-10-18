@@ -32086,8 +32086,11 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
     }
     if (!rootWindow) return;
     // 先放行一次真 layerClass 给占位视图（与上游一致的时序把戏）。
+    // 注意：私有类不能直接 alloc（会产生链接期符号），一律 %c() 运行时取类。
     erDIBackboarddMap = YES;
-    UIView *cover = [[_SBGainMapView alloc] initWithFrame:CGRectMake(-1.3, -0.9, 1, 1)];
+    Class gainMapClass = %c(_SBGainMapView);
+    if (!gainMapClass) return;
+    UIView *cover = [[gainMapClass alloc] initWithFrame:CGRectMake(-1.3, -0.9, 1, 1)];
     cover.userInteractionEnabled = NO;
     [rootWindow addSubview:cover];
     if (erDIMainGainMapView) erDIMainGainMapView.layer.opacity = 0.0;   // 初始隐藏
