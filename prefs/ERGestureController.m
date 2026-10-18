@@ -177,9 +177,23 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     UIButton    *_valueButton;
 }
 
-- (instancetype)initWithStyle:(UITableViewCellStyle)style reuseIdentifier:(NSString *)reuseIdentifier {
-    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier];
+// 1.2.0-1 · 闪退根因：PSListController 实例化 cellClass 用的入口是**三参版**
+//   initWithStyle:reuseIdentifier:specifier:（ERSegmentedCell 同款），只实现两参版
+//   会落到基类构造 —— 自绘控件全没建、refresh 链路崩。specifier 在这里就挂上。
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(NSString *)reuseIdentifier
+                    specifier:(PSSpecifier *)specifier {
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier];
     if (!self) return nil;
+    if (specifier) {
+        objc_setAssociatedObject(self, @selector(_erGestureKey), specifier, OBJC_ASSOCIATION_RETAIN);
+    }
+    [self _erBuildUI];
+    return self;
+}
+
+- (void)_erBuildUI {
+    if (_valueButton) return;   // 幂等
     self.backgroundColor = [UIColor clearColor];
     self.selectionStyle = UITableViewCellSelectionStyleNone;
 
@@ -207,7 +221,10 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     [_valueButton addTarget:self action:@selector(_erValueTapped)
            forControlEvents:UIControlEventTouchUpInside];
     [self.contentView addSubview:_valueButton];
-    return self;
+
+    // specifier 若不是从 init 进来（某些版本走 refresh 才给），refresh 时已兜底关联。
+    NSString *key = [self _erGestureKey];
+    if (key.length) [self _erRefreshValue];
 }
 
 - (void)layoutSubviews {
@@ -225,10 +242,17 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 }
 
 - (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
-    [super refreshCellContentsWithSpecifier:specifier];
+    // 1.0.8-29 教训：基类 refresh 在自定义 cell 上可能抛 NSException（setTitle 收到
+    // 非字符串 → SIGABRT）—— 本 cell 内容全部自绘，super 调用必须 @try 兜住。
+    @try {
+        [super refreshCellContentsWithSpecifier:specifier];
+    } @catch (NSException *exception) {
+        NSLog(@"[EchoReborn] ERGesture refresh threw: %@ -- %@", exception.name, exception.reason);
+    }
     if (specifier) {
         objc_setAssociatedObject(self, @selector(_erGestureKey), specifier, OBJC_ASSOCIATION_RETAIN);
     }
+    [self _erBuildUI];   // 兜底：init 链没走到时在这里补建
     NSString *name = [specifier propertyForKey:@"label"];
     if ([name isKindOfClass:[NSString class]]) _title.text = name;
 
