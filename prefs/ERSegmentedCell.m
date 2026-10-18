@@ -481,8 +481,16 @@ static CGFloat ERBackgroundAlphaValue(void) {
         self.textLabel.text = title.length ? title : @"";
         self.textLabel.font = [UIFont systemFontOfSize:16.0];
         self.detailTextLabel.hidden = YES;
+        // 1.2.0-7 · 带 iconImage 的行（手势页「震动强度」）：图标贴左定位，
+        // 标题右移到图标后面；没图标的行走系统默认（不碰 textLabel.frame）。
+        CGFloat segX = round(width * 0.46);
+        if (self.imageView.image) {
+            CGFloat h = CGRectGetHeight(self.contentView.bounds);
+            self.imageView.frame = CGRectMake(16, round((h - 27.0) / 2.0), 27, 27);
+            self.textLabel.frame = CGRectMake(56, 0, MAX(segX - 56 - 8, 40), h);
+        }
         CGRect frame = _segment.frame;
-        frame.origin.x = round(width * 0.46);
+        frame.origin.x = segX;
         frame.size.width = MAX(width - frame.origin.x - 12.0, 100.0);
         frame.origin.y = round((CGRectGetHeight(self.contentView.bounds) - CGRectGetHeight(frame)) * 0.5);
         _segment.frame = frame;
@@ -508,6 +516,17 @@ static CGFloat ERBackgroundAlphaValue(void) {
     // 这里把两个系统标签都清空并隐藏，layoutSubviews 里再兜一次。
     PSSpecifier *current = specifier ?: _erSpecifier;
     if (!current) return;
+
+    // 1.2.0-7 · 图标支持：iOS 17 原生 PSTableCell 不渲染我们自定义的 iconImage
+    // （1.1.8-7 PSSwitchCell 同款问题）。specifier 声明了 iconImage 就显式写进
+    // imageView，layoutSubviews 里给图标定位；没声明时行为与旧版完全一致。
+    UIImage *erIcon = [current propertyForKey:@"iconImage"];
+    if ([erIcon isKindOfClass:[UIImage class]]) {
+        self.imageView.image = erIcon;
+        self.imageView.hidden = NO;
+    } else if (self.imageView.image) {
+        self.imageView.image = nil;
+    }
 
     NSArray<NSString *> *valuesEarly = ERPresetRGBList(current);
     BOOL valueModeEarly = (valuesEarly != nil);
