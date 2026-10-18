@@ -32210,6 +32210,8 @@ static void ERSPGDumpSelectors(void) {
               [hits componentsJoinedByString:@", "]);
 }
 
+// 1.2.0-9 · 前向声明：ScanTick 探针用到 ERBootLog，但其定义在下方（编译顺序）。
+static void ERBootLog(NSString *tag);
 // 周期扫描（主线程）：找到搜索胶囊 → 挂/启停手势；顺手把探测到的桌面页数写进
 // 共享偏好（设置页下拉框的「第1页…第N页」来源）。
 static void ERSPGScanTick(void) {
