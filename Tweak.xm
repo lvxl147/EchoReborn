@@ -5857,7 +5857,7 @@ static NSArray<NSString *> *ERDefaultCategoryOrder(void) {
     // 不会留下空标题。
     return @[@"辅助功能", @"拍摄", @"时钟", @"连接", @"显示", @"专注", @"家庭",
              @"媒体", @"备忘录", @"语音备忘录", @"钱包", @"实用工具",
-             @"快捷指令", @"打开应用", @"快捷动作", @"URL链接", @"脚本", @"第三方插件"];
+             @"快捷指令", @"打开应用", @"快捷方式", @"URL链接", @"脚本", @"第三方插件"];
 }
 
 static NSArray<NSString *> *ERCategoryOrder(void) {
@@ -7538,7 +7538,7 @@ static NSString *ERFriendlyNameForIdentifier(NSString *identifier) {
         if (linkRecord) {
             NSString *name = linkRecord[@"name"];
             if ([name isKindOfClass:[NSString class]] && name.length) return name;
-            return @"快捷动作";
+            return @"快捷方式";
         }
     }
     if (ERShortcutIdentifierIsShortcut(identifier)) {
@@ -8090,7 +8090,7 @@ static NSString *ERCategoryForIdentifier(NSString *identifier) {
         if (linkRecord) {
             NSString *entryType = [linkRecord[@"type"] isKindOfClass:[NSString class]] ? linkRecord[@"type"] : @"";
             if ([entryType isEqualToString:@"app"]) return @"打开应用";
-            if ([entryType isEqualToString:@"appShortcut"]) return @"快捷动作";
+            if ([entryType isEqualToString:@"appShortcut"]) return @"快捷方式";
             if ([entryType isEqualToString:@"script"]) return @"脚本";
             return @"URL链接";
         }
@@ -17906,10 +17906,10 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     for (NSDictionary *entry in ERLinkCatalogRecords()) {
         NSString *uuid = entry[@"uuid"];
         NSString *name = entry[@"name"];
-        if (![name isKindOfClass:[NSString class]] || !name.length) name = @"快捷动作";
+        if (![name isKindOfClass:[NSString class]] || !name.length) name = @"快捷方式";
         NSString *entryType = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
         NSString *entryCategory = [entryType isEqualToString:@"app"] ? @"打开应用"
-                                : [entryType isEqualToString:@"appShortcut"] ? @"快捷动作"
+                                : [entryType isEqualToString:@"appShortcut"] ? @"快捷方式"
                                 : [entryType isEqualToString:@"script"] ? @"脚本"
                                 : @"URL链接";
         NSString *slotIdentifier = ERLinkSlotIdentifierForAddingUUID(uuid);
@@ -17935,6 +17935,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     for (NSDictionary *entry in catalog) {
         if ([entry[@"category"] isEqualToString:@"快捷指令"]) shortcutCount++;
         if ([entry[@"category"] isEqualToString:@"快捷动作"] ||
+            [entry[@"category"] isEqualToString:@"快捷方式"] ||
             [entry[@"category"] isEqualToString:@"URL链接"] ||
             [entry[@"category"] isEqualToString:@"脚本"]) linkCount++;
     }
