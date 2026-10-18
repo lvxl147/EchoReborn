@@ -30264,6 +30264,8 @@ static NSString *const kERMusicCapsuleInsetKey   = @"MusicCapsule.WidthInset";
 static NSString *const kERMusicCapsuleOffsetKey  = @"MusicCapsule.OffsetY";
 static NSString *const kERMusicCapsuleHeightKey  = @"MusicCapsule.Height";
 static NSString *const kERMusicCapsuleHideSystemKey = @"MusicCapsule.HideSystemNowPlaying";
+static NSString *const kERMusicCapsuleSwipeKey     = @"MusicCapsule.SwipeEnabled";   // 1.1.8-1（1.1.9-74 · 从 1.1.8-6 找回，1.1.8-9 误回退丢失）
+static NSString *const kERMusicCapsuleGlassKey     = @"MusicCapsule.LiquidGlassEnabled"; // 1.1.8-3（1.1.9-74 · 同上找回）
 
 #pragma mark - 音乐胶囊 · MediaRemote（运行时解析）
 
@@ -30275,6 +30277,9 @@ static void  (*ERMusic_MRRegisterForNowPlayingNotifications)(dispatch_queue_t) =
 
 // MRMediaRemoteCommand：TogglePlayPause == 2
 static const int kERMusicCommandTogglePlayPause = 2;
+// 1.1.8-1 · 滑动切歌命令（MPRemoteCommand 枚举：NextTrack=4 / PreviousTrack=5）（1.1.9-74 找回）
+static const int kERMusicCommandNextTrack     = 4;
+static const int kERMusicCommandPreviousTrack = 5;
 
 static NSString *const kERMusicMRTitle       = @"kMRMediaRemoteNowPlayingInfoTitle";
 static NSString *const kERMusicMRArtist      = @"kMRMediaRemoteNowPlayingInfoArtist";
@@ -30312,11 +30317,17 @@ static void ERMusicResolveMediaRemote(void) {
 @property (nonatomic, strong) UILabel            *artistLabel;
 @property (nonatomic, strong) UIButton           *playPauseButton;
 @property (nonatomic, assign) BOOL               playing;
+@property (nonatomic, assign) BOOL               swipeEnabled;          // 1.1.8-1（1.1.9-74 找回）
+@property (nonatomic, strong) UISwipeGestureRecognizer *swipeLeftGesture;
+@property (nonatomic, strong) UISwipeGestureRecognizer *swipeRightGesture;
+@property (nonatomic, assign) BOOL               liquidGlassEnabled;    // 1.1.8-3（1.1.9-74 找回）
+@property (nonatomic, strong) LGLiveBackdropView *glassView;
 @property (nonatomic, assign) CGFloat            capsuleHeight;
 - (void)setTitleText:(NSString *)title
           artistText:(NSString *)artist
              artwork:(UIImage *)artwork
              playing:(BOOL)playing;
+- (void)erMusicApplyBackgroundStyle;   // 1.1.8-3（1.1.9-74 找回；供 Manager 调用）
 @end
 
 // 柔和内阴影：even-odd 环形路径 + 圆角遮罩，只保留胶囊内部的一圈
@@ -30380,7 +30391,8 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     [self addSubview:clip];
     self.clipView = clip;
 
-    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleRegular];
+    // 1.1.8-3 · 去浅色态：固定深色材质（原 Regular 随系统深浅自动切换）（1.1.9-74 找回）
+    UIBlurEffect *effect = [UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark];
     UIVisualEffectView *blur = [[UIVisualEffectView alloc] initWithEffect:effect];
     blur.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     blur.frame = clip.bounds;
@@ -30448,6 +30460,18 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     [self addSubview:button];
     self.playPauseButton = button;
 
+    // 1.1.8-1 · 左/右滑动切歌手势（默认禁用，由 MusicCapsule.SwipeEnabled 开关控制）（1.1.9-74 找回）
+    UISwipeGestureRecognizer *swL = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(erMusicSwipePrev:)];
+    swL.direction = UISwipeGestureRecognizerDirectionLeft;
+    swL.enabled = NO;
+    [self addGestureRecognizer:swL];
+    self.swipeLeftGesture = swL;
+    UISwipeGestureRecognizer *swR = [[UISwipeGestureRecognizer alloc] initWithTarget:self action:@selector(erMusicSwipeNext:)];
+    swR.direction = UISwipeGestureRecognizerDirectionRight;
+    swR.enabled = NO;
+    [self addGestureRecognizer:swR];
+    self.swipeRightGesture = swR;
+
     return self;
 }
 
@@ -30456,6 +30480,11 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
 
     CGFloat h = self.bounds.size.height;
     CGFloat w = self.bounds.size.width;
+
+    // 1.1.8-5 · 液态玻璃帧跟随（仅开启态；glassView 在则刷新帧与滤镜）（1.1.9-74 找回）
+    if (self.liquidGlassEnabled && self.glassView && !self.glassView.hidden) {
+        self.glassView.frame = self.clipView.bounds;
+    }
     CGFloat r = h / 2.0;
 
     self.clipView.frame = self.bounds;
@@ -30536,10 +30565,91 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     [generator impactOccurred];
 }
 
+// 1.1.8-1 · 切歌命令发送（与播放/暂停同通道：MediaRemote MRMediaRemoteSendCommand）（1.1.9-74 找回）
+- (void)erMusicSendTrackCommand:(int)cmd {
+    ERMusicResolveMediaRemote();
+    if (ERMusic_MRSendCommand) {
+        ERMusic_MRSendCommand(cmd, nil, nil);
+    } else {
+        Class mediaControllerClass = NSClassFromString(@"SBMediaController");
+        if ([mediaControllerClass respondsToSelector:@selector(sharedInstance)]) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Warc-performSelector-leaks"
+            id mediaController = [mediaControllerClass performSelector:@selector(sharedInstance)];
+            SEL trackSel = (cmd == kERMusicCommandNextTrack) ? @selector(nextTrack) : @selector(previousTrack);
+            if ([mediaController respondsToSelector:trackSel]) {
+                [mediaController performSelector:trackSel];
+            }
+#pragma clang diagnostic pop
+        }
+    }
+    UIImpactFeedbackGenerator *generator =
+        [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
+    [generator impactOccurred];
+}
+
+- (void)erMusicSwipeNext:(id)sender {
+    [self erMusicSendTrackCommand:kERMusicCommandNextTrack];
+}
+
+- (void)erMusicSwipePrev:(id)sender {
+    [self erMusicSendTrackCommand:kERMusicCommandPreviousTrack];
+}
+
+// 1.1.8-3 · 背景样式应用：液态玻璃（控制中心同款 LGLiveBackdropView）⇄ 深色原始态
+// 1.1.8-5 · 状态写独立文件（主日志轮转吞日志）（1.1.9-74 找回）
+static void ERMusicGlassFileLog(NSString *line) {
+    @try {
+        FILE *f = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+        if (!f) f = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+        if (!f) return;
+        fprintf(f, "[GLASS] %s\n", line.UTF8String ?: "?");
+        fclose(f);
+    } @catch (__unused NSException *e) {}
+}
+
+- (void)erMusicApplyBackgroundStyle {
+    if (self.liquidGlassEnabled) {
+        if (!self.glassView) {
+            // 1.1.8-6 · 前缀必须是宿主注册表内的合法项（MusicCapsule 不在表内 → 工厂拒绝）。
+            //   用户指定"控制中心这套渲染" → 使用 ControlCenter 宿主（filter: echoreborn.liquidglass.cc）
+            LGLiveBackdropView *g = LGCreateRegisteredGlass(self.clipView.bounds, nil, @"ControlCenter");
+            if (!g) {
+                ERMusicGlassFileLog(@"LGCreateRegisteredGlass 返回 nil！（工厂失败）");
+                ERLogInfo(@"MUSICCAPSULE LGCreateRegisteredGlass 返回 nil");
+                return;
+            }
+            g.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+            g.userInteractionEnabled = NO;
+            g.layer.cornerRadius = self.clipView.layer.cornerRadius;
+            if (@available(iOS 13.0, *)) g.layer.cornerCurve = self.clipView.layer.cornerCurve;
+            g.layer.masksToBounds = YES;
+            [self.clipView insertSubview:g atIndex:0];
+            self.glassView = g;
+            lgTrackGlass(g, @"ControlCenter", self);
+            ERMusicGlassFileLog([NSString stringWithFormat:@"玻璃已创建 %@ frame=%@", g, NSStringFromCGRect(g.frame)]);
+        }
+        self.glassView.frame = self.clipView.bounds;
+        self.glassView.hidden = NO;
+        [self.glassView applyFilters];
+        self.blurView.hidden = YES;
+        self.tintView.hidden = YES;
+        ERLogInfo(@"MUSICCAPSULE 背景已切液态玻璃");
+    } else {
+        self.glassView.hidden = YES;
+        self.blurView.hidden = NO;
+        self.tintView.hidden = NO;
+    }
+}
+
 // 胶囊空白处不拦截触摸，透传给下层锁屏
+// 1.1.8-2 · 滑动切歌开启时改为胶囊自身接收触摸 —— 否则手势收不到触摸（1.1.8-1 手势无反应根因）
 - (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
     UIView *view = [super hitTest:point withEvent:event];
-    if (view == self) { return nil; }
+    if (view == self) {
+        if (self.swipeEnabled) return self;   // 供滑动手势识别
+        return nil;
+    }
     return view;
 }
 
@@ -30620,6 +30730,14 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     self.offsetY = ERPreferenceDouble(kERMusicCapsuleOffsetKey, 0.0);
     self.capsuleHeight = ERPreferenceDouble(kERMusicCapsuleHeightKey, 56.0);
     self.hideSystemNowPlaying = ERPreferenceBool(kERMusicCapsuleHideSystemKey, YES);
+    // 1.1.8-1 · 滑动切歌开关 → 手势启停（作用于胶囊视图）（1.1.9-74 找回）
+    BOOL swipeOn = ERPreferenceBool(kERMusicCapsuleSwipeKey, NO);
+    self.capsule.swipeEnabled = swipeOn;
+    self.capsule.swipeLeftGesture.enabled  = swipeOn;
+    self.capsule.swipeRightGesture.enabled = swipeOn;
+    // 1.1.8-3 · 液态玻璃背景开关（1.1.9-74 找回；与 1.1.8-6 原语义一致，每次重读都应用）
+    self.capsule.liquidGlassEnabled = ERPreferenceBool(kERMusicCapsuleGlassKey, NO);
+    [self.capsule erMusicApplyBackgroundStyle];
     _prefsLoadedAt = CACurrentMediaTime();
 }
 
@@ -30815,6 +30933,44 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
             if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
         }
     }
+    // 1.1.7-7 · 【iOS 17.2 实锤规则】系统音乐卡 = NCNotificationListView 内顶部的
+    //   Live Activity 卡片（MC-FULLDUMP 实测：402×167 @ y=571）。识别特征：
+    //   CSActivityItemContentView（宽>380、高 120~220）且子树含 _UIScenePresentationView
+    //   （Live Activity 的 SwiftUI 场景，普通通知没有）→ 隐藏其所在 NCNotificationListCell。
+    //   （1.1.9-74 · 从 1.1.8-6 找回，1.1.8-9 误回退丢失）
+    {
+        NSMutableArray<UIView *> *q2 = [NSMutableArray arrayWithObject:root];
+        NSInteger g2 = 0;
+        while (q2.count && g2++ < 6000) {
+            UIView *v = q2.firstObject;
+            [q2 removeObjectAtIndex:0];
+            if ([NSStringFromClass(v.class) isEqualToString:@"CSActivityItemContentView"]) {
+                CGFloat w = CGRectGetWidth(v.frame), h = CGRectGetHeight(v.frame);
+                if (w > 380.0 && h > 120.0 && h < 220.0) {
+                    NSMutableArray<UIView *> *q3 = [NSMutableArray arrayWithObject:v];
+                    NSInteger g3 = 0;
+                    BOOL hasScene = NO;
+                    while (q3.count && g3++ < 1200) {
+                        UIView *x = q3.firstObject;
+                        [q3 removeObjectAtIndex:0];
+                        if ([NSStringFromClass(x.class) isEqualToString:@"_UIScenePresentationView"]) { hasScene = YES; break; }
+                        [q3 addObjectsFromArray:x.subviews];
+                    }
+                    if (hasScene) {
+                        UIView *cell = v.superview;
+                        while (cell && ![NSStringFromClass(cell.class) isEqualToString:@"NCNotificationListCell"]) cell = cell.superview;
+                        if (cell && ![candidates containsObject:cell]) {
+                            [candidates addObject:cell];
+                            ERLogInfo(@"MUSICCAPSULE 命中 iOS17.2 媒体卡（CSActivityItemContentView %dx%d）",
+                                      (int)w, (int)h);
+                        }
+                        continue;
+                    }
+                }
+            }
+            [q2 addObjectsFromArray:v.subviews];
+        }
+    }
     return candidates;
 }
 
@@ -30973,6 +31129,18 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
         ERMusic_MRGetNowPlayingInfo(dispatch_get_main_queue(), ^(NSDictionary *info) {
             dispatch_async(dispatch_get_main_queue(), ^{ apply(info); });
         });
+        // 1.1.8-2 · 切歌后系统重建媒体卡（新 cell hidden=NO）→ 延时两次再断言隐藏（1.1.9-74 找回）
+        __block typeof(self) blockSelf = self;
+        void (^rehide)(void) = ^{
+            @try {
+                UIView *root = blockSelf.coverSheetController.view;
+                if (root) [blockSelf applySystemNowPlayingHiddenInRoot:root];
+            } @catch (__unused NSException *e) {}
+        };
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), rehide);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), rehide);
         return;
     }
 
@@ -31018,6 +31186,49 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
 
 - (void)viewDidAppear:(BOOL)animated {
     %orig;
+    // 1.1.1 · 钩子命中标记：证明 CSCoverSheetViewController 在本机 iOS 上存在且被钩到（1.1.9-74 找回）
+    static BOOL erMCHitLogged = NO;
+    if (!erMCHitLogged) {
+        erMCHitLogged = YES;
+        ERLogInfo(@"MC-HIT coverSheet viewDidAppear gEnabled=%d", gEnabled ? 1 : 0);
+    }
+    // 1.1.7-6 · dump 可重试 3 次（每次锁屏 viewDidAppear 都排一个，8s 后执行）；
+    //   文件追加模式累积，用于定位系统音乐卡的真实视图层级（1.1.9-74 找回）。
+    static NSInteger erMCFullDumpCount = 0;
+    if (erMCFullDumpCount < 3) {
+        erMCFullDumpCount++;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            @try {
+                FILE *df = fopen("/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+                if (!df) df = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-mcful.log", "a");
+                if (!df) return;
+                fprintf(df, "MC-FULLDUMP begin\n");
+                for (UIWindow *w in ERAllApplicationWindows()) {
+                    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:w];
+                    NSInteger guardF = 0, loggedF = 0;
+                    while (stack.count && guardF++ < 40000 && loggedF < 1200) {
+                        UIView *v = stack.lastObject;
+                        [stack removeLastObject];
+                        if ([v isKindOfClass:[ERMusicCapsuleView class]]) continue;
+                        NSString *cn = NSStringFromClass(v.class);
+                        CGRect r = [v convertRect:v.bounds toView:w];
+                        if (r.size.width >= 40.0 && r.size.height >= 10.0) {
+                            fprintf(df, "[%s] %s frame=%s%s\n",
+                                    NSStringFromClass(w.class).UTF8String ?: "?",
+                                    cn.UTF8String ?: "?",
+                                    NSStringFromCGRect(r).UTF8String ?: "?",
+                                    v.hidden ? " HID" : "");
+                            loggedF++;
+                        }
+                        [stack addObjectsFromArray:v.subviews];
+                    }
+                }
+                fprintf(df, "MC-FULLDUMP end\n");
+                fclose(df);
+            } @catch (__unused NSException *e) {}
+        });
+    }
     if (!gEnabled) return;
     ERMusicCapsuleManager *manager = [ERMusicCapsuleManager shared];
     manager.coverSheetController = self;
@@ -31646,6 +31857,22 @@ static BOOL ERCCRecordNoDelayEnabled(void) {
     } @catch (...) { return NO; }
 }
 
+// 1.1.5 · RCP 日志钩子改标准姿势：MSHookMessageEx 第 4 参捕获 orig IMP 并调用。
+//   【1.1.4 事故复盘】此前用 objc_msgSendSuper 转发，但 startRecording 是
+//   RCPScreenRecorder 自己实现的（父类没有）→ 任何调用直接 unrecognized selector
+//   → SpringBoard 崩溃循环 → 安全模式。教训：替换实现必须捕获并调用 orig。
+//   （1.1.9-74 · 从 1.1.8-6 找回，1.1.8-9 误回退丢失）
+static void (*origRCPStart)(id, SEL);
+static void (*origRCPStop)(id, SEL);
+static void ERRCPStartLog(id self, SEL _cmd) {
+    ERLogInfo(@"RCP-TIMELINE startRecording t=%.3f", CACurrentMediaTime());
+    if (origRCPStart) origRCPStart(self, _cmd);
+}
+static void ERRCPStopLog(id self, SEL _cmd) {
+    ERLogInfo(@"RCP-TIMELINE stopRecording t=%.3f", CACurrentMediaTime());
+    if (origRCPStop) origRCPStop(self, _cmd);
+}
+
 // 1.0.9-179 · 多宿主 orig 映射：扫描可能发现多个实现 startRecordingCountdown 的类，
 //   每类各自的 orig 存表，替换函数按 self 的实际类回查（查不到沿父类链回退）。
 #define ERCCREC_MAX_HOSTS 8
@@ -31670,24 +31897,35 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
     }
     ERLogInfo(@"CC-RECORD 无延迟开录：跳过倒计时（宿主=%@）", NSStringFromClass(object_getClass(self)));
     @try {
-        // 跳过 3 秒倒计时，直接走系统开始录屏路径（带 handler 的原签名，granted 回调空实现）
-        if ([self respondsToSelector:@selector(startRecordingWithHandler:)]) {
-            ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(startRecordingWithHandler:), ^(BOOL granted){});
-        } else if ([self respondsToSelector:@selector(startRecord)]) {
-            ((void (*)(id, SEL))objc_msgSend)(self, @selector(startRecord));
+        // 1.1.7-4 · 用户需求时序：点录屏 → 【先收起 CC】→ 收起后才开始录屏（不录到 CC 画面）。
+        //   ① 立即收起控制中心：SBControlCenterController sharedInstance dismissAnimated:YES
+        //     （1.1.7-3 探测实锤：RPControlCenterClient 不响应 dismissAnimated:，
+        //      SBControlCenterController 有 +sharedInstance + -dismissAnimated:）
+        //   （1.1.9-74 · 从 1.1.8-6 找回，1.1.8-9 误回退丢失）
+        Class sbcc = objc_getClass("SBControlCenterController");
+        id inst = sbcc ? ((id (*)(id, SEL))objc_msgSend)(sbcc, @selector(sharedInstance)) : nil;
+        if (inst && [(id)inst respondsToSelector:@selector(dismissAnimated:)]) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(inst, @selector(dismissAnimated:), YES);
+            ERLogInfo(@"CC-RECORD 控制中心已发起收起（SBCC sharedInstance）");
         } else {
-            ((void (*)(id, SEL))orig)(self, _cmd);
-            return;
+            ERLogInfo(@"CC-RECORD SBCC sharedInstance/dismissAnimated 不可用，跳过收起");
         }
-        // 自动收起控制中心：0.25s 后 dismissAnimated:YES（保留系统默认动画，非瞬间关闭）
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+        // ② 收起动画走 0.4s 后再开录 —— 录屏从收起后的画面开始
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             @try {
-                if ([self respondsToSelector:@selector(dismissAnimated:)]) {
-                    ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(dismissAnimated:), @YES);
-                    ERLogInfo(@"CC-RECORD 控制中心已自动收起（动画）");
+                if ([self respondsToSelector:@selector(startRecordingWithHandler:)]) {
+                    ((void (*)(id, SEL, id))objc_msgSend)(self, @selector(startRecordingWithHandler:), ^(BOOL granted){});
+                    ERLogInfo(@"CC-RECORD 已开录（CC 收起后）");
+                } else if ([self respondsToSelector:@selector(startRecord)]) {
+                    ((void (*)(id, SEL))objc_msgSend)(self, @selector(startRecord));
+                    ERLogInfo(@"CC-RECORD 已开录（startRecord 路径）");
+                } else if (orig) {
+                    ((void (*)(id, SEL))orig)(self, _cmd);
                 }
-            } @catch (__unused NSException *e) {}
+            } @catch (__unused NSException *e173) {
+                if (orig) ((void (*)(id, SEL))orig)(self, _cmd);
+            }
         });
     } @catch (__unused NSException *e) {
         // 兜底：任何异常回退原生倒计时路径
@@ -32280,6 +32518,9 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
             ERLogRecord(@"WARN", @"ctor: EchoReborn disabled, no hooks installed");
             return;
         }
+        // 1.1.1 · 主开关读值显式落盘：录屏无延迟/隐藏锁屏音乐都挂在本开关之后（1.1.9-74 找回）。
+        ERLogInfo(@"ctor: master switch Enabled=%d quick=%d logging=%d",
+                  gEnabled ? 1 : 0, gQuickAccessButtonsEnabled ? 1 : 0, gERLoggingEnabled ? 1 : 0);
         // 1.0.9-175 · 录屏无延迟：运行时探测 SBControlCenterController 的 startRecordingCountdown
         //   （方法在才挂，参考 CCRecordNoDelay 同类名同选择器；方法不在时零副作用）
         {
@@ -32294,6 +32535,25 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
                 ERLogInfo(@"CC-RECORD 类或方法缺失（class=%@ has=%d），录屏无延迟不可用",
                           ccc ? NSStringFromClass(ccc) : @"(nil)",
                           (int)(ccc && [ccc instancesRespondToSelector:selCD]));
+            }
+            // 1.1.4 · RCPScreenRecorder 日志钩子（RCP-TIMELINE 时间线，orig 透传）（1.1.9-74 找回）
+            {
+                Class rcp = objc_getClass("RCPScreenRecorder");
+                if (rcp) {
+                    static dispatch_once_t onceRCP;
+                    dispatch_once(&onceRCP, ^{
+                        SEL sStart = NSSelectorFromString(@"startRecording");
+                        SEL sStop = NSSelectorFromString(@"stopRecording");
+                        if ([rcp instancesRespondToSelector:sStart]) {
+                            MSHookMessageEx(rcp, sStart, (IMP)ERRCPStartLog, (IMP *)&origRCPStart);
+                            ERLogInfo(@"RCP-HOOK startRecording 已挂（orig 透传）");
+                        }
+                        if ([rcp instancesRespondToSelector:sStop]) {
+                            MSHookMessageEx(rcp, sStop, (IMP)ERRCPStopLog, (IMP *)&origRCPStop);
+                            ERLogInfo(@"RCP-HOOK stopRecording 已挂（orig 透传）");
+                        }
+                    });
+                }
             }
             // 1.0.9-179 · **周期自配置扫描**：v176-178 证明 ctor 期扫描会崩（消息转发/懒加载类），
             //   且一次性扫描的日志总赶不上日志轮转抓不到。改为启动后 5s 起每 60s 扫一遍
