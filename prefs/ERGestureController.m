@@ -234,8 +234,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 
     // 1.2.0-7 · 下拉框箭头：独立 SF Symbol（chevron.down），尺寸放大到原字符 ⌄ 的
     // 约 1.5 倍，且在按钮内垂直水平居中于右侧固定槽位（不再跟文字基线走）。
+    // 1.2.0-9 · 用户反馈箭头再缩小（"10 改 8"的比例）：15pt → 12pt。
     UIImageSymbolConfiguration *chevCfg = [UIImageSymbolConfiguration
-        configurationWithPointSize:15.0 weight:UIImageSymbolWeightSemibold];
+        configurationWithPointSize:12.0 weight:UIImageSymbolWeightSemibold];
     UIImage *chev = [UIImage systemImageNamed:@"chevron.down" withConfiguration:chevCfg];
     _chevron = [[UIImageView alloc] initWithImage:chev];
     _chevron.tintColor = [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0];
@@ -255,10 +256,11 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     CGFloat left = self.contentView.layoutMargins.left;
     _icon.frame = CGRectMake(left, (h - 27) / 2.0, 27, 27);
 
-    CGFloat chevW = 16.0;
+    CGFloat chevW = 14.0;
     CGSize ts = [_title.text sizeWithAttributes:@{NSFontAttributeName: _title.font}];
     CGFloat pad = 10.0;
-    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 6.0, 76.0), 170.0);
+    // 1.2.0-9 · 容差 6→14、上限 170→190：修「第…页」文本被截断。
+    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 14.0, 76.0), 190.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
