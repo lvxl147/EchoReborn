@@ -31998,14 +31998,26 @@ static NSInteger ERSPGProbePageCount(void) {
     id ic = ERSPGIconController();
     if (!ic) return -1;
     NSArray *lists = nil;
+    NSString *via = nil;
     if ([ic respondsToSelector:@selector(iconLists)]) {
         lists = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(iconLists));
+        via = @"iconLists";
     } else if ([ic respondsToSelector:@selector(_iconLists)]) {
         lists = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(_iconLists));
+        via = @"_iconLists";
     } else if ([ic respondsToSelector:@selector(iconListsForOrientation:)]) {
         lists = ((id (*)(id, SEL, NSInteger))objc_msgSend)(ic, @selector(iconListsForOrientation:), 1);
+        via = @"iconListsForOrientation:";
     }
-    return lists.count >= 1 ? (NSInteger)lists.count : -1;
+    NSInteger cnt = lists.count >= 1 ? (NSInteger)lists.count : -1;
+    // 1.2.0-7 · 诊断：探测结果（首次/变化时记一条）
+    static NSInteger sERSPGLastLogged = -999;
+    if (cnt != sERSPGLastLogged) {
+        sERSPGLastLogged = cnt;
+        ERLogInfo(@"SPG-PAGE probe=%ld via=%@ listsClass=%@", (long)cnt, via,
+                  lists ? NSStringFromClass(lists.class) : @"nil");
+    }
+    return cnt;
 }
 
 // 跳页：候选链 ① setCurrentIconListIndex: ② _setCurrentIconListIndex:
@@ -32030,8 +32042,15 @@ static void ERSPGJumpToPage(NSInteger page1based) {
         } else if ([ic respondsToSelector:@selector(_scrollToIconListIndex:animated:)]) {
             gERSPGJumpSel = @selector(_scrollToIconListIndex:animated:); gERSPGJumpTwoArg = YES;
         }
+        // 1.2.0-7 · 诊断：跳页 selector 首次命中结果
+        ERLogInfo(@"SPG-JUMP sel=%@ twoArg=%d",
+                  gERSPGJumpSel ? NSStringFromSelector(gERSPGJumpSel) : @"(none matched)",
+                  gERSPGJumpTwoArg ? 1 : 0);
     }
     if (!gERSPGJumpSel) return;
+    // 1.2.0-7 · 诊断：每次实际跳页
+    ERLogInfo(@"SPG-JUMP call page=%ld sel=%@", (long)page1based,
+              NSStringFromSelector(gERSPGJumpSel));
     if (gERSPGJumpTwoArg) {
         ((void (*)(id, SEL, NSInteger, BOOL))objc_msgSend)(ic, gERSPGJumpSel, idx, YES);
     } else {
@@ -32072,6 +32091,8 @@ static void ERSPGHaptic(void) {
             default: return;
         }
         NSInteger page = ERSPGInt(key, 0);
+        // 1.2.0-7 · 诊断：手势触发即记（区分「手势没触发」与「触发了但跳页没效果」）
+        ERLogInfo(@"SPG-SWIPE dir=0x%lx page=%ld", (unsigned long)gesture.direction, (long)page);
         if (page < 1) return;   // 无动作 = 系统默认
         ERSPGHaptic();
         ERSPGJumpToPage(page);
@@ -32099,6 +32120,10 @@ static void ERSPGConfigurePill(UIView *pill) {
     BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
     NSMutableArray *recs = objc_getAssociatedObject(pill, kERSPGPillRecognizersKey);
     if (!recs) {
+        // 1.2.0-7 · 诊断：胶囊首次命中并挂手势
+        ERLogInfo(@"SPG-PILL found %@ frame=%@ enabled=%d",
+                  NSStringFromClass(pill.class),
+                  NSStringFromCGRect(pill.frame), enabled ? 1 : 0);
         recs = [NSMutableArray array];
         ERSPGSwipeTarget *target = [ERSPGSwipeTarget shared];
         NSDictionary *cfg = @{
@@ -32120,15 +32145,45 @@ static void ERSPGConfigurePill(UIView *pill) {
     for (UISwipeGestureRecognizer *g in recs) g.enabled = enabled;
 }
 
+// 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
+// iOS 17 真实翻页 API 未知（候选链可能全未命中 = 页数不对 + 跳页无效），
+// 把方法列表里带 Page/List/Scroll 字样的 selector 全记进日志，实锤后改候选链。
+static BOOL gERSPGDumped = NO;
+static void ERSPGDumpSelectors(void) {
+    if (gERSPGDumped) return;
+    gERSPGDumped = YES;
+    id ic = ERSPGIconController();
+    if (!ic) { ERLogInfo(@"SPG-DUMP no SBIconController"); return; }
+    NSMutableArray<NSString *> *hits = [NSMutableArray array];
+    unsigned int n = 0;
+    Method *ms = class_copyMethodList(object_getClass(ic), &n);
+    for (unsigned int i = 0; i < n; i++) {
+        NSString *name = NSStringFromSelector(method_getName(ms[i]));
+        if ([name rangeOfString:@"age" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [name rangeOfString:@"ist" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+            [name rangeOfString:@"croll" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+            [hits addObject:name];
+        }
+    }
+    if (ms) free(ms);
+    ERLogInfo(@"SPG-DUMP SBIconController page/list/scroll selectors (%lu): %@",
+              (unsigned long)hits.count,
+              [hits componentsJoinedByString:@", "]);
+}
+
 // 周期扫描（主线程）：找到搜索胶囊 → 挂/启停手势；顺手把探测到的桌面页数写进
 // 共享偏好（设置页下拉框的「第1页…第N页」来源）。
 static void ERSPGScanTick(void) {
     @try {
+        ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
         if (cnt >= 1) {
             NSInteger cached = ERSPGInt(@"HomeScreen.PageCount", 0);
-            if (cached != cnt) ERSPGSetInt(@"HomeScreen.PageCount", cnt);
+            if (cached != cnt) {
+                ERSPGSetInt(@"HomeScreen.PageCount", cnt);
+                ERLogInfo(@"SPG-PAGE publish PageCount=%ld", (long)cnt);
+            }
         }
         BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
         if (!enabled) return;   // 已挂过的识别器由 ConfigurePill 的 enabled 开关管理；
@@ -32153,6 +32208,14 @@ static void ERSPGScanTick(void) {
                 }
                 [stack addObjectsFromArray:v.subviews];
             }
+        }
+        // 1.2.0-7 · 诊断：整轮没找到胶囊，30s 节流记一条（区分「没找到胶囊」与
+        // 「找到了但手势没触发」）
+        static NSTimeInterval sERSPGLastMiss = 0;
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - sERSPGLastMiss > 30.0) {
+            sERSPGLastMiss = now;
+            ERLogInfo(@"SPG-SCAN pill NOT found (roots=%lu)", (unsigned long)roots.count);
         }
     } @catch (__unused NSException *e) {}
 }
