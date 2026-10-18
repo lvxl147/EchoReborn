@@ -31950,6 +31950,212 @@ static void ERCCRecordStartNoDelay(id self, SEL _cmd) {
     }
 }
 
+#pragma mark - 桌面胶囊手势（1.2.0-1）
+
+// 桌面搜索胶囊的四向滑动跳页。设计要点：
+//   · 识别目标 = SBIconController 视图树里类名含 "Search" 的胶囊形控件（宽 90~280、高 24~70）。
+//     iOS 16/17 的搜索胶囊类名随版本变化，这里按特征匹配并挂 UISwipeGestureRecognizer×4，
+//     单击事件天然不受滑动手势影响（无动作 = 完全系统默认）。
+//   · 跳页 = SBIconController 的翻页选择器，运行时按候选链探测并缓存（iOS 版本间选择器名
+//     有差异，全部命中失败则静默不动，不影响系统）。
+//   · 页数 = iconLists 数量，写入共享键 HomeScreen.PageCount 供设置页下拉框使用。
+//   · 偏好键（域 com.strive.echoreborn.preferences）：
+//       HomeScreen.SearchPill.Enabled          总开关（默认 NO）
+//       HomeScreen.SearchPill.GestureUp/Down/Left/Right   0=无动作，n=第n页
+//       HomeScreen.SearchPill.HapticEnabled    震动开关（默认 YES）
+//       HomeScreen.SearchPill.HapticStrength   0=轻 1=中 2=重（默认 1）
+static NSString *const kERSPGDomain = @"com.strive.echoreborn.preferences";
+static NSString *const kERSPGReload = @"com.strive.echoreborn/ReloadPrefs";
+
+static NSInteger ERSPGInt(NSString *key, NSInteger defVal) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERSPGDomain);
+    Boolean ok = NO;
+    CFIndex v = CFPreferencesGetAppIntegerValue((__bridge CFStringRef)key,
+                                                (__bridge CFStringRef)kERSPGDomain, &ok);
+    return ok ? (NSInteger)v : defVal;
+}
+
+static BOOL ERSPGBool(NSString *key, BOOL defVal) {
+    return ERSPGInt(key, defVal ? 1 : 0) != 0;
+}
+
+static void ERSPGSetInt(NSString *key, NSInteger value) {
+    CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFNumberRef)@(value),
+                             (__bridge CFStringRef)kERSPGDomain);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERSPGDomain);
+}
+
+// SBIconController.sharedInstance —— 各 helper 共用。
+static id ERSPGIconController(void) {
+    Class cls = objc_getClass("SBIconController");
+    if (!cls) return nil;
+    if (![cls respondsToSelector:@selector(sharedInstance)]) return nil;
+    return ((id (*)(id, SEL))objc_msgSend)(cls, @selector(sharedInstance));
+}
+
+// 桌面页数探测：iconLists / _iconLists / iconListsForOrientation: 候选链。
+static NSInteger ERSPGProbePageCount(void) {
+    id ic = ERSPGIconController();
+    if (!ic) return -1;
+    NSArray *lists = nil;
+    if ([ic respondsToSelector:@selector(iconLists)]) {
+        lists = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(iconLists));
+    } else if ([ic respondsToSelector:@selector(_iconLists)]) {
+        lists = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(_iconLists));
+    } else if ([ic respondsToSelector:@selector(iconListsForOrientation:)]) {
+        lists = ((id (*)(id, SEL, NSInteger))objc_msgSend)(ic, @selector(iconListsForOrientation:), 1);
+    }
+    return lists.count >= 1 ? (NSInteger)lists.count : -1;
+}
+
+// 跳页：候选链 ① setCurrentIconListIndex: ② _setCurrentIconListIndex:
+//       ③ scrollToIconListIndex:animated: ④ _scrollToIconListIndex:animated:
+// 命中即缓存，后续零探测开销。
+static SEL gERSPGJumpSel = NULL;
+static BOOL gERSPGJumpTwoArg = NO;
+
+static void ERSPGJumpToPage(NSInteger page1based) {
+    if (page1based < 1) return;
+    NSInteger idx = page1based - 1;
+    id ic = ERSPGIconController();
+    if (!ic) return;
+
+    if (!gERSPGJumpSel) {
+        if ([ic respondsToSelector:@selector(setCurrentIconListIndex:)]) {
+            gERSPGJumpSel = @selector(setCurrentIconListIndex:); gERSPGJumpTwoArg = NO;
+        } else if ([ic respondsToSelector:@selector(_setCurrentIconListIndex:)]) {
+            gERSPGJumpSel = @selector(_setCurrentIconListIndex:); gERSPGJumpTwoArg = NO;
+        } else if ([ic respondsToSelector:@selector(scrollToIconListIndex:animated:)]) {
+            gERSPGJumpSel = @selector(scrollToIconListIndex:animated:); gERSPGJumpTwoArg = YES;
+        } else if ([ic respondsToSelector:@selector(_scrollToIconListIndex:animated:)]) {
+            gERSPGJumpSel = @selector(_scrollToIconListIndex:animated:); gERSPGJumpTwoArg = YES;
+        }
+    }
+    if (!gERSPGJumpSel) return;
+    if (gERSPGJumpTwoArg) {
+        ((void (*)(id, SEL, NSInteger, BOOL))objc_msgSend)(ic, gERSPGJumpSel, idx, YES);
+    } else {
+        ((void (*)(id, SEL, NSInteger))objc_msgSend)(ic, gERSPGJumpSel, idx);
+    }
+}
+
+static void ERSPGHaptic(void) {
+    if (!ERSPGBool(@"HomeScreen.SearchPill.HapticEnabled", YES)) return;
+    NSInteger s = ERSPGInt(@"HomeScreen.SearchPill.HapticStrength", 1);
+    UIImpactFeedbackStyle style = (s <= 0) ? UIImpactFeedbackStyleLight
+                                           : (s == 1 ? UIImpactFeedbackStyleMedium
+                                                     : UIImpactFeedbackStyleHeavy);
+    [[UIImpactFeedbackGenerator alloc] initWithStyle:style] impactOccurred];
+}
+
+@interface ERSPGSwipeTarget : NSObject
+- (void)erHandleSwipe:(UISwipeGestureRecognizer *)gesture;
+@end
+
+@implementation ERSPGSwipeTarget
++ (instancetype)shared {
+    static ERSPGSwipeTarget *t = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ t = [[ERSPGSwipeTarget alloc] init]; });
+    return t;
+}
+- (void)erHandleSwipe:(UISwipeGestureRecognizer *)gesture {
+    @try {
+        if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) return;
+        NSString *key = nil;
+        switch (gesture.direction) {
+            case UISwipeGestureRecognizerDirectionUp:    key = @"HomeScreen.SearchPill.GestureUp";    break;
+            case UISwipeGestureRecognizerDirectionDown:  key = @"HomeScreen.SearchPill.GestureDown";  break;
+            case UISwipeGestureRecognizerDirectionLeft:  key = @"HomeScreen.SearchPill.GestureLeft";  break;
+            case UISwipeGestureRecognizerDirectionRight: key = @"HomeScreen.SearchPill.GestureRight"; break;
+            default: return;
+        }
+        NSInteger page = ERSPGInt(key, 0);
+        if (page < 1) return;   // 无动作 = 系统默认
+        ERSPGHaptic();
+        ERSPGJumpToPage(page);
+    } @catch (__unused NSException *e) {}
+}
+@end
+
+static const void *kERSPGPillRecognizersKey = &kERSPGPillRecognizersKey;
+
+// 目标判定：类名含 "Search" 的胶囊形控件（iOS 16/17 搜索胶囊类名有版本差异，
+// 按类名特征 + 尺寸闸门匹配，避免误挂到别的东西上）。
+static BOOL ERSPGLooksLikePill(UIView *v) {
+    NSString *cn = NSStringFromClass(v.class);
+    if ([cn rangeOfString:@"Search"].location == NSNotFound) return NO;
+    if ([cn rangeOfString:@"Button"].location == NSNotFound &&
+        [cn rangeOfString:@"Affordance"].location == NSNotFound &&
+        [cn rangeOfString:@"Pill"].location == NSNotFound &&
+        [cn rangeOfString:@"Suggestion"].location == NSNotFound) return NO;
+    CGFloat w = CGRectGetWidth(v.frame), h = CGRectGetHeight(v.frame);
+    if (w < 90.0 || w > 280.0 || h < 24.0 || h > 70.0) return NO;
+    return YES;
+}
+
+static void ERSPGConfigurePill(UIView *pill) {
+    BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
+    NSMutableArray *recs = objc_getAssociatedObject(pill, kERSPGPillRecognizersKey);
+    if (!recs) {
+        recs = [NSMutableArray array];
+        ERSPGSwipeTarget *target = [ERSPGSwipeTarget shared];
+        NSDictionary *cfg = @{
+            @(UISwipeGestureRecognizerDirectionUp):    @"up",
+            @(UISwipeGestureRecognizerDirectionDown):  @"down",
+            @(UISwipeGestureRecognizerDirectionLeft):  @"left",
+            @(UISwipeGestureRecognizerDirectionRight): @"right",
+        };
+        [cfg enumerateKeysAndObjectsUsingBlock:^(NSNumber *dirNum, NSString *name, BOOL *stop) {
+            UISwipeGestureRecognizer *g = [[UISwipeGestureRecognizer alloc]
+                initWithTarget:target action:@selector(erHandleSwipe:)];
+            g.direction = (UISwipeGestureRecognizerDirection)dirNum.integerValue;
+            g.delegate = nil;
+            [pill addGestureRecognizer:g];
+            [recs addObject:g];
+        }];
+        objc_setAssociatedObject(pill, kERSPGPillRecognizersKey, recs, OBJC_ASSOCIATION_RETAIN);
+    }
+    for (UISwipeGestureRecognizer *g in recs) g.enabled = enabled;
+}
+
+// 周期扫描（主线程）：找到搜索胶囊 → 挂/启停手势；顺手把探测到的桌面页数写进
+// 共享偏好（设置页下拉框的「第1页…第N页」来源）。
+static void ERSPGScanTick(void) {
+    @try {
+        // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
+        NSInteger cnt = ERSPGProbePageCount();
+        if (cnt >= 1) {
+            NSInteger cached = ERSPGInt(@"HomeScreen.PageCount", 0);
+            if (cached != cnt) ERSPGSetInt(@"HomeScreen.PageCount", cnt);
+        }
+        BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
+        if (!enabled) return;   // 已挂过的识别器由 ConfigurePill 的 enabled 开关管理；
+                                // 关闭态无需每 5s 白扫，等开启后的下一个 tick 自然恢复。
+        // 先扫 SBIconController 视图树（胶囊就在其中），再兜底全窗口。
+        NSMutableArray<UIView *> *roots = [NSMutableArray array];
+        id ic = ERSPGIconController();
+        if (ic && [ic respondsToSelector:@selector(view)]) {
+            UIView *root = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(view));
+            if (root) [roots addObject:root];
+        }
+        for (UIWindow *win in ERAllApplicationWindows()) [roots addObject:win];
+        for (UIView *root in roots) {
+            NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+            NSInteger guard = 0;
+            while (stack.count && guard++ < 3000) {
+                UIView *v = stack.lastObject;
+                [stack removeLastObject];
+                if (ERSPGLooksLikePill(v)) {
+                    ERSPGConfigurePill(v);
+                    return;   // 一台设备只有一个搜索胶囊，命中即止
+                }
+                [stack addObjectsFromArray:v.subviews];
+            }
+        }
+    } @catch (__unused NSException *e) {}
+}
+
 // ===== 1.1.0e · 岛容器 screenBlend（纯 C 手动 swizzle，目标类对照 LiquidAss 维护版实锤）=====
 // 决定性证据（2026-10-12 泽哥维护版 dylv.liquidass 2-0.1.1-2c+island136 运行日志）：
 //   [LiquidAss] screenBlend applied on _SBSystemApertureContainerViewScalingContentView
@@ -32583,6 +32789,22 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
                 });
             }
             ERLogInfo(@"ctor: CC-RECORD init done (1.1.7-2 host=RPControlCenterClient)");
+            // 1.2.0-1 · 桌面胶囊手势：主线程周期扫描（respring 后 8s 起每 5s 一轮），
+            //   负责搜索胶囊识别/挂手势 + 桌面页数发布（HomeScreen.PageCount）。
+            {
+                dispatch_source_t spgTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                                    dispatch_get_main_queue());
+                if (spgTimer) {
+                    dispatch_source_set_timer(spgTimer,
+                                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                                              (uint64_t)(5.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
+                    __block dispatch_source_t keepSPG = spgTimer;
+                    dispatch_source_set_event_handler(spgTimer, ^{
+                        @autoreleasepool { ERSPGScanTick(); }
+                    });
+                    dispatch_resume(spgTimer);
+                }
+            }
             // 1.1.4 · RCPScreenRecorder 日志钩子（RCP-TIMELINE 时间线，orig 透传）（1.1.9-74 找回）
             {
                 Class rcp = objc_getClass("RCPScreenRecorder");
