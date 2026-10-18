@@ -20,6 +20,10 @@ static NSString *const kERGestureSuite = @"com.strive.echoreborn.preferences";
 static NSString *const kERGestureReload = @"com.strive.echoreborn/ReloadPrefs";
 static NSString *const kERGestureValueCellClassName = @"ERGestureValueCell";
 
+static void ERGPrefsLog(NSString *format, ...);
+static void ERGCrashWrite(NSString *header);
+static void ERGUncaughtHandler(NSException *exception);
+
 static NSInteger ERGesturePageCount(void) {
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
     Boolean ok = NO;
