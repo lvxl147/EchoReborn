@@ -20,9 +20,9 @@ static NSString *const kERGestureSuite = @"com.strive.echoreborn.preferences";
 static NSString *const kERGestureReload = @"com.strive.echoreborn/ReloadPrefs";
 static NSString *const kERGestureValueCellClassName = @"ERGestureValueCell";
 
-static void ERGPrefsLog(NSString *format, ...);
-static void ERGCrashWrite(NSString *header);
-static void ERGUncaughtHandler(NSException *exception);
+void ERGPrefsLog(NSString *format, ...);
+void ERGCrashWrite(NSString *header);
+void ERGUncaughtHandler(NSException *exception);
 
 static NSInteger ERGesturePageCount(void) {
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
@@ -309,7 +309,8 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 //     mobile 身份可写，与主插件的日志导出目录同一出处）
 //   · NSSetUncaughtExceptionHandler + SIGABRT/SIGSEGV/SIGBUS/SIGILL 信号处理器
 //     → /var/mobile/Documents/EchoReborn-crash.txt（异常名/原因 + 符号化调用栈）
-static void ERGPrefsLog(NSString *format, ...) {
+// 注意：不能加 static——ERRootListController.m 的面包屑要跨文件链接它（1.2.0-4 链接错误教训）。
+void ERGPrefsLog(NSString *format, ...) {
     @try {
         va_list args;
         va_start(args, format);
