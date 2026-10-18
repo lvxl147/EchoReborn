@@ -438,7 +438,7 @@ static UIImage *ERLinkGlyphTile(NSString *symbolName, long long colorValue) {
 // App 图标画进 size×size 圆角（添加页 40，详情页按需缩小）。
 static UIImage *ERLinkAppCellIcon(NSString *bundleId, CGFloat side) {
     UIImage *appIcon = ERLinkAppIconImage(bundleId);
-    if (!appIcon) return ERLinkGlyphTile(@"app.fill", 0xFF3B82F6LL);
+    if (!appIcon) return ERLinkGlyphTile(@"app.fill", 0x3B82F6FFLL);
     CGSize size = CGSizeMake(side, side);
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:size];
     return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
@@ -461,7 +461,7 @@ static NSDictionary *ERLinkMakeAppShortcutEntry(NSString *bundleId, NSString *ap
     entry[@"shortcutType"] = shortcutType ?: @"";
     entry[@"iconKind"] = @"app";
     entry[@"iconValue"] = bundleId ?: @"";
-    entry[@"color"] = @(0xFF3B82F6LL);
+    entry[@"color"] = @(0x3B82F6FFLL);
     NSString *file = ERLinkWriteRenderedIcon(entry);
     if (file) {
         entry[@"iconFile"] = file;
@@ -518,7 +518,7 @@ static NSDictionary *ERLinkMakeAppEntry(NSString *bundleId, NSString *name) {
     entry[@"bundleId"] = bundleId ?: @"";
     entry[@"iconKind"] = @"app";
     entry[@"iconValue"] = bundleId ?: @"";
-    entry[@"color"] = @(0xFF3B82F6LL);
+    entry[@"color"] = @(0x3B82F6FFLL);
     NSString *file = ERLinkWriteRenderedIcon(entry);
     if (file) {
         entry[@"iconFile"] = file;
@@ -759,6 +759,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
 
 - (void)reloadLinks {
     self.links = ERLinkCatalogForDisplay();
+    [self migrateLegacyColorsIfNeeded];
     // 1.1.9-68：按类型归组 —— 顺序固定：打开应用 / 快捷方式 / URL链接 / 脚本。
     NSMutableArray<NSDictionary *> *apps = [NSMutableArray array];
     NSMutableArray<NSDictionary *> *appShortcuts = [NSMutableArray array];
@@ -778,6 +779,43 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         @{@"title": @"脚本", @"entries": scripts},
     ];
     [self.linkTableView reloadData];
+}
+
+// 1.1.9-70：一次性迁移 1.1.9-68/69 写错字节序的颜色（本插件颜色是 0xRRGGBBAA）。
+// 脚本 0xFF34C759（粉）→ 0x30B0C7FF（青）；App/链接 0xFF3B82F6（粉红）→ 0x3B82F6FF（蓝）。
+// 迁移后重渲染 iconFile（旧 PNG 的底色也画错了），只写一次盘。
+- (void)migrateLegacyColorsIfNeeded {
+    NSArray<NSDictionary *> *catalog = ERLinkStoredCatalog();
+    if (!catalog.count) return;
+    BOOL changed = NO;
+    NSMutableArray<NSDictionary *> *updated = [NSMutableArray array];
+    for (NSDictionary *source in catalog) {
+        NSDictionary *entry = [source isKindOfClass:[NSDictionary class]] ? source : @{};
+        long long color = [entry[@"color"] longLongValue];
+        long long fixed = color;
+        if (color == (long long)0xFF34C759LL) {
+            fixed = (long long)0x30B0C7FFLL;      // 脚本：粉 → 青
+        } else if (color == (long long)0xFF3B82F6LL) {
+            fixed = (long long)0x3B82F6FFLL;      // App/链接：粉红 → 蓝
+        }
+        if (fixed != color) {
+            NSMutableDictionary *entryUpdate = [entry mutableCopy] ?: [NSMutableDictionary dictionary];
+            entryUpdate[@"color"] = @(fixed);
+            NSString *file = ERLinkWriteRenderedIcon(entryUpdate);
+            if (file) {
+                entryUpdate[@"iconFile"] = file;
+                entryUpdate[@"iconFull"] = @([ERLinkResolveIcon(entryUpdate)[@"full"] boolValue]);
+            }
+            ERLinkLog(@"linkPane: 颜色迁移 %@ %llx→%llx", entry[@"uuid"], color, fixed);
+            entry = entryUpdate;
+            changed = YES;
+        }
+        [updated addObject:entry];
+    }
+    if (changed) {
+        ERLinkPersistCatalog(updated);
+        self.links = updated;
+    }
 }
 
 // 取某张卡片里的条目数组。
@@ -847,7 +885,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
     NSString *entryType = [entry[@"type"] isKindOfClass:[NSString class]] ? entry[@"type"] : @"";
     NSString *detail;
     if ([entryType isEqualToString:@"script"]) {
-        detail = @"脚本";
+        detail = @"JavaScript 脚本";
     } else if ([entryType isEqualToString:@"app"] || [entryType isEqualToString:@"appShortcut"]) {
         detail = entry[@"bundleId"];
     } else {
@@ -1057,7 +1095,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         entry[@"name"] = name.length ? name : url;
         entry[@"type"] = @"link";
         entry[@"url"] = url;
-        entry[@"color"] = @(0xFF3B82F6LL);
+        entry[@"color"] = @(0x3B82F6FFLL);
         if (strongSelf.pendingIconFile.length) {
             // 从文件/相册导入的本地图片优先
             entry[@"iconKind"] = @"image";
@@ -1243,7 +1281,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         // 1.1.9-68：「创建脚本」卡片（keyboardX 脚本编辑样式，默认大括号图标）。
         cell.textLabel.text = @"创建脚本";
         cell.textLabel.textColor = UIColor.labelColor;
-        cell.detailTextLabel.text = @"JavaScript 脚本，点磁贴运行";
+        cell.detailTextLabel.text = @"JavaScript 脚本";
         cell.detailTextLabel.textColor = UIColor.labelColor;
         cell.imageView.image = ERLinkGlyphTile(@"curlybraces", 0x30B0C7FF);
         cell.imageView.layer.cornerRadius = 9.0;
@@ -1289,6 +1327,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         // 1.1.9-68：进脚本编辑页。
         ERLinkScriptController *script = [[ERLinkScriptController alloc] init];
         script.replaceUUID = self.replaceUUID;   // 替换模式透传
+        script.replaceStageHandler = self.replaceStageHandler;   // 1.1.9-70：暂存版替换也要透传（否则脚本页会立即落盘）
         [self.navigationController pushViewController:script animated:YES];
         return;
     }
@@ -1299,6 +1338,7 @@ static NSArray<NSDictionary *> *ERLinkAppShortcutsForBundle(NSString *bundleId) 
         [[ERLinkAppDetailController alloc] initWithAppBundleId:app[@"bundleId"]
                                                           name:app[@"name"]];
     detail.replaceUUID = self.replaceUUID;   // 1.1.9-62：替换模式透传
+    detail.replaceStageHandler = self.replaceStageHandler;   // 1.1.9-70：暂存版替换也要透传（否则详情页会立即落盘）
     [self.navigationController pushViewController:detail animated:YES];
 }
 
@@ -2573,11 +2613,15 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
             }
             iconField.text = current;
             // 1.1.9-67：预览实时反映未保存的图标（暂存值合成临时条目再渲染）。
-            NSMutableDictionary *previewEntry = [entry mutableCopy] ?: [NSMutableDictionary dictionary];
+            // 1.1.9-70：替换暂存时以新目标为底；选定新符号时强制按 symbol 渲染，
+            // 彻底绕开 iconFile/iconKind 旧图优先的问题（链接/脚本条目此前预览不更新）。
+            NSDictionary *previewBase = (_pendingReplaceSet && _pendingReplace) ? _pendingReplace : entry;
+            NSMutableDictionary *previewEntry = [previewBase mutableCopy] ?: [NSMutableDictionary dictionary];
             if (_pendingSymbolSet) {
                 if (_pendingSymbol.length) {
-                    previewEntry[@"symbolOverride"] = _pendingSymbol;
-                    // 1.1.9-69：去掉旧渲染 PNG（否则 iconFile 优先级更高，预览永远是旧图）。
+                    previewEntry[@"iconKind"] = @"symbol";
+                    previewEntry[@"iconValue"] = _pendingSymbol;
+                    [previewEntry removeObjectForKey:@"symbolOverride"];
                     [previewEntry removeObjectForKey:@"iconFile"];
                     [previewEntry removeObjectForKey:@"iconFull"];
                 } else {
