@@ -482,7 +482,9 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                                           detail:Nil
                                                             cell:PSTitleValueCell
                                                             edit:Nil];
-        [seg setProperty:@"ERSegmentedCell" forKey:@"cellClass"];
+        Class segCellClass = NSClassFromString(@"ERSegmentedCell");
+        if (!segCellClass) segCellClass = [PSTableCell class]; // 兜底：绝不给 PS 传字符串
+        [seg setProperty:segCellClass forKey:@"cellClass"];
         [seg setProperty:@"HomeScreen.SearchPill.HapticStrength" forKey:@"key"];
         [seg setProperty:kERGestureSuite forKey:@"defaults"];
         [seg setProperty:@1 forKey:@"default"];
@@ -534,7 +536,12 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                                       detail:Nil
                                                         cell:PSTitleValueCell
                                                         edit:Nil];
-    [row setProperty:kERGestureValueCellClassName forKey:@"cellClass"];
+    // 1.2.0-6 闪退实锤修复：cellClass 必须传**类对象**——PS 在 cellForRow 里对
+    // [spec cellClass] 直接发 isSubclassOfClass:（崩溃日志
+    // -[__NSCFConstantString isSubclassOfClass:] unrecognized selector）。
+    // 其它页的字符串写法没崩只是因为那些代码行是 plist 装载失败时的兜底、从未执行；
+    // plist 解析器会转换字符串，setProperty 不会。本页纯代码构建，必须传 Class。
+    [row setProperty:[ERGestureValueCell class] forKey:@"cellClass"];
     [row setProperty:key forKey:@"erGestureKey"];
     [row setProperty:ERImageIconWithFallbacks(@[symbol], nil,
                                              [name substringToIndex:1], color)
