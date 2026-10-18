@@ -335,7 +335,7 @@ void ERGPrefsLog(NSString *format, ...) {
     } @catch (__unused NSException *e) {}
 }
 
-static void ERGCrashWrite(NSString *header) {
+void ERGCrashWrite(NSString *header) {
     @try {
         void *frames[64];
         int n = backtrace(frames, 64);
@@ -366,9 +366,6 @@ static void ERGSignalHandler(int sig) {
     raise(sig);
 }
 
-static void ERGSignalHandler(int sig);
-static void ERGUncaughtHandler(NSException *exception);
-
 static void ERGInstallCrashReporter(void) {
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -381,7 +378,7 @@ static void ERGInstallCrashReporter(void) {
     });
 }
 
-static void ERGUncaughtHandler(NSException *exception) {
+void ERGUncaughtHandler(NSException *exception) {
     ERGCrashWrite([NSString stringWithFormat:@"EXCEPTION %@ -- %@\n%@",
                    exception.name, exception.reason, exception.callStackSymbols]);
 }
