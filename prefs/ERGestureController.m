@@ -264,7 +264,11 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
 
     // 按钮内部：文字居左（pad 起，titleEdgeInsets 右侧给箭头让位），箭头独立居中于右侧槽位。
+    // custom 按钮不走 UIButtonConfiguration，弃用告警在 -Werror 下需压制（contentEdgeInsets 同款）。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
+#pragma clang diagnostic pop
     _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);
 
     CGFloat textX = left + 27 + 12;
