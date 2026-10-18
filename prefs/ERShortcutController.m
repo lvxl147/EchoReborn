@@ -11,6 +11,9 @@ static NSString *const kERShortcutPrefsDomain = @"com.strive.echoreborn.preferen
 static NSString *const kERShortcutVisibleKey = @"ShortcutVisibleIdentifiers";
 static NSString *const kERShortcutReloadNotification = @"com.strive.echoreborn/ReloadPrefs";
 static NSString *const kERShortcutRescanNotification = @"com.strive.echoreborn/RescanShortcuts";
+// 1.1.9-70 · 每条快捷指令的显示覆盖（改名/改图标），键是快捷指令 uuid：
+// { "<uuid>": { "name": "显示名", "symbolOverride": "sf.symbol.name" } }。
+static NSString *const kERShortcutOverridesKey = @"ShortcutOverrides";
 
 // Where SpringBoard publishes what it fetched. Same directory as the
 // diagnostics log, chosen because SpringBoard and this bundle run as `mobile`
@@ -21,6 +24,7 @@ static NSString *const kERShortcutSnapshotDirectory = @"/var/mobile/Library/Logs
 static NSString *const kERShortcutSnapshotFileName = @"shortcuts.plist";
 
 // 1.0.7-17：子页行图标 —— 与控制中心里快捷指令磁贴**同一套画法**。
+@class ERShortcutInfoController;   // 1.1.9-70 · 信息页（文件尾部实现）
 // 颜色解码与 glyph→SF Symbol 映射与 Tweak.xm 的 ERShortcutColorFromValue /
 // ERShortcutSymbolNameForGlyph 完全一致（后者来自 WorkflowKit 的私有函数，
 // 用 dlopen 取；Settings 进程同样能加载）。
@@ -46,6 +50,25 @@ static NSString *ERShortcutIconDirectory(void) {
 }
 
 static void ERShortcutLog(NSString *format, ...);
+
+// 1.1.9-70 · 显示覆盖的读写（共享偏好域；写完广播 ReloadPrefs 让磁贴同步刷新）。
+static NSDictionary *ERShortcutOverridesRead(void) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+    id value = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)kERShortcutOverridesKey,
+                                                               (__bridge CFStringRef)kERShortcutPrefsDomain);
+    return [value isKindOfClass:[NSDictionary class]] ? value : @{};
+}
+
+static void ERShortcutOverridesWrite(NSDictionary *overrides) {
+    CFPreferencesSetAppValue((__bridge CFStringRef)kERShortcutOverridesKey,
+                             (__bridge CFPropertyListRef)(overrides.count ? overrides : nil),
+                             (__bridge CFStringRef)kERShortcutPrefsDomain);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
+                                         (__bridge CFStringRef)kERShortcutReloadNotification,
+                                         NULL, NULL, YES);
+    ERShortcutLog(@"shortcutPane: persisted %lu override(s)", (unsigned long)overrides.count);
+}
 
 // 1.1.8-18 · 量一张图的「墨迹」包围盒（返回值是相对整图的比例）。
 // SF Symbol 的画布自带大量内边距，不同符号差得很远（同一个 0.62 的绘制系数，
@@ -129,6 +152,19 @@ static UIImage *ERShortcutCellIcon(NSDictionary *shortcut) {
             } else {
                 glyph = rendered;
                 iconSource = @"icon-fg";
+            }
+        }
+    }
+    if (!customImage && !glyph) {
+        // 1.1.9-70 · 信息页设置的图标覆盖（symbolOverride）优先于兜底字形。
+        NSString *overrideSymbol = [shortcut[@"symbolOverride"] isKindOfClass:[NSString class]]
+                                   ? shortcut[@"symbolOverride"] : nil;
+        if (overrideSymbol.length) {
+            UIImage *symbol = [UIImage systemImageNamed:overrideSymbol];
+            if (symbol) {
+                glyph = [symbol imageWithTintColor:UIColor.whiteColor
+                                      renderingMode:UIImageRenderingModeAlwaysOriginal] ?: symbol;
+                iconSource = @"override";
             }
         }
     }
@@ -352,10 +388,33 @@ static void ERShortcutPersistVisible(NSSet<NSString *> *visible, NSUInteger fetc
 }
 
 - (NSString *)displayNameForShortcut:(NSDictionary *)shortcut {
+    // 1.1.9-70 · 信息页改过的显示名优先。
+    NSString *uuid = [shortcut[@"uuid"] isKindOfClass:[NSString class]] ? shortcut[@"uuid"] : nil;
+    if (uuid.length) {
+        NSDictionary *overrides = ERShortcutOverridesRead();
+        NSDictionary *override = [overrides[uuid] isKindOfClass:[NSDictionary class]] ? overrides[uuid] : nil;
+        NSString *renamed = [override[@"name"] isKindOfClass:[NSString class]] ? override[@"name"] : nil;
+        if (renamed.length) return renamed;
+    }
     NSString *name = shortcut[@"name"];
     if ([name isKindOfClass:[NSString class]] && name.length) return name;
-    NSString *uuid = shortcut[@"uuid"];
     return [uuid isKindOfClass:[NSString class]] ? uuid : @"快捷指令";
+}
+
+// 1.1.9-70 · 把该 uuid 的显示覆盖并进记录副本（列表行图标用）。
+- (NSDictionary *)displayRecordForShortcut:(NSDictionary *)shortcut {
+    NSString *uuid = [shortcut[@"uuid"] isKindOfClass:[NSString class]] ? shortcut[@"uuid"] : nil;
+    if (!uuid.length) return shortcut;
+    NSDictionary *overrides = ERShortcutOverridesRead();
+    NSDictionary *override = [overrides[uuid] isKindOfClass:[NSDictionary class]] ? overrides[uuid] : nil;
+    if (![override isKindOfClass:[NSDictionary class]] || !override.count) return shortcut;
+    NSMutableDictionary *merged = [shortcut mutableCopy] ?: [NSMutableDictionary dictionary];
+    NSString *renamed = [override[@"name"] isKindOfClass:[NSString class]] ? override[@"name"] : nil;
+    if (renamed.length) merged[@"name"] = renamed;
+    NSString *symbol = [override[@"symbolOverride"] isKindOfClass:[NSString class]] ? override[@"symbolOverride"] : nil;
+    if (symbol.length && [UIImage systemImageNamed:symbol]) merged[@"symbolOverride"] = symbol;
+    else [merged removeObjectForKey:@"symbolOverride"];
+    return merged;
 }
 
 // 1.1.8-18 · 诊断文案抽成 C 函数：主页不再显示诊断，改由「添加」子页面的
@@ -574,7 +633,8 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     NSDictionary *shortcut = rows[indexPath.row];
     cell.textLabel.text = [self displayNameForShortcut:shortcut];
     cell.textLabel.textColor = UIColor.labelColor;
-    cell.imageView.image = ERShortcutCellIcon(shortcut);
+    // 1.1.9-70 · 图标也走覆盖（信息页改过的 symbolOverride 优先）。
+    cell.imageView.image = ERShortcutCellIcon([self displayRecordForShortcut:shortcut]);
     cell.imageView.layer.cornerRadius = 9.0;
     cell.imageView.clipsToBounds = YES;
     // The uuid is shown because two shortcuts can legitimately share a name,
@@ -590,9 +650,221 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     return cell;
 }
 
-// 主页纯展示，所以这里故意不做任何事 —— 保留方法只为满足 UITableViewDelegate
-// 的可选协议，行本身已经把 userInteractionEnabled 关掉了。
-- (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(__unused NSIndexPath *)indexPath {
+// 1.1.9-70 · 点击进入信息页（改名/改图标，右上角保存），对齐快捷方式子页的交互。
+- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    NSArray<NSDictionary *> *rows = [self visibleShortcuts];
+    if ((NSUInteger)indexPath.row >= rows.count) return;
+    ERShortcutInfoController *info = [[ERShortcutInfoController alloc] initWithShortcut:rows[(NSUInteger)indexPath.row]];
+    info.title = @"快捷指令信息";
+    [self.navigationController pushViewController:info animated:YES];
+}
+
+// 1.1.9-70 · 左滑删除 = 移出「显示控制项」（快捷指令本体不受影响，可再从「添加」里加回来）。
+- (BOOL)tableView:(__unused UITableView *)tableView canEditRowAtIndexPath:(NSIndexPath *)indexPath {
+    return (NSUInteger)indexPath.row < [self visibleShortcuts].count;
+}
+
+- (void)tableView:(UITableView *)tableView commitEditingStyle:(UITableViewCellEditingStyle)editingStyle
+                                            forRowAtIndexPath:(NSIndexPath *)indexPath {
+    if (editingStyle != UITableViewCellEditingStyleDelete) return;
+    NSArray<NSDictionary *> *rows = [self visibleShortcuts];
+    if ((NSUInteger)indexPath.row >= rows.count) return;
+    NSString *uuid = rows[(NSUInteger)indexPath.row][@"uuid"];
+    if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
+    [self.visibleUUIDs removeObject:uuid];
+    [self persist];
+    [tableView reloadData];
+    ERShortcutLog(@"shortcutPane: 左滑移出显示列表 %@", uuid);
+}
+
+@end
+
+// ---------------------------------------------------------------------------
+// 1.1.9-70 · 快捷指令信息页：改名 / 改图标（右上角「保存」才落盘，与快捷方式
+// 信息页同一套交互习惯）。覆盖按 uuid 存进 ShortcutOverrides，磁贴侧
+// （ERShortcutModule.h）与列表同读这份键，保存后广播 ReloadPrefs 同步刷新。
+// ---------------------------------------------------------------------------
+@interface ERShortcutInfoController : PSViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, strong) UITableView *infoTableView;
+@property (nonatomic, strong) NSDictionary *record;
+@property (nonatomic, copy) NSString *shortcutUUID;
+@property (nonatomic, copy) NSString *pendingName;      // nil = 未改
+@property (nonatomic, copy) NSString *pendingSymbol;    // nil = 未改；@"" = 清除覆盖
+@property (nonatomic, assign) BOOL pendingSymbolSet;
+- (instancetype)initWithShortcut:(NSDictionary *)shortcut;
+@end
+
+@implementation ERShortcutInfoController
+
+- (instancetype)initWithShortcut:(NSDictionary *)shortcut {
+    if ((self = [super init])) {
+        _record = [shortcut isKindOfClass:[NSDictionary class]] ? shortcut : @{};
+        _shortcutUUID = [_record[@"uuid"] isKindOfClass:[NSString class]] ? _record[@"uuid"] : @"";
+    }
+    return self;
+}
+
+- (void)loadView {
+    self.view = [[UIView alloc] initWithFrame:CGRectMake(0.0, 0.0, 320.0, 480.0)];
+    self.view.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+    UITableView *table = [[UITableView alloc] initWithFrame:self.view.bounds style:UITableViewStyleInsetGrouped];
+    table.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    table.dataSource = self;
+    table.delegate = self;
+    [self.view addSubview:table];
+    self.infoTableView = table;
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    if (!self.title.length) self.title = @"快捷指令信息";
+    self.navigationItem.rightBarButtonItem =
+        [[UIBarButtonItem alloc] initWithTitle:@"保存"
+                                         style:UIBarButtonItemStyleDone
+                                        target:self
+                                        action:@selector(saveTapped)];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    [self.infoTableView reloadData];
+}
+
+// MARK: - Table（卡片：名称 / 图标）
+
+- (NSInteger)numberOfSectionsInTableView:(__unused UITableView *)tableView {
+    return 1;
+}
+
+- (NSInteger)tableView:(__unused UITableView *)tableView numberOfRowsInSection:(__unused NSInteger)section {
+    return 2;
+}
+
+- (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
+    static NSString *identifier = @"ERShortcutInfoCell";
+    UITableViewCell *cell = [tableView dequeueReusableCellWithIdentifier:identifier];
+    if (!cell) cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:identifier];
+
+    if (indexPath.row == 0) {
+        cell.textLabel.text = @"名称";
+        NSString *name = self.pendingName.length ? self.pendingName
+                        : ([self.record[@"name"] isKindOfClass:[NSString class]] ? self.record[@"name"] : @"");
+        cell.detailTextLabel.text = name.length ? name : @"未命名";
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    } else {
+        cell.textLabel.text = @"图标";
+        NSString *symbol = self.pendingSymbolSet ? self.pendingSymbol : nil;
+        if ([symbol isKindOfClass:[NSString class]] && symbol.length) {
+            cell.detailTextLabel.text = symbol;
+        } else if (self.pendingSymbolSet) {
+            cell.detailTextLabel.text = @"默认";
+        } else {
+            NSDictionary *overrides = ERShortcutOverridesRead();
+            NSDictionary *override = [overrides[self.shortcutUUID] isKindOfClass:[NSDictionary class]] ? overrides[self.shortcutUUID] : nil;
+            NSString *saved = [override[@"symbolOverride"] isKindOfClass:[NSString class]] ? override[@"symbolOverride"] : nil;
+            cell.detailTextLabel.text = saved.length ? saved : @"默认";
+        }
+        cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+        cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+        cell.selectionStyle = UITableViewCellSelectionStyleDefault;
+    }
+    cell.detailTextLabel.adjustsFontSizeToFitWidth = YES;
+    return cell;
+}
+
+- (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(__unused NSInteger)section {
+    return @"修改需点右上角「保存」才会生效；只改这块磁贴的显示，快捷指令本体不受影响。";
+}
+
+- (void)tableView:(__unused UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
+    [self.infoTableView deselectRowAtIndexPath:indexPath animated:YES];
+    if (indexPath.row == 0) [self renameTapped];
+    else [self pickIconTapped];
+}
+
+// MARK: - 动作
+
+- (void)renameTapped {
+    NSString *current = self.pendingName.length ? self.pendingName
+                       : ([self.record[@"name"] isKindOfClass:[NSString class]] ? self.record[@"name"] : @"");
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"修改名称" message:nil preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = current;
+        field.placeholder = @"名称";
+    }];
+    __weak typeof(self) weakSelf = self;
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+        __strong typeof(weakSelf) strongSelf = weakSelf;
+        UITextField *field = alert.textFields.firstObject;
+        strongSelf.pendingName = [field.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+        [strongSelf.infoTableView reloadData];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+// 图标：复用快捷方式那套图标库（ERLinkIconPickerController 在同一个
+// PreferenceBundle 里，运行时取类，避免跨编译单元的头依赖）。
+- (void)pickIconTapped {
+    Class pickerClass = NSClassFromString(@"ERLinkIconPickerController");
+    if (!pickerClass) {
+        ERShortcutLog(@"shortcutInfo: ERLinkIconPickerController 不可用");
+        return;
+    }
+    UIViewController *picker = [[pickerClass alloc] init];
+    NSString *current = nil;
+    if (self.pendingSymbolSet) current = self.pendingSymbol;
+    if (!current) {
+        NSDictionary *overrides = ERShortcutOverridesRead();
+        NSDictionary *override = [overrides[self.shortcutUUID] isKindOfClass:[NSDictionary class]] ? overrides[self.shortcutUUID] : nil;
+        current = [override[@"symbolOverride"] isKindOfClass:[NSString class]] ? override[@"symbolOverride"] : nil;
+    }
+    [picker setValue:current ?: @"" forKey:@"selectedSymbol"];
+    [picker setValue:self forKey:@"pickerDelegate"];
+    [self.navigationController pushViewController:picker animated:YES];
+}
+
+// 图标库回调（ERLinkIconPickerDelegate）。清空选择 = 恢复默认图标。
+- (void)iconPickerDidPickSymbol:(NSString *)name {
+    self.pendingSymbol = [name isKindOfClass:[NSString class]]
+                         ? [name stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                         : @"";
+    self.pendingSymbolSet = YES;
+    [self.infoTableView reloadData];
+}
+
+// 右上角「保存」：把名称/图标覆盖写进 ShortcutOverrides 并广播刷新。
+- (void)saveTapped {
+    if (!self.pendingName.length && !self.pendingSymbolSet) {
+        [self.navigationController popViewControllerAnimated:YES];
+        return;
+    }
+    if (self.pendingSymbolSet && self.pendingSymbol.length && ![UIImage systemImageNamed:self.pendingSymbol]) {
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"符号不可用"
+                                                                       message:[NSString stringWithFormat:@"系统里没有名为 %@ 的 SF 符号。", self.pendingSymbol]
+                                                                preferredStyle:UIAlertControllerStyleAlert];
+        [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+        [self presentViewController:alert animated:YES completion:nil];
+        return;
+    }
+    NSMutableDictionary *overrides = [ERShortcutOverridesRead() mutableCopy] ?: [NSMutableDictionary dictionary];
+    id existingOverride = overrides[self.shortcutUUID];
+    NSMutableDictionary *override = [existingOverride isKindOfClass:[NSDictionary class]]
+                                    ? [existingOverride mutableCopy] : [NSMutableDictionary dictionary];
+    if (![override isKindOfClass:[NSMutableDictionary class]]) override = [NSMutableDictionary dictionary];
+    if (self.pendingName.length) override[@"name"] = self.pendingName;
+    else [override removeObjectForKey:@"name"];
+    if (self.pendingSymbolSet) {
+        if (self.pendingSymbol.length) override[@"symbolOverride"] = self.pendingSymbol;
+        else [override removeObjectForKey:@"symbolOverride"];   // 清空 = 恢复默认图标
+    }
+    if (override.count) overrides[self.shortcutUUID] = override;
+    else [overrides removeObjectForKey:self.shortcutUUID];
+    ERShortcutOverridesWrite(overrides);
+    [self.navigationController popViewControllerAnimated:YES];
 }
 
 @end
