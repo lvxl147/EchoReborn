@@ -32069,7 +32069,7 @@ static void ERSPGHaptic(void) {
 }
 
 @interface ERSPGSwipeTarget : NSObject
-- (void)erHandleSwipe:(UISwipeGestureRecognizer *)gesture;
+- (void)erHandlePan:(UIPanGestureRecognizer *)gesture;
 @end
 
 @implementation ERSPGSwipeTarget
@@ -32079,20 +32079,31 @@ static void ERSPGHaptic(void) {
     dispatch_once(&once, ^{ t = [[ERSPGSwipeTarget alloc] init]; });
     return t;
 }
-- (void)erHandleSwipe:(UISwipeGestureRecognizer *)gesture {
+// 1.2.0-8 · 关键改造：UISwipeGestureRecognizer 在桌面搜索胶囊上会被系统/其它手势
+// 插件的 pan 压制（离散 swipe 与连续 pan 竞争，pan 胜出后 swipe 直接 fail）——
+// 改用一个允许并存的 UIPanGestureRecognizer 自己判方向（位移超阈值触发一次）。
+- (void)erHandlePan:(UIPanGestureRecognizer *)gesture {
     @try {
+        static NSInteger sERPanN = 0;
+        if (gesture.state == UIGestureRecognizerStateEnded ||
+            gesture.state == UIGestureRecognizerStateCancelled) {
+            objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
+            return;
+        }
+        if (gesture.state != UIGestureRecognizerStateChanged) return;
+        if ([objc_getAssociatedObject(gesture, @selector(erPanFired)) boolValue]) return;
+        CGPoint t = [gesture translationInView:gesture.view];
+        if (hypot(t.x, t.y) < 40.0) return;   // 位移闸门：40pt 才算一次有效滑动
         if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) return;
         NSString *key = nil;
-        switch (gesture.direction) {
-            case UISwipeGestureRecognizerDirectionUp:    key = @"HomeScreen.SearchPill.GestureUp";    break;
-            case UISwipeGestureRecognizerDirectionDown:  key = @"HomeScreen.SearchPill.GestureDown";  break;
-            case UISwipeGestureRecognizerDirectionLeft:  key = @"HomeScreen.SearchPill.GestureLeft";  break;
-            case UISwipeGestureRecognizerDirectionRight: key = @"HomeScreen.SearchPill.GestureRight"; break;
-            default: return;
+        if (fabs(t.x) >= fabs(t.y)) {
+            key = (t.x < 0) ? @"HomeScreen.SearchPill.GestureLeft" : @"HomeScreen.SearchPill.GestureRight";
+        } else {
+            key = (t.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         }
+        objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
         NSInteger page = ERSPGInt(key, 0);
-        // 1.2.0-7 · 诊断：手势触发即记（区分「手势没触发」与「触发了但跳页没效果」）
-        ERLogInfo(@"SPG-SWIPE dir=0x%lx page=%ld", (unsigned long)gesture.direction, (long)page);
+        ERLogInfo(@"SPG-PAN #%ld t=(%.0f,%.0f) page=%ld", (long)++sERPanN, t.x, t.y, (long)page);
         if (page < 1) return;   // 无动作 = 系统默认
         ERSPGHaptic();
         ERSPGJumpToPage(page);
@@ -32101,6 +32112,32 @@ static void ERSPGHaptic(void) {
 @end
 
 static const void *kERSPGPillRecognizersKey = &kERSPGPillRecognizersKey;
+
+// pan 手势 delegate：允许与系统手势同时识别（否则照样被桌面翻页 pan 压制）。
+// 1.2.0-8：定义必须在 ERSPGConfigurePill 之前（C 编译顺序）。
+@interface ERSPGPanDelegate : NSObject <UIGestureRecognizerDelegate>
++ (instancetype)shared;
+@end
+@implementation ERSPGPanDelegate
++ (instancetype)shared {
+    static ERSPGPanDelegate *d = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ d = [[ERSPGPanDelegate alloc] init]; });
+    return d;
+}
+- (BOOL)gestureRecognizerShouldRecognizeSimultaneouslyWithGestureRecognizer:
+        (UIGestureRecognizer *)otherGestureRecognizer {
+    return YES;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldRequireFailureOfGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return NO;
+}
+- (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
+shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
+    return NO;
+}
+@end
 
 // 目标判定：类名含 "Search" 的胶囊形控件（iOS 16/17 搜索胶囊类名有版本差异，
 // 按类名特征 + 尺寸闸门匹配，避免误挂到别的东西上）。
@@ -32118,31 +32155,33 @@ static BOOL ERSPGLooksLikePill(UIView *v) {
 
 static void ERSPGConfigurePill(UIView *pill) {
     BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
+    // 1.2.0-8 · 在场心跳：30s 一条，证明扫描每轮都能找到胶囊（手势挂着）
+    static NSTimeInterval sERSPGLastPresent = 0;
+    NSTimeInterval nowTick = [[NSDate date] timeIntervalSince1970];
+    if (nowTick - sERSPGLastPresent > 30.0) {
+        sERSPGLastPresent = nowTick;
+        ERLogInfo(@"SPG-PILL present cls=%@ enabled=%d", NSStringFromClass(pill.class), enabled ? 1 : 0);
+    }
     NSMutableArray *recs = objc_getAssociatedObject(pill, kERSPGPillRecognizersKey);
     if (!recs) {
-        // 1.2.0-7 · 诊断：胶囊首次命中并挂手势
-        ERLogInfo(@"SPG-PILL found %@ frame=%@ enabled=%d",
-                  NSStringFromClass(pill.class),
-                  NSStringFromCGRect(pill.frame), enabled ? 1 : 0);
+        // 1.2.0-8 · 一个允许并存的 pan（自行判方向）替代四个 swipe——
+        // UISwipeGestureRecognizer 在桌面被 pan 手势压制、从不触发的教训。
         recs = [NSMutableArray array];
         ERSPGSwipeTarget *target = [ERSPGSwipeTarget shared];
-        NSDictionary *cfg = @{
-            @(UISwipeGestureRecognizerDirectionUp):    @"up",
-            @(UISwipeGestureRecognizerDirectionDown):  @"down",
-            @(UISwipeGestureRecognizerDirectionLeft):  @"left",
-            @(UISwipeGestureRecognizerDirectionRight): @"right",
-        };
-        [cfg enumerateKeysAndObjectsUsingBlock:^(NSNumber *dirNum, NSString *name, BOOL *stop) {
-            UISwipeGestureRecognizer *g = [[UISwipeGestureRecognizer alloc]
-                initWithTarget:target action:@selector(erHandleSwipe:)];
-            g.direction = (UISwipeGestureRecognizerDirection)dirNum.integerValue;
-            g.delegate = nil;
-            [pill addGestureRecognizer:g];
-            [recs addObject:g];
-        }];
+        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+            initWithTarget:target action:@selector(erHandlePan:)];
+        pan.maximumNumberOfTouches = 1;
+        ERSPGPanDelegate *dlg = [ERSPGPanDelegate shared];
+        pan.delegate = dlg;
+        objc_setAssociatedObject(pan, @selector(erPanDelegate), dlg, OBJC_ASSOCIATION_RETAIN);
+        [pill addGestureRecognizer:pan];
+        [recs addObject:pan];
         objc_setAssociatedObject(pill, kERSPGPillRecognizersKey, recs, OBJC_ASSOCIATION_RETAIN);
+        ERLogInfo(@"SPG-PILL found %@ frame=%@ enabled=%d (pan attached)",
+                  NSStringFromClass(pill.class),
+                  NSStringFromCGRect(pill.frame), enabled ? 1 : 0);
     }
-    for (UISwipeGestureRecognizer *g in recs) g.enabled = enabled;
+    for (UIGestureRecognizer *g in recs) g.enabled = enabled;
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
