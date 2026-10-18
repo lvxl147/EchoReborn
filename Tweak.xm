@@ -32214,6 +32214,18 @@ static void ERSPGDumpSelectors(void) {
 // 共享偏好（设置页下拉框的「第1页…第N页」来源）。
 static void ERSPGScanTick(void) {
     @try {
+        // 1.2.0-9 · 探针：ScanTick 是否真的在跑（前 3 个 tick 必记，之后 60s 节流）。
+        // 双通道：ERLogInfo（主日志）+ ERBootLog（BOOT 通道，防 ctor 阶段主日志不可写）。
+        static NSInteger sERSPGTickN = 0;
+        static NSTimeInterval sERSPGTickLast = 0;
+        sERSPGTickN++;
+        NSTimeInterval tickNow = [[NSDate date] timeIntervalSince1970];
+        if (sERSPGTickN <= 3 || tickNow - sERSPGTickLast > 60.0) {
+            sERSPGTickLast = tickNow;
+            NSString *msg = [NSString stringWithFormat:@"SPG-TICK #%ld entered", (long)sERSPGTickN];
+            ERLogInfo(msg);
+            ERBootLog(msg);
+        }
         ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
@@ -32897,6 +32909,8 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
             {
                 dispatch_source_t spgTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
                                                                     dispatch_get_main_queue());
+                ERBootLog(@"SPG-CTOR timer created? (1=yes)");
+                ERLogInfo(@"SPG-CTOR timer create result=%@", spgTimer ? @"OK" : @"NIL");
                 if (spgTimer) {
                     dispatch_source_set_timer(spgTimer,
                                               dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
@@ -32906,6 +32920,8 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
                         @autoreleasepool { ERSPGScanTick(); }
                     });
                     dispatch_resume(spgTimer);
+                    ERBootLog(@"SPG-CTOR timer resumed");
+                    ERLogInfo(@"SPG-CTOR timer resumed ok");
                 }
             }
             // 1.1.4 · RCPScreenRecorder 日志钩子（RCP-TIMELINE 时间线，orig 透传）（1.1.9-74 找回）
