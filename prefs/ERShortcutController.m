@@ -51,6 +51,20 @@ static NSString *ERShortcutIconDirectory(void) {
 
 static void ERShortcutLog(NSString *format, ...);
 
+// 1.1.9-70 · 快捷指令信息页：改名 / 改图标（右上角「保存」才落盘，与快捷方式
+// 信息页同一套交互习惯）。覆盖按 uuid 存进 ShortcutOverrides，磁贴侧
+// （ERShortcutModule.h）与列表同读这份键，保存后广播 ReloadPrefs 同步刷新。
+// 完整 @interface 需在主页 didSelect 使用之前（-Werror 下 @class 不够）。
+@interface ERShortcutInfoController : PSViewController <UITableViewDataSource, UITableViewDelegate>
+@property (nonatomic, strong) UITableView *infoTableView;
+@property (nonatomic, strong) NSDictionary *record;
+@property (nonatomic, copy) NSString *shortcutUUID;
+@property (nonatomic, copy) NSString *pendingName;      // nil = 未改
+@property (nonatomic, copy) NSString *pendingSymbol;    // nil = 未改；@"" = 清除覆盖
+@property (nonatomic, assign) BOOL pendingSymbolSet;
+- (instancetype)initWithShortcut:(NSDictionary *)shortcut;
+@end
+
 // 1.1.9-70 · 显示覆盖的读写（共享偏好域；写完广播 ReloadPrefs 让磁贴同步刷新）。
 static NSDictionary *ERShortcutOverridesRead(void) {
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
@@ -680,21 +694,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
 
 @end
 
-// ---------------------------------------------------------------------------
-// 1.1.9-70 · 快捷指令信息页：改名 / 改图标（右上角「保存」才落盘，与快捷方式
-// 信息页同一套交互习惯）。覆盖按 uuid 存进 ShortcutOverrides，磁贴侧
-// （ERShortcutModule.h）与列表同读这份键，保存后广播 ReloadPrefs 同步刷新。
-// ---------------------------------------------------------------------------
-@interface ERShortcutInfoController : PSViewController <UITableViewDataSource, UITableViewDelegate>
-@property (nonatomic, strong) UITableView *infoTableView;
-@property (nonatomic, strong) NSDictionary *record;
-@property (nonatomic, copy) NSString *shortcutUUID;
-@property (nonatomic, copy) NSString *pendingName;      // nil = 未改
-@property (nonatomic, copy) NSString *pendingSymbol;    // nil = 未改；@"" = 清除覆盖
-@property (nonatomic, assign) BOOL pendingSymbolSet;
-- (instancetype)initWithShortcut:(NSDictionary *)shortcut;
-@end
-
+// 1.1.9-70 · 信息页实现（接口声明在文件前部）。
 @implementation ERShortcutInfoController
 
 - (instancetype)initWithShortcut:(NSDictionary *)shortcut {
