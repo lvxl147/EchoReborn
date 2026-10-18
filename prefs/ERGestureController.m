@@ -385,6 +385,14 @@ static void ERGUncaughtHandler(NSException *exception) {
                    exception.name, exception.reason, exception.callStackSymbols]);
 }
 
+// 1.2.0-4：崩溃记录器挂到 bundle 构造函数——只要偏好 bundle 被加载就立即生效，
+// 无论之后崩在 ERRootListController / ERGestureController / 任何 cell，都能拿到
+// NSException 的 name + reason（系统 .ips 里没有 reason，这是我们唯一的实锤渠道）。
+__attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
+    ERGInstallCrashReporter();
+    ERGPrefsLog(@"prefs bundle loaded (constructor)");
+}
+
 - (NSBundle *)bundle {
     return [NSBundle bundleForClass:[self class]];
 }
