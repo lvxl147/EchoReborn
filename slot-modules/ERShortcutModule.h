@@ -205,6 +205,18 @@ static inline NSString *ERShortcutSymbolForRecord(NSDictionary *record) {
     return symbol.length ? symbol : @"sparkles";
 }
 
+// 1.1.9-70 · 快捷指令显示覆盖（设置页信息页改名/改图标），键 = 快捷指令 uuid：
+// ShortcutOverrides = { "<uuid>": { "name": …, "symbolOverride": … } }。
+static inline NSDictionary *ERShortcutOverridesForUUID(NSString *uuid) {
+    if (!uuid.length) return nil;
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+    id value = (__bridge_transfer id)CFPreferencesCopyAppValue((__bridge CFStringRef)@"ShortcutOverrides",
+                                                               (__bridge CFStringRef)kERShortcutPrefsDomain);
+    if (![value isKindOfClass:[NSDictionary class]]) return nil;
+    id override = ((NSDictionary *)value)[uuid];
+    return [override isKindOfClass:[NSDictionary class]] ? override : nil;
+}
+
 // Layout geometry shared with the 蓝牙 connectivity tile so the two line up
 // (matches kERGridCellSize / kERSquareContentInset in Tweak.xm).
 static const CGFloat kERShortcutGridCellSize = 67.0;
@@ -421,6 +433,19 @@ static void ERShortcutTileDidReload(CFNotificationCenterRef center, void *observ
         _runLabel.text = @"点击运行";
     }
     NSString *name = [record[@"name"] isKindOfClass:[NSString class]] ? record[@"name"] : nil;
+    // 1.1.9-70 · 设置页信息页的覆盖（改名/改图标）优先 —— 磁贴与列表同一份键。
+    NSDictionary *displayOverride = ERShortcutOverridesForUUID(uuid);
+    if (displayOverride) {
+        NSString *overrideSymbol = [displayOverride[@"symbolOverride"] isKindOfClass:[NSString class]]
+                                   ? displayOverride[@"symbolOverride"] : @"";
+        if (!self.isLinkEntry && overrideSymbol.length && [UIImage systemImageNamed:overrideSymbol]) {
+            self.symbolName = overrideSymbol;
+            self.linkImage = nil;
+        }
+        NSString *renamed = [displayOverride[@"name"] isKindOfClass:[NSString class]]
+                            ? displayOverride[@"name"] : @"";
+        if (renamed.length) name = renamed;
+    }
     self.nameLabel.text = name;
     // 1.1.9-20：渲染状态远程诊断（SpringBoard 进程写自有偏好域）。
     @try {
