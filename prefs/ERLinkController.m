@@ -2337,11 +2337,14 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
     if ([self.pickerDelegate respondsToSelector:@selector(iconPickerDidPickSymbol:)]) {
         [self.pickerDelegate iconPickerDidPickSymbol:name];
     }
-    // 1.1.9-66：选完直接回到「快捷动作信息」页（跳过图标库根页）。
+    // 1.1.9-66：选完直接回到发起选择的页面（跳过图标库根页）。
+    // 1.1.9-72：不只认快捷动作信息页——从快捷指令信息页进入时也要一路弹回，
+    // 规则：从栈顶往下找第一个「非图标库」的页面弹回去。
     UINavigationController *nav = self.navigationController;
     for (NSInteger i = (NSInteger)nav.viewControllers.count - 1; i >= 0; i--) {
         UIViewController *vc = nav.viewControllers[(NSUInteger)i];
-        if ([vc isKindOfClass:[ERLinkCustomizeController class]]) {
+        if (![vc isKindOfClass:[ERLinkIconPickerController class]]) {
+            if (i == (NSInteger)(nav.viewControllers.count - 1)) break;   // 自己就是根，弹自己
             [nav popToViewController:vc animated:YES];
             return;
         }
