@@ -32045,7 +32045,8 @@ static void ERSPGHaptic(void) {
     UIImpactFeedbackStyle style = (s <= 0) ? UIImpactFeedbackStyleLight
                                            : (s == 1 ? UIImpactFeedbackStyleMedium
                                                      : UIImpactFeedbackStyleHeavy);
-    [[UIImpactFeedbackGenerator alloc] initWithStyle:style] impactOccurred];
+    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+    [gen impactOccurred];
 }
 
 @interface ERSPGSwipeTarget : NSObject
