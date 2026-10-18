@@ -114,7 +114,7 @@
 			<key>erIconColor</key>
 			<string>blue</string>
 			<key>label</key>
-			<string>快捷方式</string>
+			<string>快捷动作</string>
 		</dict>
 		<dict>
 			<key>action</key>
