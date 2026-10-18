@@ -30482,8 +30482,16 @@ static void ERMusicInstallInnerShadow(UIView *host, CGFloat radius) {
     CGFloat w = self.bounds.size.width;
 
     // 1.1.8-5 · 液态玻璃帧跟随（仅开启态；glassView 在则刷新帧与滤镜）（1.1.9-74 找回）
+    // 1.1.9-75 · 边缘残影修复：帧变化时禁隐式动画 + 立即 applyFilters 重采样，
+    //   否则渲染器采样面滞后于胶囊圆角，边缘留一圈旧采样残影。
     if (self.liquidGlassEnabled && self.glassView && !self.glassView.hidden) {
-        self.glassView.frame = self.clipView.bounds;
+        if (!CGRectEqualToRect(self.glassView.frame, self.clipView.bounds)) {
+            [CATransaction begin];
+            [CATransaction setDisableActions:YES];
+            self.glassView.frame = self.clipView.bounds;
+            [CATransaction commit];
+            @try { [self.glassView applyFilters]; } @catch (__unused NSException *e) {}
+        }
     }
     CGFloat r = h / 2.0;
 
@@ -30631,7 +30639,7 @@ static void ERMusicGlassFileLog(NSString *line) {
         }
         self.glassView.frame = self.clipView.bounds;
         self.glassView.hidden = NO;
-        [self.glassView applyFilters];
+        @try { [self.glassView applyFilters]; } @catch (__unused NSException *e) {}
         self.blurView.hidden = YES;
         self.tintView.hidden = YES;
         ERLogInfo(@"MUSICCAPSULE 背景已切液态玻璃");
@@ -30735,9 +30743,18 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     self.capsule.swipeEnabled = swipeOn;
     self.capsule.swipeLeftGesture.enabled  = swipeOn;
     self.capsule.swipeRightGesture.enabled = swipeOn;
-    // 1.1.8-3 · 液态玻璃背景开关（1.1.9-74 找回；与 1.1.8-6 原语义一致，每次重读都应用）
-    self.capsule.liquidGlassEnabled = ERPreferenceBool(kERMusicCapsuleGlassKey, NO);
-    [self.capsule erMusicApplyBackgroundStyle];
+    // 1.1.8-3 · 液态玻璃背景开关（1.1.9-74 找回）
+    // 1.1.9-75 · 防崩溃收口：旧语义"每次 reloadPrefs 都 erMusicApplyBackgroundStyle"意味着
+    //   点播放（MR 通知 → refresh → reloadPrefsIfStale 超 1s 就重读）会在锁屏媒体卡入场动画
+    //   的事务中对玻璃 applyFilters —— 用户实测玻璃开着点播放必进安全模式、关玻璃不崩。
+    //   改为仅在【开关状态变化】或【玻璃还没创建】时应用一次；同值重读零副作用。
+    {
+        BOOL glassPref = ERPreferenceBool(kERMusicCapsuleGlassKey, NO);
+        if (glassPref != (BOOL)self.capsule.liquidGlassEnabled || !self.capsule.glassView) {
+            self.capsule.liquidGlassEnabled = glassPref;
+            [self.capsule erMusicApplyBackgroundStyle];
+        }
+    }
     _prefsLoadedAt = CACurrentMediaTime();
 }
 
@@ -32521,21 +32538,51 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
         // 1.1.1 · 主开关读值显式落盘：录屏无延迟/隐藏锁屏音乐都挂在本开关之后（1.1.9-74 找回）。
         ERLogInfo(@"ctor: master switch Enabled=%d quick=%d logging=%d",
                   gEnabled ? 1 : 0, gQuickAccessButtonsEnabled ? 1 : 0, gERLoggingEnabled ? 1 : 0);
-        // 1.0.9-175 · 录屏无延迟：运行时探测 SBControlCenterController 的 startRecordingCountdown
-        //   （方法在才挂，参考 CCRecordNoDelay 同类名同选择器；方法不在时零副作用）
+        // 1.1.9-75 · 录屏无延迟挂载块整体换回 1.1.8-6 实锤版（1.1.7-2 逆向确认）：
+        //   iOS 17.2 上 startRecordingCountdown 的宿主 = RPControlCenterClient（RPControlCenter 家族，
+        //   1.1.5 崩溃日志里截断的 "RPControlCen..." 即它）；旧宿主 SBControlCenterController 已无此方法。
+        //   1.1.9-74 错还原了 1.0.9-175 时代的旧块（SBControlCenterController + 后台 60s 扫描）→
+        //   钩子从未命中（用户实测：点录屏 CC 不收起、倒计时照旧）。挂钩一律【主线程】执行
+        //   （1.1.5/1.1.6 后台挂钩竞态事故）；RPControlCenterClient 懒加载时由主队列延迟重试兜底。
         {
-            Class ccc = objc_getClass("SBControlCenterController");
             SEL selCD = NSSelectorFromString(@"startRecordingCountdown");
-            if (ccc && [ccc instancesRespondToSelector:selCD] && gERCCRecHostCnt < ERCCREC_MAX_HOSTS) {
-                gERCCRecHostCls[gERCCRecHostCnt] = ccc;
-                MSHookMessageEx(ccc, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
+            NSArray<NSString *> *hostNames = @[@"RPControlCenterClient", @"SBControlCenterController"];
+            for (NSString *hn in hostNames) {
+                Class c = objc_getClass(hn.UTF8String);
+                BOOL hookedAlready = NO;
+                for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hookedAlready = YES;
+                if (!c || ![c instancesRespondToSelector:selCD]) {
+                    ERLogInfo(@"CC-RECORD %@ 不可挂（class=%@ has=%d）", hn,
+                              c ? NSStringFromClass(c) : @"(nil)",
+                              (int)(c && [c instancesRespondToSelector:selCD]));
+                    continue;
+                }
+                if (hookedAlready || gERCCRecHostCnt >= ERCCREC_MAX_HOSTS) continue;
+                gERCCRecHostCls[gERCCRecHostCnt] = c;
+                MSHookMessageEx(c, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
                 gERCCRecHostCnt++;
-                ERLogInfo(@"CC-RECORD hook 已挂载 SBControlCenterController startRecordingCountdown");
-            } else {
-                ERLogInfo(@"CC-RECORD 类或方法缺失（class=%@ has=%d），录屏无延迟不可用",
-                          ccc ? NSStringFromClass(ccc) : @"(nil)",
-                          (int)(ccc && [ccc instancesRespondToSelector:selCD]));
+                ERLogInfo(@"CC-RECORD hook 已挂载 %@ startRecordingCountdown", hn);
             }
+            // 主队列延迟重试（懒加载兜底）：3s 与 10s 各一次，只针对 RPControlCenterClient，
+            // 且只在主线程执行 —— 重现参考插件 Logos ctor 语义，无竞态。
+            for (NSInteger retryDelayIdx = 0; retryDelayIdx < 2; retryDelayIdx++) {
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((retryDelayIdx ? 10.0 : 3.0) * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{
+                    @try {
+                        Class c = objc_getClass("RPControlCenterClient");
+                        SEL s2 = NSSelectorFromString(@"startRecordingCountdown");
+                        if (!c || ![c instancesRespondToSelector:s2]) return;
+                        BOOL hookedAlready = NO;
+                        for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hookedAlready = YES;
+                        if (hookedAlready || gERCCRecHostCnt >= ERCCREC_MAX_HOSTS) return;
+                        gERCCRecHostCls[gERCCRecHostCnt] = c;
+                        MSHookMessageEx(c, s2, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
+                        gERCCRecHostCnt++;
+                        ERLogInfo(@"CC-RECORD retry: 已挂载 RPControlCenterClient startRecordingCountdown");
+                    } @catch (__unused NSException *e172) {}
+                });
+            }
+            ERLogInfo(@"ctor: CC-RECORD init done (1.1.7-2 host=RPControlCenterClient)");
             // 1.1.4 · RCPScreenRecorder 日志钩子（RCP-TIMELINE 时间线，orig 透传）（1.1.9-74 找回）
             {
                 Class rcp = objc_getClass("RCPScreenRecorder");
@@ -32554,50 +32601,6 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
                         }
                     });
                 }
-            }
-            // 1.0.9-179 · **周期自配置扫描**：v176-178 证明 ctor 期扫描会崩（消息转发/懒加载类），
-            //   且一次性扫描的日志总赶不上日志轮转抓不到。改为启动后 5s 起每 60s 扫一遍
-            //   （后台队列 + @try）：发现新宿主类直接自动挂 hook（自配置），日志每轮都输出，
-            //   任何时刻抓日志都能看到扫描结果与开关读值。
-            dispatch_source_t scanTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                                                 dispatch_get_global_queue(QOS_CLASS_UTILITY, 0));
-            if (scanTimer) {
-                dispatch_source_set_timer(scanTimer,
-                                          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5.0 * NSEC_PER_SEC)),
-                                          (uint64_t)(60.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
-                __block dispatch_source_t keepScan = scanTimer;
-                dispatch_source_set_event_handler(scanTimer, ^{
-                    @autoreleasepool {
-                        @try {
-                            unsigned int cnt = 0;
-                            Class *clsList = objc_copyClassList(&cnt);
-                            NSMutableArray<NSString *> *hosts = [NSMutableArray array];
-                            for (unsigned int i = 0; i < cnt; i++) {
-                                Class c = clsList[i];
-                                if (class_getInstanceMethod(c, selCD) || class_getClassMethod(c, selCD)) {
-                                    BOOL hooked = NO;
-                                    for (NSInteger k = 0; k < gERCCRecHostCnt; k++) if (gERCCRecHostCls[k] == c) hooked = YES;
-                                    if (hooked) { [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(已挂)"]]; continue; }
-                                    if (gERCCRecHostCnt < ERCCREC_MAX_HOSTS) {
-                                        gERCCRecHostCls[gERCCRecHostCnt] = c;
-                                        MSHookMessageEx(c, selCD, (IMP)ERCCRecordStartNoDelay, &gERCCRecHostOrig[gERCCRecHostCnt]);
-                                        gERCCRecHostCnt++;
-                                        [hosts addObject:[NSStringFromClass(c) stringByAppendingString:@"(新挂)"]];
-                                        ERLogInfo(@"CC-RECORD 扫描发现新宿主并挂载：%@", NSStringFromClass(c));
-                                    } else {
-                                        [hosts addObject:NSStringFromClass(c)];
-                                    }
-                                }
-                            }
-                            free(clsList);
-                            ERLogInfo(@"CC-RECORD 扫描宿主=%@ 开关读值=%d（每 60s 复扫）",
-                                      hosts.count ? [hosts componentsJoinedByString:@","] : @"(无)", (int)ERCCRecordNoDelayEnabled());
-                        } @catch (NSException *e179) {
-                            ERLogWarn(@"CC-RECORD 扫描异常（忽略）: %@", e179);
-                        }
-                    }
-                });
-                dispatch_resume(scanTimer);
             }
         }
         // The package intentionally has no firmware ceiling so it installs on
