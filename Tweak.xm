@@ -31986,6 +31986,15 @@ static void ERSPGSetInt(NSString *key, NSInteger value) {
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERSPGDomain);
 }
 
+// 1.2.0-21 · 触发范围（pt）：用户可调（设置页滑块 10~80，默认 20）。
+// 位移主方向滑够这个距离 = 触发（震动提示），松手才跳页。
+static CGFloat ERSPGTriggerRange(void) {
+    NSInteger r = ERSPGInt(@"HomeScreen.SearchPill.TriggerRange", 20);
+    if (r < 10) r = 10;
+    if (r > 80) r = 80;
+    return (CGFloat)r;
+}
+
 // SBIconController.sharedInstance —— 各 helper 共用。
 static id ERSPGIconController(void) {
     Class cls = objc_getClass("SBIconController");
@@ -32174,22 +32183,25 @@ static void ERSPGJumpToPage(NSInteger page1based) {
     }
 }
 
+// 1.2.0-21 · 用户实锤 1315 系统音自带"嗒"声（连响两次像消息提示音）——换成
+// 与「界面优化 → 震动反馈」同款的 UIImpactFeedbackGenerator（常驻强引用 +
+// prepare 预热，纯触感无声）。强度档位仍走本页"震动强度"（0轻/1中/2重）。
+// 生成器必须全局保留：impactOccurred 异步派发，局部变量会提前释放导致无感
+// （界面优化页同款教训，见 ERHapticWithStrength 注释）。
+static UIImpactFeedbackGenerator *sERSPGHapticGen = nil;
+static NSInteger sERSPGHapticStyle = -1;
 static void ERSPGHaptic(void) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.HapticEnabled", YES)) return;
     NSInteger s = ERSPGInt(@"HomeScreen.SearchPill.HapticStrength", 1);
-    // 1.2.0-20 · 用户反馈 4095 全震"太夸张"。降档：轻=1315 短震一次，
-    // 中=1315 短震两次（间隔 100ms），重=4095 完整震动一次。
-    if (s <= 0) {
-        AudioServicesPlaySystemSound(1315);          // 短促"嘀嗒"震
-    } else if (s == 1) {
-        AudioServicesPlaySystemSound(1315);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.10 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            AudioServicesPlaySystemSound(1315);
-        });
-    } else {
-        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+    UIImpactFeedbackStyle style = UIImpactFeedbackStyleMedium;
+    if (s <= 0) style = UIImpactFeedbackStyleLight;
+    else if (s >= 2) style = UIImpactFeedbackStyleHeavy;
+    if (sERSPGHapticStyle != (NSInteger)style || !sERSPGHapticGen) {
+        sERSPGHapticGen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
+        sERSPGHapticStyle = (NSInteger)style;
     }
+    [sERSPGHapticGen prepare];
+    [sERSPGHapticGen impactOccurred];
 }
 
 // 1.2.0-12 · 前向声明：pan handler 里用到（定义在 PanDelegate 之后）。
@@ -32205,6 +32217,17 @@ static UIPanGestureRecognizer *sERSPGWinPan = nil;
 - (void)erHandlePan:(UIPanGestureRecognizer *)gesture;
 @end
 
+// 1.2.0-21 · 起手落在胶囊扩展区内时，临时禁用桌面分页 pager 的 pan（横向滑动
+// 原生翻页手势会抢先吞掉触摸，SPG-PAN 全是纵向、横向零触发的实锤根因）。
+// pan 结束/取消后恢复，另加 1s 兜底强制恢复防卡死。
+static void ERSPGPagerPanSetEnabled(BOOL on) {
+    UIScrollView *pager = ERSPGPager();
+    if (!pager.panGestureRecognizer) return;
+    if (pager.panGestureRecognizer.enabled == on) return;
+    pager.panGestureRecognizer.enabled = on;
+    ERLogInfo(@"SPG-PAN pager-pan %@", on ? @"restored" : @"suppressed");
+}
+
 @implementation ERSPGSwipeTarget
 + (instancetype)shared {
     static ERSPGSwipeTarget *t = nil;
@@ -32214,36 +32237,67 @@ static UIPanGestureRecognizer *sERSPGWinPan = nil;
 }
 // 1.2.0-8 · 关键改造：UISwipeGestureRecognizer 在桌面搜索胶囊上会被系统/其它手势
 // 插件的 pan 压制（离散 swipe 与连续 pan 竞争，pan 胜出后 swipe 直接 fail）——
-// 改用一个允许并存的 UIPanGestureRecognizer 自己判方向（位移超阈值触发一次）。
+// 改用一个允许并存的 UIPanGestureRecognizer 自己判方向。
+// 1.2.0-21 · 流程改造（用户需求）：手放胶囊中心区（帧外扩 30pt 内）任意点 →
+// 朝四方向滑够「触发范围」→ 震动一次并锁定方向 → **松手才跳页**（此前达标瞬间
+// 直接跳）。达标前反向滑按位移主方向重新判定。
 - (void)erHandlePan:(UIPanGestureRecognizer *)gesture {
     @try {
         static NSInteger sERPanN = 0;
-        // 1.2.0-17 · 日志实锤：胶囊(SBHSearchPillView)只是显示层，触摸被上层
-        // SBSearchScrollView 接管——挂在胶囊上的 pan/touch 零触发。pan 改挂
-        // window，Began 时判起点是否落在胶囊区域（±10pt 容差）内才生效。
         if (gesture.state == UIGestureRecognizerStateBegan) {
             UIView *pill = sERSPGPillRef;
             BOOL inside = NO;
             if (pill.window) {
                 CGPoint p = [gesture locationInView:pill.window];
-                CGRect f = CGRectInset(sERSPGPillWinFrame, -10.0, -10.0);
+                // 1.2.0-21 · 判定区外扩 30pt：pan 手势要等手指移动 ~10pt 才正式
+                // Began，紧贴胶囊起手时实际触点已略偏；外扩后胶囊本体+近圈都算。
+                CGRect f = CGRectInset(sERSPGPillWinFrame, -30.0, -30.0);
                 inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
+                if (inside) {
+                    ERLogInfo(@"SPG-PAN begin ok p=(%.0f,%.0f) frame=%@ winFrame=%@",
+                              p.x, p.y, NSStringFromCGRect(pill.frame),
+                              NSStringFromCGRect(pill.window.frame));
+                    // 防横向被桌面翻页 pan 抢走：压住 pager pan，结束再恢复。
+                    ERSPGPagerPanSetEnabled(NO);
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                                   dispatch_get_main_queue(), ^{
+                        ERSPGPagerPanSetEnabled(YES);
+                    });
+                } else {
+                    // 失败可见（每秒最多 1 条防刷屏）：区分区域外起手。
+                    static NSTimeInterval sERLastOutside = 0;
+                    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+                    if (now - sERLastOutside > 1.0) {
+                        sERLastOutside = now;
+                        ERLogInfo(@"SPG-PAN begin outside p=(%.0f,%.0f) pillWinFrame=%@",
+                                  p.x, p.y, NSStringFromCGRect(sERSPGPillWinFrame));
+                    }
+                }
             }
             objc_setAssociatedObject(gesture, @selector(erPanInPill), @(inside), OBJC_ASSOCIATION_RETAIN);
-            if (inside) ERLogInfo(@"SPG-PAN begin-in-pill ok frame=%@",
-                                  NSStringFromCGRect(sERSPGPillWinFrame));
+            objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
+            objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @0, OBJC_ASSOCIATION_RETAIN);
             return;
         }
         if (gesture.state == UIGestureRecognizerStateEnded ||
             gesture.state == UIGestureRecognizerStateCancelled) {
+            // 1.2.0-21 · 松手才跳页：达标时锁定的页码在这里落地。
+            NSInteger pending = [objc_getAssociatedObject(gesture, @selector(erPanPendingPage)) integerValue];
+            objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @0, OBJC_ASSOCIATION_RETAIN);
             objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
+            if (pending >= 1) {
+                ERLogInfo(@"SPG-PAN #%ld release jump page=%ld", (long)++sERPanN, (long)pending);
+                ERSPGJumpToPage(pending);
+            }
+            ERSPGPagerPanSetEnabled(YES);
             return;
         }
         if (gesture.state != UIGestureRecognizerStateChanged) return;
         if (![objc_getAssociatedObject(gesture, @selector(erPanInPill)) boolValue]) return;
         if ([objc_getAssociatedObject(gesture, @selector(erPanFired)) boolValue]) return;
         CGPoint t = [gesture translationInView:gesture.view];
-        if (hypot(t.x, t.y) < 40.0) return;   // 位移闸门：40pt 才算一次有效滑动
+        CGFloat range = ERSPGTriggerRange();
+        if (hypot(t.x, t.y) < range) return;   // 位移闸门：滑够「触发范围」才算
         if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) return;
         NSString *key = nil;
         if (fabs(t.x) >= fabs(t.y)) {
@@ -32252,12 +32306,12 @@ static UIPanGestureRecognizer *sERSPGWinPan = nil;
             key = (t.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         }
         NSInteger page = ERSPGInt(key, 0);
-        if (!ERSPGShouldFire()) return;   // 1.2.0-17 提前：与 touches 通道去重（含无动作页）
+        if (!ERSPGShouldFire()) return;   // 与 touches 通道去重（含无动作页）
         objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
-        ERLogInfo(@"SPG-PAN #%ld t=(%.0f,%.0f) page=%ld", (long)++sERPanN, t.x, t.y, (long)page);
-        if (page < 1) return;   // 无动作 = 系统默认
-        ERSPGHaptic();
-        ERSPGJumpToPage(page);
+        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld", t.x, t.y, range, (long)page);
+        if (page < 1) return;   // 无动作 = 系统默认（不震不跳）
+        ERSPGHaptic();           // 达标提示震（一次）
+        objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @(page), OBJC_ASSOCIATION_RETAIN);
     } @catch (__unused NSException *e) {}
 }
 @end
@@ -32268,6 +32322,7 @@ static UIPanGestureRecognizer *sERSPGWinPan = nil;
 // 对胶囊同样处理：Began 记起点，Moved/Ended 判位移（≥40pt 与 pan 一致），
 // 位移过小 = 单击 → 透传 super（不破坏打开搜索）。
 static NSMutableDictionary<NSValue *, NSValue *> *gERSPGTouchStart = nil;
+static NSMutableDictionary<NSValue *, NSNumber *> *gERSPGTouchPending = nil;
 static NSInteger sERSPGTouchN = 0;
 
 // pan / touch 双通道去重：0.6s 内只触发一次跳页。
@@ -32279,10 +32334,12 @@ static BOOL ERSPGShouldFire(void) {
     return YES;
 }
 
-static void ERSPGTouchFire(id self, CGPoint start, CGPoint end) {
+// 1.2.0-21 · touches 通道与 pan 同流程：达标（Moved）只锁定方向+震动并记录
+// 待跳页码，松手（Ended）才真正跳页。
+static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
     @try {
         CGPoint d = CGPointMake(end.x - start.x, end.y - start.y);
-        if (hypot(d.x, d.y) < 40.0) return;   // 单击范围，交给系统
+        if (hypot(d.x, d.y) < ERSPGTriggerRange()) return;
         if (!ERSPGShouldFire()) return;
         NSString *key;
         if (fabs(d.x) >= fabs(d.y))
@@ -32290,8 +32347,38 @@ static void ERSPGTouchFire(id self, CGPoint start, CGPoint end) {
         else
             key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         NSInteger page = ERSPGInt(key, 0);
-        ERLogInfo(@"SPG-TOUCH #%ld d=(%.0f,%.0f) page=%ld", (long)++sERSPGTouchN, d.x, d.y, (long)page);
-        if (page < 1) return;   // 无动作 = 系统默认
+        if (page < 1) return;   // 无动作 = 系统默认（不震不跳）
+        ERLogInfo(@"SPG-TOUCH armed d=(%.0f,%.0f) page=%ld", d.x, d.y, (long)page);
+        ERSPGHaptic();
+        if (!gERSPGTouchPending) gERSPGTouchPending = [NSMutableDictionary new];
+        gERSPGTouchPending[[NSValue valueWithNonretainedObject:touch]] = @(page);
+    } @catch (__unused NSException *e) {}
+}
+
+// 松手跳页：pending 页码落地；未达标但松手时已够范围（快速轻扫）直接触发。
+static void ERSPGTouchRelease(UITouch *touch, CGPoint start, CGPoint end) {
+    @try {
+        NSValue *tv = [NSValue valueWithNonretainedObject:touch];
+        NSNumber *pending = gERSPGTouchPending[tv];
+        if (pending) {
+            [gERSPGTouchPending removeObjectForKey:tv];
+            ERLogInfo(@"SPG-TOUCH #%ld release jump page=%ld",
+                      (long)++sERSPGTouchN, (long)pending.integerValue);
+            ERSPGJumpToPage(pending.integerValue);
+            return;
+        }
+        CGPoint d = CGPointMake(end.x - start.x, end.y - start.y);
+        if (hypot(d.x, d.y) < ERSPGTriggerRange()) return;
+        if (!ERSPGShouldFire()) return;
+        NSString *key;
+        if (fabs(d.x) >= fabs(d.y))
+            key = (d.x < 0) ? @"HomeScreen.SearchPill.GestureLeft" : @"HomeScreen.SearchPill.GestureRight";
+        else
+            key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
+        NSInteger page = ERSPGInt(key, 0);
+        if (page < 1) return;
+        ERLogInfo(@"SPG-TOUCH #%ld release direct d=(%.0f,%.0f) page=%ld",
+                  (long)++sERSPGTouchN, d.x, d.y, (long)page);
         ERSPGHaptic();
         ERSPGJumpToPage(page);
     } @catch (__unused NSException *e) {}
@@ -32326,10 +32413,10 @@ static void ERSPGTMoved(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
         if (sv) {
             CGPoint end = [t locationInView:(UIView *)self];
             CGPoint d = CGPointMake(end.x - sv.CGPointValue.x, end.y - sv.CGPointValue.y);
-            if (hypot(d.x, d.y) >= 40.0) {
-                // 参考插件在 Moved 即触发（阈值 10pt）；我们 40pt，触发后移除起点防重。
+            // 1.2.0-21 · Moved 达标只"上膛"（锁方向+震动），跳页等松手；移除起点防重。
+            if (hypot(d.x, d.y) >= ERSPGTriggerRange()) {
                 [gERSPGTouchStart removeObjectForKey:tv];
-                ERSPGTouchFire(self, sv.CGPointValue, end);
+                ERSPGTouchArm(t, sv.CGPointValue, end);
             }
         }
     } @catch (__unused NSException *e) {}
@@ -32344,7 +32431,11 @@ static void ERSPGTEnded(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
         if (sv) {
             [gERSPGTouchStart removeObjectForKey:tv];
             CGPoint end = [t locationInView:(UIView *)self];
-            ERSPGTouchFire(self, [sv CGPointValue], end);
+            ERSPGTouchRelease(t, [sv CGPointValue], end);
+        } else {
+            // 已上膛（Moved 达标过）→ 松手跳页。
+            ERSPGTouchRelease(t, CGPointMake(CGFLOAT_MAX, CGFLOAT_MAX),
+                              [t locationInView:(UIView *)self]);
         }
     } @catch (__unused NSException *e) {}
     ERSPGMsgSuperTouches(self, _cmd, touches, event);
