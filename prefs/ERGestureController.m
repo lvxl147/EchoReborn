@@ -858,7 +858,15 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
     [row setProperty:@YES forKey:@"showValue"];
     [row setProperty:@NO forKey:@"isContinuous"];
     [row setProperty:kERGestureReload forKey:@"PostNotification"];
-    [row setProperty:ERImageIconWithFallbacks(@[symbol], nil,
+    // 1.2.0-24 · 用户截图实锤标题空白：ERSliderTrackCell 标题读 label/name 属性，
+    // 代码构建的 specifier 不会自动生成 label property —— 手动补上。
+    [row setProperty:name forKey:@"label"];
+    // symbol 换增强页已验证有效的候选组合（"arrow.up.left.and.arrow.down.right"
+    // 在 iOS17.2 渲染成白块）。
+    [row setProperty:ERImageIconWithFallbacks(@[@"arrow.up.and.down",
+                                                @"arrow.left.and.right",
+                                                @"plusminus"],
+                                              nil,
                                              [name substringToIndex:1], color)
               forKey:@"iconImage"];
     return row;
