@@ -32026,7 +32026,7 @@ static UIScrollView *ERSPGFindPager(UIView *root) {
             CGFloat w = CGRectGetWidth(sv.bounds), h = CGRectGetHeight(sv.bounds);
             NSString *cn = NSStringFromClass(sv.class);
             if (sv.pagingEnabled && w >= sw * 0.9 && h >= sh * 0.6 &&
-                CGRectGetWidth(sv.contentSize) >= w * 1.5 &&
+                CGSizeGetWidth(sv.contentSize) >= w * 1.5 &&
                 [cn rangeOfString:@"Search"].location == NSNotFound &&
                 ERSPGSubtreeHasClass(sv, @"IconList")) {
                 return sv;
@@ -32051,8 +32051,8 @@ static UIScrollView *ERSPGPager(void) {
         sERSPGPagerPageW = CGRectGetWidth(sv.bounds);
         ERLogInfo(@"SPG-PAGER found cls=%@ pageW=%.0f contentW=%.0f pages=%.0f",
                   NSStringFromClass(sv.class), sERSPGPagerPageW,
-                  CGRectGetWidth(sv.contentSize),
-                  sERSPGPagerPageW > 1 ? CGRectGetWidth(sv.contentSize) / sERSPGPagerPageW : 0);
+                  CGSizeGetWidth(sv.contentSize),
+                  sERSPGPagerPageW > 1 ? CGSizeGetWidth(sv.contentSize) / sERSPGPagerPageW : 0);
     }
     return sERSPGPager;
 }
@@ -32078,7 +32078,7 @@ static NSInteger ERSPGProbePageCount(void) {
     if (cnt < 1) {
         UIScrollView *pager = ERSPGPager();
         if (pager && sERSPGPagerPageW > 1) {
-            NSInteger p = (NSInteger)lround(CGRectGetWidth(pager.contentSize) / sERSPGPagerPageW);
+            NSInteger p = (NSInteger)lround(CGSizeGetWidth(pager.contentSize) / sERSPGPagerPageW);
             if (p >= 1) { cnt = p; via = @"pagerScrollView"; }
         }
     }
