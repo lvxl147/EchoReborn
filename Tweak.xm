@@ -32567,23 +32567,133 @@ static void ERSPGSyncSystemGestures(UIView *pill, BOOL gestureEnabled) {
 // recognizer——"拖胶囊一直翻页"是覆盖全屏的搜索层 SBSearchScrollView（横向
 // 滚动视图）自己在滚。总开关模型（用户需求）：开=我们的手势生效+搜索层 pan
 // 禁用（系统拖胶囊翻页彻底失效）；关=恢复系统原生行为。
+// 1.2.0-25 · page control 手势/触摸外科手术（替换 -24 整层 userInteractionEnabled
+// 过杀方案）：用户需求——胶囊保持可点（开搜索）可拖（有跟随显示），只杀"拖拽
+// 翻页"。三招：
+//   ① SPG-GR2 一次性 dump page control 链手势清单（-24 实锤它是真载体但未 dump 过）
+//   ② 若有 pan/swipe recognizer → 开关开只禁它们（其余保留，外科手术式）
+//   ③ 纯 touches 实现的兜底：类级 hook touches，开关开时吞噬（翻页死）；
+//      单击（位移<10pt）临时隐藏 page control 链后 hitTest 重放给下层真实视图
+//      （点击开搜索保住）
+static NSMutableDictionary<NSValue *, NSValue *> *gERSPGPageCtlStart = nil;
+static BOOL sERSPGPageCtlReplay = NO;
+static NSMutableSet *gERSPGPageCtlHooked = nil;
+
+static BOOL ERSPGIsPageCtlClass(NSString *cn) {
+    return [cn rangeOfString:@"SBIconListPageControl"].location != NSNotFound ||
+           [cn rangeOfString:@"SBFolderScrollAccessoryView"].location != NSNotFound ||
+           [cn rangeOfString:@"_UIPageControlContentView"].location != NSNotFound;
+}
+
+static void ERSPGPageCtlBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
+        ERSPGMsgSuperTouches(self, _cmd, touches, event);
+        return;
+    }
+    UITouch *t = [touches anyObject];
+    CGPoint p = [t locationInView:(UIView *)self];
+    if (!gERSPGPageCtlStart) gERSPGPageCtlStart = [NSMutableDictionary new];
+    gERSPGPageCtlStart[[NSValue valueWithNonretainedObject:t]] = [NSValue valueWithCGPoint:p];
+    // 吞噬：不调 super → 拖拽翻页逻辑不启动（window pan 不受影响，仍能收到）
+}
+
+static void ERSPGPageCtlMoved(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
+        ERSPGMsgSuperTouches(self, _cmd, touches, event);
+        return;
+    }
+    // 吞噬
+}
+
+static void ERSPGPageCtlEnded(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
+        ERSPGMsgSuperTouches(self, _cmd, touches, event);
+        return;
+    }
+    @try {
+        UITouch *t = [touches anyObject];
+        NSValue *tv = [NSValue valueWithNonretainedObject:t];
+        NSValue *sv = gERSPGPageCtlStart[tv];
+        [gERSPGPageCtlStart removeObjectForKey:tv];
+        if (!sv) return;
+        CGPoint start = sv.CGPointValue;
+        CGPoint end = [t locationInView:(UIView *)self];
+        if (hypot(end.x - start.x, end.y - start.y) >= 10.0) return;   // 拖拽 = 无动作
+        // 单击重放：隐藏 page control 链 → hitTest 下层真实视图 → 转发 touches
+        UIView *pc = (UIView *)self;
+        UIWindow *w = pc.window;
+        if (!w) return;
+        CGPoint wp = [t locationInView:w];
+        NSMutableArray *hiddenViews = [NSMutableArray new];
+        for (UIView *v = pc; v; v = v.superview) {
+            NSString *cn = NSStringFromClass(v.class);
+            if ([cn rangeOfString:@"PageControl"].location != NSNotFound ||
+                [cn rangeOfString:@"Accessory"].location != NSNotFound) {
+                if (!v.hidden) { v.hidden = YES; [hiddenViews addObject:v]; }
+            }
+        }
+        UIView *real = [w hitTest:wp withEvent:nil];
+        if (real) {
+            sERSPGPageCtlReplay = YES;
+            [real touchesBegan:touches withEvent:event];
+            [real touchesEnded:touches withEvent:event];
+            sERSPGPageCtlReplay = NO;
+            ERLogInfo(@"SPG-TAPREPLAY -> %@", NSStringFromClass(real.class));
+        }
+        for (UIView *h in hiddenViews) h.hidden = NO;
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERSPGAttachPageCtlHook(Class cls) {
+    if (!cls || [gERSPGPageCtlHooked containsObject:cls]) return;
+    if (!gERSPGPageCtlHooked) gERSPGPageCtlHooked = [NSMutableSet new];
+    struct { SEL sel; IMP imp; } items[] = {
+        { @selector(touchesBegan:withEvent:),  (IMP)ERSPGPageCtlBegan  },
+        { @selector(touchesMoved:withEvent:),  (IMP)ERSPGPageCtlMoved  },
+        { @selector(touchesEnded:withEvent:),  (IMP)ERSPGPageCtlEnded  },
+    };
+    for (int i = 0; i < 3; i++) {
+        if (!class_addMethod(cls, items[i].sel, items[i].imp, "v@:@@"))
+            class_replaceMethod(cls, items[i].sel, items[i].imp, "v@:@@");
+    }
+    [gERSPGPageCtlHooked addObject:cls];
+    ERLogInfo(@"SPG-PAGECTL hook attached cls=%@", NSStringFromClass(cls));
+}
+
 static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSInteger *n) {
     if (!root) return;
     @try {
         NSString *cn = NSStringFromClass(root.class);
-        // 1.2.0-24 · SPG-HIT 实锤：胶囊区域 hitTest 命中 SBFolderScrollAccessoryView
-        // < SBIconListPageControl —— 桌面分页圆点控件透明层盖住胶囊，iOS17 page
-        // control 自带"拖圆点翻页"，这才是"拖胶囊翻页"的真载体（SearchScrollView
-        // pan 压了没用）。手势开关开 → 整层 userInteractionEnabled=NO（拖圆点翻页/
-        // 点圆点跳页同属系统行为一并关闭，用户确认可接受）；关 → 恢复 YES。
-        BOOL pageCtl = [cn rangeOfString:@"SBIconListPageControl"].location != NSNotFound ||
-                       [cn rangeOfString:@"SBFolderScrollAccessoryView"].location != NSNotFound;
-        if (pageCtl) {
-            if (root.userInteractionEnabled != (!gestureEnabled)) {
-                root.userInteractionEnabled = !gestureEnabled;
-                ERLogInfo(@"SPG-PAGECTL %@ -> %@", cn, gestureEnabled ? @"OFF" : @"restored");
-            }
+        // 1.2.0-25 · page control 真载体：外科手术三招（见上方注释块）。
+        // -24 整层 userInteractionEnabled=NO 过杀（胶囊互动全灭、横向反而落到
+        // 桌面翻页），已回滚。
+        if (ERSPGIsPageCtlClass(cn)) {
             (*n)++;
+            // ① 一次性 dump 手势清单
+            static BOOL sERSPGGR2Logged = NO;
+            if (!sERSPGGR2Logged) {
+                sERSPGGR2Logged = YES;
+                NSArray *grs = root.gestureRecognizers;
+                ERLogInfo(@"SPG-GR2 %@ gestures=%lu", cn, (unsigned long)grs.count);
+                for (UIGestureRecognizer *g in grs) {
+                    ERLogInfo(@"SPG-GR2   g=%@ state=%ld enabled=%d",
+                              NSStringFromClass(g.class), (long)g.state, g.enabled?1:0);
+                }
+            }
+            // ② pan/swipe recognizer 外科手术：开关开只禁它们
+            for (UIGestureRecognizer *g in root.gestureRecognizers) {
+                BOOL panLike = [g isKindOfClass:[UIPanGestureRecognizer class]] ||
+                               [g isKindOfClass:[UISwipeGestureRecognizer class]];
+                if (!panLike) continue;
+                BOOL want = gestureEnabled ? NO : YES;
+                if (g.enabled != want) {
+                    g.enabled = want;
+                    ERLogInfo(@"SPG-GR2 suppress %@ g=%@ -> %d", cn,
+                              NSStringFromClass(g.class), want?1:0);
+                }
+            }
+            // ③ touches 兜底 hook（类级一次）
+            ERSPGAttachPageCtlHook(root.class);
         }
         if ([cn rangeOfString:@"SearchScrollView"].location != NSNotFound) {
             // 1.2.0-23b · CI 实锤：panGestureRecognizer 是 UIScrollView 属性，
