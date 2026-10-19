@@ -120,3 +120,4 @@
 | 203 | 1.2.0-8 | 1002008 | 手势触发改造：UISwipeGestureRecognizer 在搜索胶囊上被桌面翻页 pan/其它手势插件压制、从不触发（1.2.0-7 诊断日志 0 条 SPG-SWIPE 实锤）——改为单个允许 simultaneous 识别的 UIPanGestureRecognizer（ERSPGPanDelegate 全 YES），位移≥40pt 判方向触发一次（pan 内 erPanFired 防重）；新增 SPG-PAN 触发日志、SPG-PILL 30s 在场心跳；排查中发现 1.2.0-7 的 Tweak.xm 因推送脚本清单遗漏从未上设备（0 条 SPG 的根因），push_ergesture.py 已补 Tweak.xm |
 | 204 | 1.2.0-9 | 1002009 | SPG 探针（ctor/tick 双通道）+ ERModuleIconSwitchCell 坐标换算修开关消失 + 箭头 15→12pt + 按钮加宽防截断 |
 | 205 | 1.2.0-10 | 1002010 | 开关行换 ERGestureSwitchCell（不碰开关只注图标）+ 浅色模式适配（标题/按钮/下拉浮层动态色）+ 下拉框再加宽半字 |
+| 206 | 1.2.0-11 | 1002011 | 开关行图标改为每布局重读 specifier 强制注入 + 下拉框页码筛选（他手势占用页隐藏，无动作恒可选）+ 下拉框再宽（容差36/上限216）+ 浅色模式框内文字/箭头改黑 |
