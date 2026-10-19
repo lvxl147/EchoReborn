@@ -15,7 +15,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.2.0-8</string>
 	<key>CFBundleVersion</key>
-	<string>1002015</string>
+	<string>1002016</string>
 	<key>NSPrincipalClass</key>
 	<string>ERRootListController</string>
 </dict>
