@@ -571,6 +571,155 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 
 @end
 
+#pragma mark - 手势页滑块 cell（1.2.0-21 触发范围）
+
+// 滑块行读写（CFPreferences 直读直写 + ReloadPrefs 通知，与开关行同链路）。
+static NSInteger ERGSliderRead(NSString *key, NSInteger defVal) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
+    CFTypeRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                            (__bridge CFStringRef)kERGestureSuite);
+    NSInteger val = defVal;
+    if (v) {
+        if (CFGetTypeID(v) == CFNumberGetTypeID()) {
+            val = [(__bridge NSNumber *)v integerValue];
+        } else if (CFGetTypeID(v) == CFStringGetTypeID()) {
+            val = [(__bridge NSString *)v integerValue];
+        }
+        CFRelease(v);
+    }
+    return val;
+}
+
+static void ERGSliderWrite(NSString *key, NSInteger val) {
+    CFPreferencesSetAppValue((__bridge CFStringRef)key,
+                             (__bridge CFNumberRef)@(val),
+                             (__bridge CFStringRef)kERGestureSuite);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
+    notify_post(kERGestureReload.UTF8String);
+}
+
+// 左图标 + 标题，右侧滑块 + 当前值标签；样式对齐开关行（29pt 图标 / 16pt 标题）。
+@interface ERGestureSliderCell : PSTableCell
+@end
+
+@implementation ERGestureSliderCell {
+    UIImageView *_erIcon;
+    UILabel     *_erTitle;
+    UISlider    *_erSlider;
+    UILabel     *_erValue;
+    PSSpecifier *_erSpec;
+}
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(NSString *)reuseIdentifier
+                    specifier:(PSSpecifier *)specifier {
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier];
+    if (!self) return nil;
+    _erSpec = specifier;
+    self.backgroundColor = [UIColor clearColor];
+    self.selectionStyle = UITableViewCellSelectionStyleNone;
+
+    _erIcon = [[UIImageView alloc] initWithFrame:CGRectZero];
+    _erIcon.contentMode = UIViewContentModeScaleAspectFit;
+    _erIcon.userInteractionEnabled = NO;
+    _erIcon.image = [specifier propertyForKey:@"iconImage"];
+    [self.contentView addSubview:_erIcon];
+
+    _erTitle = [[UILabel alloc] initWithFrame:CGRectZero];
+    _erTitle.font = [UIFont systemFontOfSize:16.0];
+    _erTitle.text = ERSpecLabel(specifier);
+    _erTitle.textColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.95],
+                                    [UIColor colorWithWhite:0.0 alpha:0.87]);
+    [self.contentView addSubview:_erTitle];
+
+    _erSlider = [[UISlider alloc] initWithFrame:CGRectZero];
+    NSNumber *mn = [specifier propertyForKey:@"erMin"] ?: @10;
+    NSNumber *mx = [specifier propertyForKey:@"erMax"] ?: @80;
+    _erSlider.minimumValue = mn.floatValue;
+    _erSlider.maximumValue = mx.floatValue;
+    _erSlider.tintColor = [UIColor colorWithRed:0.20 green:0.72 blue:0.65 alpha:1.0];
+    [_erSlider addTarget:self action:@selector(_erSliderChanged:)
+        forControlEvents:UIControlEventValueChanged];
+    [self.contentView addSubview:_erSlider];
+
+    _erValue = [[UILabel alloc] initWithFrame:CGRectZero];
+    _erValue.font = [UIFont monospacedDigitSystemFontOfSize:14.0 weight:UIFontWeightMedium];
+    _erValue.textColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.75],
+                                    [UIColor colorWithWhite:0.0 alpha:0.55]);
+    _erValue.textAlignment = NSTextAlignmentRight;
+    [self.contentView addSubview:_erValue];
+    [self _erSyncSlider];
+    return self;
+}
+
+- (void)_erSyncSlider {
+    NSString *key = [_erSpec propertyForKey:@"key"];
+    if (!key.length) return;
+    NSNumber *def = [_erSpec propertyForKey:@"default"] ?: @20;
+    NSInteger v = ERGSliderRead(key, def.integerValue);
+    _erSlider.value = (float)v;
+    _erValue.text = [NSString stringWithFormat:@"%ld", (long)v];
+}
+
+- (void)_erSliderChanged:(UISlider *)slider {
+    NSString *key = [_erSpec propertyForKey:@"key"];
+    if (!key.length) return;
+    // 步进 5（用户需求示例 20：值域内按 5 取整）。
+    NSInteger v = lroundf(slider.value / 5.0f) * 5;
+    NSNumber *mn = [_erSpec propertyForKey:@"erMin"] ?: @10;
+    NSNumber *mx = [_erSpec propertyForKey:@"erMax"] ?: @80;
+    if (v < mn.integerValue) v = mn.integerValue;
+    if (v > mx.integerValue) v = mx.integerValue;
+    slider.value = (float)v;
+    _erValue.text = [NSString stringWithFormat:@"%ld", (long)v];
+    ERGSliderWrite(key, v);
+}
+
+- (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
+    @try {
+        [super refreshCellContentsWithSpecifier:specifier];
+    } @catch (__unused NSException *e) {}
+    if (specifier) _erSpec = specifier;
+    self.textLabel.hidden = YES;
+    self.textLabel.text = nil;
+    self.detailTextLabel.hidden = YES;
+    self.detailTextLabel.text = nil;
+    self.imageView.hidden = YES;
+    self.imageView.image = nil;
+    _erIcon.image = [_erSpec propertyForKey:@"iconImage"];
+    _erTitle.text = ERSpecLabel(_erSpec);
+    [self _erSyncSlider];
+    [self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    @try {
+        CGFloat h = self.contentView.bounds.size.height;
+        if (h < 40.0) h = 44.0;
+        CGFloat left = self.contentView.layoutMargins.left;
+        CGFloat right = self.contentView.layoutMargins.right;
+        if (left < 1.0) left = 16.0;
+        if (right < 1.0) right = 16.0;
+        CGFloat w = self.contentView.bounds.size.width;
+        if (w < 1.0) return;
+        self.imageView.hidden = YES;
+        self.textLabel.hidden = YES;
+        self.detailTextLabel.hidden = YES;
+        _erIcon.frame = CGRectMake(left, (h - 29.0) / 2.0, 29.0, 29.0);
+        CGFloat valW = 34.0;
+        CGFloat sliderW = 150.0;
+        _erValue.frame = CGRectMake(w - right - valW, (h - 20.0) / 2.0, valW, 20.0);
+        _erSlider.frame = CGRectMake(w - right - valW - 10.0 - sliderW,
+                                     (h - 31.0) / 2.0, sliderW, 31.0);
+        CGFloat lx = left + 29.0 + 12.0;
+        _erTitle.frame = CGRectMake(lx, 0,
+                                    _erSlider.frame.origin.x - lx - 12.0, h);
+    } @catch (__unused NSException *e) {}
+}
+
+@end
+
 #pragma mark - 控制器
 
 @implementation ERGestureController
@@ -717,7 +866,7 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 
         // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
         PSSpecifier *g1 = [PSSpecifier groupSpecifierWithName:@"搜索胶囊"];
-        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响；「无动作」保持系统默认行为，选择某页后，触发对应滑动的瞬间直接跳到该页。"
+        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。"
                  forKey:@"footerText"];
         [specs addObject:g1];
         [specs addObject:[self erSwitchNamed:@"搜索胶囊手势"
@@ -729,6 +878,12 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
         [specs addObject:[self erGestureNamed:@"下滑胶囊" key:@"HomeScreen.SearchPill.GestureDown" symbol:@"arrow.down"  color:@"blue"]];
         [specs addObject:[self erGestureNamed:@"左滑胶囊" key:@"HomeScreen.SearchPill.GestureLeft" symbol:@"arrow.left"  color:@"teal"]];
         [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"teal"]];
+        // 1.2.0-21 · 触发范围滑块行（用户需求）：右滑胶囊下面，左图标+文字、右滑块。
+        [specs addObject:[self erSliderNamed:@"触发范围"
+                                          key:@"HomeScreen.SearchPill.TriggerRange"
+                                          min:10 max:80 def:20
+                                       symbol:@"arrow.up.left.and.arrow.down.right"
+                                        color:@"blue"]];
 
         // ---- 卡片2 · 震动反馈 ----
         PSSpecifier *g3 = [PSSpecifier groupSpecifierWithName:@"震动反馈"];
@@ -812,6 +967,32 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
     // plist 解析器会转换字符串，setProperty 不会。本页纯代码构建，必须传 Class。
     [row setProperty:[ERGestureValueCell class] forKey:@"cellClass"];
     [row setProperty:key forKey:@"erGestureKey"];
+    [row setProperty:ERImageIconWithFallbacks(@[symbol], nil,
+                                             [name substringToIndex:1], color)
+              forKey:@"iconImage"];
+    return row;
+}
+
+// 1.2.0-21 · 触发范围滑块行（ERGestureSliderCell）。
+- (PSSpecifier *)erSliderNamed:(NSString *)name
+                            key:(NSString *)key
+                            min:(NSInteger)minV
+                            max:(NSInteger)maxV
+                            def:(NSInteger)defV
+                         symbol:(NSString *)symbol
+                          color:(NSString *)color {
+    PSSpecifier *row = [PSSpecifier preferenceSpecifierNamed:name
+                                                      target:self
+                                                         set:NULL
+                                                         get:NULL
+                                                      detail:Nil
+                                                        cell:PSTitleValueCell
+                                                        edit:Nil];
+    [row setProperty:[ERGestureSliderCell class] forKey:@"cellClass"];
+    [row setProperty:key forKey:@"key"];
+    [row setProperty:@(minV) forKey:@"erMin"];
+    [row setProperty:@(maxV) forKey:@"erMax"];
+    [row setProperty:@(defV) forKey:@"default"];
     [row setProperty:ERImageIconWithFallbacks(@[symbol], nil,
                                              [name substringToIndex:1], color)
               forKey:@"iconImage"];
