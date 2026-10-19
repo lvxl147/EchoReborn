@@ -33037,6 +33037,7 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
                         @autoreleasepool { ERSPGScanTick(); }
                     });
                     dispatch_resume(spgTimer);
+                    (void)sERSPGTimer;   // 抑制 -Wunused-but-set-variable（持有即目的）
                     ERBootLog(@"SPG-CTOR timer resumed (static kept)");
                     ERLogInfo(@"SPG-CTOR timer resumed ok (static kept)");
                 }
