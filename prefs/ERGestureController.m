@@ -842,7 +842,13 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                                       detail:Nil
                                                         cell:PSSliderCell
                                                         edit:Nil];
-    [row setProperty:@"ERSliderTrackCell" forKey:@"cellClass"];
+    // 1.2.0-23 · 崩溃实锤（Preferences .ips：cellForRow → doesNotRecognizeSelector）：
+    // 代码构建的 specifier cellClass 不能传字符串（plist 装载会自动转类，setProperty
+    // 不会）——必须 NSClassFromString 运行期解析成类对象；解析失败兜底 PSTableCell，
+    // 绝不给 PS 传字符串。
+    Class sliderCell = NSClassFromString(@"ERSliderTrackCell");
+    if (!sliderCell) sliderCell = [PSTableCell class];
+    [row setProperty:sliderCell forKey:@"cellClass"];
     [row setProperty:key forKey:@"key"];
     [row setProperty:kERGestureSuite forKey:@"defaults"];
     [row setProperty:@(defV) forKey:@"default"];
