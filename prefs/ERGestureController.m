@@ -384,14 +384,41 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
 
 #pragma mark - 手势页开关 cell（1.2.0-13）
 
-// 1.2.0-13 · 编译期类替代运行期注册（1.2.0-10~12 三版图标都不显示，注册链路
-// 无法从用户侧取证）：与同页已验证的 ERGestureValueCell 相同写法——三参 init
-// 建 UI、refresh 写图标、layoutSubviews 定位。开关仍完全交给基类。
-@interface ERGestureSwitchCell : PSSwitchCell
+// 1.2.0-13 · 彻底换方案：Theos 头文件把 PSSwitchCell 声明为枚举成员（无法编译期
+// 子类化），运行期注册类又因黑盒原因图标始终不显示（1.2.0-10~12 三版实测）。
+// 改用**本页已验证可行的 ERGestureValueCell 同款自绘**：继承 PSTableCell（可
+// 编译期子类化），彩色图标 + 标题 + 自放 UISwitch，读写走 CFPreferences（与
+// 下拉框同一链路），PostNotification 实时生效。不再依赖 PSSwitchCell 任何布局。
+static BOOL ERGSwitchRead(NSString *key) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
+    CFTypeRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                            (__bridge CFStringRef)kERGestureSuite);
+    BOOL val = NO;
+    if (v) {
+        if (CFGetTypeID(v) == CFBooleanGetTypeID()) {
+            val = CFBooleanGetValue((CFBooleanRef)v);
+        } else if (CFGetTypeID(v) == CFNumberGetTypeID()) {
+            val = [(__bridge NSNumber *)v boolValue];
+        }
+        CFRelease(v);
+    }
+    return val;
+}
+
+static void ERGSwitchWrite(NSString *key, BOOL val) {
+    CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFBooleanRef)@(val),
+                             (__bridge CFStringRef)kERGestureSuite);
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
+    notify_post(kERGestureReload.UTF8String);
+}
+
+@interface ERGestureSwitchCell : PSTableCell
 @end
 
 @implementation ERGestureSwitchCell {
     UIImageView *_erIcon;
+    UILabel     *_erTitle;
+    UISwitch    *_erSwitch;
     PSSpecifier *_erSpec;
 }
 
@@ -401,12 +428,50 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier];
     if (!self) return nil;
     _erSpec = specifier;
+    self.backgroundColor = [UIColor clearColor];
+    self.selectionStyle = UITableViewCellSelectionStyleNone;
+
     _erIcon = [[UIImageView alloc] initWithFrame:CGRectZero];
     _erIcon.contentMode = UIViewContentModeScaleAspectFit;
     _erIcon.userInteractionEnabled = NO;
     _erIcon.image = [specifier propertyForKey:@"iconImage"];
     [self.contentView addSubview:_erIcon];
+
+    _erTitle = [[UILabel alloc] initWithFrame:CGRectZero];
+    _erTitle.font = [UIFont systemFontOfSize:16.0];
+    _erTitle.text = [specifier propertyForKey:@"label"];
+    _erTitle.textColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.95],
+                                    [UIColor colorWithWhite:0.0 alpha:0.87]);
+    [self.contentView addSubview:_erTitle];
+
+    _erSwitch = [[UISwitch alloc] initWithFrame:CGRectZero];
+    [_erSwitch addTarget:self action:@selector(_erToggled:)
+        forControlEvents:UIControlEventValueChanged];
+    [self.contentView addSubview:_erSwitch];
+    [self _erSyncSwitch];
     return self;
+}
+
+- (void)_erSyncSwitch {
+    NSString *key = [_erSpec propertyForKey:@"key"];
+    if (!key.length) return;
+    // 无历史值时用 specifier 的 default（搜索胶囊手势=NO，震动反馈=YES）。
+    CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
+    CFTypeRef cur = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                              (__bridge CFStringRef)kERGestureSuite);
+    if (cur) {
+        CFRelease(cur);
+        _erSwitch.on = ERGSwitchRead(key);
+    } else {
+        NSNumber *def = [_erSpec propertyForKey:@"default"];
+        _erSwitch.on = def.boolValue;
+    }
+}
+
+- (void)_erToggled:(UISwitch *)sw {
+    NSString *key = [_erSpec propertyForKey:@"key"];
+    if (!key.length) return;
+    ERGSwitchWrite(key, sw.on);
 }
 
 - (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
@@ -416,26 +481,27 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     } @catch (__unused NSException *e) {}
     if (specifier) _erSpec = specifier;
     _erIcon.image = [_erSpec propertyForKey:@"iconImage"];
+    _erTitle.text = [_erSpec propertyForKey:@"label"];
+    [self _erSyncSwitch];
     [self setNeedsLayout];
 }
 
 - (void)layoutSubviews {
     [super layoutSubviews];
     @try {
-        if (!_erIcon.image) return;
         CGFloat h = self.contentView.bounds.size.height;
         CGFloat left = self.contentView.layoutMargins.left;
-        _erIcon.hidden = NO;
+        CGFloat right = self.contentView.layoutMargins.right;
+        CGFloat w = self.contentView.bounds.size.width;
         _erIcon.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
-        UILabel *label = self.textLabel;
-        if (label) {
-            CGFloat lx = left + 27.0 + 12.0;
-            CGRect f = label.frame;
-            f.origin.x = lx;
-            f.size.width = MIN(f.size.width,
-                               self.contentView.bounds.size.width - lx - 90.0);
-            label.frame = f;
-        }
+        CGSize swSize = _erSwitch.bounds.size;
+        if (swSize.width < 1.0) swSize = CGSizeMake(51.0, 31.0);
+        _erSwitch.frame = CGRectMake(w - right - swSize.width,
+                                     (h - swSize.height) / 2.0,
+                                     swSize.width, swSize.height);
+        CGFloat lx = left + 27.0 + 12.0;
+        _erTitle.frame = CGRectMake(lx, 0,
+                                    _erSwitch.frame.origin.x - lx - 12.0, h);
     } @catch (__unused NSException *e) {}
 }
 
