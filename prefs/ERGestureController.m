@@ -114,14 +114,18 @@ static NSString *ERGestureValueText(NSInteger value) {
 
 #pragma mark - 下拉浮层
 
-static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^onPick)(NSInteger idx)) {
+static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
+                                  NSArray<NSNumber *> *excludePages,
+                                  void (^onPick)(NSInteger idx)) {
     UIWindow *window = anchor.window;
     if (!window) return;
 
     CGRect anchorRect = [anchor convertRect:anchor.bounds toView:window];
     NSInteger pageCount = ERGesturePageCount();
     NSMutableArray<NSString *> *options = [NSMutableArray arrayWithObject:@"无动作"];
+    // 1.2.0-11 · 筛选：其它手势已占用的页不再出现（无动作恒可选）。
     for (NSInteger p = 1; p <= pageCount; p++) {
+        if ([excludePages containsObject:@(p)]) continue;
         [options addObject:[NSString stringWithFormat:@"第%ld页", (long)p]];
     }
 
@@ -253,7 +257,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
         configurationWithPointSize:12.0 weight:UIImageSymbolWeightSemibold];
     UIImage *chev = [UIImage systemImageNamed:@"chevron.down" withConfiguration:chevCfg];
     _chevron = [[UIImageView alloc] initWithImage:chev];
-    _chevron.tintColor = [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0];
+    // 1.2.0-11 · 箭头颜色也随深浅色（浅色下深灰，跟文字一致）。
+    _chevron.tintColor = ERGDynamic([UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0],
+                                    [UIColor colorWithWhite:0.15 alpha:1.0]);
     _chevron.contentMode = UIViewContentModeCenter;
     [_valueButton addSubview:_chevron];
 
@@ -277,8 +283,8 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     CGFloat chevW = 14.0;
     CGSize ts = [_title.text sizeWithAttributes:@{NSFontAttributeName: _title.font}];
     CGFloat pad = 10.0;
-    // 1.2.0-10 · 用户反馈仍差半个字：容差 14→24、上限 190→200。
-    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 24.0, 76.0), 200.0);
+    // 1.2.0-11 · 「无动作/第10页」仍截断：容差 24→36、上限 200→216。
+    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 36.0, 76.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -328,7 +334,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     NSString *text = ERGestureValueText(ERGestureReadValue(key));
     // 1.2.0-7 · 箭头不再拼进标题字符串（字符 ⌄ 小且随基线偏移），独立 _chevron 渲染。
     [_valueButton setTitle:text forState:UIControlStateNormal];
-    [_valueButton setTitleColor:[UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0]
+    // 1.2.0-11 · 浅色模式文字改黑（深色保持青色高亮）。
+    [_valueButton setTitleColor:ERGDynamic([UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0],
+                                            [UIColor colorWithWhite:0.05 alpha:1.0])
                        forState:UIControlStateNormal];
     [self setNeedsLayout];
 }
@@ -337,9 +345,30 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     PSSpecifier *spec = objc_getAssociatedObject(self, @selector(_erGestureKey));
     NSString *key = [self _erGestureKey];
     if (!spec || !key.length) return;
+    // 1.2.0-11 · 筛选：收集其余三个手势已占用的页码，本下拉框不再提供。
+    NSArray<NSString *> *allKeys = @[@"HomeScreen.SearchPill.GestureUp",
+                                     @"HomeScreen.SearchPill.GestureDown",
+                                     @"HomeScreen.SearchPill.GestureLeft",
+                                     @"HomeScreen.SearchPill.GestureRight"];
+    NSMutableArray<NSNumber *> *taken = [NSMutableArray array];
+    for (NSString *k in allKeys) {
+        if ([k isEqualToString:key]) continue;
+        NSInteger v = ERGestureReadValue(k);
+        if (v >= 1) [taken addObject:@(v)];
+    }
     __weak typeof(self) wself = self;
-    ERGestureShowDropdown(_valueButton, ERGestureValueText(ERGestureReadValue(key)), ^(NSInteger idx) {
-        ERGestureWriteValue(key, idx);   // idx 0 = 无动作，1..N = 第n页
+    ERGestureShowDropdown(_valueButton, ERGestureValueText(ERGestureReadValue(key)), taken, ^(NSInteger idx) {
+        // 1.2.0-11 · 筛选后 options 下标≠页码：idx 0=无动作，否则取「可选页序列」第 idx 项。
+        NSInteger page = 0;
+        if (idx >= 1) {
+            NSInteger cnt = ERGesturePageCount();
+            NSMutableArray<NSNumber *> *avail = [NSMutableArray array];
+            for (NSInteger p = 1; p <= cnt; p++) {
+                if (![taken containsObject:@(p)]) [avail addObject:@(p)];
+            }
+            if (idx - 1 < (NSInteger)avail.count) page = avail[idx - 1].integerValue;
+        }
+        ERGestureWriteValue(key, page);
         [wself _erRefreshValue];
     });
 }
@@ -556,12 +585,19 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 static Class ERGSwitchCellClass = NULL;
 static IMP gERGSuperLayout = NULL;
 static IMP gERGSuperRefresh = NULL;
+static char kERGSwitchSpecKey;
 
 static void ERGSwitchLayout(id self, SEL _cmd) {
     if (gERGSuperLayout) ((void (*)(id, SEL))gERGSuperLayout)(self, _cmd);
     @try {
         UITableViewCell *cell = (UITableViewCell *)self;
-        if (!cell.imageView.image) return;
+        // 1.2.0-11 · 图标注入改为每次布局重读 specifier：不依赖 refresh 时机
+        //（1.2.0-10 只在 refresh 写一次，基类布局可能把 imageView 清掉/隐藏）。
+        PSSpecifier *spec = objc_getAssociatedObject(self, kERGSwitchSpecKey);
+        UIImage *icon = [spec propertyForKey:@"iconImage"];
+        if (![icon isKindOfClass:[UIImage class]]) return;
+        cell.imageView.image = icon;
+        cell.imageView.hidden = NO;
         CGFloat h = cell.contentView.bounds.size.height;
         CGFloat left = cell.contentView.layoutMargins.left;
         cell.imageView.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
@@ -580,8 +616,7 @@ static void ERGSwitchLayout(id self, SEL _cmd) {
 static void ERGSwitchRefresh(id self, SEL _cmd, PSSpecifier *spec) {
     if (gERGSuperRefresh) ((void (*)(id, SEL, id))gERGSuperRefresh)(self, _cmd, spec);
     @try {
-        UIImage *icon = [spec propertyForKey:@"iconImage"];
-        if (icon) ((UITableViewCell *)self).imageView.image = icon;
+        if (spec) objc_setAssociatedObject(self, &kERGSwitchSpecKey, spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     } @catch (__unused NSException *e) {}
 }
 
