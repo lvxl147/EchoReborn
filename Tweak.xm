@@ -32632,6 +32632,9 @@ static void ERSPGPageCtlTouchGateEnd(UIView *from) {
     if (gERSPGPageCtlActive == 0) ERSPGPageCtlScrollPan(YES, from, "on");
 }
 
+static BOOL ERSPGGRGateShouldBegin(id self, SEL _cmd, UIGestureRecognizer *gr);
+static void ERSPGPageCtlChainDump(UIView *leaf);
+
 static void ERSPGPageCtlBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
         ERSPGMsgSuperTouches(self, _cmd, touches, event);
