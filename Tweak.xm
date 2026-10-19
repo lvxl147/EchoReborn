@@ -32251,6 +32251,10 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 // 按类名特征 + 尺寸闸门匹配，避免误挂到别的东西上）。
 static BOOL ERSPGLooksLikePill(UIView *v) {
     NSString *cn = NSStringFromClass(v.class);
+    // 1.2.0-16 · 日志实锤 iOS 17.2 桌面胶囊 = SBHSearchPillView，真实尺寸 62x30
+    // （旧 90~280 宽度闸门直接把它拒掉了，这就是"pill NOT found"的根因）。
+    // 类名精确命中 SearchPill 直接放行，不再过尺寸闸门。
+    if ([cn rangeOfString:@"SearchPill"].location != NSNotFound) return YES;
     // 1.2.0-14 · iOS 17.2 胶囊类名可能含 Spotlight 而非 Search。
     if ([cn rangeOfString:@"Search"].location == NSNotFound &&
         [cn rangeOfString:@"Spotlight"].location == NSNotFound) return NO;
@@ -32259,7 +32263,8 @@ static BOOL ERSPGLooksLikePill(UIView *v) {
         [cn rangeOfString:@"Pill"].location == NSNotFound &&
         [cn rangeOfString:@"Suggestion"].location == NSNotFound) return NO;
     CGFloat w = CGRectGetWidth(v.frame), h = CGRectGetHeight(v.frame);
-    if (w < 90.0 || w > 280.0 || h < 24.0 || h > 70.0) return NO;
+    // 1.2.0-16 · 宽度闸门放宽：90 → 40（兜底其它机型/状态下的小尺寸变体）。
+    if (w < 40.0 || w > 280.0 || h < 24.0 || h > 70.0) return NO;
     return YES;
 }
 
@@ -32361,6 +32366,10 @@ static void ERSPGScanTick(void) {
             if (root) [roots addObject:root];
         }
         for (UIWindow *win in ERAllApplicationWindows()) [roots addObject:win];
+        // 1.2.0-16 · 日志里存在两个 SBHSearchPillView（一个离屏旧实例 @-31,-15、
+        // 一个当前胶囊 @24,13）——不能"命中即止"，优先挂完全落在父视图 bounds
+        // 内的实例；找不到屏内命中才退回第一个候选。
+        UIView *erFallback = nil;
         for (UIView *root in roots) {
             NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
             NSInteger guard = 0;
@@ -32368,12 +32377,18 @@ static void ERSPGScanTick(void) {
                 UIView *v = stack.lastObject;
                 [stack removeLastObject];
                 if (ERSPGLooksLikePill(v)) {
-                    ERSPGConfigurePill(v);
-                    return;   // 一台设备只有一个搜索胶囊，命中即止
+                    CGRect f = v.frame;
+                    CGRect pb = v.superview.bounds;
+                    BOOL onscreen = !CGRectIsNull(pb) && f.origin.x >= -1.0 && f.origin.y >= -1.0 &&
+                                    CGRectGetMaxX(f) <= CGRectGetWidth(pb) + 1.0 &&
+                                    CGRectGetMaxY(f) <= CGRectGetHeight(pb) + 1.0;
+                    if (onscreen) { ERSPGConfigurePill(v); return; }
+                    if (!erFallback) erFallback = v;
                 }
                 [stack addObjectsFromArray:v.subviews];
             }
         }
+        if (erFallback) { ERSPGConfigurePill(erFallback); return; }
         // 1.2.0-7 · 诊断：整轮没找到胶囊，30s 节流记一条（区分「没找到胶囊」与
         // 「找到了但手势没触发」）。1.2.0-14 · 同时 dump 尺寸落在胶囊区间内的候选
         // 类名（类名特征没匹配上 → 拿真实类名修 ERSPGLooksLikePill）。
