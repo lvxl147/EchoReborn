@@ -32194,6 +32194,7 @@ static void ERSPGJumpToPage(NSInteger page1based) {
 // prepare 预热，纯触感无声）。强度档位仍走本页"震动强度"（0轻/1中/2重）。
 // 生成器必须全局保留：impactOccurred 异步派发，局部变量会提前释放导致无感
 // （界面优化页同款教训，见 ERHapticWithStrength 注释）。
+static BOOL sERSPGOwnHaptic = NO;  // 1.2.0-31 系统震动封锁期间放行标记
 static UIImpactFeedbackGenerator *sERSPGHapticGen = nil;
 static NSInteger sERSPGHapticStyle = -1;
 static void ERSPGHaptic(void) {
@@ -32221,8 +32222,6 @@ static __weak UIView *sERSPGPillRef = nil;
 static CGRect sERSPGPillWinFrame = CGRectZero;
 // 1.2.0-29 · 胶囊帧集合：桌面有两个 SBHSearchPillView（底部真胶囊 + 搜索层顶部胶囊），单缓存帧会在两者间跳变，-28 日志实锤闸门拿错帧全放行。改用集合存所有候选帧，闸门命中任一帧即拒。
 static NSMutableArray<NSValue *> *gERSPGPillFrameList = nil;
-// 1.2.0-31 · 我方震动放行标记 + 触摸闸门前向声明（pan handler 先用）
-static BOOL sERSPGOwnHaptic = NO;
 static void ERSPGPageCtlTouchGateBegin(UIView *from);
 static void ERSPGPageCtlTouchGateEnd(UIView *from);
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset);
