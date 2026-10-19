@@ -32587,6 +32587,51 @@ static BOOL ERSPGIsPageCtlClass(NSString *cn) {
            [cn rangeOfString:@"Accessory"].location != NSNotFound;
 }
 
+// 1.2.0-27 · 根因实锤：view 层 touches 吞噬只挡"触摸→view"通道，挂在祖先
+// 滚动视图（SBIconScrollView/SBSearchScrollView）上的 pan 手势识别器依然独立
+// 收到同一套触摸并识别成功→系统翻页照旧。必须在吞噬开始时把祖先滚动视图的
+// pan 手势一并禁用（Began 引用计数 ++，Ended/Cancelled -- 归零恢复，
+// 另加 10s 兜底强制恢复防卡死）。桌面其他区域起手不命中本 hook，不受影响。
+static NSInteger gERSPGPageCtlActive = 0;
+
+static void ERSPGPageCtlScrollPan(BOOL on, UIView *from, const char *tag) {
+    @try {
+        static NSTimeInterval sERLastPCGR = 0;
+        BOOL logIt = NO;
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - sERLastPCGR > 30.0) { sERLastPCGR = now; logIt = YES; }
+        for (UIView *v = from; v; v = v.superview) {
+            if ([v isKindOfClass:%c(UIScrollView)]) {
+                UIScrollView *sv = (UIScrollView *)v;
+                if (sv.panGestureRecognizer && sv.panGestureRecognizer.enabled != on) {
+                    sv.panGestureRecognizer.enabled = on;
+                    if (logIt)
+                        ERLogInfo(@"SPG-PCGR %s %@ pan cls=%@", tag, on ? @"restored" : @"disabled",
+                                  NSStringFromClass(v.class));
+                }
+            }
+        }
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERSPGPageCtlTouchGateBegin(UIView *from) {
+    gERSPGPageCtlActive++;
+    ERSPGPageCtlScrollPan(NO, from, "off");
+    // 10s 兜底强制恢复（正常拖拽远短于此）
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        if (gERSPGPageCtlActive > 0) {
+            gERSPGPageCtlActive = 0;
+            ERSPGPageCtlScrollPan(YES, from, "recover");
+        }
+    });
+}
+
+static void ERSPGPageCtlTouchGateEnd(UIView *from) {
+    if (gERSPGPageCtlActive > 0) gERSPGPageCtlActive--;
+    if (gERSPGPageCtlActive == 0) ERSPGPageCtlScrollPan(YES, from, "on");
+}
+
 static void ERSPGPageCtlBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
         ERSPGMsgSuperTouches(self, _cmd, touches, event);
@@ -32603,6 +32648,8 @@ static void ERSPGPageCtlBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event)
     CGPoint p = [t locationInView:(UIView *)self];
     if (!gERSPGPageCtlStart) gERSPGPageCtlStart = [NSMutableDictionary new];
     gERSPGPageCtlStart[[NSValue valueWithNonretainedObject:t]] = [NSValue valueWithCGPoint:p];
+    // 1.2.0-27 · 关键：同时掐断祖先滚动视图的 pan 手势通道（系统翻页真驱动）
+    ERSPGPageCtlTouchGateBegin((UIView *)self);
     // 吞噬：不调 super → 拖拽翻页逻辑不启动（window pan 不受影响，仍能收到）
 }
 
@@ -32619,6 +32666,8 @@ static void ERSPGPageCtlEnded(id self, SEL _cmd, NSSet *touches, UIEvent *event)
         ERSPGMsgSuperTouches(self, _cmd, touches, event);
         return;
     }
+    // 1.2.0-27 · 本次触摸结束：恢复祖先滚动视图 pan（引用计数归零时）
+    ERSPGPageCtlTouchGateEnd((UIView *)self);
     @try {
         UITouch *t = [touches anyObject];
         NSValue *tv = [NSValue valueWithNonretainedObject:t];
@@ -32653,15 +32702,29 @@ static void ERSPGPageCtlEnded(id self, SEL _cmd, NSSet *touches, UIEvent *event)
     } @catch (__unused NSException *e) {}
 }
 
+// 1.2.0-27 · 触摸被系统取消（来电/手势接管等）：同样要恢复 pan，防卡在禁用态
+static void ERSPGPageCtlCancelled(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
+        ERSPGMsgSuperTouches(self, _cmd, touches, event);
+        return;
+    }
+    @try {
+        UITouch *t = [touches anyObject];
+        [gERSPGPageCtlStart removeObjectForKey:[NSValue valueWithNonretainedObject:t]];
+    } @catch (__unused NSException *e) {}
+    ERSPGPageCtlTouchGateEnd((UIView *)self);
+}
+
 static void ERSPGAttachPageCtlHook(Class cls) {
     if (!cls || [gERSPGPageCtlHooked containsObject:cls]) return;
     if (!gERSPGPageCtlHooked) gERSPGPageCtlHooked = [NSMutableSet new];
     struct { SEL sel; IMP imp; } items[] = {
-        { @selector(touchesBegan:withEvent:),  (IMP)ERSPGPageCtlBegan  },
-        { @selector(touchesMoved:withEvent:),  (IMP)ERSPGPageCtlMoved  },
-        { @selector(touchesEnded:withEvent:),  (IMP)ERSPGPageCtlEnded  },
+        { @selector(touchesBegan:withEvent:),     (IMP)ERSPGPageCtlBegan     },
+        { @selector(touchesMoved:withEvent:),     (IMP)ERSPGPageCtlMoved     },
+        { @selector(touchesEnded:withEvent:),     (IMP)ERSPGPageCtlEnded     },
+        { @selector(touchesCancelled:withEvent:), (IMP)ERSPGPageCtlCancelled },
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 4; i++) {
         if (!class_addMethod(cls, items[i].sel, items[i].imp, "v@:@@"))
             class_replaceMethod(cls, items[i].sel, items[i].imp, "v@:@@");
     }
