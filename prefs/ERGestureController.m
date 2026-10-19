@@ -61,6 +61,16 @@ static NSString *ERGestureValueText(NSInteger value) {
     return value >= 1 ? [NSString stringWithFormat:@"第%ld页", (long)value] : @"无动作";
 }
 
+// 1.2.0-18 · 行标题取值修正：标题存在 specifier.name，propertyForKey:@"label"
+// 返回 nil —— 自绘标题一直是空串（之前显示的文字是原生 textLabel 画的，
+// 被我们 1.2.0-17 隐藏后就成了空白）。
+static NSString *ERSpecLabel(PSSpecifier *spec) {
+    if (!spec) return @"";
+    NSString *n = [spec propertyForKey:@"label"];
+    if (![n isKindOfClass:[NSString class]] || !n.length) n = spec.name;
+    return n ?: @"";
+}
+
 #pragma mark - 下拉菜单数据源桥
 
 // UITableView 的 dataSource/delegate 都是 weak 引用 —— 桥对象必须由浮层容器
@@ -351,8 +361,8 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
         objc_setAssociatedObject(self, @selector(_erGestureKey), specifier, OBJC_ASSOCIATION_RETAIN);
     }
     [self _erBuildUI];   // 兜底：init 链没走到时在这里补建
-    NSString *name = [specifier propertyForKey:@"label"];
-    if ([name isKindOfClass:[NSString class]]) _title.text = name;
+    NSString *name = ERSpecLabel(specifier);
+    if (name.length) _title.text = name;
 
     UIImage *icon = [specifier propertyForKey:@"iconImage"];
     if (icon) _icon.image = icon;
@@ -469,7 +479,7 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 
     _erTitle = [[UILabel alloc] initWithFrame:CGRectZero];
     _erTitle.font = [UIFont systemFontOfSize:16.0];
-    _erTitle.text = [specifier propertyForKey:@"label"];
+    _erTitle.text = ERSpecLabel(specifier);
     _erTitle.textColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.95],
                                     [UIColor colorWithWhite:0.0 alpha:0.87]);
     [self.contentView addSubview:_erTitle];
@@ -522,7 +532,7 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
     self.imageView.hidden = YES;
     self.imageView.image = nil;
     _erIcon.image = [_erSpec propertyForKey:@"iconImage"];
-    _erTitle.text = [_erSpec propertyForKey:@"label"];
+    _erTitle.text = ERSpecLabel(_erSpec);
     [self _erSyncSwitch];
     [self setNeedsLayout];
 }
