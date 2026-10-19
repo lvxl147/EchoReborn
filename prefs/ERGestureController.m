@@ -24,6 +24,13 @@ void ERGPrefsLog(NSString *format, ...);
 void ERGCrashWrite(NSString *header);
 void ERGUncaughtHandler(NSException *exception);
 
+// 1.2.0-10 · 浅色模式适配：深/浅色双态动态色（iOS 13+ dynamicProvider）。
+static UIColor *ERGDynamic(UIColor *darkColor, UIColor *lightColor) {
+    return [UIColor colorWithDynamicProvider:^UIColor *(UITraitCollection *traits) {
+        return (traits.userInterfaceStyle == UIUserInterfaceStyleDark) ? darkColor : lightColor;
+    }];
+}
+
 static NSInteger ERGesturePageCount(void) {
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
     Boolean ok = NO;
@@ -95,7 +102,8 @@ static NSString *ERGestureValueText(NSInteger value) {
     cell.textLabel.text = opt;
     cell.textLabel.textColor = [opt isEqualToString:_current]
         ? [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0]   // 当前值高亮青色
-        : [UIColor colorWithWhite:1.0 alpha:0.92];
+        : ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.92],
+                     [UIColor colorWithWhite:0.0 alpha:0.85]);
     return cell;
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -139,8 +147,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
         y = MAX(anchorRect.origin.y - tableH - 6.0, 12.0);      // 放不下就往上弹
     }
 
+    // 1.2.0-10 · 浅色模式：SystemMaterial 随系统深浅色自适应（原 Dark 写死）。
     UIVisualEffectView *panel = [[UIVisualEffectView alloc]
-        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
     panel.frame = CGRectMake(x, y, width, tableH);
     panel.layer.cornerRadius = 12.0;
     panel.layer.masksToBounds = YES;
@@ -148,9 +157,11 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 
     UITableView *menu = [[UITableView alloc] initWithFrame:panel.contentView.bounds
                                                      style:UITableViewStylePlain];
-    menu.backgroundColor = [UIColor colorWithWhite:0.10 alpha:0.88];
+    menu.backgroundColor = ERGDynamic([UIColor colorWithWhite:0.10 alpha:0.88],
+                                      [UIColor colorWithWhite:1.0 alpha:0.96]);
     menu.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-    menu.separatorColor = [UIColor colorWithWhite:1.0 alpha:0.10];
+    menu.separatorColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.10],
+                                     [UIColor colorWithWhite:0.0 alpha:0.10]);
     menu.scrollEnabled = (options.count > 8);
     menu.alwaysBounceVertical = NO;
 
@@ -213,15 +224,18 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 
     _title = [[UILabel alloc] initWithFrame:CGRectZero];
     _title.font = [UIFont systemFontOfSize:16.0];
-    _title.textColor = [UIColor colorWithWhite:1.0 alpha:0.95];
+    _title.textColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.95],
+                                  [UIColor colorWithWhite:0.0 alpha:0.87]);
     [self.contentView addSubview:_title];
 
     _valueButton = [UIButton buttonWithType:UIButtonTypeCustom];
     _valueButton.titleLabel.font = [UIFont systemFontOfSize:14.0];
     _valueButton.layer.cornerRadius = 8.0;
     _valueButton.layer.borderWidth = 1.0;
-    _valueButton.layer.borderColor = [UIColor colorWithWhite:1.0 alpha:0.25].CGColor;
-    _valueButton.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.06];
+    _valueButton.layer.borderColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.25],
+                                                [UIColor colorWithWhite:0.0 alpha:0.22]).CGColor;
+    _valueButton.backgroundColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.06],
+                                              [UIColor colorWithWhite:0.0 alpha:0.045]);
     // -Werror 下压制 iOS15 弃用告警：UIButtonConfiguration 不适用（自绘描边样式），
     // 这里就是要用老式 contentEdgeInsets 做内边距。
 #pragma clang diagnostic push
@@ -250,6 +264,10 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
 
 - (void)layoutSubviews {
     [super layoutSubviews];
+    // 1.2.0-10 · CGColor 不随深浅色自动切换，每帧重设（dynamic 色 取当前 trait 解析）。
+    _valueButton.layer.borderColor =
+        ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.25],
+                   [UIColor colorWithWhite:0.0 alpha:0.22]).CGColor;
     CGFloat h = self.contentView.bounds.size.height;
     // 1.2.0-7 · 图标与标题的左边距跟系统 layoutMargins 走（绝对定位 16 在不同机型
     // 上会比系统行"多出来一点"），标题起点 = 图标右缘 + 12。
@@ -259,8 +277,8 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current, void (^on
     CGFloat chevW = 14.0;
     CGSize ts = [_title.text sizeWithAttributes:@{NSFontAttributeName: _title.font}];
     CGFloat pad = 10.0;
-    // 1.2.0-9 · 容差 6→14、上限 170→190：修「第…页」文本被截断。
-    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 14.0, 76.0), 190.0);
+    // 1.2.0-10 · 用户反馈仍差半个字：容差 14→24、上限 190→200。
+    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 24.0, 76.0), 200.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -470,6 +488,7 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 - (NSArray *)specifiers {
     if (!_specifiers) {
         ERGPrefsLog(@"specifiers build start");
+        ERGEnsureSwitchCellClass();
         NSMutableArray *specs = [NSMutableArray array];
 
         // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
@@ -527,6 +546,64 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
     return _specifiers;
 }
 
+#pragma mark - 手势页开关 cell（1.2.0-10）
+
+// 1.2.0-10 · 「开关消失」换方案：1.2.0-9 坐标换算后用户实测开关仍不显示——
+// 放弃 ERModuleIconSwitchCell（它强制重摆 UISwitch，坐标/时机在本页不成立）。
+// 本类**完全不碰 UISwitch**：基类 PSSwitchCell 自己放开关（其它页原生开关一直
+// 正常），我们只做两件事——refresh 把 iconImage 写进 imageView；layoutSubviews
+// 给图标定位 + 标题右移。
+static Class ERGSwitchCellClass = NULL;
+static IMP gERGSuperLayout = NULL;
+static IMP gERGSuperRefresh = NULL;
+
+static void ERGSwitchLayout(id self, SEL _cmd) {
+    if (gERGSuperLayout) ((void (*)(id, SEL))gERGSuperLayout)(self, _cmd);
+    @try {
+        UITableViewCell *cell = (UITableViewCell *)self;
+        if (!cell.imageView.image) return;
+        CGFloat h = cell.contentView.bounds.size.height;
+        CGFloat left = cell.contentView.layoutMargins.left;
+        cell.imageView.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
+        UILabel *label = cell.textLabel;
+        if (label) {
+            CGFloat lx = left + 27.0 + 12.0;
+            CGRect f = label.frame;
+            f.origin.x = lx;
+            f.size.width = MIN(f.size.width,
+                               cell.contentView.bounds.size.width - lx - 90.0);
+            label.frame = f;
+        }
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERGSwitchRefresh(id self, SEL _cmd, PSSpecifier *spec) {
+    if (gERGSuperRefresh) ((void (*)(id, SEL, id))gERGSuperRefresh)(self, _cmd, spec);
+    @try {
+        UIImage *icon = [spec propertyForKey:@"iconImage"];
+        if (icon) ((UITableViewCell *)self).imageView.image = icon;
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERGEnsureSwitchCellClass(void) {
+    if (ERGSwitchCellClass) return;
+    Class base = NSClassFromString(@"PSSwitchCell");
+    if (!base) return;
+    Method lay = class_getInstanceMethod(base, @selector(layoutSubviews));
+    Method ref = class_getInstanceMethod(base, @selector(refreshCellContentsWithSpecifier:));
+    if (!lay || !ref) return;
+    Class cls = objc_allocateClassPair(base, "ERGestureSwitchCell", 0);
+    if (!cls) return;
+    gERGSuperLayout = method_getImplementation(lay);
+    gERGSuperRefresh = method_getImplementation(ref);
+    class_addMethod(cls, @selector(layoutSubviews), (IMP)ERGSwitchLayout, "v@:");
+    class_addMethod(cls, @selector(refreshCellContentsWithSpecifier:),
+                    (IMP)ERGSwitchRefresh, "v@:@");
+    objc_registerClassPair(cls);
+    ERGSwitchCellClass = cls;
+    ERGPrefsLog(@"ERGestureSwitchCell registered base=%@", NSStringFromClass(base));
+}
+
 - (PSSpecifier *)erSwitchNamed:(NSString *)name
                             key:(NSString *)key
                         symbols:(NSArray<NSString *> *)symbols
@@ -539,11 +616,11 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                                      detail:Nil
                                                        cell:PSSwitchCell
                                                        edit:Nil];
-    // 1.2.0-7 · 图标修复：iOS 17.2 原生 PSSwitchCell 不渲染 specifier 的 iconImage
-    //（1.1.8-7 同款教训），必须换 bundle 里现成的 ERModuleIconSwitchCell（refresh 时
-    // 显式把 iconImage 写进 imageView）。cellClass 同 1.2.0-6 教训传**类对象**。
-    Class swCell = NSClassFromString(@"ERModuleIconSwitchCell");
-    if (swCell) [sw setProperty:swCell forKey:@"cellClass"];
+    // 1.2.0-10 · 开关消失修复：改用本文件运行期注册的 ERGestureSwitchCell
+    //（不碰开关，只注入图标）。注册失败兜底原生 PSSwitchCell（开关必有，图标无）。
+    if (ERGSwitchCellClass) {
+        [sw setProperty:ERGSwitchCellClass forKey:@"cellClass"];
+    } // 未注册时保留 cell:PSSwitchCell 的默认 cellClass
     [sw setProperty:key forKey:@"key"];
     [sw setProperty:kERGestureSuite forKey:@"defaults"];
     [sw setProperty:@(defVal) forKey:@"default"];
