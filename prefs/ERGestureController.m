@@ -237,6 +237,12 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     // 自建 _icon 差一点 → 双层叠加）。与开关行 1.2.0-15 同款修法：隐藏原生槽位。
     self.imageView.hidden = YES;
     self.imageView.image = nil;
+    // 1.2.0-17 · 用户实锤「选完值后标题被图标盖住（上滑胶囊→囊）」：原生
+    // textLabel 在 x≈16 渲染，压在自建图标下 —— 一并隐藏，只留自建 _title。
+    self.textLabel.hidden = YES;
+    self.textLabel.text = nil;
+    self.detailTextLabel.hidden = YES;
+    self.detailTextLabel.text = nil;
 
     _icon = [[UIImageView alloc] initWithFrame:CGRectMake(16, 0, 27, 27)];
     _icon.contentMode = UIViewContentModeScaleAspectFit;
@@ -299,9 +305,14 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     // 1.2.0-16 · 原生槽位每帧隐藏（super refresh 可能反复填回 image）。
     self.imageView.hidden = YES;
     self.imageView.image = nil;
+    // 1.2.0-17 · 原生 textLabel 每帧隐藏。
+    self.textLabel.hidden = YES;
+    self.detailTextLabel.hidden = YES;
 
     CGFloat chevW = 14.0;
-    CGFloat pad = 10.0;
+    // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
+    // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
+    CGFloat pad = 6.0;
     // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本（"第10页"/"无动作"）定宽，
     // 不再随各自值伸缩（用户反馈宽度不一致 + 整体偏大）。
     static CGFloat sERMaxTSW = 0.0;
@@ -311,7 +322,7 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
         CGSize t2 = [@"无动作" sizeWithAttributes:@{NSFontAttributeName: f}];
         sERMaxTSW = MAX(t1.width, t2.width);
     }
-    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 12.0, 76.0), 216.0);
+    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 6.0, 72.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -323,7 +334,6 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
 #pragma clang diagnostic pop
     _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);
-
     CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);
@@ -500,6 +510,13 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
         [super refreshCellContentsWithSpecifier:specifier];
     } @catch (__unused NSException *e) {}
     if (specifier) _erSpec = specifier;
+    // 1.2.0-17 · 用户实锤「文字被图标遮住开头（如 胶囊手势→囊手势）」：原生
+    // textLabel/detailTextLabel 在 x≈16 处渲染 specifier label，压在我们 29pt
+    // 图标底下 —— 与 imageView 一并隐藏，只留自建 _erTitle（与下拉框行同基准对齐）。
+    self.textLabel.hidden = YES;
+    self.textLabel.text = nil;
+    self.detailTextLabel.hidden = YES;
+    self.detailTextLabel.text = nil;
     // 1.2.0-15 · 用户实锤「有个图标遮在上面」：原生 imageView 也在渲染同一张
     // iconImage（白网格那层）——直接隐藏原生槽位，只留自建图标。
     self.imageView.hidden = YES;
@@ -527,6 +544,9 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
         CGFloat w = self.contentView.bounds.size.width;
         if (w < 1.0) return;
         self.imageView.hidden = YES;   // 1.2.0-15 双图标修：原生槽位每帧隐藏
+        // 1.2.0-17 · 原生 textLabel 每帧隐藏（super refresh 可能反复填回）。
+        self.textLabel.hidden = YES;
+        self.detailTextLabel.hidden = YES;
         _erIcon.frame = CGRectMake(left, (h - 29.0) / 2.0, 29.0, 29.0);
         CGSize swSize = _erSwitch.bounds.size;
         if (swSize.width < 1.0) swSize = CGSizeMake(51.0, 31.0);
