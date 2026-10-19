@@ -281,9 +281,12 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     _icon.frame = CGRectMake(left, (h - 27) / 2.0, 27, 27);
 
     CGFloat chevW = 14.0;
-    CGSize ts = [_title.text sizeWithAttributes:@{NSFontAttributeName: _title.font}];
+    // 1.2.0-12 · 截断真因：之前量的是**行标题**（"左滑胶囊"）而非按钮里的值文本
+    // （"第10页"/"无动作"）——必须量 currentTitle（titleLabel 字号 14）。
+    CGSize ts = [_valueButton.currentTitle sizeWithAttributes:
+        @{NSFontAttributeName: _valueButton.titleLabel.font}];
     CGFloat pad = 10.0;
-    // 1.2.0-11 · 「无动作/第10页」仍截断：容差 24→36、上限 200→216。
+    // 容差 36、上限 216（1.2.0-11 起）。
     CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 36.0, 76.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
@@ -586,21 +589,32 @@ static Class ERGSwitchCellClass = NULL;
 static IMP gERGSuperLayout = NULL;
 static IMP gERGSuperRefresh = NULL;
 static char kERGSwitchSpecKey;
+static char kERGSwitchIconKey;
+
+// 1.2.0-12 · 图标改用**自建 UIImageView**（不再依赖 cell.imageView——iOS 17.2
+// PSSwitchCell 里它不显示；同页 ERGestureValueCell 自建 iconView 已证实可行）。
+static UIImageView *ERGSwitchIconView(id self) {
+    UIImageView *iv = objc_getAssociatedObject(self, &kERGSwitchIconKey);
+    if (!iv) {
+        iv = [[UIImageView alloc] initWithFrame:CGRectZero];
+        iv.contentMode = UIViewContentModeScaleAspectFit;
+        iv.userInteractionEnabled = NO;
+        [((UITableViewCell *)self).contentView addSubview:iv];
+        objc_setAssociatedObject(self, &kERGSwitchIconKey, iv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return iv;
+}
 
 static void ERGSwitchLayout(id self, SEL _cmd) {
     if (gERGSuperLayout) ((void (*)(id, SEL))gERGSuperLayout)(self, _cmd);
     @try {
         UITableViewCell *cell = (UITableViewCell *)self;
-        // 1.2.0-11 · 图标注入改为每次布局重读 specifier：不依赖 refresh 时机
-        //（1.2.0-10 只在 refresh 写一次，基类布局可能把 imageView 清掉/隐藏）。
-        PSSpecifier *spec = objc_getAssociatedObject(self, &kERGSwitchSpecKey);
-        UIImage *icon = [spec propertyForKey:@"iconImage"];
-        if (![icon isKindOfClass:[UIImage class]]) return;
-        cell.imageView.image = icon;
-        cell.imageView.hidden = NO;
+        UIImageView *iv = objc_getAssociatedObject(self, &kERGSwitchIconKey);
+        if (!iv.image) return;
         CGFloat h = cell.contentView.bounds.size.height;
         CGFloat left = cell.contentView.layoutMargins.left;
-        cell.imageView.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
+        iv.hidden = NO;
+        iv.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
         UILabel *label = cell.textLabel;
         if (label) {
             CGFloat lx = left + 27.0 + 12.0;
@@ -617,6 +631,8 @@ static void ERGSwitchRefresh(id self, SEL _cmd, PSSpecifier *spec) {
     if (gERGSuperRefresh) ((void (*)(id, SEL, id))gERGSuperRefresh)(self, _cmd, spec);
     @try {
         if (spec) objc_setAssociatedObject(self, &kERGSwitchSpecKey, spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        UIImage *icon = [spec propertyForKey:@"iconImage"];
+        if ([icon isKindOfClass:[UIImage class]]) ERGSwitchIconView(self).image = icon;
     } @catch (__unused NSException *e) {}
 }
 
