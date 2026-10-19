@@ -98,6 +98,14 @@ static NSString *ERGestureValueText(NSInteger value) {
         cell.textLabel.font = [UIFont systemFontOfSize:15.0];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
     }
+    // 1.2.0-16 · 用户实锤浮层左侧一截多余空白：默认 cell 文字跟 layoutMargins 缩进
+    // （约 16pt+）+ 分隔线 inset —— 全部归零，文字紧贴左缘只留固定 14pt。
+    cell.layoutMargins = UIEdgeInsetsMake(0, 14.0, 0, 8.0);
+    cell.preservesSuperviewLayoutMargins = NO;
+    cell.separatorInset = UIEdgeInsetsMake(0, 14.0, 0, 0);
+    cell.indentationLevel = 0;
+    cell.indentationWidth = 0.0;
+    if (@available(iOS 11.0, *)) cell.textLabel.insetsLayoutMarginsFromSafeArea = NO;
     NSString *opt = _options[(NSUInteger)indexPath.row];
     cell.textLabel.text = opt;
     cell.textLabel.textColor = [opt isEqualToString:_current]
@@ -142,7 +150,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     [container addSubview:backdrop];
 
     CGFloat rowH = 40.0;
-    CGFloat width = 150.0;   // 1.2.0-15 · 用户反馈太宽：170 → 150
+    // 1.2.0-16 · 用户反馈还是有点宽、且左侧有一截多余空白：150 → 132（"第10页"
+    // 15pt 字体约 55pt 宽，132 足够完整显示）；同时 cell 内边距归零（见下方 cellForRow）。
+    CGFloat width = 132.0;
     CGFloat tableH = MIN((CGFloat)options.count, 8.0) * rowH;   // 最多 8 行，超出滚动
     CGFloat x = MIN(MAX(anchorRect.origin.x + anchorRect.size.width - width, 8.0),
                     window.bounds.size.width - width - 8.0);
@@ -222,6 +232,12 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     self.backgroundColor = [UIColor clearColor];
     self.selectionStyle = UITableViewCellSelectionStyleNone;
 
+    // 1.2.0-16 · 用户实锤「上下左右图标底下/上面好像还有一个图标、左边边缘多一点」：
+    // 基类 refresh 会把同一张 iconImage 塞进原生 self.imageView（系统槽位位置与
+    // 自建 _icon 差一点 → 双层叠加）。与开关行 1.2.0-15 同款修法：隐藏原生槽位。
+    self.imageView.hidden = YES;
+    self.imageView.image = nil;
+
     _icon = [[UIImageView alloc] initWithFrame:CGRectMake(16, 0, 27, 27)];
     _icon.contentMode = UIViewContentModeScaleAspectFit;
     [self.contentView addSubview:_icon];
@@ -278,7 +294,11 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     // 1.2.0-7 · 图标与标题的左边距跟系统 layoutMargins 走（绝对定位 16 在不同机型
     // 上会比系统行"多出来一点"），标题起点 = 图标右缘 + 12。
     CGFloat left = self.contentView.layoutMargins.left;
+    if (left < 1.0) left = 16.0;
     _icon.frame = CGRectMake(left, (h - 27) / 2.0, 27, 27);
+    // 1.2.0-16 · 原生槽位每帧隐藏（super refresh 可能反复填回 image）。
+    self.imageView.hidden = YES;
+    self.imageView.image = nil;
 
     CGFloat chevW = 14.0;
     CGFloat pad = 10.0;
@@ -498,8 +518,12 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
         // 图标用原生 29pt（与工厂图 29x29 一致，避免 AspectFit 缩进）。
         CGFloat h = self.contentView.bounds.size.height;
         if (h < 40.0) h = 44.0;
-        CGFloat left = 16.0;
-        CGFloat right = 16.0;
+        // 1.2.0-16 · 用户实锤开关行图标与上下左右行没对齐：gesture 行用的是
+        // layoutMargins.left 基准，开关行还是绝对 16 —— 统一改成同一基准。
+        CGFloat left = self.contentView.layoutMargins.left;
+        CGFloat right = self.contentView.layoutMargins.right;
+        if (left < 1.0) left = 16.0;
+        if (right < 1.0) right = 16.0;
         CGFloat w = self.contentView.bounds.size.width;
         if (w < 1.0) return;
         self.imageView.hidden = YES;   // 1.2.0-15 双图标修：原生槽位每帧隐藏
