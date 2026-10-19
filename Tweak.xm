@@ -32249,14 +32249,24 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
             BOOL inside = NO;
             if (pill.window) {
                 CGPoint p = [gesture locationInView:pill.window];
-                // 1.2.0-21 · 判定区外扩 30pt：pan 手势要等手指移动 ~10pt 才正式
-                // Began，紧贴胶囊起手时实际触点已略偏；外扩后胶囊本体+近圈都算。
-                CGRect f = CGRectInset(sERSPGPillWinFrame, -30.0, -30.0);
+                // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
+                // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
+                // pan 迟到漂移），起手区=胶囊本体。
+                CGRect f = CGRectInset(sERSPGPillWinFrame, -6.0, -6.0);
                 inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
                 if (inside) {
+                    // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
+                    // 实锤胶囊区域触摸到底落在哪个视图（系统行为载体定位）。
+                    NSMutableString *hitChain = [NSMutableString string];
+                    UIView *hit = [pill.window hitTest:p withEvent:nil];
+                    for (int d = 0; hit && d < 4; d++, hit = hit.superview) {
+                        [hitChain appendFormat:@"%@%s", NSStringFromClass(hit.class),
+                         d < 3 ? " < " : ""];
+                    }
                     ERLogInfo(@"SPG-PAN begin ok p=(%.0f,%.0f) frame=%@ winFrame=%@",
                               p.x, p.y, NSStringFromCGRect(pill.frame),
                               NSStringFromCGRect(pill.window.frame));
+                    ERLogInfo(@"SPG-HIT %@", hitChain);
                     // 防横向被桌面翻页 pan 抢走：压住 pager pan，结束再恢复。
                     ERSPGPagerPanSetEnabled(NO);
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
@@ -32553,6 +32563,40 @@ static void ERSPGSyncSystemGestures(UIView *pill, BOOL gestureEnabled) {
     } @catch (__unused NSException *e) {}
 }
 
+// 1.2.0-23 · 系统拖胶囊翻页的真正载体：SPG-GR 零输出实锤胶囊链上无手势
+// recognizer——"拖胶囊一直翻页"是覆盖全屏的搜索层 SBSearchScrollView（横向
+// 滚动视图）自己在滚。总开关模型（用户需求）：开=我们的手势生效+搜索层 pan
+// 禁用（系统拖胶囊翻页彻底失效）；关=恢复系统原生行为。
+static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSInteger *n) {
+    if (!root) return;
+    @try {
+        NSString *cn = NSStringFromClass(root.class);
+        if ([cn rangeOfString:@"SearchScrollView"].location != NSNotFound) {
+            UIPanGestureRecognizer *pg = root.panGestureRecognizer;
+            if (pg && pg.enabled != (!gestureEnabled)) {
+                pg.enabled = !gestureEnabled;
+                ERLogInfo(@"SPG-SUPPRESS %@ pan -> %@", cn, gestureEnabled ? @"OFF" : @"restored");
+            }
+            (*n)++;
+        }
+        for (UIView *sub in root.subviews) ERSPGSuppressSearchLayer(sub, gestureEnabled, n);
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
+    NSInteger n = 0;
+    for (UIWindow *w in ERAllApplicationWindows()) {
+        ERSPGSuppressSearchLayer(w, gestureEnabled, &n);
+    }
+    // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
+    static NSTimeInterval sERLastHeartbeat = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - sERLastHeartbeat > 30.0) {
+        sERLastHeartbeat = now;
+        ERLogInfo(@"SPG-SUPPRESS heartbeat enabled=%d hit=%ld", gestureEnabled ? 1 : 0, (long)n);
+    }
+}
+
 static void ERSPGConfigurePill(UIView *pill) {
     BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
     // 1.2.0-8 · 在场心跳：30s 一条，证明扫描每轮都能找到胶囊（手势挂着）
@@ -32595,6 +32639,8 @@ static void ERSPGConfigurePill(UIView *pill) {
     if (sERSPGWinPan) sERSPGWinPan.enabled = enabled;
     // 1.2.0-22 · 系统胶囊手势压制/恢复（心跳维持，每 tick 同步一次）。
     ERSPGSyncSystemGestures(pill, enabled);
+    // 1.2.0-23 · 搜索层 pan 压制/恢复（总开关联动，每 tick 心跳维持）。
+    ERSPGSyncSearchLayerPan(enabled);
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
