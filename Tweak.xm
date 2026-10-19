@@ -32571,6 +32571,20 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
     if (!root) return;
     @try {
         NSString *cn = NSStringFromClass(root.class);
+        // 1.2.0-24 · SPG-HIT 实锤：胶囊区域 hitTest 命中 SBFolderScrollAccessoryView
+        // < SBIconListPageControl —— 桌面分页圆点控件透明层盖住胶囊，iOS17 page
+        // control 自带"拖圆点翻页"，这才是"拖胶囊翻页"的真载体（SearchScrollView
+        // pan 压了没用）。手势开关开 → 整层 userInteractionEnabled=NO（拖圆点翻页/
+        // 点圆点跳页同属系统行为一并关闭，用户确认可接受）；关 → 恢复 YES。
+        BOOL pageCtl = [cn rangeOfString:@"SBIconListPageControl"].location != NSNotFound ||
+                       [cn rangeOfString:@"SBFolderScrollAccessoryView"].location != NSNotFound;
+        if (pageCtl) {
+            if (root.userInteractionEnabled != (!gestureEnabled)) {
+                root.userInteractionEnabled = !gestureEnabled;
+                ERLogInfo(@"SPG-PAGECTL %@ -> %@", cn, gestureEnabled ? @"OFF" : @"restored");
+            }
+            (*n)++;
+        }
         if ([cn rangeOfString:@"SearchScrollView"].location != NSNotFound) {
             // 1.2.0-23b · CI 实锤：panGestureRecognizer 是 UIScrollView 属性，
             // root 声明为 UIView 需先转 UIScrollView（SearchScrollView 必是）。
@@ -32616,7 +32630,31 @@ static void ERSPGConfigurePill(UIView *pill) {
     sERSPGPillRef = pill;
     if (pill.window) {
         CGRect f = [pill convertRect:pill.bounds toView:pill.window];
-        if (!CGRectIsEmpty(f)) sERSPGPillWinFrame = f;
+        if (!CGRectIsEmpty(f)) {
+            // 1.2.0-24 · 帧防抖：-23b 日志实锤缓存帧在 {187.72,710.9}（动画过渡帧）
+            // 与 {184.62,744.6}（真帧）间跳变，过渡帧导致 begin outside 误判。
+            // 新帧中心与当前帧中心差 >20pt 时视为可疑，连续两 tick 一致才切换。
+            static CGRect sERSPGPendingFrame = CGRectZero;
+            static NSInteger sERSPGPendingCount = 0;
+            CGPoint nc = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+            CGPoint cc = CGPointMake(CGRectGetMidX(sERSPGPillWinFrame), CGRectGetMidY(sERSPGPillWinFrame));
+            BOOL jumped = hypot(nc.x - cc.x, nc.y - cc.y) > 20.0 &&
+                          !CGRectIsEmpty(sERSPGPillWinFrame);
+            if (!jumped) {
+                sERSPGPillWinFrame = f;
+                sERSPGPendingFrame = CGRectZero;
+                sERSPGPendingCount = 0;
+            } else if (CGRectEqualToRect(f, sERSPGPendingFrame)) {
+                if (++sERSPGPendingCount >= 2) {
+                    sERSPGPillWinFrame = f;   // 连续两 tick 一致 = 真的移动了
+                    sERSPGPendingFrame = CGRectZero;
+                    sERSPGPendingCount = 0;
+                }
+            } else {
+                sERSPGPendingFrame = f;
+                sERSPGPendingCount = 1;
+            }
+        }
     }
     if (!recs) {
         recs = [NSMutableArray array];
