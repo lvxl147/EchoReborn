@@ -127,3 +127,4 @@
 | 210 | 1.2.0-14 | 1002015 | 手势实锤：ScanTick 已跑但 pill NOT found(roots=38)——加候选类名 dump（SPG-CAND）+ LooksLikePill 放行 Spotlight；下拉浮层恢复暗色；开关行图标 29pt/左距16/行高兜底 |
 | 211 | 1.2.0-15 | 1002016 | SPG-CAND 改类名关键词过滤（含坐标/hidden/alpha）；浮层宽度 170→150+恢复深浅自适应；开关行隐藏原生 imageView 修双图标；手势行图标底色统一（上下蓝/左右绿） |
 | 212 | 1.2.0-16 | 1002017 | 手势识别根因修复：SPG-CAND 实锤 iOS17.2 胶囊=SBHSearchPillView(62x30)，LooksLikePill 类名 SearchPill 直接放行+宽度闸门 90→40；扫描改为优先挂屏内实例（日志存在 @-31,-15 离屏旧实例，防挂错）；手势行 ERGestureValueCell 隐藏原生 imageView（用户实锤双层图标/左边缘多一截）；开关行图标左边距 16→layoutMargins 与手势行对齐（两卡片同改）；下拉浮层 150→132+cell layoutMargins 归零改固定 14pt（去左侧多余空白） |
+| 213 | 1.2.0-17 | 1002018 | 手势触发第二根因实锤：-16 日志 SPG-PILL found+TOUCH hook attached 但 pan/touch 触发行零条——胶囊只是显示层、触摸被上层 SBSearchScrollView 接管。pan 改挂 window（全局唯一），Began 时判起点是否在胶囊 window 帧±10pt 内，Changed≥40pt 判向触发；ERSPGShouldFire 前移与 touches 去重；UI：开关行/下拉框行隐藏原生 textLabel（实锤文字开头被 29pt 图标盖住：胶囊手势→囊手势，选值后标题同症）；下拉按钮内边距 10→6/右侧 12→6 收窄约 14pt |
