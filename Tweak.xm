@@ -32047,13 +32047,16 @@ static UIScrollView *ERSPGFindPager(UIView *root) {
         }
         [stack addObjectsFromArray:v.subviews];
     }
-    if (cands.count && !sERSPGPagerLogged) {
-        sERSPGPagerLogged = YES;
-        ERLogInfo(@"SPG-PAGER cands=%lu best=%@ :: %@",
-                  (unsigned long)cands.count,
-                  best ? NSStringFromClass(best.class) : @"nil",
-                  [cands componentsJoinedByString:@" | "]);
-    } else if (!cands.count && !sERSPGPagerLogged) {
+    if (cands.count) {
+        if (!sERSPGPagerLogged) {
+            sERSPGPagerLogged = YES;
+            ERLogInfo(@"SPG-PAGER cands=%lu best=%@ :: %@",
+                      (unsigned long)cands.count,
+                      best ? NSStringFromClass(best.class) : @"nil",
+                      [cands componentsJoinedByString:@" | "]);
+        }
+    } else if (!sERSPGPagerLogged) {
+        sERSPGPagerLogged = YES;   // 1.2.0-20 · 两个分支都要置位，否则每 5s 刷一条
         ERLogInfo(@"SPG-PAGER no candidates (root=%@)", NSStringFromClass(root.class));
     }
     return best;
@@ -32061,13 +32064,20 @@ static UIScrollView *ERSPGFindPager(UIView *root) {
 
 static UIScrollView *ERSPGPager(void) {
     if (sERSPGPager) return sERSPGPager;
+    // 1.2.0-20 · -19 日志实锤 ic.view 为空时这里静默返回（PAGER 诊断一条都没出），
+    // 而胶囊扫描是靠窗口兜底找到的 —— root 为空/找不到时改扫全部 window。
+    UIScrollView *sv = nil;
     id ic = ERSPGIconController();
-    UIView *root = nil;
     if (ic && [ic respondsToSelector:@selector(view)]) {
-        root = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(view));
+        UIView *root = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(view));
+        if (root) sv = ERSPGFindPager(root);
     }
-    if (!root) return nil;
-    UIScrollView *sv = ERSPGFindPager(root);
+    if (!sv) {
+        for (UIWindow *w in ERAllApplicationWindows()) {
+            sv = ERSPGFindPager(w);
+            if (sv) break;
+        }
+    }
     if (sv) {
         sERSPGPager = sv;
         sERSPGPagerPageW = CGRectGetWidth(sv.bounds);
@@ -32167,19 +32177,18 @@ static void ERSPGJumpToPage(NSInteger page1based) {
 static void ERSPGHaptic(void) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.HapticEnabled", YES)) return;
     NSInteger s = ERSPGInt(@"HomeScreen.SearchPill.HapticStrength", 1);
-    // 1.2.0-19 · 用户实锤 UIImpactFeedbackGenerator 在 SpringBoard 无感 ——
-    // 换 AudioServices 系统震动（桌面必响）。轻=短震1315，中/重=完整震动4095，
-    // 重档双震（间隔 120ms 二连）。
+    // 1.2.0-20 · 用户反馈 4095 全震"太夸张"。降档：轻=1315 短震一次，
+    // 中=1315 短震两次（间隔 100ms），重=4095 完整震动一次。
     if (s <= 0) {
         AudioServicesPlaySystemSound(1315);          // 短促"嘀嗒"震
     } else if (s == 1) {
-        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+        AudioServicesPlaySystemSound(1315);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.10 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            AudioServicesPlaySystemSound(1315);
+        });
     } else {
         AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
-        });
     }
 }
 
@@ -32389,6 +32398,15 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 // 按类名特征 + 尺寸闸门匹配，避免误挂到别的东西上）。
 static BOOL ERSPGLooksLikePill(UIView *v) {
     NSString *cn = NSStringFromClass(v.class);
+    // 1.2.0-20 · 用户日志实锤两个 SBHSearchPillView 实例：真胶囊在底部 dock 上方
+    // ({184,744})，顶部搜索层还有一个 ({24,13}, 祖先 SBSearchScrollView)。缓存
+    // 坐标每 tick 在两实例间抖动 → 触发区域错位（离胶囊一段距离也触发/很难成功/
+    // 左右全不灵）。凡祖先链含 SearchScrollView 的候选直接排除，只认真胶囊。
+    for (UIView *a = v.superview; a; a = a.superview) {
+        NSString *acn = NSStringFromClass(a.class);
+        if ([acn rangeOfString:@"SearchScrollView"].location != NSNotFound ||
+            [acn rangeOfString:@"SearchController"].location != NSNotFound) return NO;
+    }
     // 1.2.0-16 · 日志实锤 iOS 17.2 桌面胶囊 = SBHSearchPillView，真实尺寸 62x30
     // （旧 90~280 宽度闸门直接把它拒掉了，这就是"pill NOT found"的根因）。
     // 类名精确命中 SearchPill 直接放行，不再过尺寸闸门。
