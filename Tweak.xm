@@ -32071,6 +32071,12 @@ static void ERSPGHaptic(void) {
 // 1.2.0-12 · 前向声明：pan handler 里用到（定义在 PanDelegate 之后）。
 static BOOL ERSPGShouldFire(void);
 
+// 1.2.0-17 · window 级 pan 所需：当前胶囊弱引用 + 其 window 坐标缓存帧 +
+// 全局唯一 window pan（触摸不落胶囊视图，pan 必须挂上层）。
+static __weak UIView *sERSPGPillRef = nil;
+static CGRect sERSPGPillWinFrame = CGRectZero;
+static UIPanGestureRecognizer *sERSPGWinPan = nil;
+
 @interface ERSPGSwipeTarget : NSObject
 - (void)erHandlePan:(UIPanGestureRecognizer *)gesture;
 @end
@@ -32088,12 +32094,29 @@ static BOOL ERSPGShouldFire(void);
 - (void)erHandlePan:(UIPanGestureRecognizer *)gesture {
     @try {
         static NSInteger sERPanN = 0;
+        // 1.2.0-17 · 日志实锤：胶囊(SBHSearchPillView)只是显示层，触摸被上层
+        // SBSearchScrollView 接管——挂在胶囊上的 pan/touch 零触发。pan 改挂
+        // window，Began 时判起点是否落在胶囊区域（±10pt 容差）内才生效。
+        if (gesture.state == UIGestureRecognizerStateBegan) {
+            UIView *pill = sERSPGPillRef;
+            BOOL inside = NO;
+            if (pill.window) {
+                CGPoint p = [gesture locationInView:pill.window];
+                CGRect f = CGRectInset(sERSPGPillWinFrame, -10.0, -10.0);
+                inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
+            }
+            objc_setAssociatedObject(gesture, @selector(erPanInPill), @(inside), OBJC_ASSOCIATION_RETAIN);
+            if (inside) ERLogInfo(@"SPG-PAN begin-in-pill ok frame=%@",
+                                  NSStringFromCGRect(sERSPGPillWinFrame));
+            return;
+        }
         if (gesture.state == UIGestureRecognizerStateEnded ||
             gesture.state == UIGestureRecognizerStateCancelled) {
             objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
             return;
         }
         if (gesture.state != UIGestureRecognizerStateChanged) return;
+        if (![objc_getAssociatedObject(gesture, @selector(erPanInPill)) boolValue]) return;
         if ([objc_getAssociatedObject(gesture, @selector(erPanFired)) boolValue]) return;
         CGPoint t = [gesture translationInView:gesture.view];
         if (hypot(t.x, t.y) < 40.0) return;   // 位移闸门：40pt 才算一次有效滑动
@@ -32104,11 +32127,11 @@ static BOOL ERSPGShouldFire(void);
         } else {
             key = (t.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         }
-        objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
         NSInteger page = ERSPGInt(key, 0);
+        if (!ERSPGShouldFire()) return;   // 1.2.0-17 提前：与 touches 通道去重（含无动作页）
+        objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
         ERLogInfo(@"SPG-PAN #%ld t=(%.0f,%.0f) page=%ld", (long)++sERPanN, t.x, t.y, (long)page);
         if (page < 1) return;   // 无动作 = 系统默认
-        if (!ERSPGShouldFire()) return;   // 1.2.0-12 与 touches 通道去重
         ERSPGHaptic();
         ERSPGJumpToPage(page);
     } @catch (__unused NSException *e) {}
@@ -32278,27 +32301,36 @@ static void ERSPGConfigurePill(UIView *pill) {
         ERLogInfo(@"SPG-PILL present cls=%@ enabled=%d", NSStringFromClass(pill.class), enabled ? 1 : 0);
     }
     NSMutableArray *recs = objc_getAssociatedObject(pill, kERSPGPillRecognizersKey);
+    // 每 tick 刷新胶囊引用与缓存帧（胶囊实例/位置可能变化，翻页变圆点等）。
+    sERSPGPillRef = pill;
+    if (pill.window) {
+        CGRect f = [pill convertRect:pill.bounds toView:pill.window];
+        if (!CGRectIsEmpty(f)) sERSPGPillWinFrame = f;
+    }
     if (!recs) {
-        // 1.2.0-8 · 一个允许并存的 pan（自行判方向）替代四个 swipe——
-        // UISwipeGestureRecognizer 在桌面被 pan 手势压制、从不触发的教训。
         recs = [NSMutableArray array];
-        ERSPGSwipeTarget *target = [ERSPGSwipeTarget shared];
-        UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
-            initWithTarget:target action:@selector(erHandlePan:)];
-        pan.maximumNumberOfTouches = 1;
-        ERSPGPanDelegate *dlg = [ERSPGPanDelegate shared];
-        pan.delegate = dlg;
-        objc_setAssociatedObject(pan, @selector(erPanDelegate), dlg, OBJC_ASSOCIATION_RETAIN);
-        [pill addGestureRecognizer:pan];
-        [recs addObject:pan];
         objc_setAssociatedObject(pill, kERSPGPillRecognizersKey, recs, OBJC_ASSOCIATION_RETAIN);
-        ERLogInfo(@"SPG-PILL found %@ frame=%@ enabled=%d (pan attached)",
-                  NSStringFromClass(pill.class),
-                  NSStringFromCGRect(pill.frame), enabled ? 1 : 0);
+        if (!sERSPGWinPan) {
+            ERSPGSwipeTarget *target = [ERSPGSwipeTarget shared];
+            UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
+                initWithTarget:target action:@selector(erHandlePan:)];
+            pan.maximumNumberOfTouches = 1;
+            ERSPGPanDelegate *dlg = [ERSPGPanDelegate shared];
+            pan.delegate = dlg;
+            objc_setAssociatedObject(pan, @selector(erPanDelegate), dlg, OBJC_ASSOCIATION_RETAIN);
+            sERSPGWinPan = pan;
+            ERLogInfo(@"SPG-PILL found %@ frame=%@ enabled=%d (winpan created)",
+                      NSStringFromClass(pill.class),
+                      NSStringFromCGRect(pill.frame), enabled ? 1 : 0);
+        }
+    }
+    // pan 挂在胶囊所在 window 上（换 window 时重挂）。
+    if (sERSPGWinPan && pill.window && sERSPGWinPan.view != pill.window) {
+        [pill.window addGestureRecognizer:sERSPGWinPan];
     }
     // 1.2.0-12 · touches 直挂（参考插件方案，类级一次）；与 pan 并存，ERSPGShouldFire 去重。
     ERSPGAttachTouchHook(pill.class);
-    for (UIGestureRecognizer *g in recs) g.enabled = enabled;
+    if (sERSPGWinPan) sERSPGWinPan.enabled = enabled;
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
