@@ -32382,24 +32382,37 @@ static void ERSPGScanTick(void) {
         if (now - sERSPGLastMiss > 30.0) {
             sERSPGLastMiss = now;
             ERLogInfo(@"SPG-SCAN pill NOT found (roots=%lu)", (unsigned long)roots.count);
+            // 1.2.0-15 · 按类名关键词过滤（尺寸过滤上一版被图标类刷满，一个胶囊候选
+            // 都没露出）；任意尺寸都收，带坐标（判断是否离屏/隐藏）。
             NSMutableArray<NSString *> *cands = [NSMutableArray array];
             for (UIView *root in roots) {
                 NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
                 NSInteger guard = 0;
-                while (stack.count && guard++ < 3000 && cands.count < 12) {
+                while (stack.count && guard++ < 6000 && cands.count < 20) {
                     UIView *v = stack.lastObject;
                     [stack removeLastObject];
-                    CGFloat cw = CGRectGetWidth(v.frame), ch = CGRectGetHeight(v.frame);
-                    if (cw >= 60.0 && cw <= 320.0 && ch >= 20.0 && ch <= 80.0) {
-                        NSString *cn = NSStringFromClass(v.class);
-                        if ([cn hasPrefix:@"_"] || [cn hasPrefix:@"UI"]) { /* 跳过纯 UIKit 容器 */ }
-                        else [cands addObject:[NSString stringWithFormat:@"%@ (%.0fx%.0f)", cn, cw, ch]];
+                    NSString *cn = NSStringFromClass(v.class);
+                    if ([cn rangeOfString:@"Search" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                        [cn rangeOfString:@"Spotlight" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                        [cn rangeOfString:@"Pill" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                        [cn rangeOfString:@"PageControl" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+                        [cn rangeOfString:@"Suggest" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+                        CGFloat cw = CGRectGetWidth(v.frame), ch = CGRectGetHeight(v.frame);
+                        [cands addObject:[NSString stringWithFormat:@"%@ (%.0fx%.0f@%.0f,%.0f) h=%d hid=%d",
+                                          cn, cw, ch,
+                                          CGRectGetMinX(v.frame), CGRectGetMinY(v.frame),
+                                          v.hidden ? 1 : 0,
+                                          v.alpha < 0.05 ? 1 : 0]];
                     }
                     [stack addObjectsFromArray:v.subviews];
                 }
-                if (cands.count >= 12) break;
+                if (cands.count >= 20) break;
             }
-            ERLogInfo(@"SPG-CAND: %@", [cands componentsJoinedByString:@" | "]);
+            if (cands.count == 0) {
+                ERLogInfo(@"SPG-CAND: (none) 桌面树里没有 Search/Spotlight/Pill/PageControl/Suggest 类");
+            } else {
+                ERLogInfo(@"SPG-CAND: %@", [cands componentsJoinedByString:@" | "]);
+            }
         }
     } @catch (__unused NSException *e) {}
 }
