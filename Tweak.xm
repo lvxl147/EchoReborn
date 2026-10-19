@@ -21,6 +21,7 @@
 #import <objc/runtime.h>
 #import <mach-o/dyld.h>
 #import <AVFoundation/AVFoundation.h>
+#import <AudioToolbox/AudioToolbox.h>
 #include <dlfcn.h>
 
 // ---------------------------------------------------------------------------
@@ -32014,27 +32015,48 @@ static BOOL ERSPGSubtreeHasClass(UIView *root, NSString *frag) {
 
 static UIScrollView *ERSPGFindPager(UIView *root) {
     if (!root) return nil;
+    static BOOL sERSPGPagerLogged = NO;
     CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    // 1.2.0-19 · 1.2.0-18 匹配条件在 iOS17.2 全落空（no sel && no pager 实锤）。
+    // 放宽：不要求 pagingEnabled，主条件 = contentSize 宽 ≥1.9 页；IconList 子树加分。
+    // 首轮把树里全部候选 UIScrollView dump 一条日志，找不到时可立即对准。
+    NSMutableArray<NSString *> *cands = [NSMutableArray array];
+    UIScrollView *best = nil;
+    CGFloat bestScore = -1;
     NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
     NSInteger guard = 0;
-    while (stack.count && guard++ < 3000) {
+    while (stack.count && guard++ < 6000) {
         UIView *v = stack.lastObject;
         [stack removeLastObject];
         if ([v isKindOfClass:[UIScrollView class]]) {
             UIScrollView *sv = (UIScrollView *)v;
             CGFloat w = CGRectGetWidth(sv.bounds), h = CGRectGetHeight(sv.bounds);
+            CGFloat cw = sv.contentSize.width;
             NSString *cn = NSStringFromClass(sv.class);
-            if (sv.pagingEnabled && w >= sw * 0.9 && h >= sh * 0.6 &&
-                sv.contentSize.width >= w * 1.5 &&
-                [cn rangeOfString:@"Search"].location == NSNotFound &&
-                ERSPGSubtreeHasClass(sv, @"IconList")) {
-                return sv;
+            BOOL search = [cn rangeOfString:@"Search"].location != NSNotFound;
+            if (w >= sw * 0.9 && h >= sh * 0.5 && cw >= w * 1.9 && !search) {
+                BOOL hasIcons = ERSPGSubtreeHasClass(sv, @"IconList");
+                CGFloat score = (hasIcons ? 100 : 0) + (sv.pagingEnabled ? 20 : 0) + cw / w;
+                [cands addObject:[NSString stringWithFormat:@"%@ %@ content=%.0fx%.0f paging=%d icons=%d",
+                                  cn, NSStringFromCGRect(sv.bounds),
+                                  cw, sv.contentSize.height,
+                                  sv.pagingEnabled ? 1 : 0, hasIcons ? 1 : 0]];
+                if (score > bestScore) { bestScore = score; best = sv; }
             }
         }
         [stack addObjectsFromArray:v.subviews];
     }
-    return nil;
+    if (cands.count && !sERSPGPagerLogged) {
+        sERSPGPagerLogged = YES;
+        ERLogInfo(@"SPG-PAGER cands=%lu best=%@ :: %@",
+                  (unsigned long)cands.count,
+                  best ? NSStringFromClass(best.class) : @"nil",
+                  [cands componentsJoinedByString:@" | "]);
+    } else if (!cands.count && !sERSPGPagerLogged) {
+        ERLogInfo(@"SPG-PAGER no candidates (root=%@)", NSStringFromClass(root.class));
+    }
+    return best;
 }
 
 static UIScrollView *ERSPGPager(void) {
@@ -32145,11 +32167,20 @@ static void ERSPGJumpToPage(NSInteger page1based) {
 static void ERSPGHaptic(void) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.HapticEnabled", YES)) return;
     NSInteger s = ERSPGInt(@"HomeScreen.SearchPill.HapticStrength", 1);
-    UIImpactFeedbackStyle style = (s <= 0) ? UIImpactFeedbackStyleLight
-                                           : (s == 1 ? UIImpactFeedbackStyleMedium
-                                                     : UIImpactFeedbackStyleHeavy);
-    UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:style];
-    [gen impactOccurred];
+    // 1.2.0-19 · 用户实锤 UIImpactFeedbackGenerator 在 SpringBoard 无感 ——
+    // 换 AudioServices 系统震动（桌面必响）。轻=短震1315，中/重=完整震动4095，
+    // 重档双震（间隔 120ms 二连）。
+    if (s <= 0) {
+        AudioServicesPlaySystemSound(1315);          // 短促"嘀嗒"震
+    } else if (s == 1) {
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+    } else {
+        AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            AudioServicesPlaySystemSound(kSystemSoundID_Vibrate);
+        });
+    }
 }
 
 // 1.2.0-12 · 前向声明：pan handler 里用到（定义在 PanDelegate 之后）。
