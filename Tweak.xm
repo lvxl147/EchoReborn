@@ -31993,6 +31993,70 @@ static id ERSPGIconController(void) {
     return ((id (*)(id, SEL))objc_msgSend)(cls, @selector(sharedInstance));
 }
 
+// 1.2.0-18 · 桌面分页 scrollView（iOS 17.2 实锤 SBIconController 上没有任何翻页
+// setter，SPG-JUMP sel=(none matched)）——跳页兜底直接驱动桌面横向 pager。
+// 识别特征：pagingEnabled + 宽≈屏宽 + contentSize 宽 ≥1.5 页 + 高≥0.6 屏高 +
+// 类名不含 Search（排除 SBSearchScrollView）+ 子树里有 IconList 视图。
+static UIScrollView *sERSPGPager = nil;
+static CGFloat sERSPGPagerPageW = 0.0;
+
+static BOOL ERSPGSubtreeHasClass(UIView *root, NSString *frag) {
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+    NSInteger guard = 0;
+    while (stack.count && guard++ < 500) {
+        UIView *v = stack.lastObject;
+        [stack removeLastObject];
+        if ([NSStringFromClass(v.class) rangeOfString:frag].location != NSNotFound) return YES;
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return NO;
+}
+
+static UIScrollView *ERSPGFindPager(UIView *root) {
+    if (!root) return nil;
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+    NSInteger guard = 0;
+    while (stack.count && guard++ < 3000) {
+        UIView *v = stack.lastObject;
+        [stack removeLastObject];
+        if ([v isKindOfClass:[UIScrollView class]]) {
+            UIScrollView *sv = (UIScrollView *)v;
+            CGFloat w = CGRectGetWidth(sv.bounds), h = CGRectGetHeight(sv.bounds);
+            NSString *cn = NSStringFromClass(sv.class);
+            if (sv.pagingEnabled && w >= sw * 0.9 && h >= sh * 0.6 &&
+                CGRectGetWidth(sv.contentSize) >= w * 1.5 &&
+                [cn rangeOfString:@"Search"].location == NSNotFound &&
+                ERSPGSubtreeHasClass(sv, @"IconList")) {
+                return sv;
+            }
+        }
+        [stack addObjectsFromArray:v.subviews];
+    }
+    return nil;
+}
+
+static UIScrollView *ERSPGPager(void) {
+    if (sERSPGPager) return sERSPGPager;
+    id ic = ERSPGIconController();
+    UIView *root = nil;
+    if (ic && [ic respondsToSelector:@selector(view)]) {
+        root = ((id (*)(id, SEL))objc_msgSend)(ic, @selector(view));
+    }
+    if (!root) return nil;
+    UIScrollView *sv = ERSPGFindPager(root);
+    if (sv) {
+        sERSPGPager = sv;
+        sERSPGPagerPageW = CGRectGetWidth(sv.bounds);
+        ERLogInfo(@"SPG-PAGER found cls=%@ pageW=%.0f contentW=%.0f pages=%.0f",
+                  NSStringFromClass(sv.class), sERSPGPagerPageW,
+                  CGRectGetWidth(sv.contentSize),
+                  sERSPGPagerPageW > 1 ? CGRectGetWidth(sv.contentSize) / sERSPGPagerPageW : 0);
+    }
+    return sERSPGPager;
+}
+
 // 桌面页数探测：iconLists / _iconLists / iconListsForOrientation: 候选链。
 static NSInteger ERSPGProbePageCount(void) {
     id ic = ERSPGIconController();
@@ -32010,6 +32074,14 @@ static NSInteger ERSPGProbePageCount(void) {
         via = @"iconListsForOrientation:";
     }
     NSInteger cnt = lists.count >= 1 ? (NSInteger)lists.count : -1;
+    // 1.2.0-18 · 候选链失败（iOS17.2 probe=-1 实锤）→ 分页 scrollView 兜底。
+    if (cnt < 1) {
+        UIScrollView *pager = ERSPGPager();
+        if (pager && sERSPGPagerPageW > 1) {
+            NSInteger p = (NSInteger)lround(CGRectGetWidth(pager.contentSize) / sERSPGPagerPageW);
+            if (p >= 1) { cnt = p; via = @"pagerScrollView"; }
+        }
+    }
     // 1.2.0-7 · 诊断：探测结果（首次/变化时记一条）
     static NSInteger sERSPGLastLogged = -999;
     if (cnt != sERSPGLastLogged) {
@@ -32047,7 +32119,19 @@ static void ERSPGJumpToPage(NSInteger page1based) {
                   gERSPGJumpSel ? NSStringFromSelector(gERSPGJumpSel) : @"(none matched)",
                   gERSPGJumpTwoArg ? 1 : 0);
     }
-    if (!gERSPGJumpSel) return;
+    if (!gERSPGJumpSel) {
+        // 1.2.0-18 · 老 selector 链全落空（iOS17.2 实锤）→ 直接驱动桌面分页 scrollView。
+        UIScrollView *pager = ERSPGPager();
+        if (pager && sERSPGPagerPageW > 1) {
+            CGPoint off = CGPointMake(idx * sERSPGPagerPageW, 0);
+            [pager setContentOffset:off animated:YES];
+            ERLogInfo(@"SPG-JUMP pager page=%ld offset=%.0f cls=%@",
+                      (long)page1based, off.x, NSStringFromClass(pager.class));
+        } else {
+            ERLogInfo(@"SPG-JUMP no sel && no pager page=%ld", (long)page1based);
+        }
+        return;
+    }
     // 1.2.0-7 · 诊断：每次实际跳页
     ERLogInfo(@"SPG-JUMP call page=%ld sel=%@", (long)page1based,
               NSStringFromSelector(gERSPGJumpSel));
