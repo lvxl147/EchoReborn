@@ -32219,6 +32219,8 @@ static void ERSPGAttachTouchHook(Class pillCls) {
     ERLogInfo(@"SPG-TOUCH hook attached cls=%@", NSStringFromClass(pillCls));
 }
 
+static const void *kERSPGPillRecognizersKey = &kERSPGPillRecognizersKey;
+
 // pan 手势 delegate：允许与系统手势同时识别（否则照样被桌面翻页 pan 压制）。
 // 1.2.0-8：定义必须在 ERSPGConfigurePill 之前（C 编译顺序）。
 @interface ERSPGPanDelegate : NSObject <UIGestureRecognizerDelegate>
