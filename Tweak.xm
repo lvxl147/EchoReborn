@@ -32068,6 +32068,9 @@ static void ERSPGHaptic(void) {
     [gen impactOccurred];
 }
 
+// 1.2.0-12 · 前向声明：pan handler 里用到（定义在 PanDelegate 之后）。
+static BOOL ERSPGShouldFire(void);
+
 @interface ERSPGSwipeTarget : NSObject
 - (void)erHandlePan:(UIPanGestureRecognizer *)gesture;
 @end
@@ -32105,13 +32108,116 @@ static void ERSPGHaptic(void) {
         NSInteger page = ERSPGInt(key, 0);
         ERLogInfo(@"SPG-PAN #%ld t=(%.0f,%.0f) page=%ld", (long)++sERPanN, t.x, t.y, (long)page);
         if (page < 1) return;   // 无动作 = 系统默认
+        if (!ERSPGShouldFire()) return;   // 1.2.0-12 与 touches 通道去重
         ERSPGHaptic();
         ERSPGJumpToPage(page);
     } @catch (__unused NSException *e) {}
 }
 @end
 
-static const void *kERSPGPillRecognizersKey = &kERSPGPillRecognizersKey;
+// 1.2.0-12 · 参考插件逆向实锤（aemuloQS）：桌面手势不被翻页 pan 压制的正解是
+// **直接覆写目标 view 的 touches 系列**（class_addMethod，完全不走
+// UIGestureRecognizer；它对 _UIPageControlContentView 上滑阈值仅 10pt）。
+// 对胶囊同样处理：Began 记起点，Moved/Ended 判位移（≥40pt 与 pan 一致），
+// 位移过小 = 单击 → 透传 super（不破坏打开搜索）。
+static NSMutableDictionary<NSValue *, NSValue *> *gERSPGTouchStart = nil;
+static NSInteger sERSPGTouchN = 0;
+
+// pan / touch 双通道去重：0.6s 内只触发一次跳页。
+static BOOL ERSPGShouldFire(void) {
+    static NSTimeInterval sERSPGLastFire = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - sERSPGLastFire < 0.6) return NO;
+    sERSPGLastFire = now;
+    return YES;
+}
+
+static void ERSPGTouchFire(id self, CGPoint start, CGPoint end) {
+    @try {
+        CGPoint d = CGPointMake(end.x - start.x, end.y - start.y);
+        if (hypot(d.x, d.y) < 40.0) return;   // 单击范围，交给系统
+        if (!ERSPGShouldFire()) return;
+        NSString *key;
+        if (fabs(d.x) >= fabs(d.y))
+            key = (d.x < 0) ? @"HomeScreen.SearchPill.GestureLeft" : @"HomeScreen.SearchPill.GestureRight";
+        else
+            key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
+        NSInteger page = ERSPGInt(key, 0);
+        ERLogInfo(@"SPG-TOUCH #%ld d=(%.0f,%.0f) page=%ld", (long)++sERSPGTouchN, d.x, d.y, (long)page);
+        if (page < 1) return;   // 无动作 = 系统默认
+        ERSPGHaptic();
+        ERSPGJumpToPage(page);
+    } @catch (__unused NSException *e) {}
+}
+
+static CGPoint ERSPGTouchStartGet(UITouch *t) {
+    NSValue *v = gERSPGTouchStart[[NSValue valueWithNonretainedObject:t]];
+    return v ? [v CGPointValue] : CGPointMake(CGFLOAT_MAX, CGFLOAT_MAX);
+}
+
+static void ERSPGMsgSuperTouches(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    struct objc_super sup = { (id)self, class_getSuperclass(object_getClass(self)) };
+    ((void (*)(struct objc_super *, SEL, NSSet *, UIEvent *))objc_msgSendSuper)(&sup, _cmd, touches, event);
+}
+
+static void ERSPGTBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    @try {
+        if (!gERSPGTouchStart) gERSPGTouchStart = [NSMutableDictionary new];
+        UITouch *t = [touches anyObject];
+        CGPoint p = [t locationInView:(UIView *)self];
+        [gERSPGTouchStart setObject:[NSValue valueWithCGPoint:p]
+                             forKey:[NSValue valueWithNonretainedObject:t]];
+    } @catch (__unused NSException *e) {}
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+
+static void ERSPGTMoved(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    @try {
+        UITouch *t = [touches anyObject];
+        NSValue *tv = [NSValue valueWithNonretainedObject:t];
+        NSValue *sv = gERSPGTouchStart[tv];
+        if (sv) {
+            CGPoint end = [t locationInView:(UIView *)self];
+            CGPoint d = CGPointMake(end.x - sv.CGPointValue.x, end.y - sv.CGPointValue.y);
+            if (hypot(d.x, d.y) >= 40.0) {
+                // 参考插件在 Moved 即触发（阈值 10pt）；我们 40pt，触发后移除起点防重。
+                [gERSPGTouchStart removeObjectForKey:tv];
+                ERSPGTouchFire(self, sv.CGPointValue, end);
+            }
+        }
+    } @catch (__unused NSException *e) {}
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+
+static void ERSPGTEnded(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    @try {
+        UITouch *t = [touches anyObject];
+        NSValue *tv = [NSValue valueWithNonretainedObject:t];
+        NSValue *sv = gERSPGTouchStart[tv];
+        if (sv) {
+            [gERSPGTouchStart removeObjectForKey:tv];
+            CGPoint end = [t locationInView:(UIView *)self];
+            ERSPGTouchFire(self, [sv CGPointValue], end);
+        }
+    } @catch (__unused NSException *e) {}
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+
+// 每个胶囊类只挂一次（类级 hook，实例来了就挂）。
+static void ERSPGAttachTouchHook(Class pillCls) {
+    static NSMutableSet *hooked = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ hooked = [NSMutableSet new]; });
+    if (!pillCls || [hooked containsObject:pillCls]) return;
+    if (!class_addMethod(pillCls, @selector(touchesBegan:withEvent:),  (IMP)ERSPGTBegan,  "v@:@@"))
+        class_replaceMethod(pillCls, @selector(touchesBegan:withEvent:),  (IMP)ERSPGTBegan,  "v@:@@");
+    if (!class_addMethod(pillCls, @selector(touchesMoved:withEvent:),  (IMP)ERSPGTMoved,  "v@:@@"))
+        class_replaceMethod(pillCls, @selector(touchesMoved:withEvent:),  (IMP)ERSPGTMoved,  "v@:@@");
+    if (!class_addMethod(pillCls, @selector(touchesEnded:withEvent:),  (IMP)ERSPGTEnded,  "v@:@@"))
+        class_replaceMethod(pillCls, @selector(touchesEnded:withEvent:),  (IMP)ERSPGTEnded,  "v@:@@");
+    [hooked addObject:pillCls];
+    ERLogInfo(@"SPG-TOUCH hook attached cls=%@", NSStringFromClass(pillCls));
+}
 
 // pan 手势 delegate：允许与系统手势同时识别（否则照样被桌面翻页 pan 压制）。
 // 1.2.0-8：定义必须在 ERSPGConfigurePill 之前（C 编译顺序）。
@@ -32181,6 +32287,8 @@ static void ERSPGConfigurePill(UIView *pill) {
                   NSStringFromClass(pill.class),
                   NSStringFromCGRect(pill.frame), enabled ? 1 : 0);
     }
+    // 1.2.0-12 · touches 直挂（参考插件方案，类级一次）；与 pan 并存，ERSPGShouldFire 去重。
+    ERSPGAttachTouchHook(pill.class);
     for (UIGestureRecognizer *g in recs) g.enabled = enabled;
 }
 
