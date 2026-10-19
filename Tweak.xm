@@ -33027,13 +33027,18 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
                     dispatch_source_set_timer(spgTimer,
                                               dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
                                               (uint64_t)(5.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
-                    __block dispatch_source_t keepSPG = spgTimer;
+                    // 1.2.0-13 · 根因实锤（日志：SPG-CTOR resumed ok 但 5 分钟零 SPG-TICK，
+                    // 而同为毛队列定时器的 QACORR 心跳正常）：timer 此前只被 ctor 栈上的
+                    // __block keepSPG 持有——ctor 一返回 source 即被释放，handler 永不执行。
+                    // 改 static 持有（其它常驻定时器同款做法）。
+                    static dispatch_source_t sERSPGTimer = nil;
+                    sERSPGTimer = spgTimer;
                     dispatch_source_set_event_handler(spgTimer, ^{
                         @autoreleasepool { ERSPGScanTick(); }
                     });
                     dispatch_resume(spgTimer);
-                    ERBootLog(@"SPG-CTOR timer resumed");
-                    ERLogInfo(@"SPG-CTOR timer resumed ok");
+                    ERBootLog(@"SPG-CTOR timer resumed (static kept)");
+                    ERLogInfo(@"SPG-CTOR timer resumed ok (static kept)");
                 }
             }
             // 1.1.4 · RCPScreenRecorder 日志钩子（RCP-TIMELINE 时间线，orig 透传）（1.1.9-74 找回）
