@@ -32207,7 +32207,9 @@ static void ERSPGHaptic(void) {
         sERSPGHapticStyle = (NSInteger)style;
     }
     [sERSPGHapticGen prepare];
+    sERSPGOwnHaptic = YES;   // 1.2.0-31 系统震动封锁期间自己的震动放行
     [sERSPGHapticGen impactOccurred];
+    sERSPGOwnHaptic = NO;
 }
 
 // 1.2.0-12 · 前向声明：pan handler 里用到（定义在 PanDelegate 之后）。
@@ -32219,6 +32221,10 @@ static __weak UIView *sERSPGPillRef = nil;
 static CGRect sERSPGPillWinFrame = CGRectZero;
 // 1.2.0-29 · 胶囊帧集合：桌面有两个 SBHSearchPillView（底部真胶囊 + 搜索层顶部胶囊），单缓存帧会在两者间跳变，-28 日志实锤闸门拿错帧全放行。改用集合存所有候选帧，闸门命中任一帧即拒。
 static NSMutableArray<NSValue *> *gERSPGPillFrameList = nil;
+// 1.2.0-31 · 我方震动放行标记 + 触摸闸门前向声明（pan handler 先用）
+static BOOL sERSPGOwnHaptic = NO;
+static void ERSPGPageCtlTouchGateBegin(UIView *from);
+static void ERSPGPageCtlTouchGateEnd(UIView *from);
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset);
 
 static UIPanGestureRecognizer *sERSPGWinPan = nil;
@@ -32278,6 +32284,8 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                               NSStringFromCGRect(pill.window.frame));
                     ERLogInfo(@"SPG-HIT %@", hitChain);
                     // 防横向被桌面翻页 pan 抢走：压住 pager pan，结束再恢复。
+                    // 1.2.0-31 · 窗口级 pan 起手入区也纳入胶囊触摸活动计数（setContentOffset 封锁条件）
+                    ERSPGPageCtlTouchGateBegin(pill);
                     ERSPGPagerPanSetEnabled(NO);
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                                    dispatch_get_main_queue(), ^{
@@ -32309,6 +32317,8 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 ERLogInfo(@"SPG-PAN #%ld release jump page=%ld", (long)++sERPanN, (long)pending);
                 ERSPGJumpToPage(pending);
             }
+            if ([objc_getAssociatedObject(gesture, @selector(erPanInPill)) boolValue])
+                ERSPGPageCtlTouchGateEnd(sERSPGPillRef ?: nil);  // 1.2.0-31
             ERSPGPagerPanSetEnabled(YES);
             return;
         }
@@ -32926,6 +32936,39 @@ static void ERSPGPillTouchCancelled(id self, SEL _cmd, NSSet *touches, UIEvent *
     ERSPGMsgSuperTouches(self, _cmd, touches, event);
 }
 
+// 1.2.0-31 · 系统震动封锁：胶囊触摸活动期间（拖圆点翻页）系统自带震动与我方手势震动混淆，封锁 selectionChanged/impactOccurred，我方用 sERSPGOwnHaptic 放行。
+static void ERSPGSysHaptHook1(id self, SEL _cmd) {   // selectionChanged / impactOccurred
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnHaptic && gERSPGPageCtlActive > 0) return;
+    IMP o = ERSPGSCOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL))o)(self, _cmd);
+}
+static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i) {  // impactOccurredWithIntensity:/n    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnHaptic && gERSPGPageCtlActive > 0) return;
+    IMP o = ERSPGSCOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, CGFloat))o)(self, _cmd, i);
+}
+
+static void ERSPGAttachSysHaptHooks(void) {
+    static BOOL done = NO;
+    if (done) return;
+    done = YES;
+    if (!gERSPGSCOOrig) gERSPGSCOOrig = [NSMutableDictionary new];
+    struct { Class cls; SEL sel; IMP imp; const char *types; } items[] = {
+        { [UISelectionFeedbackGenerator class], @selector(selectionChanged),            (IMP)ERSPGSysHaptHook1, "v@:"  },
+        { [UIImpactFeedbackGenerator class],    @selector(impactOccurred),              (IMP)ERSPGSysHaptHook1, "v@:"  },
+        { [UIImpactFeedbackGenerator class],    @selector(impactOccurredWithIntensity:),(IMP)ERSPGSysHaptHook2, "v@:d" },
+    };
+    for (int i = 0; i < 3; i++) {
+        if (!items[i].cls) continue;
+        Method m = class_getInstanceMethod(items[i].cls, items[i].sel);
+        IMP orig = m ? method_getImplementation(m) : NULL;
+        NSString *key = [NSStringFromClass(items[i].cls) stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
+        if (orig && !gERSPGSCOOrig[key]) gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
+        if (!class_addMethod(items[i].cls, items[i].sel, items[i].imp, items[i].types) && m)
+            method_setImplementation(m, items[i].imp);
+    }
+    ERLogInfo(@"SPG-HAPTLOCK attached");
+}
+
 static void ERSPGAttachPillTouchHook(Class cls) {
     if (!cls) return;
     if (!gERSPGPageCtlHooked) gERSPGPageCtlHooked = [NSMutableSet new];
@@ -32979,6 +33022,11 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
             // ③ touches 兜底 hook（类级一次）
             ERSPGAttachPageCtlHook(root.class);
         }
+        // 1.2.0-31 · 广谱挂载：扫描到的任意 SB 系滚动视图都挂 pan 闸门 + CO 封锁（闸门只拦胶囊区，无副作用）
+        if (gestureEnabled && [root isKindOfClass:%c(UIScrollView)] && [cn hasPrefix:@"SB"]) {
+            ERSPGAttachSCOHook(root.class);
+            ERSPGAttachGRGate(root.class);
+        }
         if ([cn rangeOfString:@"SearchScrollView"].location != NSNotFound) {
             // 1.2.0-28 · 第 1 招挂载点：搜索层滚动视图本类闸门
             ERSPGAttachGRGate(root.class);
@@ -33011,6 +33059,7 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
         // 1.2.0-30 · setContentOffset 封锁（拖圆点翻页真驱动）
         ERSPGAttachSCOHook(NSClassFromString(@"SBIconScrollView"));
         ERSPGAttachSCOHook(NSClassFromString(@"SBSearchScrollView"));
+        ERSPGAttachSysHaptHooks();  // 1.2.0-31 系统震动封锁
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
     static NSTimeInterval sERLastHeartbeat = 0;
