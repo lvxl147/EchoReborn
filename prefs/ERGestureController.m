@@ -593,7 +593,7 @@ static void ERGSwitchLayout(id self, SEL _cmd) {
         UITableViewCell *cell = (UITableViewCell *)self;
         // 1.2.0-11 · 图标注入改为每次布局重读 specifier：不依赖 refresh 时机
         //（1.2.0-10 只在 refresh 写一次，基类布局可能把 imageView 清掉/隐藏）。
-        PSSpecifier *spec = objc_getAssociatedObject(self, kERGSwitchSpecKey);
+        PSSpecifier *spec = objc_getAssociatedObject(self, &kERGSwitchSpecKey);
         UIImage *icon = [spec propertyForKey:@"iconImage"];
         if (![icon isKindOfClass:[UIImage class]]) return;
         cell.imageView.image = icon;
