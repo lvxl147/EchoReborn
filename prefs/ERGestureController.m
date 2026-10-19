@@ -102,8 +102,7 @@ static NSString *ERGestureValueText(NSInteger value) {
     cell.textLabel.text = opt;
     cell.textLabel.textColor = [opt isEqualToString:_current]
         ? [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0]   // 当前值高亮青色
-        : ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.92],
-                     [UIColor colorWithWhite:0.0 alpha:0.85]);
+        : [UIColor colorWithWhite:1.0 alpha:0.92];
     return cell;
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -151,9 +150,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
         y = MAX(anchorRect.origin.y - tableH - 6.0, 12.0);      // 放不下就往上弹
     }
 
-    // 1.2.0-10 · 浅色模式：SystemMaterial 随系统深浅色自适应（原 Dark 写死）。
+    // 1.2.0-14 · 恢复之前的暗色浮层（用户反馈浅色材质"很大"不习惯）。
     UIVisualEffectView *panel = [[UIVisualEffectView alloc]
-        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
     panel.frame = CGRectMake(x, y, width, tableH);
     panel.layer.cornerRadius = 12.0;
     panel.layer.masksToBounds = YES;
@@ -161,11 +160,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
 
     UITableView *menu = [[UITableView alloc] initWithFrame:panel.contentView.bounds
                                                      style:UITableViewStylePlain];
-    menu.backgroundColor = ERGDynamic([UIColor colorWithWhite:0.10 alpha:0.88],
-                                      [UIColor colorWithWhite:1.0 alpha:0.96]);
+    menu.backgroundColor = [UIColor colorWithWhite:0.10 alpha:0.88];
     menu.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-    menu.separatorColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.10],
-                                     [UIColor colorWithWhite:0.0 alpha:0.10]);
+    menu.separatorColor = [UIColor colorWithWhite:1.0 alpha:0.10];
     menu.scrollEnabled = (options.count > 8);
     menu.alwaysBounceVertical = NO;
 
@@ -489,17 +486,22 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     @try {
+        // 1.2.0-14 · 修「图标只显示一点/偏左」：布局时行高可能还是过渡值导致 y 为负
+        // 被裁切 → 行高 <40 时按 44 兜底；左边距用绝对 16 与震动强度行对齐；
+        // 图标用原生 29pt（与工厂图 29x29 一致，避免 AspectFit 缩进）。
         CGFloat h = self.contentView.bounds.size.height;
-        CGFloat left = self.contentView.layoutMargins.left;
-        CGFloat right = self.contentView.layoutMargins.right;
+        if (h < 40.0) h = 44.0;
+        CGFloat left = 16.0;
+        CGFloat right = 16.0;
         CGFloat w = self.contentView.bounds.size.width;
-        _erIcon.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
+        if (w < 1.0) return;
+        _erIcon.frame = CGRectMake(left, (h - 29.0) / 2.0, 29.0, 29.0);
         CGSize swSize = _erSwitch.bounds.size;
         if (swSize.width < 1.0) swSize = CGSizeMake(51.0, 31.0);
         _erSwitch.frame = CGRectMake(w - right - swSize.width,
                                      (h - swSize.height) / 2.0,
                                      swSize.width, swSize.height);
-        CGFloat lx = left + 27.0 + 12.0;
+        CGFloat lx = left + 29.0 + 12.0;
         _erTitle.frame = CGRectMake(lx, 0,
                                     _erSwitch.frame.origin.x - lx - 12.0, h);
     } @catch (__unused NSException *e) {}
