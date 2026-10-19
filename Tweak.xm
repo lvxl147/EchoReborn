@@ -32572,10 +32572,15 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
     @try {
         NSString *cn = NSStringFromClass(root.class);
         if ([cn rangeOfString:@"SearchScrollView"].location != NSNotFound) {
-            UIPanGestureRecognizer *pg = root.panGestureRecognizer;
-            if (pg && pg.enabled != (!gestureEnabled)) {
-                pg.enabled = !gestureEnabled;
-                ERLogInfo(@"SPG-SUPPRESS %@ pan -> %@", cn, gestureEnabled ? @"OFF" : @"restored");
+            // 1.2.0-23b · CI 实锤：panGestureRecognizer 是 UIScrollView 属性，
+            // root 声明为 UIView 需先转 UIScrollView（SearchScrollView 必是）。
+            if ([root isKindOfClass:%c(UIScrollView)]) {
+                UIScrollView *sv = (UIScrollView *)root;
+                UIPanGestureRecognizer *pg = sv.panGestureRecognizer;
+                if (pg && pg.enabled != (!gestureEnabled)) {
+                    pg.enabled = !gestureEnabled;
+                    ERLogInfo(@"SPG-SUPPRESS %@ pan -> %@", cn, gestureEnabled ? @"OFF" : @"restored");
+                }
             }
             (*n)++;
         }
