@@ -32643,6 +32643,8 @@ static void ERSPGPageCtlBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event)
     if (now - sERLastSwallow > 30.0) {
         sERLastSwallow = now;
         ERLogInfo(@"SPG-PCSWALLOW began cls=%@", NSStringFromClass(((UIView *)self).class));
+        // 1.2.0-28 · 祖先链全 dump（一次性）
+        ERSPGPageCtlChainDump((UIView *)self);
     }
     UITouch *t = [touches anyObject];
     CGPoint p = [t locationInView:(UIView *)self];
@@ -32732,6 +32734,89 @@ static void ERSPGAttachPageCtlHook(Class cls) {
     ERLogInfo(@"SPG-PAGECTL hook attached cls=%@", NSStringFromClass(cls));
 }
 
+// 1.2.0-28 · 第 1 招（主杀）：gestureRecognizerShouldBegin: 源头闸门。
+// -27 日志实锤：被吞视图祖先链上无 UIScrollView（SPG-PCGR 零输出），翻页
+// 执行者 SBIconScrollView 不在圆点链里——touch 类级 hook 堵不住。改为在
+// 翻页执行者本类上闸门：开关开时，pan 的触摸落点在胶囊区域（外扩 10pt）
+// 内 → 直接拒绝开始。桌面其他区域起手照常翻页。
+static NSMutableDictionary<NSString *, NSValue *> *gERSPGGRGateOrig = nil;
+static NSMutableSet *gERSPGGRGateHooked = nil;
+static BOOL ERSPGGRGateShouldBegin(id self, SEL _cmd, UIGestureRecognizer *gr);
+static void ERSPGPageCtlChainDump(UIView *leaf);
+
+static void ERSPGAttachGRGate(Class cls) {
+    if (!cls) return;
+    NSString *key = NSStringFromClass(cls);
+    if (!gERSPGGRGateHooked) gERSPGGRGateHooked = [NSMutableSet new];
+    if ([gERSPGGRGateHooked containsObject:cls]) return;
+    SEL sel = @selector(gestureRecognizerShouldBegin:);
+    // 先取继承链上的原实现（superclass 上的也算），再挂到本类（addMethod
+    // 优先，失败才 replace，保证不污染 UIScrollView 基类全局行为）
+    Method m = class_getInstanceMethod(cls, sel);
+    IMP orig = m ? method_getImplementation(m) : NULL;
+    if (!gERSPGGRGateOrig) gERSPGGRGateOrig = [NSMutableDictionary new];
+    if (orig && !gERSPGGRGateOrig[key])
+        gERSPGGRGateOrig[key] = [NSValue valueWithPointer:(void *)orig];
+    BOOL added = class_addMethod(cls, sel, (IMP)ERSPGGRGateShouldBegin, "c@:@:");
+    if (!added && m) method_setImplementation(m, (IMP)ERSPGGRGateShouldBegin);
+    [gERSPGGRGateHooked addObject:cls];
+    ERLogInfo(@"SPG-GRGATE attached cls=%@ added=%d orig=%@", key, added ? 1 : 0,
+              orig ? @"yes" : @"no");
+}
+
+static BOOL ERSPGGRGateShouldBegin(id self, SEL _cmd, UIGestureRecognizer *gr) {
+    @try {
+        if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) &&
+            [gr isKindOfClass:[UIPanGestureRecognizer class]]) {
+            UIView *v = (UIView *)self;
+            UIWindow *w = v.window;
+            CGPoint wp = w ? [gr locationInView:w] : CGPointZero;
+            CGRect f = CGRectInset(sERSPGPillWinFrame, -10.0, -10.0);
+            if (w && !CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) {
+                static NSTimeInterval sERLastGate = 0;
+                NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+                if (now - sERLastGate > 30.0) {
+                    sERLastGate = now;
+                    ERLogInfo(@"SPG-GRGATE blocked cls=%@ p=(%.0f,%.0f)",
+                              NSStringFromClass(v.class), wp.x, wp.y);
+                }
+                return NO;   // 胶囊区起手的 pan 一律不准开始
+            }
+        }
+    } @catch (__unused NSException *e) {}
+    // 原实现：按 self 的类沿继承链找回存的 orig
+    IMP orig = NULL;
+    @try {
+        Class c = object_getClass(self);
+        while (c) {
+            NSValue *ov = gERSPGGRGateOrig[NSStringFromClass(c)];
+            if (ov) { orig = (IMP)ov.pointerValue; break; }
+            c = class_getSuperclass(c);
+        }
+    } @catch (__unused NSException *e) {}
+    if (orig) return ((BOOL (*)(id, SEL, UIGestureRecognizer *))orig)(self, _cmd, gr);
+    return YES;
+}
+
+// 1.2.0-28 · 第 2 招（诊断）：PCSWALLOW 命中时一次性 dump 完整祖先链
+//（每层类名 + 各自手势识别器），万一闸门堵不住，日志直接点名真凶。
+static void ERSPGPageCtlChainDump(UIView *leaf) {
+    static BOOL sERSPGChainDumped = NO;
+    if (sERSPGChainDumped) return;
+    sERSPGChainDumped = YES;
+    ERLogInfo(@"SPG-CHNDUMP ---- from %@ ----", NSStringFromClass(leaf.class));
+    int d = 0;
+    for (UIView *v = leaf; v && d < 12; v = v.superview, d++) {
+        NSString *grs = @"";
+        for (UIGestureRecognizer *g in v.gestureRecognizers)
+            grs = [grs stringByAppendingFormat:@"%@%@(state=%ld,en=%d)",
+                   grs.length ? @", " : @"", NSStringFromClass(g.class),
+                   (long)g.state, g.enabled ? 1 : 0];
+        ERLogInfo(@"SPG-CHNDUMP #%d %@ gr=[%@]", d, NSStringFromClass(v.class), grs);
+    }
+    ERLogInfo(@"SPG-CHNDUMP ---- end ----");
+}
+
 static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSInteger *n) {
     if (!root) return;
     @try {
@@ -32768,6 +32853,8 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
             ERSPGAttachPageCtlHook(root.class);
         }
         if ([cn rangeOfString:@"SearchScrollView"].location != NSNotFound) {
+            // 1.2.0-28 · 第 1 招挂载点：搜索层滚动视图本类闸门
+            ERSPGAttachGRGate(root.class);
             // 1.2.0-23b · CI 实锤：panGestureRecognizer 是 UIScrollView 属性，
             // root 声明为 UIView 需先转 UIScrollView（SearchScrollView 必是）。
             if ([root isKindOfClass:%c(UIScrollView)]) {
@@ -32788,6 +32875,12 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
     NSInteger n = 0;
     for (UIWindow *w in ERAllApplicationWindows()) {
         ERSPGSuppressSearchLayer(w, gestureEnabled, &n);
+    }
+    // 1.2.0-28 · 翻页执行者 SBIconScrollView 不在圆点祖先链里（SPG-PCGR 零
+    // 输出实锤），扫描扫不到它——直接按类名挂闸门（SpringBoard 内常驻类）
+    if (gestureEnabled) {
+        ERSPGAttachGRGate(NSClassFromString(@"SBIconScrollView"));
+        ERSPGAttachGRGate(NSClassFromString(@"SBSearchScrollView"));
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
     static NSTimeInterval sERLastHeartbeat = 0;
