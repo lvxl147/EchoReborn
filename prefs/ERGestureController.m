@@ -102,7 +102,8 @@ static NSString *ERGestureValueText(NSInteger value) {
     cell.textLabel.text = opt;
     cell.textLabel.textColor = [opt isEqualToString:_current]
         ? [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0]   // 当前值高亮青色
-        : [UIColor colorWithWhite:1.0 alpha:0.92];
+        : ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.92],
+                     [UIColor colorWithWhite:0.0 alpha:0.85]);
     return cell;
 }
 - (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
@@ -141,7 +142,7 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     [container addSubview:backdrop];
 
     CGFloat rowH = 40.0;
-    CGFloat width = 170.0;
+    CGFloat width = 150.0;   // 1.2.0-15 · 用户反馈太宽：170 → 150
     CGFloat tableH = MIN((CGFloat)options.count, 8.0) * rowH;   // 最多 8 行，超出滚动
     CGFloat x = MIN(MAX(anchorRect.origin.x + anchorRect.size.width - width, 8.0),
                     window.bounds.size.width - width - 8.0);
@@ -150,9 +151,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
         y = MAX(anchorRect.origin.y - tableH - 6.0, 12.0);      // 放不下就往上弹
     }
 
-    // 1.2.0-14 · 恢复之前的暗色浮层（用户反馈浅色材质"很大"不习惯）。
+    // 1.2.0-15 · 颜色恢复深浅自适应（用户：问题在宽度不在颜色）。
     UIVisualEffectView *panel = [[UIVisualEffectView alloc]
-        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemUltraThinMaterialDark]];
+        initWithEffect:[UIBlurEffect effectWithStyle:UIBlurEffectStyleSystemMaterial]];
     panel.frame = CGRectMake(x, y, width, tableH);
     panel.layer.cornerRadius = 12.0;
     panel.layer.masksToBounds = YES;
@@ -160,9 +161,11 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
 
     UITableView *menu = [[UITableView alloc] initWithFrame:panel.contentView.bounds
                                                      style:UITableViewStylePlain];
-    menu.backgroundColor = [UIColor colorWithWhite:0.10 alpha:0.88];
+    menu.backgroundColor = ERGDynamic([UIColor colorWithWhite:0.10 alpha:0.88],
+                                      [UIColor colorWithWhite:1.0 alpha:0.96]);
     menu.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
-    menu.separatorColor = [UIColor colorWithWhite:1.0 alpha:0.10];
+    menu.separatorColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.10],
+                                     [UIColor colorWithWhite:0.0 alpha:0.10]);
     menu.scrollEnabled = (options.count > 8);
     menu.alwaysBounceVertical = NO;
 
@@ -477,6 +480,10 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
         [super refreshCellContentsWithSpecifier:specifier];
     } @catch (__unused NSException *e) {}
     if (specifier) _erSpec = specifier;
+    // 1.2.0-15 · 用户实锤「有个图标遮在上面」：原生 imageView 也在渲染同一张
+    // iconImage（白网格那层）——直接隐藏原生槽位，只留自建图标。
+    self.imageView.hidden = YES;
+    self.imageView.image = nil;
     _erIcon.image = [_erSpec propertyForKey:@"iconImage"];
     _erTitle.text = [_erSpec propertyForKey:@"label"];
     [self _erSyncSwitch];
@@ -495,6 +502,7 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
         CGFloat right = 16.0;
         CGFloat w = self.contentView.bounds.size.width;
         if (w < 1.0) return;
+        self.imageView.hidden = YES;   // 1.2.0-15 双图标修：原生槽位每帧隐藏
         _erIcon.frame = CGRectMake(left, (h - 29.0) / 2.0, 29.0, 29.0);
         CGSize swSize = _erSwitch.bounds.size;
         if (swSize.width < 1.0) swSize = CGSizeMake(51.0, 31.0);
@@ -664,9 +672,9 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                        color:@"teal"
                                       defVal:NO]];
         [specs addObject:[self erGestureNamed:@"上滑胶囊" key:@"HomeScreen.SearchPill.GestureUp"   symbol:@"arrow.up"    color:@"blue"]];
-        [specs addObject:[self erGestureNamed:@"下滑胶囊" key:@"HomeScreen.SearchPill.GestureDown" symbol:@"arrow.down"  color:@"indigo"]];
+        [specs addObject:[self erGestureNamed:@"下滑胶囊" key:@"HomeScreen.SearchPill.GestureDown" symbol:@"arrow.down"  color:@"blue"]];
         [specs addObject:[self erGestureNamed:@"左滑胶囊" key:@"HomeScreen.SearchPill.GestureLeft" symbol:@"arrow.left"  color:@"teal"]];
-        [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"purple"]];
+        [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"teal"]];
 
         // ---- 卡片2 · 震动反馈 ----
         PSSpecifier *g3 = [PSSpecifier groupSpecifierWithName:@"震动反馈"];
