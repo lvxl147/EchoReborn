@@ -124,3 +124,4 @@
 | 207 | 1.2.0-12 | 1002012 | 参考插件逆向：胶囊类直接覆写 touches（Began/Moved/Ended，≥40pt 判向，单击透传）替代被压制的手势识别器 + 下拉框宽度量值文本（修「无动作/第10页」截断真因）+ 开关行图标改自建 UIImageView |
 | 208 | 1.2.0-13 | 1002013 | 手势扫描零 tick 根因实锤：spgTimer 未被持有（ctor 栈 __block 释放）改 static；下拉框统一宽度（按第10页/无动作定宽）；开关行图标换编译期 ERGestureSwitchCell |
 | 209 | 1.2.0-13b | 1002014 | 开关行改 ERGestureSwitchCell:PSTableCell 全自绘（图标+标题+自放 UISwitch，CFPreferences 直读写）；PSSwitchCell 头文件是枚举无法子类化。下拉框统一宽度已在 -13 |
+| 210 | 1.2.0-14 | 1002015 | 手势实锤：ScanTick 已跑但 pill NOT found(roots=38)——加候选类名 dump（SPG-CAND）+ LooksLikePill 放行 Spotlight；下拉浮层恢复暗色；开关行图标 29pt/左距16/行高兜底 |
