@@ -32251,7 +32251,9 @@ shouldBeRequiredToFailByGestureRecognizer:(UIGestureRecognizer *)otherGestureRec
 // 按类名特征 + 尺寸闸门匹配，避免误挂到别的东西上）。
 static BOOL ERSPGLooksLikePill(UIView *v) {
     NSString *cn = NSStringFromClass(v.class);
-    if ([cn rangeOfString:@"Search"].location == NSNotFound) return NO;
+    // 1.2.0-14 · iOS 17.2 胶囊类名可能含 Spotlight 而非 Search。
+    if ([cn rangeOfString:@"Search"].location == NSNotFound &&
+        [cn rangeOfString:@"Spotlight"].location == NSNotFound) return NO;
     if ([cn rangeOfString:@"Button"].location == NSNotFound &&
         [cn rangeOfString:@"Affordance"].location == NSNotFound &&
         [cn rangeOfString:@"Pill"].location == NSNotFound &&
@@ -32373,12 +32375,31 @@ static void ERSPGScanTick(void) {
             }
         }
         // 1.2.0-7 · 诊断：整轮没找到胶囊，30s 节流记一条（区分「没找到胶囊」与
-        // 「找到了但手势没触发」）
+        // 「找到了但手势没触发」）。1.2.0-14 · 同时 dump 尺寸落在胶囊区间内的候选
+        // 类名（类名特征没匹配上 → 拿真实类名修 ERSPGLooksLikePill）。
         static NSTimeInterval sERSPGLastMiss = 0;
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
         if (now - sERSPGLastMiss > 30.0) {
             sERSPGLastMiss = now;
             ERLogInfo(@"SPG-SCAN pill NOT found (roots=%lu)", (unsigned long)roots.count);
+            NSMutableArray<NSString *> *cands = [NSMutableArray array];
+            for (UIView *root in roots) {
+                NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+                NSInteger guard = 0;
+                while (stack.count && guard++ < 3000 && cands.count < 12) {
+                    UIView *v = stack.lastObject;
+                    [stack removeLastObject];
+                    CGFloat cw = CGRectGetWidth(v.frame), ch = CGRectGetHeight(v.frame);
+                    if (cw >= 60.0 && cw <= 320.0 && ch >= 20.0 && ch <= 80.0) {
+                        NSString *cn = NSStringFromClass(v.class);
+                        if ([cn hasPrefix:@"_"] || [cn hasPrefix:@"UI"]) { /* 跳过纯 UIKit 容器 */ }
+                        else [cands addObject:[NSString stringWithFormat:@"%@ (%.0fx%.0f)", cn, cw, ch]];
+                    }
+                    [stack addObjectsFromArray:v.subviews];
+                }
+                if (cands.count >= 12) break;
+            }
+            ERLogInfo(@"SPG-CAND: %@", [cands componentsJoinedByString:@" | "]);
         }
     } @catch (__unused NSException *e) {}
 }
