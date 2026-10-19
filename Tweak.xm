@@ -32211,6 +32211,10 @@ static BOOL ERSPGShouldFire(void);
 // 全局唯一 window pan（触摸不落胶囊视图，pan 必须挂上层）。
 static __weak UIView *sERSPGPillRef = nil;
 static CGRect sERSPGPillWinFrame = CGRectZero;
+// 1.2.0-29 · 胶囊帧集合：桌面有两个 SBHSearchPillView（底部真胶囊 + 搜索层顶部胶囊），单缓存帧会在两者间跳变，-28 日志实锤闸门拿错帧全放行。改用集合存所有候选帧，闸门命中任一帧即拒。
+static NSMutableArray<NSValue *> *gERSPGPillFrameList = nil;
+static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset);
+
 static UIPanGestureRecognizer *sERSPGWinPan = nil;
 
 @interface ERSPGSwipeTarget : NSObject
@@ -32767,6 +32771,18 @@ static void ERSPGAttachGRGate(Class cls) {
               orig ? @"yes" : @"no");
 }
 
+static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
+    @try {
+        CGRect f0 = CGRectInset(sERSPGPillWinFrame, inset, inset);
+        if (!CGRectIsEmpty(f0) && CGRectContainsPoint(f0, wp)) return YES;
+        for (NSValue *e in gERSPGPillFrameList) {
+            CGRect f = CGRectInset(e.CGRectValue, inset, inset);
+            if (!CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) return YES;
+        }
+    } @catch (__unused NSException *e) {}
+    return NO;
+}
+
 static BOOL ERSPGGRGateShouldBegin(id self, SEL _cmd, UIGestureRecognizer *gr) {
     @try {
         if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) &&
@@ -32774,8 +32790,8 @@ static BOOL ERSPGGRGateShouldBegin(id self, SEL _cmd, UIGestureRecognizer *gr) {
             UIView *v = (UIView *)self;
             UIWindow *w = v.window;
             CGPoint wp = w ? [gr locationInView:w] : CGPointZero;
-            CGRect f = CGRectInset(sERSPGPillWinFrame, -10.0, -10.0);
-            if (w && !CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) {
+            // 1.2.0-29 · 命中任一候选胶囊帧即拒（单帧会在底部/顶部两个胶囊间跳）
+            if (w && ERSPGPointInAnyPill(wp, -15.0)) {
                 static NSTimeInterval sERLastGate = 0;
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                 if (now - sERLastGate > 30.0) {
@@ -32909,6 +32925,15 @@ static void ERSPGConfigurePill(UIView *pill) {
     if (pill.window) {
         CGRect f = [pill convertRect:pill.bounds toView:pill.window];
         if (!CGRectIsEmpty(f)) {
+            // 1.2.0-29 · 每 tick 记录观察到的胶囊帧（去重、保留最近 8 个），供闸门使用
+            if (!gERSPGPillFrameList) gERSPGPillFrameList = [NSMutableArray new];
+            NSValue *fv = [NSValue valueWithCGRect:f];
+            NSMutableArray *fresh = [NSMutableArray new];
+            for (NSValue *e in gERSPGPillFrameList)
+                if (!CGRectEqualToRect(e.CGRectValue, f)) [fresh addObject:e];
+            [fresh addObject:fv];
+            while (fresh.count > 8) [fresh removeObjectAtIndex:0];
+            gERSPGPillFrameList = fresh;
             // 1.2.0-24 · 帧防抖：-23b 日志实锤缓存帧在 {187.72,710.9}（动画过渡帧）
             // 与 {184.62,744.6}（真帧）间跳变，过渡帧导致 begin outside 误判。
             // 新帧中心与当前帧中心差 >20pt 时视为可疑，连续两 tick 一致才切换。
