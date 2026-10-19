@@ -32138,8 +32138,10 @@ static NSInteger ERSPGProbePageCount(void) {
 // 命中即缓存，后续零探测开销。
 static SEL gERSPGJumpSel = NULL;
 static BOOL gERSPGJumpTwoArg = NO;
+// 1.2.0-30 · 我们自己的跳页放行标记（否则会被 setContentOffset 封锁误杀）
+static BOOL sERSPGOwnJump = NO;
 
-static void ERSPGJumpToPage(NSInteger page1based) {
+static void ERSPGJumpToPageInner(NSInteger page1based) {
     if (page1based < 1) return;
     NSInteger idx = page1based - 1;
     id ic = ERSPGIconController();
@@ -32181,6 +32183,10 @@ static void ERSPGJumpToPage(NSInteger page1based) {
     } else {
         ((void (*)(id, SEL, NSInteger))objc_msgSend)(ic, gERSPGJumpSel, idx);
     }
+}
+static void ERSPGJumpToPage(NSInteger page1based) {
+    sERSPGOwnJump = YES;
+    @try { ERSPGJumpToPageInner(page1based); } @finally { sERSPGOwnJump = NO; }
 }
 
 // 1.2.0-21 · 用户实锤 1315 系统音自带"嗒"声（连响两次像消息提示音）——换成
@@ -32835,6 +32841,108 @@ static void ERSPGPageCtlChainDump(UIView *leaf) {
     }
     ERLogInfo(@"SPG-CHNDUMP ---- end ----");
 }
+// ===== 1.2.0-30 · 釜底抽薪：封锁 SBIconScrollView setContentOffset =====
+// 全部版本证据：PCGR 零输出 + pager-pan/SearchScrollView pan 全禁仍能翻页 → iOS17 拖圆点翻页是搜索控制器直接调 setContentOffset，不走 pan。
+// 胶囊区有触摸活动（gERSPGPageCtlActive>0）期间丢弃非我方滚动调用，我方跳页用 sERSPGOwnJump 放行。
+static NSMutableDictionary<NSString *, NSValue *> *gERSPGSCOOrig = nil;
+static NSMutableSet *gERSPGSCOHooked = nil;
+static void ERSPGSCOOff1(id self, SEL _cmd, CGPoint off);
+static void ERSPGSCOOff2(id self, SEL _cmd, CGPoint off, BOOL anim);
+
+static BOOL ERSPGSCOShouldBlock(id self) {
+    if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) return NO;
+    if (sERSPGOwnJump) return NO;
+    if (gERSPGPageCtlActive <= 0) return NO;
+    static NSTimeInterval sERLastCO = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - sERLastCO > 30.0) {
+        sERLastCO = now;
+        ERLogInfo(@"SPG-COBLOCK cls=%@ active=%ld", NSStringFromClass(object_getClass(self)), (long)gERSPGPageCtlActive);
+    }
+    return YES;
+}
+
+static IMP ERSPGSCOLookupOrig(id self, SEL _cmd) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *ov = gERSPGSCOOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
+        if (ov) return (IMP)ov.pointerValue;
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static void ERSPGSCOOff1(id self, SEL _cmd, CGPoint off) {
+    if (ERSPGSCOShouldBlock(self)) return;
+    IMP o = ERSPGSCOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, CGPoint))o)(self, _cmd, off);
+}
+static void ERSPGSCOOff2(id self, SEL _cmd, CGPoint off, BOOL anim) {
+    if (ERSPGSCOShouldBlock(self)) return;
+    IMP o = ERSPGSCOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, CGPoint, BOOL))o)(self, _cmd, off, anim);
+}
+
+static void ERSPGAttachSCOHook(Class cls) {
+    if (!cls) return;
+    if (!gERSPGSCOHooked) gERSPGSCOHooked = [NSMutableSet new];
+    if ([gERSPGSCOHooked containsObject:cls]) return;
+    if (!gERSPGSCOOrig) gERSPGSCOOrig = [NSMutableDictionary new];
+    NSString *cn = NSStringFromClass(cls);
+    struct { SEL sel; IMP imp; const char *types; } items[] = {
+        { @selector(setContentOffset:),          (IMP)ERSPGSCOOff1, "v@:{CGPoint=dd}"   },
+        { @selector(setContentOffset:animated:), (IMP)ERSPGSCOOff2, "v@:{CGPoint=dd}B"  },
+    };
+    for (int i = 0; i < 2; i++) {
+        Method m = class_getInstanceMethod(cls, items[i].sel);
+        IMP orig = m ? method_getImplementation(m) : NULL;
+        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
+        if (orig && !gERSPGSCOOrig[key])
+            gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
+        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types) && m)
+            method_setImplementation(m, items[i].imp);
+    }
+    [gERSPGSCOHooked addObject:cls];
+    ERLogInfo(@"SPG-COBLOCK attach cls=%@", cn);
+}
+
+// 胶囊本体 touches 观察 hook（不吞、照常转发）：只维护胶囊区触摸活动计数
+static void ERSPGPillTouchBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO))
+        ERSPGPageCtlTouchGateBegin((UIView *)self);
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+static void ERSPGPillTouchMoved(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+static void ERSPGPillTouchEnded(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO))
+        ERSPGPageCtlTouchGateEnd((UIView *)self);
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+static void ERSPGPillTouchCancelled(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO))
+        ERSPGPageCtlTouchGateEnd((UIView *)self);
+    ERSPGMsgSuperTouches(self, _cmd, touches, event);
+}
+
+static void ERSPGAttachPillTouchHook(Class cls) {
+    if (!cls) return;
+    if (!gERSPGPageCtlHooked) gERSPGPageCtlHooked = [NSMutableSet new];
+    if ([gERSPGPageCtlHooked containsObject:cls]) return;
+    struct { SEL sel; IMP imp; } it2[] = {
+        { @selector(touchesBegan:withEvent:),     (IMP)ERSPGPillTouchBegan     },
+        { @selector(touchesMoved:withEvent:),     (IMP)ERSPGPillTouchMoved     },
+        { @selector(touchesEnded:withEvent:),     (IMP)ERSPGPillTouchEnded     },
+        { @selector(touchesCancelled:withEvent:), (IMP)ERSPGPillTouchCancelled },
+    };
+    for (int i = 0; i < 4; i++) {
+        if (!class_addMethod(cls, it2[i].sel, it2[i].imp, "v@:@@"))
+            class_replaceMethod(cls, it2[i].sel, it2[i].imp, "v@:@@");
+    }
+    [gERSPGPageCtlHooked addObject:cls];
+    ERLogInfo(@"SPG-PILLTOUCH hook attached cls=%@", NSStringFromClass(cls));
+}
 
 static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSInteger *n) {
     if (!root) return;
@@ -32900,6 +33008,9 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
     if (gestureEnabled) {
         ERSPGAttachGRGate(NSClassFromString(@"SBIconScrollView"));
         ERSPGAttachGRGate(NSClassFromString(@"SBSearchScrollView"));
+        // 1.2.0-30 · setContentOffset 封锁（拖圆点翻页真驱动）
+        ERSPGAttachSCOHook(NSClassFromString(@"SBIconScrollView"));
+        ERSPGAttachSCOHook(NSClassFromString(@"SBSearchScrollView"));
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
     static NSTimeInterval sERLastHeartbeat = 0;
@@ -32921,6 +33032,7 @@ static void ERSPGConfigurePill(UIView *pill) {
     }
     NSMutableArray *recs = objc_getAssociatedObject(pill, kERSPGPillRecognizersKey);
     // 每 tick 刷新胶囊引用与缓存帧（胶囊实例/位置可能变化，翻页变圆点等）。
+    ERSPGAttachPillTouchHook(((UIView *)pill).class);  // 1.2.0-30 触摸活动观察
     sERSPGPillRef = pill;
     if (pill.window) {
         CGRect f = [pill convertRect:pill.bounds toView:pill.window];
