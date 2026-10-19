@@ -32515,6 +32515,44 @@ static BOOL ERSPGLooksLikePill(UIView *v) {
     return YES;
 }
 
+// 1.2.0-22 · 系统胶囊手势压制：用户视频实锤系统自带"拖胶囊四向/左右翻页"
+// 手势（挂在胶囊相关视图上），横向抢走我们 window pan 的触摸（-21 只压
+// pager pan 压错了对象，横向依旧零触发）。开启手势开关时，把胶囊及祖先链上
+// 类名含 Search 的视图的 pan/swipe 手势全部 enabled=NO（window pan 除外），
+// 每 tick 心跳维持（防系统重建视图后复活）；关闭开关时恢复 YES。
+// 同时一次性 dump（SPG-GR）胶囊祖先链上所有手势，供下轮日志精确定位。
+static BOOL sERSPGGRLogged = NO;
+static void ERSPGSyncSystemGestures(UIView *pill, BOOL gestureEnabled) {
+    @try {
+        UIView *v = pill;
+        for (NSUInteger depth = 0; v && depth < 6; depth++, v = v.superview) {
+            NSString *cn = NSStringFromClass(v.class);
+            BOOL searchish = [cn rangeOfString:@"Search"].location != NSNotFound ||
+                             v == pill;
+            NSArray *grs = v.gestureRecognizers;
+            if (!grs.count) continue;
+            for (UIGestureRecognizer *g in grs) {
+                if (g == sERSPGWinPan) continue;
+                BOOL isPanOrSwipe = [g isKindOfClass:[UIPanGestureRecognizer class]] ||
+                                    [g isKindOfClass:[UISwipeGestureRecognizer class]];
+                if (!sERSPGGRLogged) {
+                    ERLogInfo(@"SPG-GR d=%lu view=%@ g=%@ state=%ld enabled=%d pan=%d",
+                              (unsigned long)depth, cn, NSStringFromClass(g.class),
+                              (long)g.state, g.enabled?1:0, isPanOrSwipe?1:0);
+                }
+                if (!searchish || !isPanOrSwipe) continue;
+                BOOL want = gestureEnabled ? NO : YES;
+                if (g.enabled != want) {
+                    g.enabled = want;
+                    ERLogInfo(@"SPG-GR suppress d=%lu view=%@ g=%@ -> %d",
+                              (unsigned long)depth, cn, NSStringFromClass(g.class), want?1:0);
+                }
+            }
+        }
+        sERSPGGRLogged = YES;
+    } @catch (__unused NSException *e) {}
+}
+
 static void ERSPGConfigurePill(UIView *pill) {
     BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
     // 1.2.0-8 · 在场心跳：30s 一条，证明扫描每轮都能找到胶囊（手势挂着）
@@ -32555,6 +32593,8 @@ static void ERSPGConfigurePill(UIView *pill) {
     // 1.2.0-12 · touches 直挂（参考插件方案，类级一次）；与 pan 并存，ERSPGShouldFire 去重。
     ERSPGAttachTouchHook(pill.class);
     if (sERSPGWinPan) sERSPGWinPan.enabled = enabled;
+    // 1.2.0-22 · 系统胶囊手势压制/恢复（心跳维持，每 tick 同步一次）。
+    ERSPGSyncSystemGestures(pill, enabled);
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
