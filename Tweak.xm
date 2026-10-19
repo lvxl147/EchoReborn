@@ -32580,15 +32580,24 @@ static BOOL sERSPGPageCtlReplay = NO;
 static NSMutableSet *gERSPGPageCtlHooked = nil;
 
 static BOOL ERSPGIsPageCtlClass(NSString *cn) {
-    return [cn rangeOfString:@"SBIconListPageControl"].location != NSNotFound ||
-           [cn rangeOfString:@"SBFolderScrollAccessoryView"].location != NSNotFound ||
-           [cn rangeOfString:@"_UIPageControlContentView"].location != NSNotFound;
+    // 1.2.0-26 · 放宽：-25 日志实锤圆点指示器 _UIPageControlIndicatorContentView
+    // 是独立兄弟类（不含 _UIPageControlContentView 子串），起手落在它上面时
+    // touches 绕过 hook 走进系统翻页——含 PageControl/Accessory 的一律 hook。
+    return [cn rangeOfString:@"PageControl"].location != NSNotFound ||
+           [cn rangeOfString:@"Accessory"].location != NSNotFound;
 }
 
 static void ERSPGPageCtlBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) || sERSPGPageCtlReplay) {
         ERSPGMsgSuperTouches(self, _cmd, touches, event);
         return;
+    }
+    // 1.2.0-26 · 吞噬生效诊断：首次/30s 限流，证明圆点中心触摸走到了 hook。
+    static NSTimeInterval sERLastSwallow = 0;
+    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+    if (now - sERLastSwallow > 30.0) {
+        sERLastSwallow = now;
+        ERLogInfo(@"SPG-PCSWALLOW began cls=%@", NSStringFromClass(((UIView *)self).class));
     }
     UITouch *t = [touches anyObject];
     CGPoint p = [t locationInView:(UIView *)self];
