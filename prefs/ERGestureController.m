@@ -281,13 +281,17 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     _icon.frame = CGRectMake(left, (h - 27) / 2.0, 27, 27);
 
     CGFloat chevW = 14.0;
-    // 1.2.0-12 · 截断真因：之前量的是**行标题**（"左滑胶囊"）而非按钮里的值文本
-    // （"第10页"/"无动作"）——必须量 currentTitle（titleLabel 字号 14）。
-    CGSize ts = [_valueButton.currentTitle sizeWithAttributes:
-        @{NSFontAttributeName: _valueButton.titleLabel.font}];
     CGFloat pad = 10.0;
-    // 容差 36、上限 216（1.2.0-11 起）。
-    CGFloat btnW = MIN(MAX(ts.width + pad * 2 + chevW + 36.0, 76.0), 216.0);
+    // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本（"第10页"/"无动作"）定宽，
+    // 不再随各自值伸缩（用户反馈宽度不一致 + 整体偏大）。
+    static CGFloat sERMaxTSW = 0.0;
+    if (sERMaxTSW < 1.0) {
+        UIFont *f = _valueButton.titleLabel.font;
+        CGSize t1 = [@"第10页" sizeWithAttributes:@{NSFontAttributeName: f}];
+        CGSize t2 = [@"无动作" sizeWithAttributes:@{NSFontAttributeName: f}];
+        sERMaxTSW = MAX(t1.width, t2.width);
+    }
+    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 12.0, 76.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -374,6 +378,65 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
         ERGestureWriteValue(key, page);
         [wself _erRefreshValue];
     });
+}
+
+@end
+
+#pragma mark - 手势页开关 cell（1.2.0-13）
+
+// 1.2.0-13 · 编译期类替代运行期注册（1.2.0-10~12 三版图标都不显示，注册链路
+// 无法从用户侧取证）：与同页已验证的 ERGestureValueCell 相同写法——三参 init
+// 建 UI、refresh 写图标、layoutSubviews 定位。开关仍完全交给基类。
+@interface ERGestureSwitchCell : PSSwitchCell
+@end
+
+@implementation ERGestureSwitchCell {
+    UIImageView *_erIcon;
+    PSSpecifier *_erSpec;
+}
+
+- (instancetype)initWithStyle:(UITableViewCellStyle)style
+              reuseIdentifier:(NSString *)reuseIdentifier
+                    specifier:(PSSpecifier *)specifier {
+    self = [super initWithStyle:style reuseIdentifier:reuseIdentifier specifier:specifier];
+    if (!self) return nil;
+    _erSpec = specifier;
+    _erIcon = [[UIImageView alloc] initWithFrame:CGRectZero];
+    _erIcon.contentMode = UIViewContentModeScaleAspectFit;
+    _erIcon.userInteractionEnabled = NO;
+    _erIcon.image = [specifier propertyForKey:@"iconImage"];
+    [self.contentView addSubview:_erIcon];
+    return self;
+}
+
+- (void)refreshCellContentsWithSpecifier:(PSSpecifier *)specifier {
+    // 1.0.8-29 教训：基类 refresh 在自定义 cell 上可能抛异常，@try 兜住。
+    @try {
+        [super refreshCellContentsWithSpecifier:specifier];
+    } @catch (__unused NSException *e) {}
+    if (specifier) _erSpec = specifier;
+    _erIcon.image = [_erSpec propertyForKey:@"iconImage"];
+    [self setNeedsLayout];
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    @try {
+        if (!_erIcon.image) return;
+        CGFloat h = self.contentView.bounds.size.height;
+        CGFloat left = self.contentView.layoutMargins.left;
+        _erIcon.hidden = NO;
+        _erIcon.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
+        UILabel *label = self.textLabel;
+        if (label) {
+            CGFloat lx = left + 27.0 + 12.0;
+            CGRect f = label.frame;
+            f.origin.x = lx;
+            f.size.width = MIN(f.size.width,
+                               self.contentView.bounds.size.width - lx - 90.0);
+            label.frame = f;
+        }
+    } @catch (__unused NSException *e) {}
 }
 
 @end
@@ -520,7 +583,6 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 - (NSArray *)specifiers {
     if (!_specifiers) {
         ERGPrefsLog(@"specifiers build start");
-        ERGEnsureSwitchCellClass();
         NSMutableArray *specs = [NSMutableArray array];
 
         // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
@@ -578,83 +640,6 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
     return _specifiers;
 }
 
-#pragma mark - 手势页开关 cell（1.2.0-10）
-
-// 1.2.0-10 · 「开关消失」换方案：1.2.0-9 坐标换算后用户实测开关仍不显示——
-// 放弃 ERModuleIconSwitchCell（它强制重摆 UISwitch，坐标/时机在本页不成立）。
-// 本类**完全不碰 UISwitch**：基类 PSSwitchCell 自己放开关（其它页原生开关一直
-// 正常），我们只做两件事——refresh 把 iconImage 写进 imageView；layoutSubviews
-// 给图标定位 + 标题右移。
-static Class ERGSwitchCellClass = NULL;
-static IMP gERGSuperLayout = NULL;
-static IMP gERGSuperRefresh = NULL;
-static char kERGSwitchSpecKey;
-static char kERGSwitchIconKey;
-
-// 1.2.0-12 · 图标改用**自建 UIImageView**（不再依赖 cell.imageView——iOS 17.2
-// PSSwitchCell 里它不显示；同页 ERGestureValueCell 自建 iconView 已证实可行）。
-static UIImageView *ERGSwitchIconView(id self) {
-    UIImageView *iv = objc_getAssociatedObject(self, &kERGSwitchIconKey);
-    if (!iv) {
-        iv = [[UIImageView alloc] initWithFrame:CGRectZero];
-        iv.contentMode = UIViewContentModeScaleAspectFit;
-        iv.userInteractionEnabled = NO;
-        [((UITableViewCell *)self).contentView addSubview:iv];
-        objc_setAssociatedObject(self, &kERGSwitchIconKey, iv, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    return iv;
-}
-
-static void ERGSwitchLayout(id self, SEL _cmd) {
-    if (gERGSuperLayout) ((void (*)(id, SEL))gERGSuperLayout)(self, _cmd);
-    @try {
-        UITableViewCell *cell = (UITableViewCell *)self;
-        UIImageView *iv = objc_getAssociatedObject(self, &kERGSwitchIconKey);
-        if (!iv.image) return;
-        CGFloat h = cell.contentView.bounds.size.height;
-        CGFloat left = cell.contentView.layoutMargins.left;
-        iv.hidden = NO;
-        iv.frame = CGRectMake(left, (h - 27.0) / 2.0, 27.0, 27.0);
-        UILabel *label = cell.textLabel;
-        if (label) {
-            CGFloat lx = left + 27.0 + 12.0;
-            CGRect f = label.frame;
-            f.origin.x = lx;
-            f.size.width = MIN(f.size.width,
-                               cell.contentView.bounds.size.width - lx - 90.0);
-            label.frame = f;
-        }
-    } @catch (__unused NSException *e) {}
-}
-
-static void ERGSwitchRefresh(id self, SEL _cmd, PSSpecifier *spec) {
-    if (gERGSuperRefresh) ((void (*)(id, SEL, id))gERGSuperRefresh)(self, _cmd, spec);
-    @try {
-        if (spec) objc_setAssociatedObject(self, &kERGSwitchSpecKey, spec, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        UIImage *icon = [spec propertyForKey:@"iconImage"];
-        if ([icon isKindOfClass:[UIImage class]]) ERGSwitchIconView(self).image = icon;
-    } @catch (__unused NSException *e) {}
-}
-
-static void ERGEnsureSwitchCellClass(void) {
-    if (ERGSwitchCellClass) return;
-    Class base = NSClassFromString(@"PSSwitchCell");
-    if (!base) return;
-    Method lay = class_getInstanceMethod(base, @selector(layoutSubviews));
-    Method ref = class_getInstanceMethod(base, @selector(refreshCellContentsWithSpecifier:));
-    if (!lay || !ref) return;
-    Class cls = objc_allocateClassPair(base, "ERGestureSwitchCell", 0);
-    if (!cls) return;
-    gERGSuperLayout = method_getImplementation(lay);
-    gERGSuperRefresh = method_getImplementation(ref);
-    class_addMethod(cls, @selector(layoutSubviews), (IMP)ERGSwitchLayout, "v@:");
-    class_addMethod(cls, @selector(refreshCellContentsWithSpecifier:),
-                    (IMP)ERGSwitchRefresh, "v@:@");
-    objc_registerClassPair(cls);
-    ERGSwitchCellClass = cls;
-    ERGPrefsLog(@"ERGestureSwitchCell registered base=%@", NSStringFromClass(base));
-}
-
 - (PSSpecifier *)erSwitchNamed:(NSString *)name
                             key:(NSString *)key
                         symbols:(NSArray<NSString *> *)symbols
@@ -667,11 +652,8 @@ static void ERGEnsureSwitchCellClass(void) {
                                                      detail:Nil
                                                        cell:PSSwitchCell
                                                        edit:Nil];
-    // 1.2.0-10 · 开关消失修复：改用本文件运行期注册的 ERGestureSwitchCell
-    //（不碰开关，只注入图标）。注册失败兜底原生 PSSwitchCell（开关必有，图标无）。
-    if (ERGSwitchCellClass) {
-        [sw setProperty:ERGSwitchCellClass forKey:@"cellClass"];
-    } // 未注册时保留 cell:PSSwitchCell 的默认 cellClass
+    // 1.2.0-13 · 编译期 ERGestureSwitchCell：开关交基类，图标自建 UIImageView。
+    [sw setProperty:[ERGestureSwitchCell class] forKey:@"cellClass"];
     [sw setProperty:key forKey:@"key"];
     [sw setProperty:kERGestureSuite forKey:@"defaults"];
     [sw setProperty:@(defVal) forKey:@"default"];
