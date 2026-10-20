@@ -33064,6 +33064,61 @@ static void ERSPGAttachPCTrace(Class cls) {
     ERLogInfo(@"SPG-PCTRACE attach cls=%@ n=%d", cn, n);
 }
 
+// ===== 1.2.0-36 · 圆点焊死：真凶实锤为 CallAssist.dylib =====
+// -35 backtrace 实锤：圆点 frame 由 CallAssist.dylib（TweakInject 注入 SpringBoard 的通话助手
+// 整合插件）在布局遍历中直接调 setFrame: 驱动——完全绕开 currentPage 属性与一切 selector 通道，
+// 这就是 -33/-34 全部封锁无效的原因。对策：胶囊触摸活动期（非我方跳页）直接丢弃
+// _UIPageControlIndicatorContentView 的 setFrame:/setCenter: —— 不管谁在推，圆点都动不了。
+// 松手后照常恢复布局；我方跳页走 sERSPGOwnJump 放行。setBounds 保持只观察（防误伤布局）。
+static void ERSPGPCFrameBlockHook(id self, SEL _cmd, CGRect f) {
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
+        static NSTimeInterval sERLastPCB = 0;
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - sERLastPCB > 2.0) {
+            sERLastPCB = now;
+            ERLogInfo(@"SPG-PCBLOCK frame cls=%@", NSStringFromClass(object_getClass(self)));
+        }
+        return;
+    }
+    IMP o = ERSPGPCLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, CGRect))o)(self, _cmd, f);
+}
+static void ERSPGPCCenterBlockHook(id self, SEL _cmd, CGPoint c) {
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
+        static NSTimeInterval sERLastPCB2 = 0;
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - sERLastPCB2 > 2.0) {
+            sERLastPCB2 = now;
+            ERLogInfo(@"SPG-PCBLOCK center cls=%@", NSStringFromClass(object_getClass(self)));
+        }
+        return;
+    }
+    IMP o = ERSPGPCLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, CGPoint))o)(self, _cmd, c);
+}
+static void ERSPGAttachPCBlock(Class cls) {
+    if (!cls) return;
+    if (!gERSPGPCHooked) gERSPGPCHooked = [NSMutableSet new];
+    if (!gERSPGPCOrig) gERSPGPCOrig = [NSMutableDictionary new];
+    NSString *cn = NSStringFromClass(cls);
+    struct { SEL sel; IMP imp; const char *types; } items[] = {
+        { @selector(setFrame:),  (IMP)ERSPGPCFrameBlockHook,  "v@:{CGRect={CGPoint=dd}{CGSize=dd}}" },
+        { @selector(setCenter:), (IMP)ERSPGPCCenterBlockHook, "v@:{CGPoint=dd}" },
+    };
+    int n = 0;
+    for (int i = 0; i < 2; i++) {
+        Method m = class_getInstanceMethod(cls, items[i].sel);
+        if (!m) continue;
+        IMP orig = method_getImplementation(m);
+        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
+        if (!gERSPGPCOrig[key]) gERSPGPCOrig[key] = [NSValue valueWithPointer:(void *)orig];
+        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types))
+            method_setImplementation(m, items[i].imp);
+        n++;
+    }
+    ERLogInfo(@"SPG-PCBLOCK attach cls=%@ n=%d", cn, n);
+}
+
 // 胶囊本体 touches 观察 hook（不吞、照常转发）：只维护胶囊区触摸活动计数
 static void ERSPGPillTouchBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
     if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO))
@@ -33269,6 +33324,7 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
         ERSPGAttachPCTrace(NSClassFromString(@"_UIPageControlIndicatorContentView"));
         ERSPGAttachPCTrace(NSClassFromString(@"_UIPageControl"));
         ERSPGAttachPCTrace(NSClassFromString(@"UIPageControl"));
+        ERSPGAttachPCBlock(NSClassFromString(@"_UIPageControlIndicatorContentView"));  // 1.2.0-36 圆点焊死
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
     static NSTimeInterval sERLastHeartbeat = 0;
