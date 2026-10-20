@@ -33240,13 +33240,16 @@ static void ERSPGDotsRefresh(void) {
         // 1.2.0-41 · 删掉 contentSize 早退（抓到文件夹/小组件滚动视图时它会把
         // 圆点永久拦下；抓错视图的问题由 FindIconSV 评分制解决）
         if (!sERSPGDotsView || !sv || sv.bounds.size.width < 1) return;
-        // 页数：三源——桌面页控件 numberOfPages → contentSize 换算 → 已发布 PageCount
+        // 页数：三源——桌面页控件 numberOfPages（-42 实锤本机会假报 1，仅 ≥2 可信）
+        // → contentSize 换算 → 已发布 PageCount
         NSInteger pages = 0;
         UIView *pc = sERSPGHomePCRef;
         NSString *pcCls = pc ? NSStringFromClass(pc.class) : @"(nil)";
+        NSInteger npc = 0;
         if (pc && [pc respondsToSelector:@selector(numberOfPages)])
-            pages = [(UIPageControl *)pc numberOfPages];
-        if (pages < 1) pages = (NSInteger)lround(sv.contentSize.width / sv.bounds.size.width);
+            npc = [(UIPageControl *)pc numberOfPages];
+        if (npc >= 2) pages = npc;
+        if (pages < 2) pages = (NSInteger)lround(sv.contentSize.width / sv.bounds.size.width);
         NSInteger pagesRaw = pages;
         if (pages < 1) pages = ERSPGInt(@"HomeScreen.PageCount", 0);   // 1.2.0-42 第三源
         // 1.2.0-42 · DOTSSTATE 探针（2s 节流）前移到页数守卫之前——-41 版探针排在
@@ -33256,10 +33259,10 @@ static void ERSPGDotsRefresh(void) {
             NSTimeInterval nds = [[NSDate date] timeIntervalSince1970];
             if (nds - sERLastDS > 2.0) {
                 sERLastDS = nds;
-                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pc=%@ raw=%ld pages=%ld dAlpha=%.1f pillBg=%d",
+                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pc=%@ npc=%ld pages=%ld dAlpha=%.1f pillBg=%d",
                           NSStringFromClass(sv.class), sv.window ? 1 : 0,
                           sv.bounds.size.width, sv.contentSize.width, sv.contentOffset.x,
-                          pcCls, (long)pagesRaw, (long)pages, sERSPGDotsView.alpha,
+                          pcCls, (long)npc, (long)pages, sERSPGDotsView.alpha,
                           sERSPGPillBg ? 1 : 0);
             }
         }
@@ -33274,6 +33277,17 @@ static void ERSPGDotsRefresh(void) {
             sERSPGDotsLastChange = now;
         }
         BOOL pagingActive = (gERSPGPageCtlActive > 0) || (now - sERSPGDotsLastChange < 3.0);
+        // 1.2.0-43 · 翻页期间隐藏胶囊内文字/图标（底壳与圆点除外）——-42 实锤
+        // "搜索"label 与圆点叠显互相遮挡；3 秒恢复时自动放出来。
+        {
+            UIView *pillH = sERSPGPillRef;
+            if (pillH) {
+                for (UIView *v in pillH.subviews) {
+                    if (v == sERSPGDotsView || v == sERSPGPillBg) continue;
+                    if (v.hidden != pagingActive) v.hidden = pagingActive;
+                }
+            }
+        }
         if (pages != sERSPGDotsPages) { ERSPGDotsRebuild(pages); sERSPGDotsPages = pages; }
         CGFloat targetAlpha = pagingActive ? 1.0 : 0.0;
         if (sERSPGDotsView.alpha != targetAlpha) sERSPGDotsView.alpha = targetAlpha;
@@ -33301,6 +33315,26 @@ static void ERSPGDotsRefresh(void) {
 @implementation ERSPGDotsLinkTarget
 + (instancetype)shared { static ERSPGDotsLinkTarget *s; static dispatch_once_t t; dispatch_once(&t, ^{ s = [self new]; }); return s; }
 - (void)erDotsTick:(CADisplayLink *)__unused l { ERSPGDotsRefresh(); }
+// 1.2.0-43 · 点击进搜索：-42 实锤触摸已进胶囊（hitTest 命中 SBHSearchPillView）
+// 但系统点击处理无声——自挂单击，转发给胶囊上已有的系统单击手势 action（同源）。
+- (void)erPillTap:(UITapGestureRecognizer *)g {
+    @try {
+        UIView *pill = g.view;
+        if (!pill || !pill.window) return;
+        for (UIGestureRecognizer *gr in pill.gestureRecognizers) {
+            if (gr == g || ![gr isKindOfClass:[UITapGestureRecognizer class]]) continue;
+            if (gr.numberOfTapsRequired > 1) continue;
+            id target = ((UITapGestureRecognizer *)gr).targets.anyObject;
+            if (target) {
+                SEL a = ((UITapGestureRecognizer *)gr).action;
+                ((void (*)(id, SEL, id))objc_msgSend)(target, a, gr);
+                ERLogInfo(@"SPG-PILLTAP forwarded sel=%@", NSStringFromSelector(a));
+                return;
+            }
+        }
+        ERLogInfo(@"SPG-PILLTAP no system tap to forward");
+    } @catch (__unused NSException *e) {}
+}
 @end
 
 static CADisplayLink *sERSPGDotsLink = nil;
@@ -33343,12 +33377,34 @@ static void ERSPGAttachPillGuard(Class cls) {
     ERLogInfo(@"SPG-PILLGUARD attach cls=%@ n=%d", cn, n);
 }
 
+// 1.2.0-43 · 单击手势挂载（每胶囊视图一次）+ 系统手势清单 dump
+static void ERSPGAttachPillTap(UIView *pill) {
+    if (!pill) return;
+    if (objc_getAssociatedObject(pill, @selector(erPillTap:))) return;
+    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
+        initWithTarget:ERSPGDotsLinkTarget.shared action:@selector(erPillTap:)];
+    tap.cancelsTouchesInView = NO;   // 不吞触摸，系统流程照走
+    [pill addGestureRecognizer:tap];
+    objc_setAssociatedObject(pill, @selector(erPillTap:), tap, OBJC_ASSOCIATION_RETAIN);
+    NSMutableString *gs = [NSMutableString string];
+    for (UIGestureRecognizer *g in pill.gestureRecognizers) {
+        [gs appendFormat:@"%@(%lu)%@ ", NSStringFromClass(g.class),
+         (unsigned long)g.numberOfTapsRequired,
+         g.enabled ? @"" : @"!"];
+    }
+    ERLogInfo(@"SPG-PILLGEST grs=[%@]", gs);
+}
+
 // 每 tick 调用（ConfigurePill）：保证滚动视图引用、圆点视图在场（胶囊内部）、显示链启停
 static void ERSPGSyncDots(BOOL enabled) {
     @try {
         if (!enabled) {
             if (sERSPGDotsView) { [sERSPGDotsView removeFromSuperview]; sERSPGDotsView = nil; sERSPGDotItems = nil; }
             if (sERSPGPillBg) { [sERSPGPillBg removeFromSuperview]; sERSPGPillBg = nil; }
+            // 1.2.0-43 · 关闭时还原可能被翻页显示链藏掉的文字/图标
+            if (sERSPGPillRef) {
+                for (UIView *v in sERSPGPillRef.subviews) if (v.hidden) v.hidden = NO;
+            }
             sERSPGDotsPage = -1; sERSPGDotsPages = -1;
             if (sERSPGDotsLink) sERSPGDotsLink.paused = YES;
             return;
@@ -33386,6 +33442,8 @@ static void ERSPGSyncDots(BOOL enabled) {
             sERSPGPillBg.frame = CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height);
             sERSPGPillBg.layer.cornerRadius = pill.bounds.size.height / 2.0;
         }
+        // 1.2.0-43 · 点击进搜索（自挂单击转发系统 action）
+        ERSPGAttachPillTap(pill);
         if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
         if (!sERSPGIconSVRef) return;
         // 圆点视图挂进胶囊内部（1.2.0-38 用户规格：翻页时胶囊里面变圆点）
