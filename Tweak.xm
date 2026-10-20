@@ -32915,6 +32915,67 @@ static void ERSPGAttachSCOHook(Class cls) {
     ERLogInfo(@"SPG-COBLOCK attach cls=%@", cn);
 }
 
+// ===== 1.2.0-33 · 第三条路：图标控制器 selector 翻页链 =====
+// -32 实锤：用户"拖到中间圆点不震、两边才震"= 翻页一直在发生（震动是边界页反弹触觉）——翻页走的是 SBIconController 的
+// setCurrentIconListIndex:/scrollToIconListIndex: 链（内部直接动画，不起 scrollview pan、可能绕开 setContentOffset）。
+// 活动期丢弃非我方调用（sERSPGOwnJump 放行），SPG-ICBLOCK 日志。
+static NSMutableDictionary<NSString *, NSValue *> *gERSPGICOOrig = nil;
+static NSMutableSet *gERSPGICOHooked = nil;
+static void ERSPGICOHook1(id self, SEL _cmd, NSInteger idx);
+static void ERSPGICOHook2(id self, SEL _cmd, NSInteger idx, BOOL anim);
+
+static IMP ERSPGICOLookupOrig(id self, SEL _cmd) {
+    Class c = object_getClass(self);
+    while (c) {
+        NSValue *ov = gERSPGICOOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
+        if (ov) return (IMP)ov.pointerValue;
+        c = class_getSuperclass(c);
+    }
+    return NULL;
+}
+
+static BOOL ERSPGICOShouldBlock(void) {
+    return ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0;
+}
+
+static void ERSPGICOHook1(id self, SEL _cmd, NSInteger idx) {
+    if (ERSPGICOShouldBlock()) return;
+    IMP o = ERSPGICOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, NSInteger))o)(self, _cmd, idx);
+}
+static void ERSPGICOHook2(id self, SEL _cmd, NSInteger idx, BOOL anim) {
+    if (ERSPGICOShouldBlock()) return;
+    IMP o = ERSPGICOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, NSInteger, BOOL))o)(self, _cmd, idx, anim);
+}
+
+static void ERSPGAttachICOHook(Class cls) {
+    if (!cls) return;
+    if (!gERSPGICOHooked) gERSPGICOHooked = [NSMutableSet new];
+    if ([gERSPGICOHooked containsObject:cls]) return;
+    if (!gERSPGICOOrig) gERSPGICOOrig = [NSMutableDictionary new];
+    NSString *cn = NSStringFromClass(cls);
+    struct { SEL sel; IMP imp; const char *types; } items[] = {
+        { @selector(setCurrentIconListIndex:),         (IMP)ERSPGICOHook1, "v@:q"  },
+        { @selector(_setCurrentIconListIndex:),        (IMP)ERSPGICOHook1, "v@:q"  },
+        { @selector(scrollToIconListIndex:animated:),  (IMP)ERSPGICOHook2, "v@:qB" },
+        { @selector(_scrollToIconListIndex:animated:), (IMP)ERSPGICOHook2, "v@:qB" },
+    };
+    int n = 0;
+    for (int i = 0; i < 4; i++) {
+        Method m = class_getInstanceMethod(cls, items[i].sel);
+        if (!m) continue;
+        IMP orig = method_getImplementation(m);
+        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
+        if (orig && !gERSPGICOOrig[key]) gERSPGICOOrig[key] = [NSValue valueWithPointer:(void *)orig];
+        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types) && m)
+            method_setImplementation(m, items[i].imp);
+        n++;
+    }
+    [gERSPGICOHooked addObject:cls];
+    ERLogInfo(@"SPG-ICBLOCK attach cls=%@ n=%d", cn, n);
+}
+
 // 胶囊本体 touches 观察 hook（不吞、照常转发）：只维护胶囊区触摸活动计数
 static void ERSPGPillTouchBegan(id self, SEL _cmd, NSSet *touches, UIEvent *event) {
     if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO))
@@ -33114,6 +33175,7 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
         // 1.2.0-30 · setContentOffset 封锁（拖圆点翻页真驱动）
         ERSPGAttachSCOHook(NSClassFromString(@"SBIconScrollView"));
         ERSPGAttachSCOHook(NSClassFromString(@"SBSearchScrollView"));
+        ERSPGAttachICOHook(NSClassFromString(@"SBIconController"));  // 1.2.0-33
         ERSPGAttachSysHaptHooks();  // 1.2.0-31 系统震动封锁
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
