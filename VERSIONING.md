@@ -182,3 +182,10 @@
 - 命中判定改实时帧：ERSPGPillRTWinFrame（convertRect 到窗口），pan 起手与 GR 闸门均启用（修点击/拖拽失灵）
 - SPG-DOTSSTATE 探针：每 2s 滚动视图类名/尺寸/offset/页数/圆点 alpha/胶囊底在场
 - refresh 删 contentSize 早退条件
+
+### 1.2.0-42 (1002044)
+- 圆点根因修复：桌面页控件类名实为 UIPageControl（-41 日志实锤），sERSPGHomePCRef 匹配条件补上该类名
+- 页数第三源：numberOfPages/contentSize 都拿不到时读已发布的 HomeScreen.PageCount
+- 恢复胶囊 userInteractionEnabled（-41 hitTest 落在 accessory view = 触摸进不了胶囊，点击搜索失效根因）
+- DOTSSTATE 探针前移到页数守卫之前（旧位置在 pages<1 return 之后，恰好盲区盖住真因），附 pc 类名/raw 页数
+- PILLSTATE 增 ue= 交互标志；SPG-PAN armed 附四方向配置值（拖拽无反应=没配置还是读不到，一眼可辨）
