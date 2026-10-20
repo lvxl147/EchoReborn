@@ -33843,6 +33843,39 @@ static void ERSPGDumpSelectors(void) {
               [hits componentsJoinedByString:@", "]);
 }
 
+// 1.2.0-44 · 一次性 dump 四个胶囊相关类的 "earch" selector（类方法+实例方法）——
+// -43 实锤系统胶囊上没有任何点击手势，点进搜索的载体在别处，锁定真实 API 后
+// 下一版把自挂单击接到正确的调用上。
+static void ERSPGDumpSearchSelectors(void) {
+    static BOOL sDumped = NO;
+    if (sDumped) return;
+    sDumped = YES;
+    NSArray *names = @[@"SBHSearchPillView", @"SBFolderScrollAccessoryView",
+                       @"SBRootFolderView", @"SBIconScrollView",
+                       @"SBIconController", @"SBRootFolderController"];
+    for (NSString *cn in names) {
+        Class cls = NSClassFromString(cn);
+        if (!cls) { ERLogInfo(@"SPG-SRDUMP %@ (class not found)", cn); continue; }
+        for (int pass = 0; pass < 2; pass++) {
+            // pass 0: 实例方法；pass 1: 类方法（metaclass）
+            Class target = pass == 0 ? cls : object_getClass(cls);
+            NSMutableArray<NSString *> *hits = [NSMutableArray array];
+            unsigned int n = 0;
+            Method *ms = class_copyMethodList(target, &n);
+            for (unsigned int i = 0; i < n; i++) {
+                NSString *name = NSStringFromSelector(method_getName(ms[i]));
+                if ([name rangeOfString:@"earch" options:NSCaseInsensitiveSearch].location != NSNotFound)
+                    [hits addObject:name];
+            }
+            if (ms) free(ms);
+            ERLogInfo(@"SPG-SRDUMP %@ %@ earch selectors (%lu): %@", cn,
+                      pass == 0 ? @"inst" : @"cls",
+                      (unsigned long)hits.count,
+                      hits.count ? [hits componentsJoinedByString:@", "] : @"-");
+        }
+    }
+}
+
 // 1.2.0-9 · 前向声明：ScanTick 探针用到 ERBootLog，但其定义在下方（编译顺序）。
 static void ERBootLog(NSString *tag);
 // 周期扫描（主线程）：找到搜索胶囊 → 挂/启停手势；顺手把探测到的桌面页数写进
@@ -33862,6 +33895,7 @@ static void ERSPGScanTick(void) {
             ERBootLog(msg);
         }
         ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
+        ERSPGDumpSearchSelectors();   // 1.2.0-44 首个 tick dump 搜索相关 selector
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
         // 1.2.0-39 · 补充源：桌面 _UIPageControl 的真实 numberOfPages（iconLists 探测失败时的可靠来源）
