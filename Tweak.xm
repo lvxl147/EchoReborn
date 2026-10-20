@@ -34168,8 +34168,7 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
 }
 
 // ===== 1.2.0-32 · C 函数兜底：AudioServices 老震动通道（胶囊触摸活动期拦截）=====
-extern void AudioServicesPlaySystemSound(unsigned int sid);
-extern void AudioServicesPlayAlertSound(unsigned int sid);
+#import <AudioToolbox/AudioToolbox.h>
 
 %hookf(void, AudioServicesPlaySystemSound, unsigned int sid) {
     if (ERSPGShouldDropSysHaptic()) return;
