@@ -32936,14 +32936,21 @@ static void ERSPGPillTouchCancelled(id self, SEL _cmd, NSSet *touches, UIEvent *
 }
 
 // 1.2.0-31 · 系统震动封锁：胶囊触摸活动期间（拖圆点翻页）系统自带震动与我方手势震动混淆，封锁 selectionChanged/impactOccurred，我方用 sERSPGOwnHaptic 放行。
+static BOOL ERSPGShouldDropSysHaptic(void) {
+    return ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnHaptic && gERSPGPageCtlActive > 0;
+}
 static void ERSPGSysHaptHook1(id self, SEL _cmd) {   // selectionChanged / impactOccurred
-    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnHaptic && gERSPGPageCtlActive > 0) return;
+    if (ERSPGShouldDropSysHaptic()) return;
     IMP o = ERSPGSCOLookupOrig(self, _cmd);
     if (o) ((void (*)(id, SEL))o)(self, _cmd);
 }
-static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i) {  // impactOccurredWithIntensity:/n    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnHaptic && gERSPGPageCtlActive > 0) return;
+static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i) {  // impactOccurredWithIntensity:/n    if (ERSPGShouldDropSysHaptic()) return;
     IMP o = ERSPGSCOLookupOrig(self, _cmd);
     if (o) ((void (*)(id, SEL, CGFloat))o)(self, _cmd, i);
+}
+static void ERSPGSysHaptHook3(id self, SEL _cmd, NSInteger t) {  // notificationOccurred:/n    if (ERSPGShouldDropSysHaptic()) return;
+    IMP o = ERSPGSCOLookupOrig(self, _cmd);
+    if (o) ((void (*)(id, SEL, NSInteger))o)(self, _cmd, t);
 }
 
 static void ERSPGAttachSysHaptHooks(void) {
@@ -32965,7 +32972,34 @@ static void ERSPGAttachSysHaptHooks(void) {
         if (!class_addMethod(items[i].cls, items[i].sel, items[i].imp, items[i].types) && m)
             method_setImplementation(m, items[i].imp);
     }
-    ERLogInfo(@"SPG-HAPTLOCK attached");
+    // 1.2.0-32 · 运行时广谱：类名含 Feedback/Haptic 的类（含私有子类）全部挂拦截
+    unsigned int clsCnt = 0;
+    Class *allCls = objc_copyClassList(&clsCnt);
+    int attachedN = 0;
+    for (unsigned int i = 0; i < clsCnt; i++) {
+        Class c = allCls[i];
+        NSString *n = NSStringFromClass(c);
+        if ([n rangeOfString:@"Feedback"].location == NSNotFound &&
+            [n rangeOfString:@"Haptic"].location == NSNotFound) continue;
+        struct { SEL sel; IMP imp; const char *types; } it[] = {
+            { @selector(selectionChanged),             (IMP)ERSPGSysHaptHook1, "v@:"  },
+            { @selector(impactOccurred),               (IMP)ERSPGSysHaptHook1, "v@:"  },
+            { @selector(impactOccurredWithIntensity:), (IMP)ERSPGSysHaptHook2, "v@:d"  },
+            { @selector(notificationOccurred:),        (IMP)ERSPGSysHaptHook3, "v@:q"  },
+        };
+        for (int k = 0; k < 4; k++) {
+            Method m = class_getInstanceMethod(c, it[k].sel);
+            if (!m) continue;
+            IMP orig = method_getImplementation(m);
+            NSString *key = [n stringByAppendingFormat:@"#%@", NSStringFromSelector(it[k].sel)];
+            if (!gERSPGSCOOrig[key]) gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
+            if (!class_addMethod(c, it[k].sel, it[k].imp, it[k].types))
+                method_setImplementation(m, it[k].imp);
+            attachedN++;
+        }
+    }
+    if (allCls) free(allCls);
+    ERLogInfo(@"SPG-HAPTLOCK attached base+ broad=%d", attachedN);
 }
 
 static void ERSPGAttachPillTouchHook(Class cls) {
@@ -34131,4 +34165,18 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
     }
 
 
+}
+
+// ===== 1.2.0-32 · C 函数兜底：AudioServices 老震动通道（胶囊触摸活动期拦截）=====
+extern void AudioServicesPlaySystemSound(unsigned int sid);
+extern void AudioServicesPlayAlertSound(unsigned int sid);
+
+%hookf(void, AudioServicesPlaySystemSound, unsigned int sid) {
+    if (ERSPGShouldDropSysHaptic()) return;
+    %orig;
+}
+
+%hookf(void, AudioServicesPlayAlertSound, unsigned int sid) {
+    if (ERSPGShouldDropSysHaptic()) return;
+    %orig;
 }
