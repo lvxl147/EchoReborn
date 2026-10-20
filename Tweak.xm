@@ -33167,6 +33167,37 @@ static void ERSPGDotsRebuild(NSInteger pages) {
 
 static void ERSPGDotsRefresh(void) {
     @try {
+        // 1.2.0-40 · 胶囊状态探针（2s 节流）：hidden/alpha/superview/frame/transform
+        // + 祖先链逐级 hidden/alpha 检查——揭示胶囊被谁藏在哪一级（用户实测禁用
+        // 全部其他插件仍不显示 = 我们自己的 PCHIDE 连坐嫌疑最大）。
+        {
+            UIView *pill = sERSPGPillRef;
+            static NSTimeInterval sERLastPS = 0;
+            NSTimeInterval nw = [[NSDate date] timeIntervalSince1970];
+            if (pill && nw - sERLastPS > 2.0) {
+                sERLastPS = nw;
+                NSMutableString *s = [NSMutableString stringWithFormat:
+                    @"SPG-PILLSTATE cls=%@ hidden=%d alpha=%.2f sv=%@ win=%d frame=%@ tf=%@ op=%.2f anc=",
+                    NSStringFromClass(pill.class), pill.hidden ? 1 : 0, pill.alpha,
+                    pill.superview ? NSStringFromClass(pill.superview.class) : @"(nil)",
+                    pill.window ? 1 : 0,
+                    NSStringFromCGRect(pill.frame),
+                    NSStringFromCGAffineTransform(pill.transform),
+                    pill.layer.opacity];
+                UIView *a = pill.superview;
+                int depth = 0;
+                while (a && depth < 12) {
+                    [s appendFormat:@"%@%s%d[h%d,a%.1f]", depth ? ">" : "", "", depth,
+                     a.hidden ? 1 : 0, a.alpha];
+                    if (a.hidden || a.alpha < 0.99) {
+                        // 记录藏匿祖先的类名（完整）
+                        [s appendFormat:@"{%@}", NSStringFromClass(a.class)];
+                    }
+                    a = a.superview; depth++;
+                }
+                ERLogInfo(@"%@", s);
+            }
+        }
         UIScrollView *sv = sERSPGIconSVRef;
         if (!sERSPGDotsView || !sv || sv.bounds.size.width < 1 ||
             sv.contentSize.width < sv.bounds.size.width * 0.5) return;
@@ -33433,12 +33464,33 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
         if (ERSPGIsPageCtlClass(cn)) {
             (*n)++;
             // 1.2.0-37 · B 方案：系统分页圆点隐藏（自绘圆点替代），仅限胶囊所在 window；关闭时恢复
-            BOOL wantHidden = gestureEnabled && root.window && root.window == sERSPGPillRef.window;
+            // 1.2.0-40 · 防连坐：与胶囊同树（互为祖先/后代）的视图绝不能藏——用户实测
+            // 禁用全部其他插件胶囊仍不显示 = PCHIDE 把胶囊视图树里的 PageControl 成员藏了。
+            BOOL relatedToPill = NO;
+            if (sERSPGPillRef) {
+                UIView *p = root;
+                while (p) { if (p == sERSPGPillRef) { relatedToPill = YES; break; } p = p.superview; }
+                if (!relatedToPill) {
+                    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
+                    NSInteger g2 = 0;
+                    while (stack.count && g2++ < 200 && !relatedToPill) {
+                        UIView *v = stack.lastObject; [stack removeLastObject];
+                        if (v == sERSPGPillRef) { relatedToPill = YES; break; }
+                        [stack addObjectsFromArray:v.subviews];
+                    }
+                }
+            }
+            BOOL wantHidden = gestureEnabled && root.window && root.window == sERSPGPillRef.window && !relatedToPill;
             if ([cn isEqualToString:@"_UIPageControl"] && wantHidden)
                 sERSPGHomePCRef = root;  // 1.2.0-38 记住桌面页控件（自绘圆点读真实 numberOfPages）
             if (root.hidden != wantHidden) {
                 root.hidden = wantHidden;
-                ERLogInfo(@"SPG-PCHIDE %@ -> %d", cn, wantHidden ? 1 : 0);
+                // 1.2.0-40 · PCHIDE 附父链前 5 级类名（判断被藏对象归属）
+                NSMutableString *pc = [NSMutableString string];
+                UIView *p2 = root.superview;
+                for (int i = 0; p2 && i < 5; i++, p2 = p2.superview)
+                    [pc appendFormat:@"%@%@", i ? @"<" : @"", NSStringFromClass(p2.class)];
+                ERLogInfo(@"SPG-PCHIDE %@ -> %d rel=%d chain=%@", cn, wantHidden ? 1 : 0, relatedToPill ? 1 : 0, pc);
             }
             // ① 一次性 dump 手势清单
             static BOOL sERSPGGR2Logged = NO;
