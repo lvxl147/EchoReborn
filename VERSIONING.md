@@ -174,3 +174,11 @@
 - SPG-PILLSTATE 探针：每 2s 胶囊 hidden/alpha/frame/transform/opacity + 祖先链逐级 hidden 检查
 - SPG-PCHIDE 日志附父链 5 级类名（归属判断）
 - 设置页"选择第几页"最后一页显示"资源库"（ERGesturePageText，映射值不变）
+
+### 1.2.0-41 (1002043)
+- 自绘胶囊底：胶囊内最底层插入圆角底视图（系统底色层被折腾没了只剩"搜索"label，截图实锤）
+- 圆点固定 3 颗循环：高亮 = 页码 % 3，翻页淡入、3s 无翻页淡出
+- FindIconSV 评分制：主屏窗口 +1000、宽度最接近屏宽优先（修抓错文件夹/小组件滚动视图导致圆点永不出现）
+- 命中判定改实时帧：ERSPGPillRTWinFrame（convertRect 到窗口），pan 起手与 GR 闸门均启用（修点击/拖拽失灵）
+- SPG-DOTSSTATE 探针：每 2s 滚动视图类名/尺寸/offset/页数/圆点 alpha/胶囊底在场
+- refresh 删 contentSize 早退条件
