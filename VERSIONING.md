@@ -145,3 +145,8 @@
 | 228 | 1.2.0-31 | 1002033 | -30 用户实测：系统翻页概率大降但仍偶发（触摸起手不在任何 hook 类上时活动计数=0 封锁不生效）；①系统震动封禁：用户实锤拖圆点翻页自带震动与手势震动混淆，胶囊触摸活动期封锁 UISelectionFeedbackGenerator selectionChanged + UIImpactFeedbackGenerator impactOccurred/WithIntensity:（SPG-HAPTLOCK），我方 ERSPGHaptic 经 sERSPGOwnHaptic 放行；②窗口级 pan 起手入区纳入活动计数（Began-inside ++，Ended/Cancelled --）；③广谱挂载：扫描到的任意 SB 系 UIScrollView 一律挂 pan 闸门+CO 封锁（闸门只拦胶囊区，无副作用） |
 | 229 | 1.2.0-32 | 1002034 | -31 用户实测：翻页封锁生效（COBLOCK 命中）但拖圆点仍带系统震动=震动发射器未覆盖（私有 Feedback/Haptic 子类自带实现绕过基类 hook）。①运行时广谱：objc_copyClassList 枚举类名含 Feedback/Haptic 的全部类（含私有），凡响应 selectionChanged/impactOccurred/WithIntensity:/notificationOccurred: 一律挂活动期丢弃拦截（SPG-HAPTLOCK broad n 日志）；②C 函数兜底：%hookf AudioServicesPlaySystemSound/AlertSound 活动期拦截；统一条件 helper ERSPGShouldDropSysHaptic，我方 sERSPGOwnHaptic 放行不变 |
 | 230 | 1.2.0-33 | 1002035 | -32 用户实测破案："拖到中间圆点不震、两边才震"=翻页一直在发生（震动是边界页反弹触觉）——翻页走 SBIconController selector 链（setCurrentIconListIndex:/scrollToIconListIndex:animated: 等，内部直接动画，绕过 scrollview pan 与 setContentOffset）。类级 hook SBIconController 四个翻页 selector（SPG-ICBLOCK），活动期丢弃非我方调用（sERSPGOwnJump 放行我方跳页）；至此翻页三路全封：pan 闸门+setContentOffset 封锁+图标控制器 selector 封锁 |
+| 231 | 1.2.0-34 | 1002036 | -33 实测仍翻页：COBLOCK 命中 setContentOffset: 但圆点仍动、ICBLOCK 四 selector 零调用=翻页走未知通道；本版 hook 圆点 setCurrentPage:（UIPageControl/_UIPageControl）活动期打印 backtrace（SPG-PCTRACE）定位真凶；并补私有变体 _setContentOffset: 封锁；心跳带挂载类计数 |
+### 1.2.0-34 (1002036)
+- 定位翻页真凶：hook 页面圆点 setCurrentPage:（UIPageControl/_UIPageControl），胶囊活动期打印调用者 backtrace（SPG-PCTRACE），决定性证据定位未知翻页通道
+- 补漏：setContentOffset 封锁增加私有变体 _setContentOffset:（-33 实锤 COBLOCK 命中但圆点仍动）
+- 心跳日志带 ico/co 挂载类计数，确认 -33 四 selector 挂载状态
