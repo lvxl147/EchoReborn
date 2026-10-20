@@ -195,3 +195,7 @@
 - 页数可信度：numberOfPages 仅 ≥2 才采用（-42 日志实锤本机假报 1 导致 14↔1 抖动）
 - 点击进搜索：自挂单击手势（cancelsTouchesInView=NO），转发给胶囊上系统单击手势的 action，附 SPG-PILLGEST 手势清单 dump
 - 关闭功能时还原被隐藏的文字/图标
+
+### 1.2.0-44 (1002046)
+- SPG-SRDUMP：一次性 dump SBHSearchPillView/SBFolderScrollAccessoryView/SBRootFolderView/SBIconScrollView/SBIconController/SBRootFolderController 的 earch selector（实例+类方法）
+- 目的：-43 实锤系统胶囊无点击手势，锁定点进搜索的真实载体，供下一版接自挂单击
