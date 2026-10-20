@@ -33335,7 +33335,7 @@ static SEL ERSPGGRAction(UIGestureRecognizer *g) {
         for (UIGestureRecognizer *gr in pill.gestureRecognizers) {
             if (gr == g || ![gr isKindOfClass:[UITapGestureRecognizer class]]) continue;
             if (ERSPGGRTaps(gr) > 1) continue;
-            id target = ERSPGGRTargets(gr).anyObject;
+            id target = [ERSPGGRTargets(gr) anyObject];
             if (target) {
                 SEL a = ERSPGGRAction(gr);
                 ((void (*)(id, SEL, id))objc_msgSend)(target, a, gr);
