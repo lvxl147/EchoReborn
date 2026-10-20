@@ -33338,6 +33338,15 @@ static SEL ERSPGGRAction(UIGestureRecognizer *g) {
     @try {
         UIView *pill = g.view;
         if (!pill || !pill.window) return;
+        // 1.2.0-45 · -44 SRDUMP 实锤：系统点进搜索的载体是 SBIconController 的
+        // _handleSearchAffordanceTap（胶囊本身无任何点击手势）。单击直接调用它。
+        id ic = ERSPGIconController();
+        if (ic && [(id)ic respondsToSelector:@selector(_handleSearchAffordanceTap)]) {
+            ((void (*)(id, SEL))objc_msgSend)(ic, @selector(_handleSearchAffordanceTap));
+            ERLogInfo(@"SPG-PILLTAP invoked _handleSearchAffordanceTap");
+            return;
+        }
+        // 兜底：胶囊上若存在系统单击手势则转发（-43 旧路径）
         for (UIGestureRecognizer *gr in pill.gestureRecognizers) {
             if (gr == g || ![gr isKindOfClass:[UITapGestureRecognizer class]]) continue;
             if (ERSPGGRTaps(gr) > 1) continue;
@@ -33349,8 +33358,10 @@ static SEL ERSPGGRAction(UIGestureRecognizer *g) {
                 return;
             }
         }
-        ERLogInfo(@"SPG-PILLTAP no system tap to forward");
-    } @catch (__unused NSException *e) {}
+        ERLogInfo(@"SPG-PILLTAP no handler (icon ctl missing?)");
+    } @catch (__unused NSException *e) {
+        ERLogInfo(@"SPG-PILLTAP exception");
+    }
 }
 @end
 
