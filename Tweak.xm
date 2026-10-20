@@ -33317,16 +33317,27 @@ static void ERSPGDotsRefresh(void) {
 - (void)erDotsTick:(CADisplayLink *)__unused l { ERSPGDotsRefresh(); }
 // 1.2.0-43 · 点击进搜索：-42 实锤触摸已进胶囊（hitTest 命中 SBHSearchPillView）
 // 但系统点击处理无声——自挂单击，转发给胶囊上已有的系统单击手势 action（同源）。
+// targets/action/numberOfTapsRequired 在本 SDK 不在 UIGestureRecognizer 声明上，
+// 一律 objc_msgSend 取（CI -43 首次构建实锤 property not found）。
+static NSUInteger ERSPGGRTaps(UIGestureRecognizer *g) {
+    return ((NSUInteger (*)(id, SEL))objc_msgSend)(g, @selector(numberOfTapsRequired));
+}
+static NSArray *ERSPGGRTargets(UIGestureRecognizer *g) {
+    return ((NSArray *(*)(id, SEL))objc_msgSend)(g, @selector(targets));
+}
+static SEL ERSPGGRAction(UIGestureRecognizer *g) {
+    return ((SEL (*)(id, SEL))objc_msgSend)(g, @selector(action));
+}
 - (void)erPillTap:(UITapGestureRecognizer *)g {
     @try {
         UIView *pill = g.view;
         if (!pill || !pill.window) return;
         for (UIGestureRecognizer *gr in pill.gestureRecognizers) {
             if (gr == g || ![gr isKindOfClass:[UITapGestureRecognizer class]]) continue;
-            if (gr.numberOfTapsRequired > 1) continue;
-            id target = ((UITapGestureRecognizer *)gr).targets.anyObject;
+            if (ERSPGGRTaps(gr) > 1) continue;
+            id target = ERSPGGRTargets(gr).anyObject;
             if (target) {
-                SEL a = ((UITapGestureRecognizer *)gr).action;
+                SEL a = ERSPGGRAction(gr);
                 ((void (*)(id, SEL, id))objc_msgSend)(target, a, gr);
                 ERLogInfo(@"SPG-PILLTAP forwarded sel=%@", NSStringFromSelector(a));
                 return;
@@ -33389,7 +33400,7 @@ static void ERSPGAttachPillTap(UIView *pill) {
     NSMutableString *gs = [NSMutableString string];
     for (UIGestureRecognizer *g in pill.gestureRecognizers) {
         [gs appendFormat:@"%@(%lu)%@ ", NSStringFromClass(g.class),
-         (unsigned long)g.numberOfTapsRequired,
+         (unsigned long)ERSPGGRTaps(g),
          g.enabled ? @"" : @"!"];
     }
     ERLogInfo(@"SPG-PILLGEST grs=[%@]", gs);
