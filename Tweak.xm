@@ -33187,7 +33187,7 @@ static void ERSPGDotsRefresh(void) {
                 UIView *a = pill.superview;
                 int depth = 0;
                 while (a && depth < 12) {
-                    [s appendFormat:@"%@%s%d[h%d,a%.1f]", depth ? ">" : "", "", depth,
+                    [s appendFormat:@"%@%d[h%d,a%.1f]", depth ? @">" : @"", depth,
                      a.hidden ? 1 : 0, a.alpha];
                     if (a.hidden || a.alpha < 0.99) {
                         // 记录藏匿祖先的类名（完整）
