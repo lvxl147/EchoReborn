@@ -189,3 +189,9 @@
 - 恢复胶囊 userInteractionEnabled（-41 hitTest 落在 accessory view = 触摸进不了胶囊，点击搜索失效根因）
 - DOTSSTATE 探针前移到页数守卫之前（旧位置在 pages<1 return 之后，恰好盲区盖住真因），附 pc 类名/raw 页数
 - PILLSTATE 增 ue= 交互标志；SPG-PAN armed 附四方向配置值（拖拽无反应=没配置还是读不到，一眼可辨）
+
+### 1.2.0-43 (1002045)
+- 翻页期间隐藏胶囊内文字/图标（底壳+圆点除外），3 秒恢复时还原（-42 实锤圆点与"搜索"叠显遮挡）
+- 页数可信度：numberOfPages 仅 ≥2 才采用（-42 日志实锤本机假报 1 导致 14↔1 抖动）
+- 点击进搜索：自挂单击手势（cancelsTouchesInView=NO），转发给胶囊上系统单击手势的 action，附 SPG-PILLGEST 手势清单 dump
+- 关闭功能时还原被隐藏的文字/图标
