@@ -32350,7 +32350,14 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         NSInteger page = ERSPGInt(key, 0);
         if (!ERSPGShouldFire()) return;   // 与 touches 通道去重（含无动作页）
         objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
-        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld", t.x, t.y, range, (long)page);
+        // 1.2.0-42 · 附带四方向配置值：armed page=0（拖拽无反应）到底是没配置还是
+        // 读不到配置，一眼可辨。
+        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld cfg[L=%ld R=%ld U=%ld D=%ld]",
+                  t.x, t.y, range, (long)page,
+                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureLeft", 0),
+                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureRight", 0),
+                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureUp", 0),
+                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureDown", 0));
         if (page < 1) return;   // 无动作 = 系统默认（不震不跳）
         ERSPGHaptic();           // 达标提示震（一次）
         objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @(page), OBJC_ASSOCIATION_RETAIN);
@@ -33207,8 +33214,9 @@ static void ERSPGDotsRefresh(void) {
             if (pill && nw - sERLastPS > 2.0) {
                 sERLastPS = nw;
                 NSMutableString *s = [NSMutableString stringWithFormat:
-                    @"SPG-PILLSTATE cls=%@ hidden=%d alpha=%.2f sv=%@ win=%d frame=%@ tf=%@ op=%.2f anc=",
+                    @"SPG-PILLSTATE cls=%@ hidden=%d alpha=%.2f ue=%d sv=%@ win=%d frame=%@ tf=%@ op=%.2f anc=",
                     NSStringFromClass(pill.class), pill.hidden ? 1 : 0, pill.alpha,
+                    pill.userInteractionEnabled ? 1 : 0,
                     pill.superview ? NSStringFromClass(pill.superview.class) : @"(nil)",
                     pill.window ? 1 : 0,
                     NSStringFromCGRect(pill.frame),
@@ -33232,30 +33240,33 @@ static void ERSPGDotsRefresh(void) {
         // 1.2.0-41 · 删掉 contentSize 早退（抓到文件夹/小组件滚动视图时它会把
         // 圆点永久拦下；抓错视图的问题由 FindIconSV 评分制解决）
         if (!sERSPGDotsView || !sv || sv.bounds.size.width < 1) return;
-        // 页数：优先读桌面 _UIPageControl 的真实 numberOfPages，回退 contentSize 换算
+        // 页数：三源——桌面页控件 numberOfPages → contentSize 换算 → 已发布 PageCount
         NSInteger pages = 0;
         UIView *pc = sERSPGHomePCRef;
+        NSString *pcCls = pc ? NSStringFromClass(pc.class) : @"(nil)";
         if (pc && [pc respondsToSelector:@selector(numberOfPages)])
             pages = [(UIPageControl *)pc numberOfPages];
         if (pages < 1) pages = (NSInteger)lround(sv.contentSize.width / sv.bounds.size.width);
-        if (pages < 1 || pages > 12) return;
-        CGFloat x = sv.contentOffset.x;
-        NSInteger page = (NSInteger)lround(x / sv.bounds.size.width);
-        page = MIN(MAX(page, 0), pages - 1);
-        // 1.2.0-40 · DOTSSTATE 探针（2s 节流）：滚动视图归属/尺寸/offset/页数/圆点
-        // alpha/胶囊底在场——圆点再不出现时一眼定位是抓错视图还是显示链问题。
+        NSInteger pagesRaw = pages;
+        if (pages < 1) pages = ERSPGInt(@"HomeScreen.PageCount", 0);   // 1.2.0-42 第三源
+        // 1.2.0-42 · DOTSSTATE 探针（2s 节流）前移到页数守卫之前——-41 版探针排在
+        // `pages<1 return` 之后，页数为 0 时探针被一起拦掉，盲区恰好盖住真因。
         {
             static NSTimeInterval sERLastDS = 0;
             NSTimeInterval nds = [[NSDate date] timeIntervalSince1970];
             if (nds - sERLastDS > 2.0) {
                 sERLastDS = nds;
-                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pages=%ld page=%ld dAlpha=%.1f pillBg=%d",
+                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pc=%@ raw=%ld pages=%ld dAlpha=%.1f pillBg=%d",
                           NSStringFromClass(sv.class), sv.window ? 1 : 0,
                           sv.bounds.size.width, sv.contentSize.width, sv.contentOffset.x,
-                          (long)pages, (long)page, sERSPGDotsView.alpha,
+                          pcCls, (long)pagesRaw, (long)pages, sERSPGDotsView.alpha,
                           sERSPGPillBg ? 1 : 0);
             }
         }
+        if (pages < 1 || pages > 12) return;
+        CGFloat x = sv.contentOffset.x;
+        NSInteger page = (NSInteger)lround(x / sv.bounds.size.width);
+        page = MIN(MAX(page, 0), pages - 1);
         // 滚动变化检测：3s 无翻页 → 圆点淡出（恢复系统搜索胶囊观感）
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
         if (sERSPGDotsLastX < 0 || fabs(x - sERSPGDotsLastX) > 0.5) {
@@ -33351,6 +33362,13 @@ static void ERSPGSyncDots(BOOL enabled) {
         if (!pill.window) return;   // 被移出窗口：守卫已挂，等下个 tick 圆点恢复
         if (pill.hidden) pill.hidden = NO;
         if (pill.alpha < 0.99) pill.alpha = 1.0;
+        // 1.2.0-42 · -41 日志实锤：胶囊区 hitTest 落在 SBFolderScrollAccessoryView
+        // 而不是胶囊 = pill.userInteractionEnabled=NO，点击/触摸永远进不了胶囊
+        //（点击进搜索彻底失效）。按 B 方案规格恢复交互。
+        if (!pill.userInteractionEnabled) {
+            pill.userInteractionEnabled = YES;
+            ERLogInfo(@"SPG-PILL userInteraction restored");
+        }
         // 1.2.0-41 · 自绘胶囊底：-40 截图+PILLSTATE 实锤胶囊视图健康（hidden=0
         // alpha=1）但用户只看到"搜索"label——系统的胶囊底色层被折腾没了。我们
         // 自己画一层圆角底插在最底层，常驻不参与 3s 淡出，不依赖系统背景。
@@ -33545,7 +33563,10 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
                 }
             }
             BOOL wantHidden = gestureEnabled && root.window && root.window == sERSPGPillRef.window && !relatedToPill;
-            if ([cn isEqualToString:@"_UIPageControl"] && wantHidden)
+            // 1.2.0-42 · 本机桌面页控件类名是 UIPageControl（-41 日志 PCHIDE 行实锤），
+            // 旧条件只匹配 "_UIPageControl" → sERSPGHomePCRef 永远 nil → 圆点页数恒 0
+            // → 圆点永不出现。两个类名都收。
+            if (([cn isEqualToString:@"_UIPageControl"] || [cn isEqualToString:@"UIPageControl"]) && wantHidden)
                 sERSPGHomePCRef = root;  // 1.2.0-38 记住桌面页控件（自绘圆点读真实 numberOfPages）
             if (root.hidden != wantHidden) {
                 root.hidden = wantHidden;
