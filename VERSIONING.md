@@ -149,7 +149,7 @@
 | 232 | 1.2.0-35 | 1002037 | -34 实锤：PCTRACE 零输出=setCurrentPage: 零调用、ICBLOCK 挂载正常零命中（icoCls=1）→ 圆点位移不走 currentPage 通道；-35 升级探针：直接 hook 圆点指示器本体 _UIPageControlIndicatorContentView 的 setFrame:/setBounds:/setCenter: + setCurrentPage:/updateCurrentPageDisplay 旁路，圆点动一帧即打印 backtrace（只观察不拦截） |### 1.2.0-34 (1002036)
 | 233 | 1.2.0-36 | 1002038 | -35 backtrace 实锤真凶：CallAssist.dylib（TweakInject 注入 SpringBoard 的通话助手整合插件）在布局遍历中直接 setFrame: 挪圆点，绕开 currentPage 属性与一切 selector 通道；-36 圆点焊死：胶囊活动期丢弃 _UIPageControlIndicatorContentView 的 setFrame:/setCenter:（SPG-PCBLOCK），我方跳页 sERSPGOwnJump 放行，setBounds 保持只观察 |- 定位翻页真凶：hook 页面圆点 setCurrentPage:（UIPageControl/_UIPageControl），胶囊活动期打印调用者 backtrace（SPG-PCTRACE），决定性证据定位未知翻页通道
 | 234 | 1.2.0-37 | 1002039 | -36 实锤 CallAssist 换 setBounds: 继续驱动（焊不死，圆点跳出胶囊）；采纳用户 B 方案：系统分页圆点隐藏（仅胶囊所在 window，关闭恢复）+ 胶囊常驻不变形（每帧恢复 hidden/alpha）+ 圆点完全自绘（SBIconScrollView contentOffset 换算当前页，CADisplayLink 驱动，位置跟随胶囊下方）|- 补漏：setContentOffset 封锁增加私有变体 _setContentOffset:（-33 实锤 COBLOCK 命中但圆点仍动）
-- 心跳日志带 ico/co 挂载类计数，确认 -33 四 selector 挂载状态
+| 235 | 1.2.0-38 | 1002040 | -37 问题：胶囊被 CallAssist 藏没（PILLRESTORE 救不回）、自绘圆点页数算错太多颗；-38 按用户规格重做：胶囊守卫（类级封 SBHSearchPillView 的 setHidden:YES/setAlpha:<1，SPG-PILLGUARD）+ 圆点挂进胶囊内部 + 页数读桌面 _UIPageControl.numberOfPages + 滚动停止 3s 圆点淡出恢复搜索胶囊观感 + 滚动中深灰圆点当前页 0.85 高亮放大 1.2x |- 心跳日志带 ico/co 挂载类计数，确认 -33 四 selector 挂载状态
 ### 1.2.0-35 (1002037)
 - -34 探针结果：SPG-PCTRACE 零输出 → setCurrentPage: 从未被调用；心跳 icoCls=1 确认 SBIconController 四 selector 挂载正常但零命中
 - -35 升级：hook 圆点指示器本体 _UIPageControlIndicatorContentView 的 setFrame:/setBounds:/setCenter:，圆点位置变化直接打印调用者 backtrace；补 setCurrentPage:/updateCurrentPageDisplay 旁路；全部只观察不拦截
@@ -161,3 +161,7 @@
 - 系统分页圆点隐藏（ERSPG-PCHIDE，仅胶囊所在 window）；PCBLOCK 封锁瞬间顺带强制隐藏
 - 自绘圆点：SPG-DOTS 视图（7pt 圆点/间距 6，当前页放大 1.15x），CADisplayLink 常驻刷新，contentOffset 换算页码，位置跟随胶囊
 - 胶囊防变形兜底：SPG-PILLRESTORE 每帧恢复 hidden/alpha
+### 1.2.0-38 (1002040)
+- 胶囊守卫：类级封锁 SBHSearchPillView 的 setHidden:YES / setAlpha:<1（CallAssist 藏胶囊的主要手段被封死）
+- 自绘圆点移入胶囊内部居中；页数优先读桌面 _UIPageControl 的 numberOfPages（修复页数算错）
+- 交互规格（用户定义）：翻页滚动中/结束后 3s 内显示圆点（深灰，当前页 0.85 高亮 1.2x），超 3s 淡出恢复系统"搜索"胶囊原样
