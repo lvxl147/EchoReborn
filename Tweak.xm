@@ -32936,6 +32936,7 @@ static void ERSPGPillTouchCancelled(id self, SEL _cmd, NSSet *touches, UIEvent *
 }
 
 // 1.2.0-31 · 系统震动封锁：胶囊触摸活动期间（拖圆点翻页）系统自带震动与我方手势震动混淆，封锁 selectionChanged/impactOccurred，我方用 sERSPGOwnHaptic 放行。
+#include <substrate.h>
 static BOOL ERSPGShouldDropSysHaptic(void) {
     return ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnHaptic && gERSPGPageCtlActive > 0;
 }
@@ -32951,6 +32952,17 @@ static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i) {  // impactOccurred
 static void ERSPGSysHaptHook3(id self, SEL _cmd, NSInteger t) {  // notificationOccurred:/n    if (ERSPGShouldDropSysHaptic()) return;
     IMP o = ERSPGSCOLookupOrig(self, _cmd);
     if (o) ((void (*)(id, SEL, NSInteger))o)(self, _cmd, t);
+}
+
+static void (*ERSPGPlaySysOrigC)(unsigned int) = NULL;
+static void (*ERSPGPlayAlertOrigC)(unsigned int) = NULL;
+static void ERSPGPlaySysHookC(unsigned int sid) {
+    if (ERSPGShouldDropSysHaptic()) return;
+    ERSPGPlaySysOrigC(sid);
+}
+static void ERSPGPlayAlertHookC(unsigned int sid) {
+    if (ERSPGShouldDropSysHaptic()) return;
+    ERSPGPlayAlertOrigC(sid);
 }
 
 static void ERSPGAttachSysHaptHooks(void) {
@@ -32999,6 +33011,16 @@ static void ERSPGAttachSysHaptHooks(void) {
         }
     }
     if (allCls) free(allCls);
+    // 1.2.0-32 · AudioServices C 震动通道封锁（MSHookFunction）
+    static BOOL coDone = NO;
+    if (!coDone) {
+        coDone = YES;
+        MSHookFunction((void *)AudioServicesPlaySystemSound,
+                       (void *)ERSPGPlaySysHookC, (void **)&ERSPGPlaySysOrigC);
+        MSHookFunction((void *)AudioServicesPlayAlertSound,
+                       (void *)ERSPGPlayAlertHookC, (void **)&ERSPGPlayAlertOrigC);
+        ERLogInfo(@"SPG-HAPTLOCK audioservices locked");
+    }
     ERLogInfo(@"SPG-HAPTLOCK attached base+ broad=%d", attachedN);
 }
 
@@ -34167,15 +34189,4 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
 
 }
 
-// ===== 1.2.0-32 · C 函数兜底：AudioServices 老震动通道（胶囊触摸活动期拦截）=====
-#import <AudioToolbox/AudioToolbox.h>
-
-%hookf(void, AudioServicesPlaySystemSound, unsigned int sid) {
-    if (ERSPGShouldDropSysHaptic()) return;
-    %orig;
-}
-
-%hookf(void, AudioServicesPlayAlertSound, unsigned int sid) {
-    if (ERSPGShouldDropSysHaptic()) return;
-    %orig;
-}
+// 1.2.0-32 · AudioServices C 函数震动封锁改用 MSHookFunction（在 ERSPGAttachSysHaptHooks 内挂载）
