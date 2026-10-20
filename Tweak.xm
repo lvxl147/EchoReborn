@@ -33074,6 +33074,7 @@ static void ERSPGPCFrameBlockHook(id self, SEL _cmd, CGRect f) {
     if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
         static NSTimeInterval sERLastPCB = 0;
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        ((UIView *)self).hidden = YES;  // 1.2.0-37 B 方案兜底：封锁瞬间顺带隐藏
         if (now - sERLastPCB > 2.0) {
             sERLastPCB = now;
             ERLogInfo(@"SPG-PCBLOCK frame cls=%@", NSStringFromClass(object_getClass(self)));
@@ -33087,6 +33088,7 @@ static void ERSPGPCCenterBlockHook(id self, SEL _cmd, CGPoint c) {
     if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
         static NSTimeInterval sERLastPCB2 = 0;
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        ((UIView *)self).hidden = YES;  // 1.2.0-37 B 方案兜底：封锁瞬间顺带隐藏
         if (now - sERLastPCB2 > 2.0) {
             sERLastPCB2 = now;
             ERLogInfo(@"SPG-PCBLOCK center cls=%@", NSStringFromClass(object_getClass(self)));
@@ -33117,6 +33119,129 @@ static void ERSPGAttachPCBlock(Class cls) {
         n++;
     }
     ERLogInfo(@"SPG-PCBLOCK attach cls=%@ n=%d", cn, n);
+}
+
+// ===== 1.2.0-37 · B 方案：胶囊常驻 + 自绘圆点 =====
+// -36 实锤 CallAssist 换 setBounds: 继续驱动圆点（焊不死）。改道（用户方案）：
+// 系统圆点指示器直接隐藏、胶囊常驻不变形，圆点完全自绘——位置/样式全可控，
+// CallAssist 碰不到我们的视图。当前页数据源：SBIconScrollView 的 contentOffset
+// 换算（page = round(offset.x/页宽)），CADisplayLink 常驻驱动，无 KVO 生命周期风险。
+static UIView *sERSPGDotsView = nil;
+static NSMutableArray<UIView *> *sERSPGDotItems = nil;
+static __weak UIScrollView *sERSPGIconSVRef = nil;
+static NSInteger sERSPGDotsPage = -1;
+static NSInteger sERSPGDotsPages = -1;
+static void ERSPGDotsRefresh(void);
+
+static UIScrollView *ERSPGFindIconSV(void) {
+    for (UIWindow *w in ERAllApplicationWindows()) {
+        NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
+        while (stack.count) {
+            UIView *v = stack.lastObject; [stack removeLastObject];
+            if ([NSStringFromClass(v.class) isEqualToString:@"SBIconScrollView"]) return (UIScrollView *)v;
+            [stack addObjectsFromArray:v.subviews];
+        }
+    }
+    return nil;
+}
+
+static void ERSPGDotsRebuild(NSInteger pages) {
+    for (UIView *d in sERSPGDotItems) [d removeFromSuperview];
+    [sERSPGDotItems removeAllObjects];
+    CGFloat ds = 7.0, gap = 6.0;
+    CGFloat w = pages * ds + (pages - 1) * gap;
+    sERSPGDotsView.frame = CGRectMake(0, 0, w, ds);
+    for (NSInteger i = 0; i < pages; i++) {
+        UIView *d = [[UIView alloc] initWithFrame:CGRectMake(i * (ds + gap), 0, ds, ds)];
+        d.layer.cornerRadius = ds / 2.0;
+        d.backgroundColor = [UIColor whiteColor];
+        d.userInteractionEnabled = NO;
+        [sERSPGDotsView addSubview:d];
+        [sERSPGDotItems addObject:d];
+    }
+}
+
+static void ERSPGDotsRefresh(void) {
+    @try {
+        // 每帧兜底：胶囊被 CallAssist 变形隐藏时拉回来（节流日志）
+        UIView *pill = sERSPGPillRef;
+        if (pill && (pill.hidden || pill.alpha < 0.99)) {
+            static NSTimeInterval sERLastPR = 0;
+            NSTimeInterval nw = [[NSDate date] timeIntervalSince1970];
+            pill.hidden = NO;
+            pill.alpha = 1.0;
+            if (nw - sERLastPR > 5.0) {
+                sERLastPR = nw;
+                ERLogInfo(@"SPG-PILLRESTORE cls=%@", NSStringFromClass(pill.class));
+            }
+        }
+        UIScrollView *sv = sERSPGIconSVRef;
+        if (!sERSPGDotsView || sERSPGDotsView.hidden || !sv ||
+            sv.bounds.size.width < 1 || sv.contentSize.width < sv.bounds.size.width * 0.5) return;
+        NSInteger pages = (NSInteger)lround(sv.contentSize.width / sv.bounds.size.width);
+        if (pages < 1) return;
+        NSInteger page = (NSInteger)lround(sv.contentOffset.x / sv.bounds.size.width);
+        page = MIN(MAX(page, 0), pages - 1);
+        if (pages != sERSPGDotsPages) { ERSPGDotsRebuild(pages); sERSPGDotsPages = pages; }
+        if (page != sERSPGDotsPage) {
+            sERSPGDotsPage = page;
+            for (NSInteger i = 0; i < (NSInteger)sERSPGDotItems.count; i++) {
+                UIView *d = sERSPGDotItems[i];
+                d.alpha = (i == page) ? 1.0 : 0.4;
+                d.transform = (i == page) ? CGAffineTransformMakeScale(1.15, 1.15) : CGAffineTransformIdentity;
+            }
+        }
+        // 位置跟随胶囊（每帧刷新，防胶囊/窗口变化错位）
+        UIWindow *win = sERSPGDotsView.window;
+        if (win) {
+            CGRect pf = sERSPGPillWinFrame;
+            if (!CGRectIsEmpty(pf)) {
+                CGFloat y = CGRectGetMaxY(pf) + 8.0;
+                if (y + 10.0 > win.bounds.size.height) y = CGRectGetMinY(pf) - 16.0;
+                CGRect nf = CGRectMake((win.bounds.size.width - sERSPGDotsView.frame.size.width) / 2.0, y,
+                                       sERSPGDotsView.frame.size.width, 7.0);
+                if (!CGRectEqualToRect(nf, sERSPGDotsView.frame)) sERSPGDotsView.frame = nf;
+            }
+        }
+    } @catch (__unused NSException *e) {}
+}
+
+@interface ERSPGDotsLinkTarget : NSObject @end
+@implementation ERSPGDotsLinkTarget
++ (instancetype)shared { static ERSPGDotsLinkTarget *s; static dispatch_once_t t; dispatch_once(&t, ^{ s = [self new]; }); return s; }
+- (void)erDotsTick:(CADisplayLink *)__unused l { ERSPGDotsRefresh(); }
+@end
+
+static CADisplayLink *sERSPGDotsLink = nil;
+// 每 tick 调用（ConfigurePill）：保证滚动视图引用、圆点视图在场、显示链启停
+static void ERSPGSyncDots(BOOL enabled) {
+    @try {
+        if (!enabled) {
+            if (sERSPGDotsView) { [sERSPGDotsView removeFromSuperview]; sERSPGDotsView = nil; sERSPGDotItems = nil; }
+            sERSPGDotsPage = -1; sERSPGDotsPages = -1;
+            if (sERSPGDotsLink) sERSPGDotsLink.paused = YES;
+            return;
+        }
+        if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
+        if (!sERSPGIconSVRef) return;
+        UIWindow *win = sERSPGPillRef.window ?: sERSPGIconSVRef.window;
+        if (!win) return;
+        if (!sERSPGDotsView) {
+            sERSPGDotsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 20, 7)];
+            sERSPGDotsView.userInteractionEnabled = NO;
+            sERSPGDotItems = [NSMutableArray new];
+            [win addSubview:sERSPGDotsView];
+            ERLogInfo(@"SPG-DOTS created win=%@ sv=%@", win.class, sERSPGIconSVRef.class);
+        } else if (sERSPGDotsView.window != win) {
+            [win addSubview:sERSPGDotsView];
+        }
+        if (!sERSPGDotsLink) {
+            sERSPGDotsLink = [CADisplayLink displayLinkWithTarget:ERSPGDotsLinkTarget.shared selector:@selector(erDotsTick:)];
+            [sERSPGDotsLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+        }
+        sERSPGDotsLink.paused = NO;
+        ERSPGDotsRefresh();
+    } @catch (__unused NSException *e) {}
 }
 
 // 胶囊本体 touches 观察 hook（不吞、照常转发）：只维护胶囊区触摸活动计数
@@ -33255,6 +33380,12 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
         // 桌面翻页），已回滚。
         if (ERSPGIsPageCtlClass(cn)) {
             (*n)++;
+            // 1.2.0-37 · B 方案：系统分页圆点隐藏（自绘圆点替代），仅限胶囊所在 window；关闭时恢复
+            BOOL wantHidden = gestureEnabled && root.window && root.window == sERSPGPillRef.window;
+            if (root.hidden != wantHidden) {
+                root.hidden = wantHidden;
+                ERLogInfo(@"SPG-PCHIDE %@ -> %d", cn, wantHidden ? 1 : 0);
+            }
             // ① 一次性 dump 手势清单
             static BOOL sERSPGGR2Logged = NO;
             if (!sERSPGGR2Logged) {
@@ -33416,6 +33547,8 @@ static void ERSPGConfigurePill(UIView *pill) {
     ERSPGSyncSystemGestures(pill, enabled);
     // 1.2.0-23 · 搜索层 pan 压制/恢复（总开关联动，每 tick 心跳维持）。
     ERSPGSyncSearchLayerPan(enabled);
+    // 1.2.0-37 · B 方案：自绘圆点（滚动视图引用/圆点视图/显示链维持）
+    ERSPGSyncDots(enabled);
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
