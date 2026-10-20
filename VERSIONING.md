@@ -151,7 +151,7 @@
 | 234 | 1.2.0-37 | 1002039 | -36 实锤 CallAssist 换 setBounds: 继续驱动（焊不死，圆点跳出胶囊）；采纳用户 B 方案：系统分页圆点隐藏（仅胶囊所在 window，关闭恢复）+ 胶囊常驻不变形（每帧恢复 hidden/alpha）+ 圆点完全自绘（SBIconScrollView contentOffset 换算当前页，CADisplayLink 驱动，位置跟随胶囊下方）|- 补漏：setContentOffset 封锁增加私有变体 _setContentOffset:（-33 实锤 COBLOCK 命中但圆点仍动）
 | 235 | 1.2.0-38 | 1002040 | -37 问题：胶囊被 CallAssist 藏没（PILLRESTORE 救不回）、自绘圆点页数算错太多颗；-38 按用户规格重做：胶囊守卫（类级封 SBHSearchPillView 的 setHidden:YES/setAlpha:<1，SPG-PILLGUARD）+ 圆点挂进胶囊内部 + 页数读桌面 _UIPageControl.numberOfPages + 滚动停止 3s 圆点淡出恢复搜索胶囊观感 + 滚动中深灰圆点当前页 0.85 高亮放大 1.2x |- 心跳日志带 ico/co 挂载类计数，确认 -33 四 selector 挂载状态
 | 236 | 1.2.0-39 | 1002041 | -38 日志实锤：SPG-PILLGUARD 零输出=守卫被前置条件卡死（胶囊被藏后 pill.window 空直接 return）；-39 修复：守卫挂载提前到 syncDots 首步（只依赖 pill 类）+ ERSPGFindIconSV 改 isKindOfClass 匹配子类 + 页数发布补充桌面 _UIPageControl.numberOfPages 源（iconLists 探测失败时设置页下拉框仍实时真实页数）|### 1.2.0-35 (1002037)
-- -34 探针结果：SPG-PCTRACE 零输出 → setCurrentPage: 从未被调用；心跳 icoCls=1 确认 SBIconController 四 selector 挂载正常但零命中
+| 237 | 1.2.0-40 | 1002042 | 用户实测禁用全部其他插件胶囊仍不显示=排除 CallAssist，是 -37 PCHIDE 连坐（藏了胶囊视图树里的 PageControl 成员）；-40：PCHIDE 防连坐（与胶囊同树互为祖先/后代的不藏）+ PCHIDE 日志附父链 5 级 + SPG-PILLSTATE 每 2s 胶囊全套状态与祖先链 hidden 探针 + 设置页最后一页显示资源库（映射值不变）|- -34 探针结果：SPG-PCTRACE 零输出 → setCurrentPage: 从未被调用；心跳 icoCls=1 确认 SBIconController 四 selector 挂载正常但零命中
 - -35 升级：hook 圆点指示器本体 _UIPageControlIndicatorContentView 的 setFrame:/setBounds:/setCenter:，圆点位置变化直接打印调用者 backtrace；补 setCurrentPage:/updateCurrentPageDisplay 旁路；全部只观察不拦截
 ### 1.2.0-36 (1002038)
 - -35 backtrace 决定性证据：圆点 frame 由 CallAssist.dylib 直接驱动（非系统、非本插件），解释 -33/-34 全部封锁无效
@@ -169,3 +169,8 @@
 - 修复守卫卡死：ERSPGSyncDots 首步即挂胶囊守卫（不依赖 window/scrollview），CallAssist 藏胶囊前守卫已就位
 - ERSPGFindIconSV 改 isKindOfClass 匹配（SBIconScrollView 子类实例也算），自绘圆点数据源建立
 - 页数实时化：发布链路补充桌面 _UIPageControl.numberOfPages，设置页"选择第几页"下拉框反映真实页数
+### 1.2.0-40 (1002042)
+- PCHIDE 防连坐：与胶囊互为祖先/后代的 PageControl 视图不再隐藏（胶囊消失根因假设）
+- SPG-PILLSTATE 探针：每 2s 胶囊 hidden/alpha/frame/transform/opacity + 祖先链逐级 hidden 检查
+- SPG-PCHIDE 日志附父链 5 级类名（归属判断）
+- 设置页"选择第几页"最后一页显示"资源库"（ERGesturePageText，映射值不变）
