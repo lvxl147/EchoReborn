@@ -199,3 +199,7 @@
 ### 1.2.0-44 (1002046)
 - SPG-SRDUMP：一次性 dump SBHSearchPillView/SBFolderScrollAccessoryView/SBRootFolderView/SBIconScrollView/SBIconController/SBRootFolderController 的 earch selector（实例+类方法）
 - 目的：-43 实锤系统胶囊无点击手势，锁定点进搜索的真实载体，供下一版接自挂单击
+
+### 1.2.0-45 (1002047)
+- 点击进搜索落地：-44 SRDUMP 实锤 SBIconController `_handleSearchAffordanceTap` 为系统原生胶囊点击处理
+- 自挂单击改为直调该方法（respondsToSelector 守卫 + @try 兜底），旧转发路径保留为 fallback
