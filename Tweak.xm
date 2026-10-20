@@ -8,6 +8,7 @@
 #import <stdarg.h>
 #import <stdlib.h>
 #import <string.h>
+#import <execinfo.h> // 1.2.0-34 setCurrentPage: 回溯探针
 // 1.0.1：控制按钮的动作（注销 / 安全模式 / 用户空间重启 / 重启）用 posix_spawnp
 // 直接 exec 设备上的命令行工具，不经过 shell。posix_spawnp 会按 PATH 查找，
 // 所以 rootless(/var/jb) 与 roothide(随机 jbroot) 两种前缀都不用在这里特判。
@@ -32901,8 +32902,10 @@ static void ERSPGAttachSCOHook(Class cls) {
     struct { SEL sel; IMP imp; const char *types; } items[] = {
         { @selector(setContentOffset:),          (IMP)ERSPGSCOOff1, "v@:{CGPoint=dd}"   },
         { @selector(setContentOffset:animated:), (IMP)ERSPGSCOOff2, "v@:{CGPoint=dd}B"  },
+        // 1.2.0-34 · 私有变体：系统内部滚动常走 _setContentOffset:（-33 日志实锤 setContentOffset: 只被拦 1 次但圆点仍动）
+        { @selector(_setContentOffset:),         (IMP)ERSPGSCOOff1, "v@:{CGPoint=dd}"   },
     };
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 3; i++) {
         Method m = class_getInstanceMethod(cls, items[i].sel);
         IMP orig = m ? method_getImplementation(m) : NULL;
         NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
@@ -32974,6 +32977,57 @@ static void ERSPGAttachICOHook(Class cls) {
     }
     [gERSPGICOHooked addObject:cls];
     ERLogInfo(@"SPG-ICBLOCK attach cls=%@ n=%d", cn, n);
+}
+
+// ===== 1.2.0-34 · 定位翻页真凶：页面圆点 setCurrentPage: 回溯探针 =====
+// -33 日志实锤：COBLOCK 命中 SBIconScrollView setContentOffset: 但圆点仍在动、
+// ICBLOCK 四个 selector 零调用 → 翻页走了未知通道。touch 落点类是
+// _UIPageControlIndicatorContentView（分页圆点控件本体），圆点动 = currentPage 被改。
+// 在 currentPage 被改的瞬间打印调用者 backtrace，一枪看清真正的翻页驱动者。
+// 只观察不拦截（照常转发），活动期内 0.5s 节流，避免刷爆日志。
+static NSMutableDictionary<NSString *, NSValue *> *gERSPGPCOrig = nil;
+static NSMutableSet *gERSPGPCHooked = nil;
+static void ERSPGPCTraceHook(id self, SEL _cmd, NSInteger page) {
+    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
+        static NSTimeInterval sERLastPCT = 0;
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        if (now - sERLastPCT > 0.5) {
+            sERLastPCT = now;
+            void *bt[14];
+            int nb = backtrace(bt, 14);
+            char **syms = backtrace_symbols(bt, nb);
+            if (syms) {
+                NSMutableString *s = [NSMutableString stringWithFormat:
+                    @"SPG-PCTRACE cls=%@ page=%ld bt=", NSStringFromClass(object_getClass(self)), (long)page];
+                for (int i = 1; i < nb; i++) [s appendFormat:@"%s|", syms[i]];
+                ERLogInfo(@"%@", s);
+                free(syms);
+            }
+        }
+    }
+    // 沿继承链回溯找 orig
+    IMP o = NULL;
+    Class c = object_getClass(self);
+    while (c && !o) {
+        NSValue *v = gERSPGPCOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
+        if (v) o = (IMP)v.pointerValue; else c = class_getSuperclass(c);
+    }
+    if (o) ((void (*)(id, SEL, NSInteger))o)(self, _cmd, page);
+}
+static void ERSPGAttachPCTrace(Class cls) {
+    if (!cls) return;
+    if (!gERSPGPCHooked) gERSPGPCHooked = [NSMutableSet new];
+    if ([gERSPGPCHooked containsObject:cls]) return;
+    if (!gERSPGPCOrig) gERSPGPCOrig = [NSMutableDictionary new];
+    Method m = class_getInstanceMethod(cls, @selector(setCurrentPage:));
+    [gERSPGPCHooked addObject:cls];
+    if (!m) return;
+    IMP orig = method_getImplementation(m);
+    NSString *key = [NSStringFromClass(cls) stringByAppendingString:@"#setCurrentPage:"];
+    if (!gERSPGPCOrig[key]) gERSPGPCOrig[key] = [NSValue valueWithPointer:(void *)orig];
+    if (!class_addMethod(cls, @selector(setCurrentPage:), (IMP)ERSPGPCTraceHook, "v@:q"))
+        method_setImplementation(m, (IMP)ERSPGPCTraceHook);
+    ERLogInfo(@"SPG-PCTRACE attach cls=%@", NSStringFromClass(cls));
 }
 
 // 胶囊本体 touches 观察 hook（不吞、照常转发）：只维护胶囊区触摸活动计数
@@ -33177,13 +33231,19 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
         ERSPGAttachSCOHook(NSClassFromString(@"SBSearchScrollView"));
         ERSPGAttachICOHook(NSClassFromString(@"SBIconController"));  // 1.2.0-33
         ERSPGAttachSysHaptHooks();  // 1.2.0-31 系统震动封锁
+        // 1.2.0-34 · 圆点回溯探针：currentPage 被改瞬间打印调用链（基类+SpringBoard 子类都挂）
+        ERSPGAttachPCTrace(NSClassFromString(@"UIPageControl"));
+        ERSPGAttachPCTrace(NSClassFromString(@"_UIPageControl"));
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
     static NSTimeInterval sERLastHeartbeat = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - sERLastHeartbeat > 30.0) {
         sERLastHeartbeat = now;
-        ERLogInfo(@"SPG-SUPPRESS heartbeat enabled=%d hit=%ld", gestureEnabled ? 1 : 0, (long)n);
+        ERLogInfo(@"SPG-SUPPRESS heartbeat enabled=%d hit=%ld icoCls=%lu coCls=%lu",
+                  gestureEnabled ? 1 : 0, (long)n,
+                  (unsigned long)gERSPGICOHooked.count,
+                  (unsigned long)gERSPGSCOHooked.count);
     }
 }
 
