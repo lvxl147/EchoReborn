@@ -33141,7 +33141,8 @@ static UIScrollView *ERSPGFindIconSV(void) {
         NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
         while (stack.count) {
             UIView *v = stack.lastObject; [stack removeLastObject];
-            if ([NSStringFromClass(v.class) isEqualToString:@"SBIconScrollView"]) return (UIScrollView *)v;
+            if ([NSStringFromClass(v.class) isEqualToString:@"SBIconScrollView"] ||
+                [v isKindOfClass:%c(SBIconScrollView)]) return (UIScrollView *)v;
             [stack addObjectsFromArray:v.subviews];
         }
     }
@@ -33263,14 +33264,17 @@ static void ERSPGSyncDots(BOOL enabled) {
             if (sERSPGDotsLink) sERSPGDotsLink.paused = YES;
             return;
         }
-        if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
-        if (!sERSPGIconSVRef) return;
         UIView *pill = sERSPGPillRef;
-        if (!pill || !pill.window) return;
-        // 1.2.0-38 · 胶囊守卫：禁止隐藏/淡出（CallAssist 变形的主要手段）
+        if (!pill) return;
+        // 1.2.0-39 · 守卫挂载必须最前（不依赖 window/scrollview）：
+        // -38 日志实锤守卫被前置条件卡死（胶囊被藏后 pill.window 为空直接 return，
+        // 守卫永远没机会挂 → 胶囊彻底消失）。先封死 setHidden/setAlpha 再谈其他。
         ERSPGAttachPillGuard(pill.class);
+        if (!pill.window) return;   // 被移出窗口：守卫已挂，等下个 tick 圆点恢复
         if (pill.hidden) pill.hidden = NO;
         if (pill.alpha < 0.99) pill.alpha = 1.0;
+        if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
+        if (!sERSPGIconSVRef) return;
         // 圆点视图挂进胶囊内部（1.2.0-38 用户规格：翻页时胶囊里面变圆点）
         if (!sERSPGDotsView) {
             sERSPGDotsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 20, 5)];
@@ -33648,6 +33652,11 @@ static void ERSPGScanTick(void) {
         ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
+        // 1.2.0-39 · 补充源：桌面 _UIPageControl 的真实 numberOfPages（iconLists 探测失败时的可靠来源）
+        if (sERSPGHomePCRef && [sERSPGHomePCRef respondsToSelector:@selector(numberOfPages)]) {
+            NSInteger npc = [(UIPageControl *)sERSPGHomePCRef numberOfPages];
+            if (npc >= 1) cnt = npc;
+        }
         if (cnt >= 1) {
             NSInteger cached = ERSPGInt(@"HomeScreen.PageCount", 0);
             if (cached != cnt) {
