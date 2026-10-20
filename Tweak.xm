@@ -32221,6 +32221,15 @@ static BOOL ERSPGShouldFire(void);
 // 全局唯一 window pan（触摸不落胶囊视图，pan 必须挂上层）。
 static __weak UIView *sERSPGPillRef = nil;
 static CGRect sERSPGPillWinFrame = CGRectZero;
+// 1.2.0-41 · 实时帧：-40 日志实锤系统翻页时胶囊会缩放移动（pillWinFrame 在
+// {187.72,710.9} 与 {184.62,744.6} 间横跳），防抖缓存帧与真帧错位导致命中判定
+// 一半 outside 一半 ok（点击/拖拽失灵）。命中判定改为每次实时转换胶囊 frame。
+static CGRect ERSPGPillRTWinFrame(void) {
+    UIView *pill = sERSPGPillRef;
+    if (!pill || !pill.window) return sERSPGPillWinFrame;
+    CGRect f = [pill convertRect:pill.bounds toView:pill.window];
+    return CGRectIsEmpty(f) ? sERSPGPillWinFrame : f;
+}
 // 1.2.0-29 · 胶囊帧集合：桌面有两个 SBHSearchPillView（底部真胶囊 + 搜索层顶部胶囊），单缓存帧会在两者间跳变，-28 日志实锤闸门拿错帧全放行。改用集合存所有候选帧，闸门命中任一帧即拒。
 static NSMutableArray<NSValue *> *gERSPGPillFrameList = nil;
 static void ERSPGPageCtlTouchGateBegin(UIView *from);
@@ -32268,7 +32277,9 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                CGRect f = CGRectInset(sERSPGPillWinFrame, -6.0, -6.0);
+                // 1.2.0-41 · 实时帧取代防抖缓存帧（胶囊翻页时在动，缓存帧错位）。
+                CGRect rtFrame = ERSPGPillRTWinFrame();
+                CGRect f = CGRectInset(rtFrame, -6.0, -6.0);
                 inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
@@ -32297,8 +32308,9 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                     if (now - sERLastOutside > 1.0) {
                         sERLastOutside = now;
-                        ERLogInfo(@"SPG-PAN begin outside p=(%.0f,%.0f) pillWinFrame=%@",
-                                  p.x, p.y, NSStringFromCGRect(sERSPGPillWinFrame));
+                        ERLogInfo(@"SPG-PAN begin outside p=(%.0f,%.0f) pillWinFrame=%@ rt=%@",
+                                  p.x, p.y, NSStringFromCGRect(sERSPGPillWinFrame),
+                                  NSStringFromCGRect(rtFrame));
                     }
                 }
             }
@@ -32789,6 +32801,9 @@ static void ERSPGAttachGRGate(Class cls) {
 
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
+        // 1.2.0-41 · 实时帧优先（胶囊翻页时在动，缓存帧会错位）
+        CGRect rf = CGRectInset(ERSPGPillRTWinFrame(), inset, inset);
+        if (!CGRectIsEmpty(rf) && CGRectContainsPoint(rf, wp)) return YES;
         CGRect f0 = CGRectInset(sERSPGPillWinFrame, inset, inset);
         if (!CGRectIsEmpty(f0) && CGRectContainsPoint(f0, wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
@@ -33128,6 +33143,7 @@ static void ERSPGAttachPCBlock(Class cls) {
 // 换算（page = round(offset.x/页宽)），CADisplayLink 常驻驱动，无 KVO 生命周期风险。
 static UIView *sERSPGDotsView = nil;
 static NSMutableArray<UIView *> *sERSPGDotItems = nil;
+static UIView *sERSPGPillBg = nil;   // 1.2.0-41 自绘胶囊底（系统底色被折腾没了，只剩"搜索"label）
 static __weak UIScrollView *sERSPGIconSVRef = nil;
 static NSInteger sERSPGDotsPage = -1;
 static NSInteger sERSPGDotsPages = -1;
@@ -33137,25 +33153,39 @@ static NSTimeInterval sERSPGDotsLastChange = 0; // 最后一次翻页时刻（3s
 static void ERSPGDotsRefresh(void);
 
 static UIScrollView *ERSPGFindIconSV(void) {
+    // 1.2.0-41 · 旧实现返回全窗口遍历到的第一个 SBIconScrollView——iOS 17 文件夹/
+    // 小组件里也有同名视图，抓错后 offset 永不变 → 圆点永不出现。改为评分制：
+    // 主屏窗口 +1000，宽度与屏宽越接近分越高。
+    UIScrollView *best = nil;
+    CGFloat bestScore = -1e9;
+    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
     for (UIWindow *w in ERAllApplicationWindows()) {
+        BOOL isHome = [NSStringFromClass(w.class) containsString:@"HomeScreen"];
         NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
         while (stack.count) {
             UIView *v = stack.lastObject; [stack removeLastObject];
             if ([NSStringFromClass(v.class) isEqualToString:@"SBIconScrollView"] ||
-                [v isKindOfClass:%c(SBIconScrollView)]) return (UIScrollView *)v;
+                [v isKindOfClass:%c(SBIconScrollView)]) {
+                UIScrollView *sv = (UIScrollView *)v;
+                CGFloat score = (isHome ? 1000.0 : 0.0) - fabs(sv.bounds.size.width - sw);
+                if (score > bestScore) { bestScore = score; best = sv; }
+            }
             [stack addObjectsFromArray:v.subviews];
         }
     }
-    return nil;
+    return best;
 }
 
 static void ERSPGDotsRebuild(NSInteger pages) {
     for (UIView *d in sERSPGDotItems) [d removeFromSuperview];
     [sERSPGDotItems removeAllObjects];
+    // 1.2.0-41 · 用户规格：固定 3 颗、翻页高亮循环（高亮 = 页码 % 3），页数不再
+    // 决定点数（-40 页数多时点太多颗）。
     CGFloat ds = 5.0, gap = 5.0;
-    CGFloat w = pages * ds + (pages - 1) * gap;
+    NSInteger n = 3;
+    CGFloat w = n * ds + (n - 1) * gap;
     sERSPGDotsView.frame = CGRectMake(0, 0, w, ds);
-    for (NSInteger i = 0; i < pages; i++) {
+    for (NSInteger i = 0; i < n; i++) {
         UIView *d = [[UIView alloc] initWithFrame:CGRectMake(i * (ds + gap), 0, ds, ds)];
         d.layer.cornerRadius = ds / 2.0;
         d.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
@@ -33199,8 +33229,9 @@ static void ERSPGDotsRefresh(void) {
             }
         }
         UIScrollView *sv = sERSPGIconSVRef;
-        if (!sERSPGDotsView || !sv || sv.bounds.size.width < 1 ||
-            sv.contentSize.width < sv.bounds.size.width * 0.5) return;
+        // 1.2.0-41 · 删掉 contentSize 早退（抓到文件夹/小组件滚动视图时它会把
+        // 圆点永久拦下；抓错视图的问题由 FindIconSV 评分制解决）
+        if (!sERSPGDotsView || !sv || sv.bounds.size.width < 1) return;
         // 页数：优先读桌面 _UIPageControl 的真实 numberOfPages，回退 contentSize 换算
         NSInteger pages = 0;
         UIView *pc = sERSPGHomePCRef;
@@ -33211,6 +33242,20 @@ static void ERSPGDotsRefresh(void) {
         CGFloat x = sv.contentOffset.x;
         NSInteger page = (NSInteger)lround(x / sv.bounds.size.width);
         page = MIN(MAX(page, 0), pages - 1);
+        // 1.2.0-40 · DOTSSTATE 探针（2s 节流）：滚动视图归属/尺寸/offset/页数/圆点
+        // alpha/胶囊底在场——圆点再不出现时一眼定位是抓错视图还是显示链问题。
+        {
+            static NSTimeInterval sERLastDS = 0;
+            NSTimeInterval nds = [[NSDate date] timeIntervalSince1970];
+            if (nds - sERLastDS > 2.0) {
+                sERLastDS = nds;
+                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pages=%ld page=%ld dAlpha=%.1f pillBg=%d",
+                          NSStringFromClass(sv.class), sv.window ? 1 : 0,
+                          sv.bounds.size.width, sv.contentSize.width, sv.contentOffset.x,
+                          (long)pages, (long)page, sERSPGDotsView.alpha,
+                          sERSPGPillBg ? 1 : 0);
+            }
+        }
         // 滚动变化检测：3s 无翻页 → 圆点淡出（恢复系统搜索胶囊观感）
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
         if (sERSPGDotsLastX < 0 || fabs(x - sERSPGDotsLastX) > 0.5) {
@@ -33223,10 +33268,11 @@ static void ERSPGDotsRefresh(void) {
         if (sERSPGDotsView.alpha != targetAlpha) sERSPGDotsView.alpha = targetAlpha;
         if (targetAlpha > 0 && (page != sERSPGDotsPage || pages != sERSPGDotsPages)) {
             sERSPGDotsPage = page;
+            NSInteger hl = page % 3;   // 1.2.0-41 · 3 颗循环
             for (NSInteger i = 0; i < (NSInteger)sERSPGDotItems.count; i++) {
                 UIView *d = sERSPGDotItems[i];
-                d.backgroundColor = [UIColor colorWithWhite:0 alpha:(i == page) ? 0.85 : 0.30];
-                d.transform = (i == page) ? CGAffineTransformMakeScale(1.2, 1.2) : CGAffineTransformIdentity;
+                d.backgroundColor = [UIColor colorWithWhite:0 alpha:(i == hl) ? 0.85 : 0.30];
+                d.transform = (i == hl) ? CGAffineTransformMakeScale(1.2, 1.2) : CGAffineTransformIdentity;
             }
         }
         // 位置：胶囊内部居中（1.2.0-38 用户规格：圆点在胶囊里面）
@@ -33291,19 +33337,37 @@ static void ERSPGSyncDots(BOOL enabled) {
     @try {
         if (!enabled) {
             if (sERSPGDotsView) { [sERSPGDotsView removeFromSuperview]; sERSPGDotsView = nil; sERSPGDotItems = nil; }
+            if (sERSPGPillBg) { [sERSPGPillBg removeFromSuperview]; sERSPGPillBg = nil; }
             sERSPGDotsPage = -1; sERSPGDotsPages = -1;
             if (sERSPGDotsLink) sERSPGDotsLink.paused = YES;
             return;
         }
         UIView *pill = sERSPGPillRef;
         if (!pill) return;
-        // 1.2.0-39 · 守卫挂载必须最前（不依赖 window/scrollview）：
+        // 守卫挂载必须最前（不依赖 window/scrollview）：
         // -38 日志实锤守卫被前置条件卡死（胶囊被藏后 pill.window 为空直接 return，
         // 守卫永远没机会挂 → 胶囊彻底消失）。先封死 setHidden/setAlpha 再谈其他。
         ERSPGAttachPillGuard(pill.class);
         if (!pill.window) return;   // 被移出窗口：守卫已挂，等下个 tick 圆点恢复
         if (pill.hidden) pill.hidden = NO;
         if (pill.alpha < 0.99) pill.alpha = 1.0;
+        // 1.2.0-41 · 自绘胶囊底：-40 截图+PILLSTATE 实锤胶囊视图健康（hidden=0
+        // alpha=1）但用户只看到"搜索"label——系统的胶囊底色层被折腾没了。我们
+        // 自己画一层圆角底插在最底层，常驻不参与 3s 淡出，不依赖系统背景。
+        if (!sERSPGPillBg || sERSPGPillBg.superview != pill) {
+            UIView *old = sERSPGPillBg;
+            sERSPGPillBg = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height)];
+            sERSPGPillBg.backgroundColor = [UIColor colorWithWhite:0.18 alpha:0.55];
+            sERSPGPillBg.layer.cornerRadius = pill.bounds.size.height / 2.0;
+            sERSPGPillBg.layer.masksToBounds = YES;
+            sERSPGPillBg.userInteractionEnabled = NO;
+            [pill insertSubview:sERSPGPillBg atIndex:0];
+            [old removeFromSuperview];
+            ERLogInfo(@"SPG-PILLBG created cls=%@ bounds=%@", pill.class, NSStringFromCGRect(pill.bounds));
+        } else if (!CGRectEqualToRect(sERSPGPillBg.frame, pill.bounds)) {
+            sERSPGPillBg.frame = CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height);
+            sERSPGPillBg.layer.cornerRadius = pill.bounds.size.height / 2.0;
+        }
         if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
         if (!sERSPGIconSVRef) return;
         // 圆点视图挂进胶囊内部（1.2.0-38 用户规格：翻页时胶囊里面变圆点）
