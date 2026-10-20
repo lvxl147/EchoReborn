@@ -33322,8 +33322,14 @@ static void ERSPGDotsRefresh(void) {
 static NSUInteger ERSPGGRTaps(UIGestureRecognizer *g) {
     return ((NSUInteger (*)(id, SEL))objc_msgSend)(g, @selector(numberOfTapsRequired));
 }
-static NSArray *ERSPGGRTargets(UIGestureRecognizer *g) {
-    return ((NSArray *(*)(id, SEL))objc_msgSend)(g, @selector(targets));
+static id ERSPGGRTargets(UIGestureRecognizer *g) {
+    return ((id (*)(id, SEL))objc_msgSend)(g, @selector(targets));
+}
+static id ERSPGGRTargetAny(UIGestureRecognizer *g) {
+    id ts = ERSPGGRTargets(g);
+    if ([ts isKindOfClass:[NSSet class]]) return [(NSSet *)ts anyObject];
+    if ([ts isKindOfClass:[NSArray class]]) return [(NSArray *)ts firstObject];
+    return nil;
 }
 static SEL ERSPGGRAction(UIGestureRecognizer *g) {
     return ((SEL (*)(id, SEL))objc_msgSend)(g, @selector(action));
@@ -33335,7 +33341,7 @@ static SEL ERSPGGRAction(UIGestureRecognizer *g) {
         for (UIGestureRecognizer *gr in pill.gestureRecognizers) {
             if (gr == g || ![gr isKindOfClass:[UITapGestureRecognizer class]]) continue;
             if (ERSPGGRTaps(gr) > 1) continue;
-            id target = [ERSPGGRTargets(gr) anyObject];
+            id target = ERSPGGRTargetAny(gr);
             if (target) {
                 SEL a = ERSPGGRAction(gr);
                 ((void (*)(id, SEL, id))objc_msgSend)(target, a, gr);
