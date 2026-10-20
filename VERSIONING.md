@@ -147,9 +147,12 @@
 | 230 | 1.2.0-33 | 1002035 | -32 用户实测破案："拖到中间圆点不震、两边才震"=翻页一直在发生（震动是边界页反弹触觉）——翻页走 SBIconController selector 链（setCurrentIconListIndex:/scrollToIconListIndex:animated: 等，内部直接动画，绕过 scrollview pan 与 setContentOffset）。类级 hook SBIconController 四个翻页 selector（SPG-ICBLOCK），活动期丢弃非我方调用（sERSPGOwnJump 放行我方跳页）；至此翻页三路全封：pan 闸门+setContentOffset 封锁+图标控制器 selector 封锁 |
 | 231 | 1.2.0-34 | 1002036 | -33 实测仍翻页：COBLOCK 命中 setContentOffset: 但圆点仍动、ICBLOCK 四 selector 零调用=翻页走未知通道；本版 hook 圆点 setCurrentPage:（UIPageControl/_UIPageControl）活动期打印 backtrace（SPG-PCTRACE）定位真凶；并补私有变体 _setContentOffset: 封锁；心跳带挂载类计数 |
 | 232 | 1.2.0-35 | 1002037 | -34 实锤：PCTRACE 零输出=setCurrentPage: 零调用、ICBLOCK 挂载正常零命中（icoCls=1）→ 圆点位移不走 currentPage 通道；-35 升级探针：直接 hook 圆点指示器本体 _UIPageControlIndicatorContentView 的 setFrame:/setBounds:/setCenter: + setCurrentPage:/updateCurrentPageDisplay 旁路，圆点动一帧即打印 backtrace（只观察不拦截） |### 1.2.0-34 (1002036)
-- 定位翻页真凶：hook 页面圆点 setCurrentPage:（UIPageControl/_UIPageControl），胶囊活动期打印调用者 backtrace（SPG-PCTRACE），决定性证据定位未知翻页通道
+| 233 | 1.2.0-36 | 1002038 | -35 backtrace 实锤真凶：CallAssist.dylib（TweakInject 注入 SpringBoard 的通话助手整合插件）在布局遍历中直接 setFrame: 挪圆点，绕开 currentPage 属性与一切 selector 通道；-36 圆点焊死：胶囊活动期丢弃 _UIPageControlIndicatorContentView 的 setFrame:/setCenter:（SPG-PCBLOCK），我方跳页 sERSPGOwnJump 放行，setBounds 保持只观察 |- 定位翻页真凶：hook 页面圆点 setCurrentPage:（UIPageControl/_UIPageControl），胶囊活动期打印调用者 backtrace（SPG-PCTRACE），决定性证据定位未知翻页通道
 - 补漏：setContentOffset 封锁增加私有变体 _setContentOffset:（-33 实锤 COBLOCK 命中但圆点仍动）
 - 心跳日志带 ico/co 挂载类计数，确认 -33 四 selector 挂载状态
 ### 1.2.0-35 (1002037)
 - -34 探针结果：SPG-PCTRACE 零输出 → setCurrentPage: 从未被调用；心跳 icoCls=1 确认 SBIconController 四 selector 挂载正常但零命中
 - -35 升级：hook 圆点指示器本体 _UIPageControlIndicatorContentView 的 setFrame:/setBounds:/setCenter:，圆点位置变化直接打印调用者 backtrace；补 setCurrentPage:/updateCurrentPageDisplay 旁路；全部只观察不拦截
+### 1.2.0-36 (1002038)
+- -35 backtrace 决定性证据：圆点 frame 由 CallAssist.dylib 直接驱动（非系统、非本插件），解释 -33/-34 全部封锁无效
+- -36 圆点焊死：活动期丢弃圆点指示器的 setFrame:/setCenter:，无论谁推都动不了；松手恢复，我方跳页放行
