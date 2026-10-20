@@ -57,8 +57,14 @@ static void ERGestureWriteValue(NSString *key, NSInteger value) {
     notify_post(kERGestureReload.UTF8String);
 }
 
-static NSString *ERGestureValueText(NSInteger value) {
+// 1.2.0-40 · 最后一页是资源库：显示"资源库"而非"第N页"
+static NSString *ERGesturePageText(NSInteger value, NSInteger pageCount) {
+    if (value >= 1 && pageCount >= 1 && value == pageCount) return @"资源库";
     return value >= 1 ? [NSString stringWithFormat:@"第%ld页", (long)value] : @"无动作";
+}
+
+static NSString *ERGestureValueText(NSInteger value) {
+    return ERGesturePageText(value, ERGesturePageCount());
 }
 
 // 1.2.0-18 · 行标题取值修正：标题存在 specifier.name，propertyForKey:@"label"
@@ -144,7 +150,8 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     // 1.2.0-11 · 筛选：其它手势已占用的页不再出现（无动作恒可选）。
     for (NSInteger p = 1; p <= pageCount; p++) {
         if ([excludePages containsObject:@(p)]) continue;
-        [options addObject:[NSString stringWithFormat:@"第%ld页", (long)p]];
+        // 1.2.0-40 · 最后一页显示"资源库"
+        [options addObject:ERGesturePageText(p, pageCount)];
     }
 
     UIView *container = [[UIView alloc] initWithFrame:window.bounds];
