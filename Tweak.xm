@@ -33208,7 +33208,7 @@ static void ERSPGDotsRebuild(NSInteger pages) {
     for (NSInteger i = 0; i < n; i++) {
         UIView *d = [[UIView alloc] initWithFrame:CGRectMake(i * (ds + gap), 0, ds, ds)];
         d.layer.cornerRadius = ds / 2.0;
-        d.backgroundColor = [UIColor colorWithWhite:0 alpha:0.35];
+        d.backgroundColor = [UIColor colorWithWhite:1 alpha:0.45];
         d.userInteractionEnabled = NO;
         [sERSPGDotsView addSubview:d];
         [sERSPGDotItems addObject:d];
@@ -33329,7 +33329,7 @@ static void ERSPGDotsRefresh(void) {
             NSInteger hl = page % 3;   // 1.2.0-41 · 3 颗循环
             for (NSInteger i = 0; i < (NSInteger)sERSPGDotItems.count; i++) {
                 UIView *d = sERSPGDotItems[i];
-                d.backgroundColor = [UIColor colorWithWhite:0 alpha:(i == hl) ? 0.85 : 0.30];
+                d.backgroundColor = [UIColor colorWithWhite:1 alpha:(i == hl) ? 0.95 : 0.40];
                 d.transform = (i == hl) ? CGAffineTransformMakeScale(1.2, 1.2) : CGAffineTransformIdentity;
             }
         }
@@ -33400,42 +33400,12 @@ static SEL ERSPGGRAction(UIGestureRecognizer *g) {
 
 static CADisplayLink *sERSPGDotsLink = nil;
 
-// 1.2.0-38 · 胶囊守卫：功能开启期禁止任何人隐藏/淡出搜索胶囊（-37 实锤 CallAssist
-// 会把 SBHSearchPillView 藏掉导致胶囊彻底消失）。类级封锁 setHidden:YES / setAlpha:<1。
-static void ERSPGPillGuardHiddenHook(id self, SEL _cmd, BOOL h) {
-    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && h) return;
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, BOOL))o)(self, _cmd, h);
-}
-static void ERSPGPillGuardAlphaHook(id self, SEL _cmd, CGFloat a) {
-    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && a < 0.99) return;
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, CGFloat))o)(self, _cmd, a);
-}
-static void ERSPGAttachPillGuard(Class cls) {
-    if (!cls) return;
-    if (!gERSPGPCOrig) gERSPGPCOrig = [NSMutableDictionary new];
-    NSString *cn = NSStringFromClass(cls);
-    static NSMutableSet *sERSPGPillGuarded = nil;
-    if (!sERSPGPillGuarded) sERSPGPillGuarded = [NSMutableSet new];
-    if ([sERSPGPillGuarded containsObject:cls]) return;
-    [sERSPGPillGuarded addObject:cls];
-    struct { SEL sel; IMP imp; const char *types; } items[] = {
-        { @selector(setHidden:), (IMP)ERSPGPillGuardHiddenHook, "v@:B" },
-        { @selector(setAlpha:),  (IMP)ERSPGPillGuardAlphaHook,  "v@:f" },
-    };
-    int n = 0;
-    for (int i = 0; i < 2; i++) {
-        Method m = class_getInstanceMethod(cls, items[i].sel);
-        if (!m) continue;
-        IMP orig = method_getImplementation(m);
-        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
-        if (!gERSPGPCOrig[key]) gERSPGPCOrig[key] = [NSValue valueWithPointer:(void *)orig];
-        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types))
-            method_setImplementation(m, items[i].imp);
-        n++;
-    }
-    ERLogInfo(@"SPG-PILLGUARD attach cls=%@ n=%d", cn, n);
+// 1.2.0-49 · 显示守卫已移除（用户拍板）：-37 时代的 setHidden/setAlpha 封锁把系统
+// 的搜索借用流程卡死——进搜索时系统要把胶囊放大移到中部、返回时收回重摆，全被
+// 拦下 → 胶囊冻在放大后的空白状态 = 用户截图中的灰色长方形。防消失改由身份锁 +
+// SBRootFolderView 催重建机制兜底，系统对胶囊的显示管理完全放行。
+static void ERSPGAttachPillGuard(Class __unused cls) {
+    return;
 }
 
 // 1.2.0-43 · 单击手势挂载（每胶囊视图一次）+ 系统手势清单 dump
