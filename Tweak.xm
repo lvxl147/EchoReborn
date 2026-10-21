@@ -33508,20 +33508,15 @@ static void ERSPGSyncDots(BOOL enabled) {
                 }
             }
         }
-        // 1.2.0-51 · 兜底底板撤除（用户拍板"删掉"）：-50 的 layer 背景不是系统自带的，
-        // 且桌面态系统搜索胶囊本身不提供拖拽（系统控件固定底部）。回归纯原生：
-        // 胶囊保持系统 SBHSearchPillView 本体，无任何补绘外观，只留文字/图标/白圆点。
-        {
-            pill.layer.backgroundColor = nil;
-            pill.layer.cornerRadius = 0;
-            pill.layer.masksToBounds = NO;
-            // 1.2.0-52 · PILLCHAIN2 直落盘探针（C 方案，用户批准）：日志门/沙箱双失效，
-            // 改为直接写多个候选路径+NSLog 双保险，找胶囊视图链上有无被系统隐藏的真底板。
+        // 1.2.0-53 · 修正（用户截图实锤）：-51/-52 的 layer 清理三行在每次布局时把系统
+        // 画在胶囊 layer 上的原生底板抹掉——底板消失+拖动失效的根因。删除清理，
+        // 原生底板/拖动恢复；自绘白圆点保留（避开系统原生页点的震动）。
+        // 1.2.0-52 · PILLCHAIN2 直落盘探针（一次性，无害）：dump 胶囊视图链落盘留证。
             static BOOL sERPillChain2Dumped = NO;
             if (!sERPillChain2Dumped) {
                 sERPillChain2Dumped = YES;
                 @try {
-                    NSMutableString *erRep = [NSMutableString stringWithString:@"ER-PILLCHAIN2 v52\n"];
+                    NSMutableString *erRep = [NSMutableString stringWithString:@"ER-PILLCHAIN2 v53\n"];
                     UIView *v = pill;
                     int depth = 0;
                     while (v && depth < 8) {
@@ -33554,7 +33549,6 @@ static void ERSPGSyncDots(BOOL enabled) {
                     NSLog(@"[EchoReborn] PILLCHAIN2 exception");
                 }
             }
-        }
         // 1.2.0-43 · 点击进搜索（自挂单击转发系统 action）
         ERSPGAttachPillTap(pill);
         if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
