@@ -273,3 +273,7 @@
 ## 1.2.0-61
 - 与乌贼手势（SquidGesturePro 2.7.6-2）共存：拆包实锤其主屏幕下划按底部左/中/右分区判定，与胶囊触发区重叠。① 触发区收回胶囊本体（撤销 -58 外扩，外扩带正压其起手带）；② 手势开关关时 pan/touches 全通道完全透传（pan began/TouchArm/TouchRelease 补 Enabled 前置检查，不再压 pager/记闸门）；③ pan delegate 本就声明同时识别（-8 已有），松手才动作不变
 - 修设置页不显示「文件夹」：根因=设置进程缓存旧代码，装机脚本 kill Settings 没杀到真正的 Preferences 进程，补 killall Preferences
+
+## 1.2.0-62
+- 乌贼冲突硬修复：window pan 创建时 cancelsTouchesInView/delaysTouchesBegan/delaysTouchesEnded 全关——pan 识别成功后默认向视图发 touchesCancelled，起手在胶囊内的乌贼下划收不到 touchesEnded 即死（-61 透传修复未覆盖此机制）
+- 下拉框打开加诊断日志（code=-62 level1=3）：定位"设置只显示两项"是加载旧代码还是渲染问题
