@@ -252,3 +252,7 @@
 - 触发区改「中心圆」：主胶囊/帧列表均以中心点 r=18pt 判定（pan 起手+手势闸门两处），两端空白不再触发
 - 下拉框新增「负一屏」选项（值 -1）：Tweak 放行 -1，候选链探测今天视图跳转入口，未命中一次性 dump 方法表落盘 er_todayprobe.txt
 - 下拉按钮左内边距 10→3pt，「第10/12/13页」完整显示
+
+## 1.2.0-57
+- 触发区改「整个胶囊」：-56 中心圆 r18 用户实测偏窄触发难，改矩形包含判定（胶囊 frame 内任意一点起手，四方向滑均触发；主胶囊+帧列表两处同步，无外扩无内缩）
+- 负一屏修复：er_todayprobe.txt 实锤真正入口 SBIconController activateTodayViewWithCompletion:（1 参 block，nil completion 安全），置于候选链首位，原 8 候选保留兜底
