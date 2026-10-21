@@ -53,6 +53,17 @@ jobs:
       #   （run 38014441895 三连失败实证；此前 v166-170 均因 theos 上游有新提交、缓存
       #   key 变化走未命中路径而侥幸通过）。这里用 origin/main 修复 update 步骤，
       #   其余（cache key 格式 / brew 依赖 / checkout 结构）与 v2.4.6 逐项对齐。
+      - name: Source fingerprint (diag 1.2.0-47)
+        run: |
+          set -euo pipefail
+          echo "=== FINGERPRINT ==="
+          git rev-parse HEAD
+          grep -m1 '^Version' control || true
+          echo -n 'PILLLOCK count: '; grep -c 'SPG-PILLLOCK' Tweak.xm || true
+          echo -n 'SVSTALE count: '; grep -c 'SPG-SVSTALE' Tweak.xm || true
+          shasum Tweak.xm control
+          echo "=== END FINGERPRINT ==="
+
       - name: Theos environment
         run: echo "THEOS=${{ github.workspace }}/theos" >> $GITHUB_ENV
 
