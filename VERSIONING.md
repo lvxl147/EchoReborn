@@ -210,3 +210,9 @@
 - 滚动视图必须挂在主屏窗口，失效即重扫（修翻页无圆点），SPG-SVBAD 记录
 - 原生壳恢复：searchAffordanceBackgroundView 存在则恢复显示并退役自绘底；自绘底降级为兜底；SPG-PILLTREE 一次性 dump 子视图树
 - 翻页藏字逻辑豁免原生底
+
+### 1.2.0-47 (1002049)
+- 胶囊身份锁：只认"底部小胶囊"（窗口高度≤44pt 且位于屏幕底部 1/4，SPG-PILLLOCK acquired）；已锁实例存活时扫描直接复用不重扫，锁失效（搜索借用/移除）时不另寻新欢，只催 SBRootFolderView 重建（-46 日志实锤第二次点击后追踪实例被切成搜索层大胶囊 frame {8,496,414,48}）
+- 原生底主动挂载：MTMaterialView 不在 pill 内/frame 为空/被藏时直接 insertSubview atIndex:0 + 铺满 bounds + 复显（-46 实锤 getter 返回成功但视觉无效），SPG-PILLBG 诊断含 frame/superview/remount
+- 翻页双判据：offset 变化 + 页控件 currentPage 轮询；currentPage 变而 offset 不动判 sv 失联重扫（SPG-SVSTALE），修 ox 变化但 dAlpha=0 的圆点不亮
+- DOTSSTATE 探针加 cur/lock 字段；syncDots 只维护被锁定实例
