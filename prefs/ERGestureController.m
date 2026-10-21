@@ -40,21 +40,42 @@ static NSInteger ERGesturePageCount(void) {
     return 10;   // SpringBoard 还没写过（respring 后首开）时的兜底
 }
 
-static NSInteger ERGestureReadValue(NSString *key) {
-    CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
-    Boolean ok = NO;
-    CFIndex v = CFPreferencesGetAppIntegerValue((__bridge CFStringRef)key,
-                                                (__bridge CFStringRef)kERGestureSuite, &ok);
-    if (!ok) return 0;
-    return (NSInteger)v;
+// 1.2.0-59 · 值升级为原始串：数字（CFNumber，旧版兼容）或 "folder:<id>"（CFString）
+static NSString *ERGestureReadValue(NSString *key) {
+    @try {
+        CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
+        CFTypeRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                (__bridge CFStringRef)kERGestureSuite);
+        if (!v) return @"0";
+        id obj = (__bridge_transfer id)v;
+        if ([obj isKindOfClass:[NSString class]]) return obj;
+        if ([obj isKindOfClass:[NSNumber class]]) return [obj stringValue];
+    } @catch (__unused NSException *e) {}
+    return @"0";
 }
 
-static void ERGestureWriteValue(NSString *key, NSInteger value) {
-    CFPreferencesSetAppValue((__bridge CFStringRef)key,
-                             (__bridge CFNumberRef)@(value),
-                             (__bridge CFStringRef)kERGestureSuite);
+static void ERGestureWriteValue(NSString *key, NSString *val) {
+    if (![val hasPrefix:@"folder:"]) {
+        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFNumberRef)@([val integerValue]),
+                                 (__bridge CFStringRef)kERGestureSuite);
+    } else {
+        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)val,
+                                 (__bridge CFStringRef)kERGestureSuite);
+    }
     CFPreferencesAppSynchronize((__bridge CFStringRef)kERGestureSuite);
     notify_post(kERGestureReload.UTF8String);
+}
+
+// 1.2.0-59 · 文件夹显示名：读 Tweak 落盘的 er_folders.plist（ctor 后 20s 生成）
+static NSString *ERGestureFolderName(NSString *fid) {
+    @try {
+        NSArray<NSDictionary *> *arr = [NSArray arrayWithContentsOfFile:
+            @"/var/mobile/Documents/er_folders.plist"];
+        for (NSDictionary *d in arr)
+            if ([d[@"id"] isKindOfClass:[NSString class]] && [d[@"id"] isEqualToString:fid])
+                return d[@"name"] ?: @"文件夹";
+    } @catch (__unused NSException *e) {}
+    return @"文件夹";
 }
 
 // 1.2.0-40 · 最后一页是资源库：显示"资源库"而非"第N页"
@@ -65,8 +86,10 @@ static NSString *ERGesturePageText(NSInteger value, NSInteger pageCount) {
     return value >= 1 ? [NSString stringWithFormat:@"第%ld页", (long)value] : @"无动作";
 }
 
-static NSString *ERGestureValueText(NSInteger value) {
-    return ERGesturePageText(value, ERGesturePageCount());
+// 1.2.0-59 · 值文本：folder: 前缀显示文件夹名，其余走页码文本
+static NSString *ERGestureValueText(NSString *raw) {
+    if ([raw hasPrefix:@"folder:"]) return ERGestureFolderName([raw substringFromIndex:7]);
+    return ERGesturePageText(raw.integerValue, ERGesturePageCount());
 }
 
 // 1.2.0-18 · 行标题取值修正：标题存在 specifier.name，propertyForKey:@"label"
@@ -140,24 +163,15 @@ static NSString *ERSpecLabel(PSSpecifier *spec) {
 
 #pragma mark - 下拉浮层
 
-static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
-                                  NSArray<NSNumber *> *excludePages,
+static void ERGestureShowDropdown(UIButton *anchor,
+                                  NSArray<NSString *> *options,
+                                  NSString *current,
                                   void (^onPick)(NSInteger idx)) {
     UIWindow *window = anchor.window;
     if (!window) return;
 
     CGRect anchorRect = [anchor convertRect:anchor.bounds toView:window];
-    NSInteger pageCount = ERGesturePageCount();
-    NSMutableArray<NSString *> *options = [NSMutableArray arrayWithObject:@"无动作"];
-    // 1.2.0-56 · idx 1 = 负一屏（值 -1），其后才是页码序列
-    [options addObject:@"负一屏"];
-    // 1.2.0-11 · 筛选：其它手势已占用的页不再出现（无动作恒可选）。
-    for (NSInteger p = 1; p <= pageCount; p++) {
-        if ([excludePages containsObject:@(p)]) continue;
-        // 1.2.0-40 · 最后一页显示"资源库"
-        [options addObject:ERGesturePageText(p, pageCount)];
-    }
-
+    // 1.2.0-59 · 选项列表由调用方构造（两级菜单各自传）
     UIView *container = [[UIView alloc] initWithFrame:window.bounds];
     container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     container.alpha = 0.0;
@@ -405,7 +419,7 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     PSSpecifier *spec = objc_getAssociatedObject(self, @selector(_erGestureKey));
     NSString *key = [self _erGestureKey];
     if (!spec || !key.length) return;
-    // 1.2.0-11 · 筛选：收集其余三个手势已占用的页码，本下拉框不再提供。
+    // 1.2.0-11 · 筛选：收集其余三个手势已占用的页码，页码子菜单不再提供。
     NSArray<NSString *> *allKeys = @[@"HomeScreen.SearchPill.GestureUp",
                                      @"HomeScreen.SearchPill.GestureDown",
                                      @"HomeScreen.SearchPill.GestureLeft",
@@ -413,26 +427,69 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     NSMutableArray<NSNumber *> *taken = [NSMutableArray array];
     for (NSString *k in allKeys) {
         if ([k isEqualToString:key]) continue;
-        NSInteger v = ERGestureReadValue(k);
+        // 1.2.0-59 · 值是原始串，folder: 不占页码
+        NSString *raw = ERGestureReadValue(k);
+        if ([raw hasPrefix:@"folder:"]) continue;
+        NSInteger v = raw.integerValue;
         if (v >= 1) [taken addObject:@(v)];
     }
     __weak typeof(self) wself = self;
-    ERGestureShowDropdown(_valueButton, ERGestureValueText(ERGestureReadValue(key)), taken, ^(NSInteger idx) {
-        // 1.2.0-56 · idx 0=无动作，idx 1=负一屏(-1)，idx≥2 取「可选页序列」第 idx-2 项。
-        NSInteger page = 0;
-        if (idx == 1) {
-            page = -1;
-        } else if (idx >= 2) {
+    UIButton *btn = _valueButton;
+
+    // 1.2.0-59 · 两级下拉（用户拍板）：一级=无动作/桌面页›/文件夹›（›=子菜单标识，
+    // 必须再选一次才落到具体值）；二级=页码序列（负一屏+各页，末页资源库）或文件夹列表。
+    void (^pick)(NSInteger) = ^(NSInteger idx) {
+        if (idx == 0) {   // 无动作
+            ERGestureWriteValue(key, @"0");
+            [wself _erRefreshValue];
+            return;
+        }
+        if (idx == 1) {   // 桌面页 ›
             NSInteger cnt = ERGesturePageCount();
+            NSMutableArray<NSString *> *opts = [NSMutableArray arrayWithObject:@"负一屏"];
             NSMutableArray<NSNumber *> *avail = [NSMutableArray array];
             for (NSInteger p = 1; p <= cnt; p++) {
-                if (![taken containsObject:@(p)]) [avail addObject:@(p)];
+                if (![taken containsObject:@(p)]) {
+                    [avail addObject:@(p)];
+                    [opts addObject:ERGesturePageText(p, cnt)];
+                }
             }
-            if (idx - 2 < (NSInteger)avail.count) page = avail[idx - 2].integerValue;
+            [ERGestureShowDropdown(btn, opts,
+                                   ERGestureValueText(ERGestureReadValue(key)),
+                                   ^(NSInteger i2) {
+                NSString *val = (i2 == 0) ? @"-1"
+                    : (i2 - 1 < (NSInteger)avail.count ? avail[i2 - 1].stringValue : @"0");
+                ERGestureWriteValue(key, val);
+                [wself _erRefreshValue];
+            });
+            return;
         }
-        ERGestureWriteValue(key, page);
-        [wself _erRefreshValue];
-    });
+        // 文件夹 ›：读 Tweak 落盘的列表
+        NSArray<NSDictionary *> *folders = [NSArray arrayWithContentsOfFile:
+            @"/var/mobile/Documents/er_folders.plist"];
+        NSMutableArray<NSString *> *names = [NSMutableArray array];
+        NSMutableArray<NSString *> *ids = [NSMutableArray array];
+        for (NSDictionary *d in folders) {
+            NSString *fid = d[@"id"];
+            if (![fid isKindOfClass:[NSString class]] || !fid.length) continue;
+            [ids addObject:fid];
+            [names addObject:(d[@"name"] ?: fid)];
+        }
+        if (!ids.count) {
+            [names removeAllObjects];
+            [names addObject:@"未获取到（respring 后重试）"];
+        }
+        [ERGestureShowDropdown(btn, names,
+                               ERGestureValueText(ERGestureReadValue(key)),
+                               ^(NSInteger i2) {
+            if (i2 < (NSInteger)ids.count) {
+                ERGestureWriteValue(key, [@"folder:" stringByAppendingString:ids[i2]]);
+                [wself _erRefreshValue];
+            }
+        });
+    };
+    ERGestureShowDropdown(btn, @[@"无动作", @"桌面页 ›", @"文件夹 ›"],
+                          ERGestureValueText(ERGestureReadValue(key)), pick);
 }
 
 @end
