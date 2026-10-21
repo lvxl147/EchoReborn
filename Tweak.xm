@@ -32205,7 +32205,7 @@ static BOOL ERSPGJumpToToday(void) {
             SEL s = NSSelectorFromString(sn);
             BOOL oneArg = [sn hasSuffix:@":"];
             if (ico && [(id)ico respondsToSelector:s]) {
-                ERLogInfo(@"SPG-TODAY hit %@ on %@", sn, NSStringFromClass(ico.class));
+                ERLogInfo(@"SPG-TODAY hit %@ on %@", sn, NSStringFromClass(object_getClass(ico)));
                 if (oneArg) ((void (*)(id, SEL, BOOL))objc_msgSend)(ico, s, YES);
                 else ((void (*)(id, SEL))objc_msgSend)(ico, s);
                 return YES;
