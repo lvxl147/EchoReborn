@@ -32197,7 +32197,11 @@ static BOOL ERSPGJumpToToday(void) {
     @try {
         id ico = ERSPGIconController();
         static NSArray<NSString *> *sERSels = nil;
-        if (!sERSels) sERSels = @[@"goToTodayView", @"showTodayView", @"_showTodayView",
+        // 1.2.0-57 · 探针（er_todayprobe.txt）实锤真正入口：activateTodayViewWithCompletion:
+        //（SBIconController 实例方法，1 参 block；nil completion 安全）。置于候选链首位，
+        // 原 8 个候选保留兜底。
+        if (!sERSels) sERSels = @[@"activateTodayViewWithCompletion:",
+                                  @"goToTodayView", @"showTodayView", @"_showTodayView",
                                   @"presentTodayView", @"_presentTodayView",
                                   @"_showTodayViewIfPossible",
                                   @"setShowingTodayView:", @"_setShowingTodayView:"];
@@ -32206,7 +32210,9 @@ static BOOL ERSPGJumpToToday(void) {
             BOOL oneArg = [sn hasSuffix:@":"];
             if (ico && [(id)ico respondsToSelector:s]) {
                 ERLogInfo(@"SPG-TODAY hit %@ on %@", sn, NSStringFromClass(object_getClass(ico)));
-                if (oneArg) ((void (*)(id, SEL, BOOL))objc_msgSend)(ico, s, YES);
+                if ([sn isEqualToString:@"activateTodayViewWithCompletion:"])
+                    ((void (*)(id, SEL, id))objc_msgSend)(ico, s, nil);   // block 参数传 nil
+                else if (oneArg) ((void (*)(id, SEL, BOOL))objc_msgSend)(ico, s, YES);
                 else ((void (*)(id, SEL))objc_msgSend)(ico, s);
                 return YES;
             }
@@ -32323,12 +32329,10 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                // 1.2.0-56 · 触发区改"中心圆"（用户拍板）：以胶囊中心为圆心 r=18pt，
-                // 只按胶囊中间才武装手势，两端空白不再触发；触发距离保持 20pt。
-                CGPoint erc = CGPointMake(CGRectGetMidX(sERSPGPillWinFrame),
-                                          CGRectGetMidY(sERSPGPillWinFrame));
+                // 1.2.0-57 · 触发区改"整个胶囊"（用户拍板）：起手点落在胶囊
+                // frame 内任意一点即可四方向滑动触发；不再外扩也不内缩。
                 inside = !CGRectIsEmpty(sERSPGPillWinFrame) &&
-                         hypot(p.x - erc.x, p.y - erc.y) <= 18.0;
+                         CGRectContainsPoint(sERSPGPillWinFrame, p);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
                     // 实锤胶囊区域触摸到底落在哪个视图（系统行为载体定位）。
@@ -32850,17 +32854,15 @@ static void ERSPGAttachGRGate(Class cls) {
               orig ? @"yes" : @"no");
 }
 
-// 1.2.0-56 · 命中判定改"中心圆"：主胶囊帧与帧列表均以中心点 r=18pt 判定。
+// 1.2.0-57 · 命中判定改"整个胶囊"：主胶囊帧与帧列表均为矩形包含判定
+//（-56 中心圆 r=18 触发太窄，用户要求胶囊内任意一点起手都能触发）。
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
-        CGPoint c0 = CGPointMake(CGRectGetMidX(sERSPGPillWinFrame),
-                                 CGRectGetMidY(sERSPGPillWinFrame));
         if (!CGRectIsEmpty(sERSPGPillWinFrame) &&
-            hypot(wp.x - c0.x, wp.y - c0.y) <= 18.0) return YES;
+            CGRectContainsPoint(sERSPGPillWinFrame, wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
             CGRect f = e.CGRectValue;
-            CGPoint c = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
-            if (!CGRectIsEmpty(f) && hypot(wp.x - c.x, wp.y - c.y) <= 18.0) return YES;
+            if (!CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) return YES;
         }
     } @catch (__unused NSException *e) {}
     return NO;
