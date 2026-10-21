@@ -33508,6 +33508,43 @@ static void ERSPGSyncDots(BOOL enabled) {
                 }
             }
         }
+        // 1.2.0-50 · 兜底底板（用户批准 A 方案）：给原生胶囊自身 layer 补胶囊形背景。
+        // 不新建、不替换视图——SBHSearchPillView 还是系统那个对象，点击/拖拽/其他插件
+        // 调用全部走原生流程，只补它本该有但系统在桌面态没建出来的背景外观。
+        {
+            CGFloat erh = pill.bounds.size.height;
+            if (erh < 8) erh = 40;
+            pill.layer.cornerRadius = erh / 2.0;
+            pill.layer.masksToBounds = YES;
+            BOOL erDark = (UIScreen.mainScreen.traitCollection.userInterfaceStyle
+                           == UIUserInterfaceStyleDark);
+            UIColor *erBg = erDark ? [UIColor colorWithWhite:0.16 alpha:0.85]
+                                   : [UIColor colorWithWhite:0.96 alpha:0.92];
+            pill.layer.backgroundColor = erBg.CGColor;
+            // SPG-PILLCHAIN 一次性探针：dump superview 链各层背景/圆角（找系统底板真身）
+            static BOOL sERPillChainDumped = NO;
+            if (!sERPillChainDumped) {
+                sERPillChainDumped = YES;
+                @try {
+                    UIView *v = pill;
+                    int depth = 0;
+                    while (v && depth < 8) {
+                        unsigned int sub = 0;
+                        for (UIView *c in v.subviews) sub++;
+                        ERLogInfo(@"SPG-PILLCHAIN d%d %@ frame=%@ bg=%@ corner=%.1f hidden=%d subviews=%lu",
+                                  depth, NSStringFromClass(v.class),
+                                  NSStringFromCGRect(v.frame),
+                                  v.layer.backgroundColor ? @"yes" : @"nil",
+                                  v.layer.cornerRadius,
+                                  v.hidden ? 1 : 0, (unsigned long)sub);
+                        v = v.superview;
+                        depth++;
+                    }
+                } @catch (__unused NSException *e) {
+                    ERLogInfo(@"SPG-PILLCHAIN exception");
+                }
+            }
+        }
         // 1.2.0-43 · 点击进搜索（自挂单击转发系统 action）
         ERSPGAttachPillTap(pill);
         if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
