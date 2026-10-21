@@ -33150,7 +33150,8 @@ static void ERSPGAttachPCBlock(Class cls) {
 // 换算（page = round(offset.x/页宽)），CADisplayLink 常驻驱动，无 KVO 生命周期风险。
 static UIView *sERSPGDotsView = nil;
 static NSMutableArray<UIView *> *sERSPGDotItems = nil;
-static UIView *sERSPGPillBg = nil;   // 1.2.0-41 自绘胶囊底（系统底色被折腾没了，只剩"搜索"label）
+static UIView *sERSPGPillBg = nil;
+static __weak UIView *sERSPGNativeBg = nil;   // 1.2.0-46 系统原生胶囊底色视图   // 1.2.0-41 自绘胶囊底（系统底色被折腾没了，只剩"搜索"label）
 static __weak UIScrollView *sERSPGIconSVRef = nil;
 static NSInteger sERSPGDotsPage = -1;
 static NSInteger sERSPGDotsPages = -1;
@@ -33283,7 +33284,7 @@ static void ERSPGDotsRefresh(void) {
             UIView *pillH = sERSPGPillRef;
             if (pillH) {
                 for (UIView *v in pillH.subviews) {
-                    if (v == sERSPGDotsView || v == sERSPGPillBg) continue;
+                    if (v == sERSPGDotsView || v == sERSPGPillBg || v == sERSPGNativeBg) continue;
                     if (v.hidden != pagingActive) v.hidden = pagingActive;
                 }
             }
@@ -33439,6 +33440,17 @@ static void ERSPGSyncDots(BOOL enabled) {
         }
         UIView *pill = sERSPGPillRef;
         if (!pill) return;
+        // 1.2.0-46 · 失效校验：父视图被藏 = 系统借用未归还的残局实例（-45 实锤），
+        // 维护它没有意义，等扫描换真胶囊。SPG-PILLBAD 记录（5s 节流）。
+        if (pill.superview && pill.superview.hidden) {
+            static NSTimeInterval sERLastPBad = 0;
+            NSTimeInterval npb = [[NSDate date] timeIntervalSince1970];
+            if (npb - sERLastPBad > 5.0) {
+                sERLastPBad = npb;
+                ERLogInfo(@"SPG-PILLBAD tracked pill invalid sv=%@ hidden — skip", NSStringFromClass(pill.superview.class));
+            }
+            return;
+        }
         // 守卫挂载必须最前（不依赖 window/scrollview）：
         // -38 日志实锤守卫被前置条件卡死（胶囊被藏后 pill.window 为空直接 return，
         // 守卫永远没机会挂 → 胶囊彻底消失）。先封死 setHidden/setAlpha 再谈其他。
@@ -33453,6 +33465,41 @@ static void ERSPGSyncDots(BOOL enabled) {
             pill.userInteractionEnabled = YES;
             ERLogInfo(@"SPG-PILL userInteraction restored");
         }
+        // 1.2.0-46 · 原生壳恢复：SBHSearchPillView.searchAffordanceBackgroundView
+        // 是系统胶囊底色（-44 方法表实锤）。在则恢复显示并退役自绘底；不在则
+        // 自绘底继续兜底。SPG-PILLTREE 一次性 dump 子视图树供验证。
+        {
+            static BOOL sERPTreeDumped = NO;
+            if (!sERPTreeDumped) {
+                sERPTreeDumped = YES;
+                NSMutableString *tr = [NSMutableString string];
+                for (UIView *v in pill.subviews) {
+                    [tr appendFormat:@"%@[h%d,a%.1f,f=%@] ", NSStringFromClass(v.class),
+                     v.hidden ? 1 : 0, v.alpha, NSStringFromCGRect(v.frame)];
+                }
+                ERLogInfo(@"SPG-PILLTREE %@", tr);
+            }
+            UIView *nativeBg = nil;
+            if ([pill respondsToSelector:@selector(searchAffordanceBackgroundView)])
+                nativeBg = ((UIView *(*)(id, SEL))objc_msgSend)(pill, @selector(searchAffordanceBackgroundView));
+            BOOL nativeOk = NO;
+            if (nativeBg && nativeBg.superview == pill) {
+                if (nativeBg.hidden) nativeBg.hidden = NO;
+                if (nativeBg.alpha < 0.99) nativeBg.alpha = 1.0;
+                nativeOk = !nativeBg.hidden && nativeBg.alpha >= 0.99;
+            }
+            sERSPGNativeBg = nativeOk ? nativeBg : nil;
+            static BOOL sERLoggedNative = NO;
+            if (nativeOk && !sERLoggedNative) {
+                sERLoggedNative = YES;
+                ERLogInfo(@"SPG-PILLBG native restored cls=%@", NSStringFromClass(nativeBg.class));
+            }
+            if (nativeOk && sERSPGPillBg) {
+                [sERSPGPillBg removeFromSuperview];
+                sERSPGPillBg = nil;
+            }
+        }
+        if (!sERSPGNativeBg) {
         // 1.2.0-41 · 自绘胶囊底：-40 截图+PILLSTATE 实锤胶囊视图健康（hidden=0
         // alpha=1）但用户只看到"搜索"label——系统的胶囊底色层被折腾没了。我们
         // 自己画一层圆角底插在最底层，常驻不参与 3s 淡出，不依赖系统背景。
@@ -33470,9 +33517,24 @@ static void ERSPGSyncDots(BOOL enabled) {
             sERSPGPillBg.frame = CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height);
             sERSPGPillBg.layer.cornerRadius = pill.bounds.size.height / 2.0;
         }
+        }
         // 1.2.0-43 · 点击进搜索（自挂单击转发系统 action）
         ERSPGAttachPillTap(pill);
         if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
+        // 1.2.0-46 · 滚动视图失效校验：必须在主屏窗口内（-45 实锤搜索借用会把
+        // 引用搞失效，offset 恒死导致圆点永不出现）
+        if (sERSPGIconSVRef &&
+            (![NSStringFromClass(sERSPGIconSVRef.window.class) containsString:@"HomeScreen"])) {
+            static NSTimeInterval sERLastSVBad = 0;
+            NSTimeInterval nsb = [[NSDate date] timeIntervalSince1970];
+            if (nsb - sERLastSVBad > 5.0) {
+                sERLastSVBad = nsb;
+                ERLogInfo(@"SPG-SVBAD drop sv=%@ win=%@",
+                          NSStringFromClass(sERSPGIconSVRef.class),
+                          sERSPGIconSVRef.window ? NSStringFromClass(sERSPGIconSVRef.window.class) : @"(nil)");
+            }
+            sERSPGIconSVRef = nil;
+        }
         if (!sERSPGIconSVRef) return;
         // 圆点视图挂进胶囊内部（1.2.0-38 用户规格：翻页时胶囊里面变圆点）
         if (!sERSPGDotsView) {
@@ -33935,6 +33997,10 @@ static void ERSPGScanTick(void) {
         // 1.2.0-16 · 日志里存在两个 SBHSearchPillView（一个离屏旧实例 @-31,-15、
         // 一个当前胶囊 @24,13）——不能"命中即止"，优先挂完全落在父视图 bounds
         // 内的实例；找不到屏内命中才退回第一个候选。
+        // 1.2.0-46 · 失效校验：-45 实锤点击搜索返回后，桌面真胶囊被系统"借用"
+        // 未归还，扫描会命中一个父视图 hidden=1 的搜索层胶囊副本（追踪它=全面
+        // 消失）。父视图隐藏的候选不再追踪，改为触发 SBRootFolderView 重排版
+        // 催系统重建桌面胶囊。
         UIView *erFallback = nil;
         for (UIView *root in roots) {
             NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
@@ -33945,16 +34011,51 @@ static void ERSPGScanTick(void) {
                 if (ERSPGLooksLikePill(v)) {
                     CGRect f = v.frame;
                     CGRect pb = v.superview.bounds;
+                    BOOL parentOk = v.superview && !v.superview.hidden;
                     BOOL onscreen = !CGRectIsNull(pb) && f.origin.x >= -1.0 && f.origin.y >= -1.0 &&
                                     CGRectGetMaxX(f) <= CGRectGetWidth(pb) + 1.0 &&
                                     CGRectGetMaxY(f) <= CGRectGetHeight(pb) + 1.0;
-                    if (onscreen) { ERSPGConfigurePill(v); return; }
+                    if (onscreen && parentOk) { ERSPGConfigurePill(v); goto erScanDone; }
+                    if (onscreen && !parentOk) {
+                        static NSTimeInterval sERLastBad = 0;
+                        NSTimeInterval nbad = [[NSDate date] timeIntervalSince1970];
+                        if (nbad - sERLastBad > 5.0) {
+                            sERLastBad = nbad;
+                            ERLogInfo(@"SPG-PILLBAD skip cls=%@ sv=%@ svHidden=%d frame=%@",
+                                      NSStringFromClass(v.class),
+                                      NSStringFromClass(v.superview.class),
+                                      v.superview.hidden ? 1 : 0, NSStringFromCGRect(f));
+                        }
+                        continue;   // 失效候选：不追踪，继续扫（可能还有别的实例）
+                    }
                     if (!erFallback) erFallback = v;
                 }
                 [stack addObjectsFromArray:v.subviews];
             }
         }
-        if (erFallback) { ERSPGConfigurePill(erFallback); return; }
+        if (erFallback && !erFallback.superview.hidden) { ERSPGConfigurePill(erFallback); goto erScanDone; }
+        {
+            // 全部候选失效/没找到：每 5s 催一次系统重排版（重建桌面胶囊 accessory）
+            static NSTimeInterval sERLastCoax = 0;
+            NSTimeInterval ncoax = [[NSDate date] timeIntervalSince1970];
+            if (ncoax - sERLastCoax > 5.0) {
+                sERLastCoax = ncoax;
+                BOOL coaxed = NO;
+                for (UIWindow *w in ERAllApplicationWindows()) {
+                    NSMutableArray *st2 = [NSMutableArray arrayWithObject:w];
+                    while (st2.count) {
+                        UIView *v2 = st2.lastObject; [st2 removeLastObject];
+                        if ([NSStringFromClass(v2.class) isEqualToString:@"SBRootFolderView"]) {
+                            [v2 setNeedsLayout];
+                            coaxed = YES;
+                        }
+                        [st2 addObjectsFromArray:v2.subviews];
+                    }
+                }
+                if (coaxed) ERLogInfo(@"SPG-PILLBAD coax relayout (no valid pill candidate)");
+            }
+        }
+        erScanDone:;
         // 1.2.0-7 · 诊断：整轮没找到胶囊，30s 节流记一条（区分「没找到胶囊」与
         // 「找到了但手势没触发」）。1.2.0-14 · 同时 dump 尺寸落在胶囊区间内的候选
         // 类名（类名特征没匹配上 → 拿真实类名修 ERSPGLooksLikePill）。
