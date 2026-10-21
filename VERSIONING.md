@@ -216,3 +216,5 @@
 - 原生底主动挂载：MTMaterialView 不在 pill 内/frame 为空/被藏时直接 insertSubview atIndex:0 + 铺满 bounds + 复显（-46 实锤 getter 返回成功但视觉无效），SPG-PILLBG 诊断含 frame/superview/remount
 - 翻页双判据：offset 变化 + 页控件 currentPage 轮询；currentPage 变而 offset 不动判 sv 失联重扫（SPG-SVSTALE），修 ox 变化但 dAlpha=0 的圆点不亮
 - DOTSSTATE 探针加 cur/lock 字段；syncDots 只维护被锁定实例
+
+- (rebuild) trigger fresh CI run: first run 39543525655 artifact compiled -46 source despite head e295cd
