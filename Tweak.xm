@@ -32553,6 +32553,13 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
     @try {
         static NSInteger sERPanN = 0;
         if (gesture.state == UIGestureRecognizerStateBegan) {
+            // 1.2.0-61 · 手势开关关 → 完全不出手（不压 pager、不记闸门、不判区）
+            if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) {
+                objc_setAssociatedObject(gesture, @selector(erPanInPill), @NO, OBJC_ASSOCIATION_RETAIN);
+                objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
+                objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @"", OBJC_ASSOCIATION_RETAIN);
+                return;
+            }
             UIView *pill = sERSPGPillRef;
             BOOL inside = NO;
             if (pill.window) {
@@ -32560,10 +32567,10 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                // 1.2.0-58 · 触发区=整个可见玻璃（用户实测落点实锤）：可见底板比逻辑帧
-                // 大一圈（上 11.3/下 2.3/左 2.6pt），矩形外扩 左右+4 上下+12 全覆盖。
+                // 1.2.0-61 · 触发区收回胶囊本体（与乌贼手势共存：撤销 -58 的
+                // 左右+4/上下+12 外扩——外扩带正压乌贼底部下划起手区）
                 inside = !CGRectIsEmpty(sERSPGPillWinFrame) &&
-                         CGRectContainsPoint(CGRectInset(sERSPGPillWinFrame, -4.0, -12.0), p);
+                         CGRectContainsPoint(sERSPGPillWinFrame, p);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
                     // 实锤胶囊区域触摸到底落在哪个视图（系统行为载体定位）。
@@ -32661,6 +32668,8 @@ static BOOL ERSPGShouldFire(void) {
 // 待跳页码，松手（Ended）才真正跳页。
 static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
     @try {
+        // 1.2.0-61 · 手势开关关 → touches 通道完全透传
+        if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) return;
         CGPoint d = CGPointMake(end.x - start.x, end.y - start.y);
         if (hypot(d.x, d.y) < ERSPGTriggerRange()) return;
         if (!ERSPGShouldFire()) return;
@@ -32682,6 +32691,12 @@ static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
 // 松手跳页：pending 页码落地；未达标但松手时已够范围（快速轻扫）直接触发。
 static void ERSPGTouchRelease(UITouch *touch, CGPoint start, CGPoint end) {
     @try {
+        // 1.2.0-61 · 手势开关关 → 完全透传
+        if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) {
+            [gERSPGTouchPending removeObjectForKey:
+                [NSValue valueWithNonretainedObject:touch]];
+            return;
+        }
         NSValue *tv = [NSValue valueWithNonretainedObject:touch];
         NSString *pending = gERSPGTouchPending[tv];
         if (pending) {
@@ -33083,16 +33098,15 @@ static void ERSPGAttachGRGate(Class cls) {
               orig ? @"yes" : @"no");
 }
 
-// 1.2.0-58 · 命中判定=整个可见玻璃：矩形外扩 左右+4pt 上下+12pt（-57 实测：
-// 失灵触点均在逻辑帧外 2.3~11.3pt，玻璃可见底板比逻辑帧大一圈）。
+// 1.2.0-61 · 命中判定收回胶囊本体：矩形包含判定（撤销 -58 外扩，与乌贼手势共存）
 // 主胶囊帧与帧列表同步；inset 参数保留但忽略。
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
         if (!CGRectIsEmpty(sERSPGPillWinFrame) &&
-            CGRectContainsPoint(CGRectInset(sERSPGPillWinFrame, -4.0, -12.0), wp)) return YES;
+            CGRectContainsPoint(sERSPGPillWinFrame, wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
             CGRect f = e.CGRectValue;
-            if (!CGRectIsEmpty(f) && CGRectContainsPoint(CGRectInset(f, -4.0, -12.0), wp)) return YES;
+            if (!CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) return YES;
         }
     } @catch (__unused NSException *e) {}
     return NO;
