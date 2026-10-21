@@ -224,3 +224,14 @@
 - SPG-PILLIVAR 一次性探针：dump SBHSearchPillView 全部 UIView 类型 ivar（定位系统底板真身）
 - 页数上限 12→24：-47 日志实锤桌面 14 页被旧上限拦截 return——ox 变化而 dAlpha 恒 0（圆点不显示）的决定性根因
 - 灰框随自绘底退役消失（自绘底跟搜索借用动画放大所致）
+
+## 1.2.0-49
+- 移除 -37 时代显示守卫（ERSPGAttachPillGuard 类级封锁 setHidden:/setAlpha:），根因：守卫把系统搜索借用流程卡死（胶囊放大移到屏幕中部再收回全被拦），胶囊冻在放大空白态=灰色长方形。防消失由身份锁+SBRootFolderView 催重建兜底
+- 圆点改白色（rebuild 0.45 / 高亮 0.95 / 其余 0.40）
+
+## 1.2.0-50
+- A 方案：给原生胶囊自身 layer 补胶囊形兜底底板（不新建不替换视图），SPG-PILLCHAIN 探针 dump superview 链
+
+## 1.2.0-51
+- 用户拍板撤除 -50 兜底底板（非系统自带），清空胶囊 layer 背景回归纯原生（裸文字+白圆点）
+- 如实结论：系统桌面态不创建底板（PILLIVAR/PILLCHAIN 实锤），且系统搜索胶囊本身固定底部不提供拖拽
