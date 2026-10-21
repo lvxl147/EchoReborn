@@ -218,3 +218,9 @@
 - DOTSSTATE 探针加 cur/lock 字段；syncDots 只维护被锁定实例
 
 - (rebuild) trigger fresh CI run: first run 39543525655 artifact compiled -46 source despite head e295cd
+
+### 1.2.0-48 (1002050)
+- 完全放手（用户拍板"去掉绘制的底板，让原生的显示出来"）：删除自绘黑底与 MTMaterialView remount 全部视觉干预，系统底由系统自己渲染；历史自绘底每 tick 清理退役
+- SPG-PILLIVAR 一次性探针：dump SBHSearchPillView 全部 UIView 类型 ivar（定位系统底板真身）
+- 页数上限 12→24：-47 日志实锤桌面 14 页被旧上限拦截 return——ox 变化而 dAlpha 恒 0（圆点不显示）的决定性根因
+- 灰框随自绘底退役消失（自绘底跟搜索借用动画放大所致）
