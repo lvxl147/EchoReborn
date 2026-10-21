@@ -32189,6 +32189,62 @@ static void ERSPGJumpToPage(NSInteger page1based) {
     @try { ERSPGJumpToPageInner(page1based); } @finally { sERSPGOwnJump = NO; }
 }
 
+// 1.2.0-56 · 负一屏（值 -1）跳转：今天视图不在桌面翻页滚动链里，走候选链探测
+// 私有入口；探到即调，探不到则一次性 dump 两类控制器的方法表落盘
+// （/var/mobile/Documents/er_todayprobe.txt，PILLCHAIN2 同款通道）供下一版定位。
+// 全程无副作用：探不到就原地不动，不影响任何现有功能。
+static BOOL ERSPGJumpToToday(void) {
+    @try {
+        id ico = ERSPGIconController();
+        static NSArray<NSString *> *sERSels = nil;
+        if (!sERSels) sERSels = @[@"goToTodayView", @"showTodayView", @"_showTodayView",
+                                  @"presentTodayView", @"_presentTodayView",
+                                  @"_showTodayViewIfPossible",
+                                  @"setShowingTodayView:", @"_setShowingTodayView:"];
+        for (NSString *sn in sERSels) {
+            SEL s = NSSelectorFromString(sn);
+            BOOL oneArg = [sn hasSuffix:@":"];
+            if (ico && [(id)ico respondsToSelector:s]) {
+                ERLogInfo(@"SPG-TODAY hit %@ on %@", sn, NSStringFromClass(ico.class));
+                if (oneArg) ((void (*)(id, SEL, BOOL))objc_msgSend)(ico, s, YES);
+                else ((void (*)(id, SEL))objc_msgSend)(ico, s);
+                return YES;
+            }
+        }
+        static BOOL sERTodayDumped = NO;
+        if (!sERTodayDumped) {
+            sERTodayDumped = YES;
+            NSMutableString *rep = [NSMutableString stringWithString:@"ER-TODAYPROBE v56\n"];
+            NSArray<id> *targets = [NSMutableArray array];
+            if (ico) [(NSMutableArray *)targets addObject:ico];
+            Class fsvc = objc_getClass("SBFluidSwitcherViewController");
+            if (fsvc) {
+                if ([fsvc respondsToSelector:@selector(sharedInstance)])
+                    [(NSMutableArray *)targets addObject:[fsvc sharedInstance]];
+                else [(NSMutableArray *)targets addObject:fsvc];   // 类对象本身也枚举一遍
+            }
+            for (id t in targets) {
+                for (Class c = object_getClass(t); c; c = class_getSuperclass(c)) {
+                    unsigned int n = 0;
+                    Method *ms = class_copyMethodList(c, &n);
+                    for (unsigned int i = 0; i < n; i++) {
+                        NSString *nm = NSStringFromSelector(method_getName(ms[i]));
+                        if ([nm localizedCaseInsensitiveContainsString:@"today"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"negative"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"widget"])
+                            [rep appendFormat:@"%@ %@\n", NSStringFromClass(c), nm];
+                    }
+                    if (ms) free(ms);
+                }
+            }
+            [rep appendFormat:@"ts=%@\n", [NSDate date]];
+            [rep writeToFile:@"/var/mobile/Documents/er_todayprobe.txt"
+                  atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+    } @catch (__unused NSException *e) {}
+    return NO;
+}
+
 // 1.2.0-21 · 用户实锤 1315 系统音自带"嗒"声（连响两次像消息提示音）——换成
 // 与「界面优化 → 震动反馈」同款的 UIImpactFeedbackGenerator（常驻强引用 +
 // prepare 预热，纯触感无声）。强度档位仍走本页"震动强度"（0轻/1中/2重）。
@@ -32267,10 +32323,12 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                // 1.2.0-55 · 起手区收紧到胶囊本体（外扩 6→0，用户拍板）：
-                // 贴边起手因坐标漂移偶尔不识别，属可接受代价；误触率最低。
-                CGRect f = CGRectInset(sERSPGPillWinFrame, 0.0, 0.0);
-                inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
+                // 1.2.0-56 · 触发区改"中心圆"（用户拍板）：以胶囊中心为圆心 r=18pt，
+                // 只按胶囊中间才武装手势，两端空白不再触发；触发距离保持 20pt。
+                CGPoint erc = CGPointMake(CGRectGetMidX(sERSPGPillWinFrame),
+                                          CGRectGetMidY(sERSPGPillWinFrame));
+                inside = !CGRectIsEmpty(sERSPGPillWinFrame) &&
+                         hypot(p.x - erc.x, p.y - erc.y) <= 18.0;
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
                     // 实锤胶囊区域触摸到底落在哪个视图（系统行为载体定位）。
@@ -32314,9 +32372,10 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
             NSInteger pending = [objc_getAssociatedObject(gesture, @selector(erPanPendingPage)) integerValue];
             objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @0, OBJC_ASSOCIATION_RETAIN);
             objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
-            if (pending >= 1) {
-                ERLogInfo(@"SPG-PAN #%ld release jump page=%ld", (long)++sERPanN, (long)pending);
-                ERSPGJumpToPage(pending);
+            // 1.2.0-56 · -1=负一屏（今天视图），0=无动作，≥1=跳页
+            if (pending != 0) {
+                if (pending == -1) ERSPGJumpToToday();
+                else ERSPGJumpToPage(pending);
             }
             if ([objc_getAssociatedObject(gesture, @selector(erPanInPill)) boolValue])
                 ERSPGPageCtlTouchGateEnd(sERSPGPillRef ?: nil);  // 1.2.0-31
@@ -32340,7 +32399,7 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         if (!ERSPGShouldFire()) return;   // 与 touches 通道去重（含无动作页）
         objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
         ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld", t.x, t.y, range, (long)page);
-        if (page < 1) return;   // 无动作 = 系统默认（不震不跳）
+        if (page == 0) return;   // 无动作=0；-1=负一屏放行（1.2.0-56）
         ERSPGHaptic();           // 达标提示震（一次）
         objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @(page), OBJC_ASSOCIATION_RETAIN);
     } @catch (__unused NSException *e) {}
@@ -32378,7 +32437,7 @@ static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
         else
             key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         NSInteger page = ERSPGInt(key, 0);
-        if (page < 1) return;   // 无动作 = 系统默认（不震不跳）
+        if (page == 0) return;   // 无动作=0；-1=负一屏放行（1.2.0-56）
         ERLogInfo(@"SPG-TOUCH armed d=(%.0f,%.0f) page=%ld", d.x, d.y, (long)page);
         ERSPGHaptic();
         if (!gERSPGTouchPending) gERSPGTouchPending = [NSMutableDictionary new];
@@ -32393,6 +32452,8 @@ static void ERSPGTouchRelease(UITouch *touch, CGPoint start, CGPoint end) {
         NSNumber *pending = gERSPGTouchPending[tv];
         if (pending) {
             [gERSPGTouchPending removeObjectForKey:tv];
+            // 1.2.0-56 · -1=负一屏
+            if (pending.integerValue == -1) { ERSPGJumpToToday(); return; }
             ERLogInfo(@"SPG-TOUCH #%ld release jump page=%ld",
                       (long)++sERSPGTouchN, (long)pending.integerValue);
             ERSPGJumpToPage(pending.integerValue);
@@ -32407,11 +32468,12 @@ static void ERSPGTouchRelease(UITouch *touch, CGPoint start, CGPoint end) {
         else
             key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         NSInteger page = ERSPGInt(key, 0);
-        if (page < 1) return;
+        if (page == 0) return;   // 无动作=0；-1=负一屏放行（1.2.0-56）
         ERLogInfo(@"SPG-TOUCH #%ld release direct d=(%.0f,%.0f) page=%ld",
                   (long)++sERSPGTouchN, d.x, d.y, (long)page);
         ERSPGHaptic();
-        ERSPGJumpToPage(page);
+        if (page == -1) ERSPGJumpToToday();
+        else ERSPGJumpToPage(page);
     } @catch (__unused NSException *e) {}
 }
 
@@ -32788,13 +32850,17 @@ static void ERSPGAttachGRGate(Class cls) {
               orig ? @"yes" : @"no");
 }
 
+// 1.2.0-56 · 命中判定改"中心圆"：主胶囊帧与帧列表均以中心点 r=18pt 判定。
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
-        CGRect f0 = CGRectInset(sERSPGPillWinFrame, inset, inset);
-        if (!CGRectIsEmpty(f0) && CGRectContainsPoint(f0, wp)) return YES;
+        CGPoint c0 = CGPointMake(CGRectGetMidX(sERSPGPillWinFrame),
+                                 CGRectGetMidY(sERSPGPillWinFrame));
+        if (!CGRectIsEmpty(sERSPGPillWinFrame) &&
+            hypot(wp.x - c0.x, wp.y - c0.y) <= 18.0) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
-            CGRect f = CGRectInset(e.CGRectValue, inset, inset);
-            if (!CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) return YES;
+            CGRect f = e.CGRectValue;
+            CGPoint c = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
+            if (!CGRectIsEmpty(f) && hypot(wp.x - c.x, wp.y - c.y) <= 18.0) return YES;
         }
     } @catch (__unused NSException *e) {}
     return NO;
