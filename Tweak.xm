@@ -33515,27 +33515,43 @@ static void ERSPGSyncDots(BOOL enabled) {
             pill.layer.backgroundColor = nil;
             pill.layer.cornerRadius = 0;
             pill.layer.masksToBounds = NO;
-            // SPG-PILLCHAIN 一次性探针：dump superview 链各层背景/圆角（找系统底板真身）
-            static BOOL sERPillChainDumped = NO;
-            if (!sERPillChainDumped) {
-                sERPillChainDumped = YES;
+            // 1.2.0-52 · PILLCHAIN2 直落盘探针（C 方案，用户批准）：日志门/沙箱双失效，
+            // 改为直接写多个候选路径+NSLog 双保险，找胶囊视图链上有无被系统隐藏的真底板。
+            static BOOL sERPillChain2Dumped = NO;
+            if (!sERPillChain2Dumped) {
+                sERPillChain2Dumped = YES;
                 @try {
+                    NSMutableString *erRep = [NSMutableString stringWithString:@"ER-PILLCHAIN2 v52\n"];
                     UIView *v = pill;
                     int depth = 0;
                     while (v && depth < 8) {
-                        unsigned int sub = 0;
-                        for (UIView *c in v.subviews) sub++;
-                        ERLogInfo(@"SPG-PILLCHAIN d%d %@ frame=%@ bg=%@ corner=%.1f hidden=%d subviews=%lu",
-                                  depth, NSStringFromClass(v.class),
-                                  NSStringFromCGRect(v.frame),
-                                  v.layer.backgroundColor ? @"yes" : @"nil",
-                                  v.layer.cornerRadius,
-                                  v.hidden ? 1 : 0, (unsigned long)sub);
+                        NSMutableString *subs = [NSMutableString string];
+                        for (UIView *c in v.subviews)
+                            [subs appendFormat:@"%@(h%d a%.2f bg%@) ",
+                             NSStringFromClass(c.class), c.hidden, c.alpha,
+                             c.layer.backgroundColor ? @"+":@"-"];
+                        [erRep appendFormat:@"d%d %@ f=%@ bg=%@ corner=%.1f hid=%d alpha=%.2f\n  subs: %@\n",
+                         depth, NSStringFromClass(v.class), NSStringFromCGRect(v.frame),
+                         v.layer.backgroundColor ? @"yes" : @"nil", v.layer.cornerRadius,
+                         v.hidden ? 1 : 0, v.alpha, subs];
                         v = v.superview;
                         depth++;
                     }
+                    [erRep appendFormat:@"ts=%@\n", [NSDate date]];
+                    BOOL erAny = NO;
+                    for (NSString *p in @[@"/var/mobile/Documents/er_pillchain2.txt",
+                                          @"/var/tmp/er_pillchain2.txt",
+                                          @"/var/mobile/Library/Logs/EchoReborn/er_pillchain2.txt"]) {
+                        NSError *erErr = nil;
+                        if ([erRep writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:&erErr]) {
+                            erAny = YES;
+                        } else {
+                            NSLog(@"[EchoReborn] PILLCHAIN2 write-fail %@ err=%@", p, erErr);
+                        }
+                    }
+                    NSLog(@"[EchoReborn] PILLCHAIN2 any=%d report:\n%@", erAny, erRep);
                 } @catch (__unused NSException *e) {
-                    ERLogInfo(@"SPG-PILLCHAIN exception");
+                    NSLog(@"[EchoReborn] PILLCHAIN2 exception");
                 }
             }
         }
