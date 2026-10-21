@@ -32329,10 +32329,10 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                // 1.2.0-57 · 触发区改"整个胶囊"（用户拍板）：起手点落在胶囊
-                // frame 内任意一点即可四方向滑动触发；不再外扩也不内缩。
+                // 1.2.0-58 · 触发区=整个可见玻璃（用户实测落点实锤）：可见底板比逻辑帧
+                // 大一圈（上 11.3/下 2.3/左 2.6pt），矩形外扩 左右+4 上下+12 全覆盖。
                 inside = !CGRectIsEmpty(sERSPGPillWinFrame) &&
-                         CGRectContainsPoint(sERSPGPillWinFrame, p);
+                         CGRectContainsPoint(CGRectInset(sERSPGPillWinFrame, -4.0, -12.0), p);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
                     // 实锤胶囊区域触摸到底落在哪个视图（系统行为载体定位）。
@@ -32854,15 +32854,16 @@ static void ERSPGAttachGRGate(Class cls) {
               orig ? @"yes" : @"no");
 }
 
-// 1.2.0-57 · 命中判定改"整个胶囊"：主胶囊帧与帧列表均为矩形包含判定
-//（-56 中心圆 r=18 触发太窄，用户要求胶囊内任意一点起手都能触发）。
+// 1.2.0-58 · 命中判定=整个可见玻璃：矩形外扩 左右+4pt 上下+12pt（-57 实测：
+// 失灵触点均在逻辑帧外 2.3~11.3pt，玻璃可见底板比逻辑帧大一圈）。
+// 主胶囊帧与帧列表同步；inset 参数保留但忽略。
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
         if (!CGRectIsEmpty(sERSPGPillWinFrame) &&
-            CGRectContainsPoint(sERSPGPillWinFrame, wp)) return YES;
+            CGRectContainsPoint(CGRectInset(sERSPGPillWinFrame, -4.0, -12.0), wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
             CGRect f = e.CGRectValue;
-            if (!CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) return YES;
+            if (!CGRectIsEmpty(f) && CGRectContainsPoint(CGRectInset(f, -4.0, -12.0), wp)) return YES;
         }
     } @catch (__unused NSException *e) {}
     return NO;
