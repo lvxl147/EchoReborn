@@ -32251,7 +32251,150 @@ static BOOL ERSPGJumpToToday(void) {
     return NO;
 }
 
-// 1.2.0-21 · 用户实锤 1315 系统音自带"嗒"声（连响两次像消息提示音）——换成
+// 1.2.0-59 · 手势值原始串：数字值与旧版兼容（0=无动作 / -1=负一屏 / n=第n页），
+// 文件夹用字符串 "folder:<id>"。CFPreferences 里数字仍是 CFNumber，此处统一转文本。
+static NSString *ERSPGGestureRaw(NSString *key) {
+    @try {
+        CFPreferencesAppSynchronize((__bridge CFStringRef)kERSPGDomain);
+        CFTypeRef v = CFPreferencesCopyAppValue((__bridge CFStringRef)key,
+                                                (__bridge CFStringRef)kERSPGDomain);
+        if (!v) return @"0";
+        id obj = (__bridge_transfer id)v;
+        if ([obj isKindOfClass:[NSString class]]) return obj;
+        if ([obj isKindOfClass:[NSNumber class]]) return [(NSNumber *)obj stringValue];
+    } @catch (__unused NSException *e) {}
+    return @"0";
+}
+
+// 1.2.0-59 · 桌面文件夹枚举落盘（设置页二级列表数据源）：
+// SBIconModel.folders（id→SBFolder 字典候选）→ [{id,name}] → /var/mobile/Documents/er_folders.plist
+// ctor 后 20s 执行一次（等图标模型就绪）；枚举通道落空时一次性方法表落盘 er_folderprobe.txt
+static BOOL sERSPGFolderDumped = NO;
+static void ERSPGDumpFolders(void) {
+    @try {
+        if (!objc_getClass("SBIconModel")) return;   // 非 SpringBoard 进程不跑
+        id ico = ERSPGIconController();
+        id model = nil;
+        if (ico && [(id)ico respondsToSelector:@selector(iconModel)])
+            model = ((id (*)(id, SEL))objc_msgSend)(ico, @selector(iconModel));
+        if (!model && ico && [(id)ico respondsToSelector:@selector(model)])
+            model = ((id (*)(id, SEL))objc_msgSend)(ico, @selector(model));
+        NSMutableArray<NSDictionary *> *out = [NSMutableArray array];
+        id folders = nil;
+        if (model && [(id)model respondsToSelector:@selector(folders)])
+            folders = ((id (*)(id, SEL))objc_msgSend)(model, @selector(folders));
+        if ([folders isKindOfClass:[NSDictionary class]]) {
+            for (NSString *fid in folders) {
+                id folder = folders[fid];
+                NSString *nm = nil;
+                for (NSString *sel in @[@"displayName", @"name"]) {
+                    if (folder && [(id)folder respondsToSelector:NSSelectorFromString(sel)]) {
+                        id r = ((id (*)(id, SEL))objc_msgSend)(folder, NSSelectorFromString(sel));
+                        if ([r isKindOfClass:[NSString class]] && r.length) { nm = r; break; }
+                    }
+                }
+                [out addObject:@{@"id": fid ?: @"", @"name": nm ?: (fid ?: @"文件夹")}];
+            }
+            [out writeToFile:@"/var/mobile/Documents/er_folders.plist" atomically:YES];
+        } else if (!sERSPGFolderDumped) {
+            sERSPGFolderDumped = YES;   // 枚举通道落空 → 方法表落盘供下一版定位
+            NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v59 (dump)\n"];
+            if (model) {
+                for (Class c = object_getClass(model); c; c = class_getSuperclass(c)) {
+                    unsigned int n = 0;
+                    Method *ms = class_copyMethodList(c, &n);
+                    for (unsigned int i = 0; i < n; i++) {
+                        NSString *nm = NSStringFromSelector(method_getName(ms[i]));
+                        if ([nm localizedCaseInsensitiveContainsString:@"folder"])
+                            [rep appendFormat:@"%@ %@\n", NSStringFromClass(c), nm];
+                    }
+                    if (ms) free(ms);
+                }
+            }
+            [rep appendFormat:@"ts=%@\n", [NSDate date]];
+            [rep writeToFile:@"/var/mobile/Documents/er_folderprobe.txt"
+                  atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        ERLogInfo(@"SPG-FOLDERS dumped=%lu model=%@",
+                  (unsigned long)out.count,
+                  model ? NSStringFromClass(object_getClass(model)) : @"nil");
+    } @catch (__unused NSException *e) {}
+}
+
+// 1.2.0-59 · 一键打开桌面文件夹：候选链探测（负一屏 activateTodayViewWithCompletion:
+// 同款打法），命中即开；落空一次性方法表落盘 er_folderprobe.txt 供下一版锁定入口
+static void ERSPGOpenFolder(NSString *folderId) {
+    @try {
+        if (!folderId.length) return;
+        id ico = ERSPGIconController();
+        if (!ico) return;
+        id model = nil;
+        if ([ico respondsToSelector:@selector(iconModel)])
+            model = ((id (*)(id, SEL))objc_msgSend)(ico, @selector(iconModel));
+        if (!model && [ico respondsToSelector:@selector(model)])
+            model = ((id (*)(id, SEL))objc_msgSend)(ico, @selector(model));
+        id folderObj = nil, iconObj = nil;
+        id folders = nil;
+        if (model && [model respondsToSelector:@selector(folders)])
+            folders = ((id (*)(id, SEL))objc_msgSend)(model, @selector(folders));
+        if ([folders isKindOfClass:[NSDictionary class]]) folderObj = folders[folderId];
+        if (model && folderObj) {
+            for (NSString *sel in @[@"iconForFolder:", @"folderIconForFolder:"]) {
+                SEL s = NSSelectorFromString(sel);
+                if ([model respondsToSelector:s]) {
+                    id r = ((id (*)(id, SEL, id))objc_msgSend)(model, s, folderObj);
+                    if (r) { iconObj = r; break; }
+                }
+            }
+        }
+        id arg = iconObj ?: folderObj;
+        if (arg) {
+            for (NSString *sn in @[@"openFolderWithIcon:", @"_openFolderWithIcon:",
+                                   @"openFolder:", @"presentFolder:"]) {
+                SEL s = NSSelectorFromString(sn);
+                if ([ico respondsToSelector:s]) {
+                    ERLogInfo(@"SPG-FOLDER hit %@ id=%@", sn, folderId);
+                    ((void (*)(id, SEL, id))objc_msgSend)(ico, s, arg);
+                    return;
+                }
+            }
+        }
+        if (!sERSPGFolderDumped) {
+            sERSPGFolderDumped = YES;
+            NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v59 (open)\n"];
+            NSMutableArray<id> *targets = [NSMutableArray array];
+            if (ico) [targets addObject:ico];
+            if (model) [targets addObject:model];
+            if (folderObj) [targets addObject:folderObj];
+            for (id t in targets) {
+                for (Class c = object_getClass(t); c; c = class_getSuperclass(c)) {
+                    unsigned int n = 0;
+                    Method *ms = class_copyMethodList(c, &n);
+                    for (unsigned int i = 0; i < n; i++) {
+                        NSString *nm = NSStringFromSelector(method_getName(ms[i]));
+                        if ([nm localizedCaseInsensitiveContainsString:@"folder"])
+                            [rep appendFormat:@"%@ %@\n", NSStringFromClass(c), nm];
+                    }
+                    if (ms) free(ms);
+                }
+            }
+            [rep appendFormat:@"ts=%@\n", [NSDate date]];
+            [rep writeToFile:@"/var/mobile/Documents/er_folderprobe.txt"
+                  atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
+        ERLogInfo(@"SPG-FOLDER miss id=%@ model=%@", folderId,
+                  model ? NSStringFromClass(object_getClass(model)) : @"nil");
+    } @catch (__unused NSException *e) {}
+}
+
+// 1.2.0-59 · 手势值统一派发：""/"0"=无动作，"-1"=负一屏，"folder:id"=开文件夹，其余=跳页
+static void ERSPGDispatchGestureValue(NSString *val) {
+    if (!val.length || [val isEqualToString:@"0"]) return;
+    if ([val isEqualToString:@"-1"]) { ERSPGJumpToToday(); return; }
+    if ([val hasPrefix:@"folder:"]) { ERSPGOpenFolder([val substringFromIndex:7]); return; }
+    ERSPGJumpToPage([val integerValue]);
+}
+
 // 与「界面优化 → 震动反馈」同款的 UIImpactFeedbackGenerator（常驻强引用 +
 // prepare 预热，纯触感无声）。强度档位仍走本页"震动强度"（0轻/1中/2重）。
 // 生成器必须全局保留：impactOccurred 异步派发，局部变量会提前释放导致无感
@@ -32372,15 +32515,12 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         }
         if (gesture.state == UIGestureRecognizerStateEnded ||
             gesture.state == UIGestureRecognizerStateCancelled) {
-            // 1.2.0-21 · 松手才跳页：达标时锁定的页码在这里落地。
-            NSInteger pending = [objc_getAssociatedObject(gesture, @selector(erPanPendingPage)) integerValue];
-            objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @0, OBJC_ASSOCIATION_RETAIN);
+            // 1.2.0-21 · 松手才跳页：达标时锁定的值在这里落地。
+            // 1.2.0-59 · pending 升级为原始串，统一派发（无动作/负一屏/文件夹/页码）
+            NSString *pending = objc_getAssociatedObject(gesture, @selector(erPanPendingPage));
+            objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @"", OBJC_ASSOCIATION_RETAIN);
             objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
-            // 1.2.0-56 · -1=负一屏（今天视图），0=无动作，≥1=跳页
-            if (pending != 0) {
-                if (pending == -1) ERSPGJumpToToday();
-                else ERSPGJumpToPage(pending);
-            }
+            if (pending.length && ![pending isEqualToString:@"0"]) ERSPGDispatchGestureValue(pending);
             if ([objc_getAssociatedObject(gesture, @selector(erPanInPill)) boolValue])
                 ERSPGPageCtlTouchGateEnd(sERSPGPillRef ?: nil);  // 1.2.0-31
             ERSPGPagerPanSetEnabled(YES);
@@ -32399,13 +32539,14 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         } else {
             key = (t.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
         }
-        NSInteger page = ERSPGInt(key, 0);
+        // 1.2.0-59 · 手势值升级为原始串（数字/folder:id 通用），统一派发
+        NSString *val = ERSPGGestureRaw(key);
         if (!ERSPGShouldFire()) return;   // 与 touches 通道去重（含无动作页）
         objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
-        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld", t.x, t.y, range, (long)page);
-        if (page == 0) return;   // 无动作=0；-1=负一屏放行（1.2.0-56）
+        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f val=%@", t.x, t.y, range, val);
+        if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
         ERSPGHaptic();           // 达标提示震（一次）
-        objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @(page), OBJC_ASSOCIATION_RETAIN);
+        objc_setAssociatedObject(gesture, @selector(erPanPendingPage), val, OBJC_ASSOCIATION_RETAIN);
     } @catch (__unused NSException *e) {}
 }
 @end
@@ -32416,7 +32557,7 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
 // 对胶囊同样处理：Began 记起点，Moved/Ended 判位移（≥40pt 与 pan 一致），
 // 位移过小 = 单击 → 透传 super（不破坏打开搜索）。
 static NSMutableDictionary<NSValue *, NSValue *> *gERSPGTouchStart = nil;
-static NSMutableDictionary<NSValue *, NSNumber *> *gERSPGTouchPending = nil;
+static NSMutableDictionary<NSValue *, NSString *> *gERSPGTouchPending = nil;
 static NSInteger sERSPGTouchN = 0;
 
 // pan / touch 双通道去重：0.6s 内只触发一次跳页。
@@ -32440,12 +32581,13 @@ static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
             key = (d.x < 0) ? @"HomeScreen.SearchPill.GestureLeft" : @"HomeScreen.SearchPill.GestureRight";
         else
             key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
-        NSInteger page = ERSPGInt(key, 0);
-        if (page == 0) return;   // 无动作=0；-1=负一屏放行（1.2.0-56）
-        ERLogInfo(@"SPG-TOUCH armed d=(%.0f,%.0f) page=%ld", d.x, d.y, (long)page);
+        // 1.2.0-59 · 手势值升级为原始串，统一派发
+        NSString *val = ERSPGGestureRaw(key);
+        if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
+        ERLogInfo(@"SPG-TOUCH armed d=(%.0f,%.0f) val=%@", d.x, d.y, val);
         ERSPGHaptic();
         if (!gERSPGTouchPending) gERSPGTouchPending = [NSMutableDictionary new];
-        gERSPGTouchPending[[NSValue valueWithNonretainedObject:touch]] = @(page);
+        gERSPGTouchPending[[NSValue valueWithNonretainedObject:touch]] = val;
     } @catch (__unused NSException *e) {}
 }
 
@@ -32453,14 +32595,13 @@ static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
 static void ERSPGTouchRelease(UITouch *touch, CGPoint start, CGPoint end) {
     @try {
         NSValue *tv = [NSValue valueWithNonretainedObject:touch];
-        NSNumber *pending = gERSPGTouchPending[tv];
+        NSString *pending = gERSPGTouchPending[tv];
         if (pending) {
             [gERSPGTouchPending removeObjectForKey:tv];
-            // 1.2.0-56 · -1=负一屏
-            if (pending.integerValue == -1) { ERSPGJumpToToday(); return; }
-            ERLogInfo(@"SPG-TOUCH #%ld release jump page=%ld",
-                      (long)++sERSPGTouchN, (long)pending.integerValue);
-            ERSPGJumpToPage(pending.integerValue);
+            // 1.2.0-59 · 原始串统一派发（无动作/负一屏/文件夹/页码）
+            ERLogInfo(@"SPG-TOUCH #%ld release jump val=%@",
+                      (long)++sERSPGTouchN, pending);
+            ERSPGDispatchGestureValue(pending);
             return;
         }
         CGPoint d = CGPointMake(end.x - start.x, end.y - start.y);
@@ -32471,13 +32612,13 @@ static void ERSPGTouchRelease(UITouch *touch, CGPoint start, CGPoint end) {
             key = (d.x < 0) ? @"HomeScreen.SearchPill.GestureLeft" : @"HomeScreen.SearchPill.GestureRight";
         else
             key = (d.y < 0) ? @"HomeScreen.SearchPill.GestureUp" : @"HomeScreen.SearchPill.GestureDown";
-        NSInteger page = ERSPGInt(key, 0);
-        if (page == 0) return;   // 无动作=0；-1=负一屏放行（1.2.0-56）
-        ERLogInfo(@"SPG-TOUCH #%ld release direct d=(%.0f,%.0f) page=%ld",
-                  (long)++sERSPGTouchN, d.x, d.y, (long)page);
+        // 1.2.0-59 · 原始串统一派发
+        NSString *val = ERSPGGestureRaw(key);
+        if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
+        ERLogInfo(@"SPG-TOUCH #%ld release direct d=(%.0f,%.0f) val=%@",
+                  (long)++sERSPGTouchN, d.x, d.y, val);
         ERSPGHaptic();
-        if (page == -1) ERSPGJumpToToday();
-        else ERSPGJumpToPage(page);
+        ERSPGDispatchGestureValue(val);
     } @catch (__unused NSException *e) {}
 }
 
@@ -33916,6 +34057,9 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
 
 %ctor {
     ERAppShortcutDiagSet(@"ctor", [NSString stringWithFormat:@"%@", [NSDate date]]);
+    // 1.2.0-59 · 桌面文件夹枚举落盘（设置页"文件夹"二级列表数据源），等图标模型就绪
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(20.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ ERSPGDumpFolders(); });
     ERSMSInstallHooks(); // 1.1.9-60：自动复制验证码（SpringBoard 侧 BBServer 钩子）
     ERLinkProbeAPIs();   // 1.1.9-23：导出 FBS/SB 打开 App 接口的方法表，锁定 iOS 17 可用路径
     ERActClsProbe();     // 1.1.9-30：全类枚举，找出 activateShortcut* 真正挂在哪个类
