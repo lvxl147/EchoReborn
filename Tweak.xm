@@ -33283,7 +33283,9 @@ static void ERSPGDotsRefresh(void) {
                           (sERSPGPillLocked != nil) ? 1 : 0);
             }
         }
-        if (pages < 1 || pages > 12) return;
+        // 1.2.0-48 · 页数上限 12→24：-47 用户日志实锤桌面 14 页，pages=14 被
+        // 旧上限 12 拦截直接 return——ox 在变而 dAlpha 恒 0 的真正死因。
+        if (pages < 1 || pages > 24) return;
         CGFloat x = sv.contentOffset.x;
         NSInteger page = (NSInteger)lround(x / sv.bounds.size.width);
         page = MIN(MAX(page, 0), pages - 1);
@@ -33501,84 +33503,40 @@ static void ERSPGSyncDots(BOOL enabled) {
             pill.userInteractionEnabled = YES;
             ERLogInfo(@"SPG-PILL userInteraction restored");
         }
-        // 1.2.0-46 · 原生壳恢复：SBHSearchPillView.searchAffordanceBackgroundView
-        // 是系统胶囊底色（-44 方法表实锤）。在则恢复显示并退役自绘底；不在则
-        // 自绘底继续兜底。SPG-PILLTREE 一次性 dump 子视图树供验证。
+        // 1.2.0-48 · 完全放手（用户拍板）：去掉绘制的底板，让原生的显示出来。
+        // 撤掉一切视觉干预——不自绘底、不 remount MTMaterialView、不校正 frame；
+        // 系统底由系统自己渲染。保留：身份锁、点击进搜索、翻页圆点。
         {
-            static BOOL sERPTreeDumped = NO;
-            if (!sERPTreeDumped) {
-                sERPTreeDumped = YES;
-                NSMutableString *tr = [NSMutableString string];
-                for (UIView *v in pill.subviews) {
-                    [tr appendFormat:@"%@[h%d,a%.1f,f=%@] ", NSStringFromClass(v.class),
-                     v.hidden ? 1 : 0, v.alpha, NSStringFromCGRect(v.frame)];
-                }
-                ERLogInfo(@"SPG-PILLTREE %@", tr);
-            }
-            UIView *nativeBg = nil;
-            if ([pill respondsToSelector:@selector(searchAffordanceBackgroundView)])
-                nativeBg = ((UIView *(*)(id, SEL))objc_msgSend)(pill, @selector(searchAffordanceBackgroundView));
-            // 1.2.0-47 · 原生底主动挂载：-46 装机探针证实 getter 返回 MTMaterialView
-            // 且 superview==pill，但用户视觉上仍是自绘壳（PILLTREE 显示 pill 直接
-            // subviews 只有 1 个 UIView）——MTMaterialView 大概率 frame 为空/被藏。
-            // 现在不再"指望系统摆好"，直接校正：挂进 pill 最底层 + 铺满 bounds + 复显。
-            BOOL nativeOk = NO;
-            if (nativeBg) {
-                BOOL remounted = NO;
-                if (nativeBg.superview != pill) {
-                    [pill insertSubview:nativeBg atIndex:0];
-                    remounted = YES;
-                }
-                if (CGRectIsEmpty(nativeBg.frame) ||
-                    !CGRectEqualToRect(nativeBg.frame, pill.bounds)) {
-                    nativeBg.frame = CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height);
-                    nativeBg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-                    remounted = YES;
-                }
-                if (nativeBg.hidden) { nativeBg.hidden = NO; remounted = YES; }
-                if (nativeBg.alpha < 0.99) { nativeBg.alpha = 1.0; remounted = YES; }
-                nativeOk = nativeBg.superview == pill && !nativeBg.hidden && nativeBg.alpha >= 0.99 &&
-                           !CGRectIsEmpty(nativeBg.frame);
-                static BOOL sERLoggedNativeD = NO;
-                if (!sERLoggedNativeD || remounted) {
-                    sERLoggedNativeD = YES;
-                    ERLogInfo(@"SPG-PILLBG native cls=%@ fr=%@ hid=%d a=%.1f sup=%@ remount=%d ok=%d",
-                              NSStringFromClass(nativeBg.class),
-                              NSStringFromCGRect(nativeBg.frame),
-                              nativeBg.hidden ? 1 : 0, nativeBg.alpha,
-                              nativeBg.superview ? NSStringFromClass(nativeBg.superview.class) : @"(nil)",
-                              remounted ? 1 : 0, nativeOk ? 1 : 0);
-                }
-            }
-            sERSPGNativeBg = nativeOk ? nativeBg : nil;
-            static BOOL sERLoggedNative = NO;
-            if (nativeOk && !sERLoggedNative) {
-                sERLoggedNative = YES;
-                ERLogInfo(@"SPG-PILLBG native restored cls=%@", NSStringFromClass(nativeBg.class));
-            }
-            if (nativeOk && sERSPGPillBg) {
+            // 历史遗留清理：老版本挂上的自绘底彻底退役
+            if (sERSPGPillBg) {
                 [sERSPGPillBg removeFromSuperview];
                 sERSPGPillBg = nil;
             }
-        }
-        if (!sERSPGNativeBg) {
-        // 1.2.0-41 · 自绘胶囊底：-40 截图+PILLSTATE 实锤胶囊视图健康（hidden=0
-        // alpha=1）但用户只看到"搜索"label——系统的胶囊底色层被折腾没了。我们
-        // 自己画一层圆角底插在最底层，常驻不参与 3s 淡出，不依赖系统背景。
-        if (!sERSPGPillBg || sERSPGPillBg.superview != pill) {
-            UIView *old = sERSPGPillBg;
-            sERSPGPillBg = [[UIView alloc] initWithFrame:CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height)];
-            sERSPGPillBg.backgroundColor = [UIColor colorWithWhite:0.18 alpha:0.55];
-            sERSPGPillBg.layer.cornerRadius = pill.bounds.size.height / 2.0;
-            sERSPGPillBg.layer.masksToBounds = YES;
-            sERSPGPillBg.userInteractionEnabled = NO;
-            [pill insertSubview:sERSPGPillBg atIndex:0];
-            [old removeFromSuperview];
-            ERLogInfo(@"SPG-PILLBG created cls=%@ bounds=%@", pill.class, NSStringFromCGRect(pill.bounds));
-        } else if (!CGRectEqualToRect(sERSPGPillBg.frame, pill.bounds)) {
-            sERSPGPillBg.frame = CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height);
-            sERSPGPillBg.layer.cornerRadius = pill.bounds.size.height / 2.0;
-        }
+            sERSPGNativeBg = nil;
+            // SPG-PILLIVAR 一次性探针：dump 全部 UIView 类型 ivar（找系统底板真身）
+            static BOOL sERPillIvarDumped = NO;
+            if (!sERPillIvarDumped) {
+                sERPillIvarDumped = YES;
+                @try {
+                    unsigned int n = 0;
+                    Ivar *ivs = class_copyIvarList(pill.class, &n);
+                    NSMutableString *s = [NSMutableString string];
+                    for (unsigned int i = 0; i < n; i++) {
+                        const char *type = ivar_getTypeEncoding(ivs[i]);
+                        if (!type || type[0] != '@') continue;
+                        id val = object_getIvar(pill, ivs[i]);
+                        if (!val || ![val isKindOfClass:[UIView class]]) continue;
+                        UIView *uv = (UIView *)val;
+                        [s appendFormat:@"%s=%@[h%d f=%@] ",
+                         ivar_getName(ivs[i]), NSStringFromClass(uv.class),
+                         uv.hidden ? 1 : 0, NSStringFromCGRect(uv.frame)];
+                    }
+                    if (ivs) free(ivs);
+                    ERLogInfo(@"SPG-PILLIVAR %@", s);
+                } @catch (__unused NSException *e) {
+                    ERLogInfo(@"SPG-PILLIVAR exception");
+                }
+            }
         }
         // 1.2.0-43 · 点击进搜索（自挂单击转发系统 action）
         ERSPGAttachPillTap(pill);
