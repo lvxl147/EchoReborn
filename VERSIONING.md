@@ -260,3 +260,9 @@
 ## 1.2.0-58
 - 触发区=整个可见玻璃：-57 用户实测失灵触点均在逻辑帧外 2.3~11.3pt（玻璃可见底板比逻辑帧大一圈，现象即"只有边能触发"）。矩形外扩 左右+4pt 上下+12pt（CGRectInset -4/-12），主胶囊+帧列表两处同步；红框内任意点四方向滑均触发
 - 负一屏确认修复（-57 日志多次命中 activateTodayViewWithCompletion:），本版不动
+
+## 1.2.0-59
+- 手势值改两级下拉（用户拍板）：一级=无动作/桌面页›/文件夹›（›为子菜单标识，须再选一次）；桌面页二级=负一屏+第1~n页（末页资源库，保持占用互斥）；文件夹二级=读 Tweak 落盘的 /var/mobile/Documents/er_folders.plist
+- 值编码升级：数字（CFNumber 旧版兼容）或 "folder:<id>"（CFString）；Tweak 读原始串统一派发 ERSPGDispatchGestureValue（无动作/负一屏/开文件夹/跳页），pan+touches 双通道 5 处同步
+- 文件夹枚举：SpringBoard 内 SBIconModel.folders→[{id,name}] ctor 后 20s 落盘；通道落空一次性方法表落盘 er_folderprobe.txt
+- 一键打开文件夹：iconForFolder:/folderIconForFolder: 取图标 + openFolderWithIcon: 等 4 候选链探测（负一屏打法），落空方法表落盘
