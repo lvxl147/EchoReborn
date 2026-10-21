@@ -33498,6 +33498,13 @@ static void ERSPGConfigurePill(UIView *pill) {
             UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc]
                 initWithTarget:target action:@selector(erHandlePan:)];
             pan.maximumNumberOfTouches = 1;
+            // 1.2.0-62 · 与乌贼手势共存硬修复：window pan 识别成功后默认会向视图发
+            // touchesCancelled（cancelsTouchesInView=YES），起手在胶囊内的乌贼下划
+            // 收不到 touchesEnded 直接死。三个属性全关：我们的 pan 只旁观+松手动作，
+            // 视图触摸链路全程无感。
+            pan.cancelsTouchesInView = NO;
+            pan.delaysTouchesBegan = NO;
+            pan.delaysTouchesEnded = NO;
             ERSPGPanDelegate *dlg = [ERSPGPanDelegate shared];
             pan.delegate = dlg;
             objc_setAssociatedObject(pan, @selector(erPanDelegate), dlg, OBJC_ASSOCIATION_RETAIN);
