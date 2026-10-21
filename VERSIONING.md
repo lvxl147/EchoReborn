@@ -256,3 +256,7 @@
 ## 1.2.0-57
 - 触发区改「整个胶囊」：-56 中心圆 r18 用户实测偏窄触发难，改矩形包含判定（胶囊 frame 内任意一点起手，四方向滑均触发；主胶囊+帧列表两处同步，无外扩无内缩）
 - 负一屏修复：er_todayprobe.txt 实锤真正入口 SBIconController activateTodayViewWithCompletion:（1 参 block，nil completion 安全），置于候选链首位，原 8 候选保留兜底
+
+## 1.2.0-58
+- 触发区=整个可见玻璃：-57 用户实测失灵触点均在逻辑帧外 2.3~11.3pt（玻璃可见底板比逻辑帧大一圈，现象即"只有边能触发"）。矩形外扩 左右+4pt 上下+12pt（CGRectInset -4/-12），主胶囊+帧列表两处同步；红框内任意点四方向滑均触发
+- 负一屏确认修复（-57 日志多次命中 activateTodayViewWithCompletion:），本版不动
