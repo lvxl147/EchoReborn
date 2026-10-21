@@ -33508,19 +33508,13 @@ static void ERSPGSyncDots(BOOL enabled) {
                 }
             }
         }
-        // 1.2.0-50 · 兜底底板（用户批准 A 方案）：给原生胶囊自身 layer 补胶囊形背景。
-        // 不新建、不替换视图——SBHSearchPillView 还是系统那个对象，点击/拖拽/其他插件
-        // 调用全部走原生流程，只补它本该有但系统在桌面态没建出来的背景外观。
+        // 1.2.0-51 · 兜底底板撤除（用户拍板"删掉"）：-50 的 layer 背景不是系统自带的，
+        // 且桌面态系统搜索胶囊本身不提供拖拽（系统控件固定底部）。回归纯原生：
+        // 胶囊保持系统 SBHSearchPillView 本体，无任何补绘外观，只留文字/图标/白圆点。
         {
-            CGFloat erh = pill.bounds.size.height;
-            if (erh < 8) erh = 40;
-            pill.layer.cornerRadius = erh / 2.0;
-            pill.layer.masksToBounds = YES;
-            BOOL erDark = (UIScreen.mainScreen.traitCollection.userInterfaceStyle
-                           == UIUserInterfaceStyleDark);
-            UIColor *erBg = erDark ? [UIColor colorWithWhite:0.16 alpha:0.85]
-                                   : [UIColor colorWithWhite:0.96 alpha:0.92];
-            pill.layer.backgroundColor = erBg.CGColor;
+            pill.layer.backgroundColor = nil;
+            pill.layer.cornerRadius = 0;
+            pill.layer.masksToBounds = NO;
             // SPG-PILLCHAIN 一次性探针：dump superview 链各层背景/圆角（找系统底板真身）
             static BOOL sERPillChainDumped = NO;
             if (!sERPillChainDumped) {
