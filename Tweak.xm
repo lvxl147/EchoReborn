@@ -32290,7 +32290,7 @@ static void ERSPGDumpFolders(void) {
                 for (NSString *sel in @[@"displayName", @"name"]) {
                     if (folder && [(id)folder respondsToSelector:NSSelectorFromString(sel)]) {
                         id r = ((id (*)(id, SEL))objc_msgSend)(folder, NSSelectorFromString(sel));
-                        if ([r isKindOfClass:[NSString class]] && r.length) { nm = r; break; }
+                        if ([r isKindOfClass:[NSString class]] && [(NSString *)r length]) { nm = r; break; }
                     }
                 }
                 [out addObject:@{@"id": fid ?: @"", @"name": nm ?: (fid ?: @"文件夹")}];
@@ -32520,7 +32520,7 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
             NSString *pending = objc_getAssociatedObject(gesture, @selector(erPanPendingPage));
             objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @"", OBJC_ASSOCIATION_RETAIN);
             objc_setAssociatedObject(gesture, @selector(erPanFired), @NO, OBJC_ASSOCIATION_RETAIN);
-            if (pending.length && ![pending isEqualToString:@"0"]) ERSPGDispatchGestureValue(pending);
+            if (pending && pending.length && ![pending isEqualToString:@"0"]) ERSPGDispatchGestureValue(pending);
             if ([objc_getAssociatedObject(gesture, @selector(erPanInPill)) boolValue])
                 ERSPGPageCtlTouchGateEnd(sERSPGPillRef ?: nil);  // 1.2.0-31
             ERSPGPagerPanSetEnabled(YES);
