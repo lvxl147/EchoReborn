@@ -266,3 +266,6 @@
 - 值编码升级：数字（CFNumber 旧版兼容）或 "folder:<id>"（CFString）；Tweak 读原始串统一派发 ERSPGDispatchGestureValue（无动作/负一屏/开文件夹/跳页），pan+touches 双通道 5 处同步
 - 文件夹枚举：SpringBoard 内 SBIconModel.folders→[{id,name}] ctor 后 20s 落盘；通道落空一次性方法表落盘 er_folderprobe.txt
 - 一键打开文件夹：iconForFolder:/folderIconForFolder: 取图标 + openFolderWithIcon: 等 4 候选链探测（负一屏打法），落空方法表落盘
+
+## 1.2.0-60
+- 修文件夹枚举：-59 落盘探针实锤 iOS16/17 图标模型为 SBHIconModel、无 folders 字典 → 改 rootFolder 递归遍历（rootFolder→lists→icons→SBFolderIcon.folder 取 uniqueIdentifier+displayName），旧 folders 通道保留兜底；打开文件夹同样遍历定位 SBFolderIcon 再走候选链
