@@ -203,3 +203,10 @@
 ### 1.2.0-45 (1002047)
 - 点击进搜索落地：-44 SRDUMP 实锤 SBIconController `_handleSearchAffordanceTap` 为系统原生胶囊点击处理
 - 自挂单击改为直调该方法（respondsToSelector 守卫 + @try 兜底），旧转发路径保留为 fallback
+
+### 1.2.0-46 (1002048)
+- 失效校验：父视图隐藏的胶囊候选不追踪（-45 实锤搜索借用未归还的残局实例=点击返回全面消失），SPG-PILLBAD 记录
+- 无有效候选时每 5s 催 SBRootFolderView setNeedsLayout，催系统重建桌面胶囊
+- 滚动视图必须挂在主屏窗口，失效即重扫（修翻页无圆点），SPG-SVBAD 记录
+- 原生壳恢复：searchAffordanceBackgroundView 存在则恢复显示并退役自绘底；自绘底降级为兜底；SPG-PILLTREE 一次性 dump 子视图树
+- 翻页藏字逻辑豁免原生底
