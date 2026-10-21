@@ -454,7 +454,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
                     [opts addObject:ERGesturePageText(p, cnt)];
                 }
             }
-            [ERGestureShowDropdown(btn, opts,
+            ERGestureShowDropdown(btn, opts,
                                    ERGestureValueText(ERGestureReadValue(key)),
                                    ^(NSInteger i2) {
                 NSString *val = (i2 == 0) ? @"-1"
@@ -479,7 +479,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
             [names removeAllObjects];
             [names addObject:@"未获取到（respring 后重试）"];
         }
-        [ERGestureShowDropdown(btn, names,
+        ERGestureShowDropdown(btn, names,
                                ERGestureValueText(ERGestureReadValue(key)),
                                ^(NSInteger i2) {
             if (i2 < (NSInteger)ids.count) {
