@@ -33158,7 +33158,19 @@ static NSInteger sERSPGDotsPages = -1;
 static __weak UIView *sERSPGHomePCRef = nil;   // 1.2.0-38 桌面 _UIPageControl 弱引用（读真实页数）
 static CGFloat sERSPGDotsLastX = -1.0;         // 上次 offset.x（判定滚动变化）
 static NSTimeInterval sERSPGDotsLastChange = 0; // 最后一次翻页时刻（3s 无翻页→恢复搜索胶囊）
+static __weak UIView *sERSPGPillLocked = nil;  // 1.2.0-47 身份锁：认准一个底部真胶囊，拒绝被搜索借用实例顶替
+static NSInteger sERSPGPCLastCur = -1;         // 1.2.0-47 页控件 currentPage 轮询记忆（翻页活动第二判据）
 static void ERSPGDotsRefresh(void);
+
+// 1.2.0-47 · 身份锁判据：只认"底部小胶囊"——窗口坐标高度 ≤44pt 且位于屏幕底部 1/4
+// 区域。搜索层借用的大胶囊（实锤 frame {8,496,414,48}：高 48、y 在屏幕中部）天然排除。
+static BOOL ERSPGIsBottomPill(UIView *v) {
+    if (!v || !v.window) return NO;
+    CGRect wf = [v convertRect:v.bounds toView:nil];
+    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
+    return (wf.size.height > 1.0 && wf.size.height <= 44.0) &&
+           (CGRectGetMaxY(wf) >= sh * 0.75);
+}
 
 static UIScrollView *ERSPGFindIconSV(void) {
     // 1.2.0-41 · 旧实现返回全窗口遍历到的第一个 SBIconScrollView——iOS 17 文件夹/
@@ -33260,21 +33272,39 @@ static void ERSPGDotsRefresh(void) {
             NSTimeInterval nds = [[NSDate date] timeIntervalSince1970];
             if (nds - sERLastDS > 2.0) {
                 sERLastDS = nds;
-                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pc=%@ npc=%ld pages=%ld dAlpha=%.1f pillBg=%d",
+                NSInteger dbgCur = -1;
+                if (pc && [pc respondsToSelector:@selector(currentPage)])
+                    dbgCur = [(UIPageControl *)pc currentPage];
+                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pc=%@ npc=%ld cur=%ld pages=%ld dAlpha=%.1f pillBg=%d lock=%d",
                           NSStringFromClass(sv.class), sv.window ? 1 : 0,
                           sv.bounds.size.width, sv.contentSize.width, sv.contentOffset.x,
-                          pcCls, (long)npc, (long)pages, sERSPGDotsView.alpha,
-                          sERSPGPillBg ? 1 : 0);
+                          pcCls, (long)npc, (long)dbgCur, (long)pages, sERSPGDotsView.alpha,
+                          sERSPGPillBg ? 1 : 0,
+                          (sERSPGPillLocked != nil) ? 1 : 0);
             }
         }
         if (pages < 1 || pages > 12) return;
         CGFloat x = sv.contentOffset.x;
         NSInteger page = (NSInteger)lround(x / sv.bounds.size.width);
         page = MIN(MAX(page, 0), pages - 1);
-        // 滚动变化检测：3s 无翻页 → 圆点淡出（恢复系统搜索胶囊观感）
+        // 1.2.0-47 · 翻页活动双判据：offset 变化（原判据）+ 页控件 currentPage 轮询
+        //（-46 日志实锤 ox 有变化但 dAlpha=0——sv 引用可能与实际翻页滚动视图不同步，
+        // currentPage 变化兜底触发圆点亮显）。
+        NSInteger pcCur = -1;
+        if (pc && npc >= 1 && [pc respondsToSelector:@selector(currentPage)])
+            pcCur = [(UIPageControl *)pc currentPage];
+        BOOL svMoved = (sERSPGDotsLastX < 0 || fabs(x - sERSPGDotsLastX) > 0.5);
+        BOOL pcAdvanced = (pcCur >= 0 && sERSPGPCLastCur >= 0 && pcCur != sERSPGPCLastCur);
+        if (pcAdvanced && !svMoved) {
+            // currentPage 变了但 offset 没动：sv 引用失联，丢弃等下个 tick 重扫
+            sERSPGIconSVRef = nil;
+            ERLogInfo(@"SPG-SVSTALE pc cur %ld->%ld but ox static (%.1f) — refind sv",
+                      (long)sERSPGPCLastCur, (long)pcCur, x);
+        }
+        sERSPGPCLastCur = pcCur;
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        if (sERSPGDotsLastX < 0 || fabs(x - sERSPGDotsLastX) > 0.5) {
-            sERSPGDotsLastX = x;
+        if (svMoved || pcAdvanced) {
+            if (svMoved) sERSPGDotsLastX = x;
             sERSPGDotsLastChange = now;
         }
         BOOL pagingActive = (gERSPGPageCtlActive > 0) || (now - sERSPGDotsLastChange < 3.0);
@@ -33440,6 +33470,12 @@ static void ERSPGSyncDots(BOOL enabled) {
         }
         UIView *pill = sERSPGPillRef;
         if (!pill) return;
+        // 1.2.0-47 · 身份锁校验：只维护被锁定的底部真胶囊。若 pillRef 与锁不一致
+        //（被搜索借用实例顶替过），立刻丢弃引用等扫描按锁逻辑处理。
+        if (sERSPGPillLocked && pill != sERSPGPillLocked) {
+            sERSPGPillRef = nil;
+            return;
+        }
         // 1.2.0-46 · 失效校验：父视图被藏 = 系统借用未归还的残局实例（-45 实锤），
         // 维护它没有意义，等扫描换真胶囊。SPG-PILLBAD 记录（5s 节流）。
         if (pill.superview && pill.superview.hidden) {
@@ -33482,11 +33518,37 @@ static void ERSPGSyncDots(BOOL enabled) {
             UIView *nativeBg = nil;
             if ([pill respondsToSelector:@selector(searchAffordanceBackgroundView)])
                 nativeBg = ((UIView *(*)(id, SEL))objc_msgSend)(pill, @selector(searchAffordanceBackgroundView));
+            // 1.2.0-47 · 原生底主动挂载：-46 装机探针证实 getter 返回 MTMaterialView
+            // 且 superview==pill，但用户视觉上仍是自绘壳（PILLTREE 显示 pill 直接
+            // subviews 只有 1 个 UIView）——MTMaterialView 大概率 frame 为空/被藏。
+            // 现在不再"指望系统摆好"，直接校正：挂进 pill 最底层 + 铺满 bounds + 复显。
             BOOL nativeOk = NO;
-            if (nativeBg && nativeBg.superview == pill) {
-                if (nativeBg.hidden) nativeBg.hidden = NO;
-                if (nativeBg.alpha < 0.99) nativeBg.alpha = 1.0;
-                nativeOk = !nativeBg.hidden && nativeBg.alpha >= 0.99;
+            if (nativeBg) {
+                BOOL remounted = NO;
+                if (nativeBg.superview != pill) {
+                    [pill insertSubview:nativeBg atIndex:0];
+                    remounted = YES;
+                }
+                if (CGRectIsEmpty(nativeBg.frame) ||
+                    !CGRectEqualToRect(nativeBg.frame, pill.bounds)) {
+                    nativeBg.frame = CGRectMake(0, 0, pill.bounds.size.width, pill.bounds.size.height);
+                    nativeBg.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+                    remounted = YES;
+                }
+                if (nativeBg.hidden) { nativeBg.hidden = NO; remounted = YES; }
+                if (nativeBg.alpha < 0.99) { nativeBg.alpha = 1.0; remounted = YES; }
+                nativeOk = nativeBg.superview == pill && !nativeBg.hidden && nativeBg.alpha >= 0.99 &&
+                           !CGRectIsEmpty(nativeBg.frame);
+                static BOOL sERLoggedNativeD = NO;
+                if (!sERLoggedNativeD || remounted) {
+                    sERLoggedNativeD = YES;
+                    ERLogInfo(@"SPG-PILLBG native cls=%@ fr=%@ hid=%d a=%.1f sup=%@ remount=%d ok=%d",
+                              NSStringFromClass(nativeBg.class),
+                              NSStringFromCGRect(nativeBg.frame),
+                              nativeBg.hidden ? 1 : 0, nativeBg.alpha,
+                              nativeBg.superview ? NSStringFromClass(nativeBg.superview.class) : @"(nil)",
+                              remounted ? 1 : 0, nativeOk ? 1 : 0);
+                }
             }
             sERSPGNativeBg = nativeOk ? nativeBg : nil;
             static BOOL sERLoggedNative = NO;
@@ -33821,6 +33883,16 @@ static void ERSPGConfigurePill(UIView *pill) {
     // 每 tick 刷新胶囊引用与缓存帧（胶囊实例/位置可能变化，翻页变圆点等）。
     ERSPGAttachPillTouchHook(((UIView *)pill).class);  // 1.2.0-30 触摸活动观察
     sERSPGPillRef = pill;
+    // 1.2.0-47 · 身份锁：只有"底部小胶囊"才有资格被锁定（高度≤44 且位于屏幕底部
+    // 1/4）。搜索层借用的大胶囊（高 48、y 中部）永远不会上锁——扫描/追踪从此
+    // 不会被它顶替。
+    if (ERSPGIsBottomPill(pill)) {
+        BOOL wasLocked = (sERSPGPillLocked == pill);
+        sERSPGPillLocked = pill;
+        if (!wasLocked) ERLogInfo(@"SPG-PILLLOCK acquired cls=%@ frame=%@",
+                                  NSStringFromClass(pill.class),
+                                  NSStringFromCGRect(pill.frame));
+    }
     if (pill.window) {
         CGRect f = [pill convertRect:pill.bounds toView:pill.window];
         if (!CGRectIsEmpty(f)) {
@@ -34001,7 +34073,53 @@ static void ERSPGScanTick(void) {
         // 未归还，扫描会命中一个父视图 hidden=1 的搜索层胶囊副本（追踪它=全面
         // 消失）。父视图隐藏的候选不再追踪，改为触发 SBRootFolderView 重排版
         // 催系统重建桌面胶囊。
+        // 1.2.0-47 · 身份锁优先：-46 日志实锤——第二次点击搜索后追踪实例被切成
+        // 搜索层大胶囊（frame {8,496,414,48}），返回后残局全面消失。治本方案：
+        // 认准一个"底部小胶囊"，只要它还活着就绝不换实例；锁失效（被借走/移除）
+        // 时也不另寻新欢，只催 SBRootFolderView 重建，重建出的新胶囊由下轮扫描
+        // 重新锁定。（erFallback 声明前置于本块：C++ goto 不得跨越其初始化）
         UIView *erFallback = nil;
+        {
+            UIView *locked = sERSPGPillLocked;
+            BOOL lockAlive = locked && locked.window &&
+                             !(locked.superview && locked.superview.hidden) && !locked.hidden;
+            if (lockAlive) {
+                ERSPGConfigurePill(locked);
+                goto erScanDone;
+            }
+            if (locked && !lockAlive) {
+                static NSTimeInterval sERLastLockGone = 0;
+                NSTimeInterval nlg = [[NSDate date] timeIntervalSince1970];
+                if (nlg - sERLastLockGone > 5.0) {
+                    sERLastLockGone = nlg;
+                    ERLogInfo(@"SPG-PILLLOCK lost (borrowed/removed) — coax rebuild, no re-hunt");
+                }
+                sERSPGPillLocked = nil;
+                sERSPGPillRef = nil;
+                // 复用重排版催重建逻辑（下方代码块同名节流，直接 fall through 到它）
+                {
+                    static NSTimeInterval sERLastCoax2 = 0;
+                    NSTimeInterval ncoax2 = [[NSDate date] timeIntervalSince1970];
+                    if (ncoax2 - sERLastCoax2 > 5.0) {
+                        sERLastCoax2 = ncoax2;
+                        BOOL coaxed2 = NO;
+                        for (UIWindow *w in ERAllApplicationWindows()) {
+                            NSMutableArray *st3 = [NSMutableArray arrayWithObject:w];
+                            while (st3.count) {
+                                UIView *v3 = st3.lastObject; [st3 removeLastObject];
+                                if ([NSStringFromClass(v3.class) isEqualToString:@"SBRootFolderView"]) {
+                                    [v3 setNeedsLayout];
+                                    coaxed2 = YES;
+                                }
+                                [st3 addObjectsFromArray:v3.subviews];
+                            }
+                        }
+                        if (coaxed2) ERLogInfo(@"SPG-PILLLOCK coax relayout");
+                    }
+                }
+                goto erScanDone;
+            }
+        }
         for (UIView *root in roots) {
             NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
             NSInteger guard = 0;
