@@ -58,7 +58,9 @@ static void ERGestureWriteValue(NSString *key, NSInteger value) {
 }
 
 // 1.2.0-40 · 最后一页是资源库：显示"资源库"而非"第N页"
+// 1.2.0-56 · -1 = 负一屏（今天视图）
 static NSString *ERGesturePageText(NSInteger value, NSInteger pageCount) {
+    if (value == -1) return @"负一屏";
     if (value >= 1 && pageCount >= 1 && value == pageCount) return @"资源库";
     return value >= 1 ? [NSString stringWithFormat:@"第%ld页", (long)value] : @"无动作";
 }
@@ -147,6 +149,8 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     CGRect anchorRect = [anchor convertRect:anchor.bounds toView:window];
     NSInteger pageCount = ERGesturePageCount();
     NSMutableArray<NSString *> *options = [NSMutableArray arrayWithObject:@"无动作"];
+    // 1.2.0-56 · idx 1 = 负一屏（值 -1），其后才是页码序列
+    [options addObject:@"负一屏"];
     // 1.2.0-11 · 筛选：其它手势已占用的页不再出现（无动作恒可选）。
     for (NSInteger p = 1; p <= pageCount; p++) {
         if ([excludePages containsObject:@(p)]) continue;
@@ -283,7 +287,9 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     // 这里就是要用老式 contentEdgeInsets 做内边距。
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 10, 5, 10);
+    // 1.2.0-56 · 左内边距 10→3（用户拍板"就差一点点"）：文本可用宽度 +7pt，
+    // 「第10/12/13页」完整显示；右侧与箭头槽不动。
+    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 3, 5, 10);
 #pragma clang diagnostic pop
     [_valueButton addTarget:self action:@selector(_erValueTapped)
            forControlEvents:UIControlEventTouchUpInside];
@@ -412,15 +418,17 @@ static void ERGestureShowDropdown(UIButton *anchor, NSString *current,
     }
     __weak typeof(self) wself = self;
     ERGestureShowDropdown(_valueButton, ERGestureValueText(ERGestureReadValue(key)), taken, ^(NSInteger idx) {
-        // 1.2.0-11 · 筛选后 options 下标≠页码：idx 0=无动作，否则取「可选页序列」第 idx 项。
+        // 1.2.0-56 · idx 0=无动作，idx 1=负一屏(-1)，idx≥2 取「可选页序列」第 idx-2 项。
         NSInteger page = 0;
-        if (idx >= 1) {
+        if (idx == 1) {
+            page = -1;
+        } else if (idx >= 2) {
             NSInteger cnt = ERGesturePageCount();
             NSMutableArray<NSNumber *> *avail = [NSMutableArray array];
             for (NSInteger p = 1; p <= cnt; p++) {
                 if (![taken containsObject:@(p)]) [avail addObject:@(p)];
             }
-            if (idx - 1 < (NSInteger)avail.count) page = avail[idx - 1].integerValue;
+            if (idx - 2 < (NSInteger)avail.count) page = avail[idx - 2].integerValue;
         }
         ERGestureWriteValue(key, page);
         [wself _erRefreshValue];
