@@ -488,6 +488,8 @@ static void ERGestureShowDropdown(UIButton *anchor,
             }
         });
     };
+    // 1.2.0-62 · 诊断：确认设置进程加载的是新代码（一级应为 3 项）
+    ERGPrefsLog(@"gesture dropdown open key=%@ code=-62 level1=3", key);
     ERGestureShowDropdown(btn, @[@"无动作", @"桌面页 ›", @"文件夹 ›"],
                           ERGestureValueText(ERGestureReadValue(key)), pick);
 }
