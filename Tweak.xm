@@ -8,7 +8,6 @@
 #import <stdarg.h>
 #import <stdlib.h>
 #import <string.h>
-#import <execinfo.h> // 1.2.0-34 setCurrentPage: 回溯探针
 // 1.0.1：控制按钮的动作（注销 / 安全模式 / 用户空间重启 / 重启）用 posix_spawnp
 // 直接 exec 设备上的命令行工具，不经过 shell。posix_spawnp 会按 PATH 查找，
 // 所以 rootless(/var/jb) 与 roothide(随机 jbroot) 两种前缀都不用在这里特判。
@@ -32221,15 +32220,6 @@ static BOOL ERSPGShouldFire(void);
 // 全局唯一 window pan（触摸不落胶囊视图，pan 必须挂上层）。
 static __weak UIView *sERSPGPillRef = nil;
 static CGRect sERSPGPillWinFrame = CGRectZero;
-// 1.2.0-41 · 实时帧：-40 日志实锤系统翻页时胶囊会缩放移动（pillWinFrame 在
-// {187.72,710.9} 与 {184.62,744.6} 间横跳），防抖缓存帧与真帧错位导致命中判定
-// 一半 outside 一半 ok（点击/拖拽失灵）。命中判定改为每次实时转换胶囊 frame。
-static CGRect ERSPGPillRTWinFrame(void) {
-    UIView *pill = sERSPGPillRef;
-    if (!pill || !pill.window) return sERSPGPillWinFrame;
-    CGRect f = [pill convertRect:pill.bounds toView:pill.window];
-    return CGRectIsEmpty(f) ? sERSPGPillWinFrame : f;
-}
 // 1.2.0-29 · 胶囊帧集合：桌面有两个 SBHSearchPillView（底部真胶囊 + 搜索层顶部胶囊），单缓存帧会在两者间跳变，-28 日志实锤闸门拿错帧全放行。改用集合存所有候选帧，闸门命中任一帧即拒。
 static NSMutableArray<NSValue *> *gERSPGPillFrameList = nil;
 static void ERSPGPageCtlTouchGateBegin(UIView *from);
@@ -32277,9 +32267,7 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                // 1.2.0-41 · 实时帧取代防抖缓存帧（胶囊翻页时在动，缓存帧错位）。
-                CGRect rtFrame = ERSPGPillRTWinFrame();
-                CGRect f = CGRectInset(rtFrame, -6.0, -6.0);
+                CGRect f = CGRectInset(sERSPGPillWinFrame, -6.0, -6.0);
                 inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
@@ -32308,9 +32296,8 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                     if (now - sERLastOutside > 1.0) {
                         sERLastOutside = now;
-                        ERLogInfo(@"SPG-PAN begin outside p=(%.0f,%.0f) pillWinFrame=%@ rt=%@",
-                                  p.x, p.y, NSStringFromCGRect(sERSPGPillWinFrame),
-                                  NSStringFromCGRect(rtFrame));
+                        ERLogInfo(@"SPG-PAN begin outside p=(%.0f,%.0f) pillWinFrame=%@",
+                                  p.x, p.y, NSStringFromCGRect(sERSPGPillWinFrame));
                     }
                 }
             }
@@ -32350,14 +32337,7 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         NSInteger page = ERSPGInt(key, 0);
         if (!ERSPGShouldFire()) return;   // 与 touches 通道去重（含无动作页）
         objc_setAssociatedObject(gesture, @selector(erPanFired), @YES, OBJC_ASSOCIATION_RETAIN);
-        // 1.2.0-42 · 附带四方向配置值：armed page=0（拖拽无反应）到底是没配置还是
-        // 读不到配置，一眼可辨。
-        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld cfg[L=%ld R=%ld U=%ld D=%ld]",
-                  t.x, t.y, range, (long)page,
-                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureLeft", 0),
-                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureRight", 0),
-                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureUp", 0),
-                  (long)ERSPGInt(@"HomeScreen.SearchPill.GestureDown", 0));
+        ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f page=%ld", t.x, t.y, range, (long)page);
         if (page < 1) return;   // 无动作 = 系统默认（不震不跳）
         ERSPGHaptic();           // 达标提示震（一次）
         objc_setAssociatedObject(gesture, @selector(erPanPendingPage), @(page), OBJC_ASSOCIATION_RETAIN);
@@ -32808,9 +32788,6 @@ static void ERSPGAttachGRGate(Class cls) {
 
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
-        // 1.2.0-41 · 实时帧优先（胶囊翻页时在动，缓存帧会错位）
-        CGRect rf = CGRectInset(ERSPGPillRTWinFrame(), inset, inset);
-        if (!CGRectIsEmpty(rf) && CGRectContainsPoint(rf, wp)) return YES;
         CGRect f0 = CGRectInset(sERSPGPillWinFrame, inset, inset);
         if (!CGRectIsEmpty(f0) && CGRectContainsPoint(f0, wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
@@ -32924,10 +32901,8 @@ static void ERSPGAttachSCOHook(Class cls) {
     struct { SEL sel; IMP imp; const char *types; } items[] = {
         { @selector(setContentOffset:),          (IMP)ERSPGSCOOff1, "v@:{CGPoint=dd}"   },
         { @selector(setContentOffset:animated:), (IMP)ERSPGSCOOff2, "v@:{CGPoint=dd}B"  },
-        // 1.2.0-34 · 私有变体：系统内部滚动常走 _setContentOffset:（-33 日志实锤 setContentOffset: 只被拦 1 次但圆点仍动）
-        { @selector(_setContentOffset:),         (IMP)ERSPGSCOOff1, "v@:{CGPoint=dd}"   },
     };
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
         Method m = class_getInstanceMethod(cls, items[i].sel);
         IMP orig = m ? method_getImplementation(m) : NULL;
         NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
@@ -32938,654 +32913,6 @@ static void ERSPGAttachSCOHook(Class cls) {
     }
     [gERSPGSCOHooked addObject:cls];
     ERLogInfo(@"SPG-COBLOCK attach cls=%@", cn);
-}
-
-// ===== 1.2.0-33 · 第三条路：图标控制器 selector 翻页链 =====
-// -32 实锤：用户"拖到中间圆点不震、两边才震"= 翻页一直在发生（震动是边界页反弹触觉）——翻页走的是 SBIconController 的
-// setCurrentIconListIndex:/scrollToIconListIndex: 链（内部直接动画，不起 scrollview pan、可能绕开 setContentOffset）。
-// 活动期丢弃非我方调用（sERSPGOwnJump 放行），SPG-ICBLOCK 日志。
-static NSMutableDictionary<NSString *, NSValue *> *gERSPGICOOrig = nil;
-static NSMutableSet *gERSPGICOHooked = nil;
-static void ERSPGICOHook1(id self, SEL _cmd, NSInteger idx);
-static void ERSPGICOHook2(id self, SEL _cmd, NSInteger idx, BOOL anim);
-
-static IMP ERSPGICOLookupOrig(id self, SEL _cmd) {
-    Class c = object_getClass(self);
-    while (c) {
-        NSValue *ov = gERSPGICOOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
-        if (ov) return (IMP)ov.pointerValue;
-        c = class_getSuperclass(c);
-    }
-    return NULL;
-}
-
-static BOOL ERSPGICOShouldBlock(void) {
-    return ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0;
-}
-
-static void ERSPGICOHook1(id self, SEL _cmd, NSInteger idx) {
-    if (ERSPGICOShouldBlock()) return;
-    IMP o = ERSPGICOLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, NSInteger))o)(self, _cmd, idx);
-}
-static void ERSPGICOHook2(id self, SEL _cmd, NSInteger idx, BOOL anim) {
-    if (ERSPGICOShouldBlock()) return;
-    IMP o = ERSPGICOLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, NSInteger, BOOL))o)(self, _cmd, idx, anim);
-}
-
-static void ERSPGAttachICOHook(Class cls) {
-    if (!cls) return;
-    if (!gERSPGICOHooked) gERSPGICOHooked = [NSMutableSet new];
-    if ([gERSPGICOHooked containsObject:cls]) return;
-    if (!gERSPGICOOrig) gERSPGICOOrig = [NSMutableDictionary new];
-    NSString *cn = NSStringFromClass(cls);
-    struct { SEL sel; IMP imp; const char *types; } items[] = {
-        { @selector(setCurrentIconListIndex:),         (IMP)ERSPGICOHook1, "v@:q"  },
-        { @selector(_setCurrentIconListIndex:),        (IMP)ERSPGICOHook1, "v@:q"  },
-        { @selector(scrollToIconListIndex:animated:),  (IMP)ERSPGICOHook2, "v@:qB" },
-        { @selector(_scrollToIconListIndex:animated:), (IMP)ERSPGICOHook2, "v@:qB" },
-    };
-    int n = 0;
-    for (int i = 0; i < 4; i++) {
-        Method m = class_getInstanceMethod(cls, items[i].sel);
-        if (!m) continue;
-        IMP orig = method_getImplementation(m);
-        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
-        if (orig && !gERSPGICOOrig[key]) gERSPGICOOrig[key] = [NSValue valueWithPointer:(void *)orig];
-        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types) && m)
-            method_setImplementation(m, items[i].imp);
-        n++;
-    }
-    [gERSPGICOHooked addObject:cls];
-    ERLogInfo(@"SPG-ICBLOCK attach cls=%@ n=%d", cn, n);
-}
-
-// ===== 1.2.0-34/35 · 圆点回溯探针 =====
-// -34 实锤：setCurrentPage: 零调用（心跳 icoCls=1 挂载正常、ICBLOCK 四 selector 零命中）→
-// 圆点位移不走 currentPage 属性通道（直接改 ivar 或直接驱动指示器视图位置）。
-// -35 升级：直接 hook 圆点指示器本体 _UIPageControlIndicatorContentView 的
-// setFrame:/setBounds:/setCenter:（+ UIPageControl/_UIPageControl 的 setCurrentPage: 与
-// updateCurrentPageDisplay 旁路），圆点动一帧就打印调用者 backtrace（0.5s 节流）。
-// 全部只观察不拦截，照常转发，零功能风险。
-static NSMutableDictionary<NSString *, NSValue *> *gERSPGPCOrig = nil;
-static NSMutableSet *gERSPGPCHooked = nil;
-
-static IMP ERSPGPCLookupOrig(id self, SEL _cmd) {
-    Class c = object_getClass(self);
-    while (c) {
-        NSValue *v = gERSPGPCOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
-        if (v) return (IMP)v.pointerValue;
-        c = class_getSuperclass(c);
-    }
-    return NULL;
-}
-static BOOL ERSPGPCShouldTrace(void) {
-    return ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0;
-}
-static void ERSPGPCTraceBT(id self, NSString *tag) {
-    static NSTimeInterval sERLastPCT = 0;
-    NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    if (now - sERLastPCT < 0.5) return;
-    sERLastPCT = now;
-    void *bt[14];
-    int nb = backtrace(bt, 14);
-    char **syms = backtrace_symbols(bt, nb);
-    if (!syms) return;
-    NSMutableString *s = [NSMutableString stringWithFormat:
-        @"SPG-PCTRACE %@ cls=%@ bt=", tag, NSStringFromClass(object_getClass(self))];
-    for (int i = 1; i < nb; i++) [s appendFormat:@"%s|", syms[i]];
-    ERLogInfo(@"%@", s);
-    free(syms);
-}
-static void ERSPGPCFrameHook(id self, SEL _cmd, CGRect f) {
-    if (ERSPGPCShouldTrace()) ERSPGPCTraceBT(self, @"frame");
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, CGRect))o)(self, _cmd, f);
-}
-static void ERSPGPCCenterHook(id self, SEL _cmd, CGPoint c) {
-    if (ERSPGPCShouldTrace()) ERSPGPCTraceBT(self, @"center");
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, CGPoint))o)(self, _cmd, c);
-}
-static void ERSPGPCPageHook(id self, SEL _cmd, NSInteger p) {
-    if (ERSPGPCShouldTrace()) ERSPGPCTraceBT(self, @"page");
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, NSInteger))o)(self, _cmd, p);
-}
-static void ERSPGPCVoidHook(id self, SEL _cmd) {
-    if (ERSPGPCShouldTrace()) ERSPGPCTraceBT(self, @"upd");
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL))o)(self, _cmd);
-}
-static void ERSPGAttachPCTrace(Class cls) {
-    if (!cls) return;
-    if (!gERSPGPCHooked) gERSPGPCHooked = [NSMutableSet new];
-    if ([gERSPGPCHooked containsObject:cls]) return;
-    if (!gERSPGPCOrig) gERSPGPCOrig = [NSMutableDictionary new];
-    [gERSPGPCHooked addObject:cls];
-    NSString *cn = NSStringFromClass(cls);
-    struct { SEL sel; IMP imp; const char *types; } items[] = {
-        { @selector(setFrame:),                (IMP)ERSPGPCFrameHook,  "v@:{CGRect={CGPoint=dd}{CGSize=dd}}" },
-        { @selector(setBounds:),               (IMP)ERSPGPCFrameHook,  "v@:{CGRect={CGPoint=dd}{CGSize=dd}}" },
-        { @selector(setCenter:),               (IMP)ERSPGPCCenterHook, "v@:{CGPoint=dd}" },
-        { @selector(setCurrentPage:),          (IMP)ERSPGPCPageHook,   "v@:q" },
-        { @selector(updateCurrentPageDisplay), (IMP)ERSPGPCVoidHook,   "v@:" },
-    };
-    int n = 0;
-    for (int i = 0; i < 5; i++) {
-        Method m = class_getInstanceMethod(cls, items[i].sel);
-        if (!m) continue;
-        IMP orig = method_getImplementation(m);
-        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
-        if (!gERSPGPCOrig[key]) gERSPGPCOrig[key] = [NSValue valueWithPointer:(void *)orig];
-        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types))
-            method_setImplementation(m, items[i].imp);
-        n++;
-    }
-    ERLogInfo(@"SPG-PCTRACE attach cls=%@ n=%d", cn, n);
-}
-
-// ===== 1.2.0-36 · 圆点焊死：真凶实锤为 CallAssist.dylib =====
-// -35 backtrace 实锤：圆点 frame 由 CallAssist.dylib（TweakInject 注入 SpringBoard 的通话助手
-// 整合插件）在布局遍历中直接调 setFrame: 驱动——完全绕开 currentPage 属性与一切 selector 通道，
-// 这就是 -33/-34 全部封锁无效的原因。对策：胶囊触摸活动期（非我方跳页）直接丢弃
-// _UIPageControlIndicatorContentView 的 setFrame:/setCenter: —— 不管谁在推，圆点都动不了。
-// 松手后照常恢复布局；我方跳页走 sERSPGOwnJump 放行。setBounds 保持只观察（防误伤布局）。
-static void ERSPGPCFrameBlockHook(id self, SEL _cmd, CGRect f) {
-    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
-        static NSTimeInterval sERLastPCB = 0;
-        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        ((UIView *)self).hidden = YES;  // 1.2.0-37 B 方案兜底：封锁瞬间顺带隐藏
-        if (now - sERLastPCB > 2.0) {
-            sERLastPCB = now;
-            ERLogInfo(@"SPG-PCBLOCK frame cls=%@", NSStringFromClass(object_getClass(self)));
-        }
-        return;
-    }
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, CGRect))o)(self, _cmd, f);
-}
-static void ERSPGPCCenterBlockHook(id self, SEL _cmd, CGPoint c) {
-    if (ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO) && !sERSPGOwnJump && gERSPGPageCtlActive > 0) {
-        static NSTimeInterval sERLastPCB2 = 0;
-        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        ((UIView *)self).hidden = YES;  // 1.2.0-37 B 方案兜底：封锁瞬间顺带隐藏
-        if (now - sERLastPCB2 > 2.0) {
-            sERLastPCB2 = now;
-            ERLogInfo(@"SPG-PCBLOCK center cls=%@", NSStringFromClass(object_getClass(self)));
-        }
-        return;
-    }
-    IMP o = ERSPGPCLookupOrig(self, _cmd);
-    if (o) ((void (*)(id, SEL, CGPoint))o)(self, _cmd, c);
-}
-static void ERSPGAttachPCBlock(Class cls) {
-    if (!cls) return;
-    if (!gERSPGPCHooked) gERSPGPCHooked = [NSMutableSet new];
-    if (!gERSPGPCOrig) gERSPGPCOrig = [NSMutableDictionary new];
-    NSString *cn = NSStringFromClass(cls);
-    struct { SEL sel; IMP imp; const char *types; } items[] = {
-        { @selector(setFrame:),  (IMP)ERSPGPCFrameBlockHook,  "v@:{CGRect={CGPoint=dd}{CGSize=dd}}" },
-        { @selector(setCenter:), (IMP)ERSPGPCCenterBlockHook, "v@:{CGPoint=dd}" },
-    };
-    int n = 0;
-    for (int i = 0; i < 2; i++) {
-        Method m = class_getInstanceMethod(cls, items[i].sel);
-        if (!m) continue;
-        IMP orig = method_getImplementation(m);
-        NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
-        if (!gERSPGPCOrig[key]) gERSPGPCOrig[key] = [NSValue valueWithPointer:(void *)orig];
-        if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types))
-            method_setImplementation(m, items[i].imp);
-        n++;
-    }
-    ERLogInfo(@"SPG-PCBLOCK attach cls=%@ n=%d", cn, n);
-}
-
-// ===== 1.2.0-37 · B 方案：胶囊常驻 + 自绘圆点 =====
-// -36 实锤 CallAssist 换 setBounds: 继续驱动圆点（焊不死）。改道（用户方案）：
-// 系统圆点指示器直接隐藏、胶囊常驻不变形，圆点完全自绘——位置/样式全可控，
-// CallAssist 碰不到我们的视图。当前页数据源：SBIconScrollView 的 contentOffset
-// 换算（page = round(offset.x/页宽)），CADisplayLink 常驻驱动，无 KVO 生命周期风险。
-static UIView *sERSPGDotsView = nil;
-static NSMutableArray<UIView *> *sERSPGDotItems = nil;
-static UIView *sERSPGPillBg = nil;
-static __weak UIView *sERSPGNativeBg = nil;   // 1.2.0-46 系统原生胶囊底色视图   // 1.2.0-41 自绘胶囊底（系统底色被折腾没了，只剩"搜索"label）
-static __weak UIScrollView *sERSPGIconSVRef = nil;
-static NSInteger sERSPGDotsPage = -1;
-static NSInteger sERSPGDotsPages = -1;
-static __weak UIView *sERSPGHomePCRef = nil;   // 1.2.0-38 桌面 _UIPageControl 弱引用（读真实页数）
-static CGFloat sERSPGDotsLastX = -1.0;         // 上次 offset.x（判定滚动变化）
-static NSTimeInterval sERSPGDotsLastChange = 0; // 最后一次翻页时刻（3s 无翻页→恢复搜索胶囊）
-static __weak UIView *sERSPGPillLocked = nil;  // 1.2.0-47 身份锁：认准一个底部真胶囊，拒绝被搜索借用实例顶替
-static NSInteger sERSPGPCLastCur = -1;         // 1.2.0-47 页控件 currentPage 轮询记忆（翻页活动第二判据）
-static void ERSPGDotsRefresh(void);
-
-// 1.2.0-47 · 身份锁判据：只认"底部小胶囊"——窗口坐标高度 ≤44pt 且位于屏幕底部 1/4
-// 区域。搜索层借用的大胶囊（实锤 frame {8,496,414,48}：高 48、y 在屏幕中部）天然排除。
-static BOOL ERSPGIsBottomPill(UIView *v) {
-    if (!v || !v.window) return NO;
-    CGRect wf = [v convertRect:v.bounds toView:nil];
-    CGFloat sh = [UIScreen mainScreen].bounds.size.height;
-    return (wf.size.height > 1.0 && wf.size.height <= 44.0) &&
-           (CGRectGetMaxY(wf) >= sh * 0.75);
-}
-
-static UIScrollView *ERSPGFindIconSV(void) {
-    // 1.2.0-41 · 旧实现返回全窗口遍历到的第一个 SBIconScrollView——iOS 17 文件夹/
-    // 小组件里也有同名视图，抓错后 offset 永不变 → 圆点永不出现。改为评分制：
-    // 主屏窗口 +1000，宽度与屏宽越接近分越高。
-    UIScrollView *best = nil;
-    CGFloat bestScore = -1e9;
-    CGFloat sw = [UIScreen mainScreen].bounds.size.width;
-    for (UIWindow *w in ERAllApplicationWindows()) {
-        BOOL isHome = [NSStringFromClass(w.class) containsString:@"HomeScreen"];
-        NSMutableArray *stack = [NSMutableArray arrayWithObject:w];
-        while (stack.count) {
-            UIView *v = stack.lastObject; [stack removeLastObject];
-            if ([NSStringFromClass(v.class) isEqualToString:@"SBIconScrollView"] ||
-                [v isKindOfClass:%c(SBIconScrollView)]) {
-                UIScrollView *sv = (UIScrollView *)v;
-                CGFloat score = (isHome ? 1000.0 : 0.0) - fabs(sv.bounds.size.width - sw);
-                if (score > bestScore) { bestScore = score; best = sv; }
-            }
-            [stack addObjectsFromArray:v.subviews];
-        }
-    }
-    return best;
-}
-
-static void ERSPGDotsRebuild(NSInteger pages) {
-    for (UIView *d in sERSPGDotItems) [d removeFromSuperview];
-    [sERSPGDotItems removeAllObjects];
-    // 1.2.0-41 · 用户规格：固定 3 颗、翻页高亮循环（高亮 = 页码 % 3），页数不再
-    // 决定点数（-40 页数多时点太多颗）。
-    CGFloat ds = 5.0, gap = 5.0;
-    NSInteger n = 3;
-    CGFloat w = n * ds + (n - 1) * gap;
-    sERSPGDotsView.frame = CGRectMake(0, 0, w, ds);
-    for (NSInteger i = 0; i < n; i++) {
-        UIView *d = [[UIView alloc] initWithFrame:CGRectMake(i * (ds + gap), 0, ds, ds)];
-        d.layer.cornerRadius = ds / 2.0;
-        d.backgroundColor = [UIColor colorWithWhite:1 alpha:0.45];
-        d.userInteractionEnabled = NO;
-        [sERSPGDotsView addSubview:d];
-        [sERSPGDotItems addObject:d];
-    }
-}
-
-static void ERSPGDotsRefresh(void) {
-    @try {
-        // 1.2.0-40 · 胶囊状态探针（2s 节流）：hidden/alpha/superview/frame/transform
-        // + 祖先链逐级 hidden/alpha 检查——揭示胶囊被谁藏在哪一级（用户实测禁用
-        // 全部其他插件仍不显示 = 我们自己的 PCHIDE 连坐嫌疑最大）。
-        {
-            UIView *pill = sERSPGPillRef;
-            static NSTimeInterval sERLastPS = 0;
-            NSTimeInterval nw = [[NSDate date] timeIntervalSince1970];
-            if (pill && nw - sERLastPS > 2.0) {
-                sERLastPS = nw;
-                NSMutableString *s = [NSMutableString stringWithFormat:
-                    @"SPG-PILLSTATE cls=%@ hidden=%d alpha=%.2f ue=%d sv=%@ win=%d frame=%@ tf=%@ op=%.2f anc=",
-                    NSStringFromClass(pill.class), pill.hidden ? 1 : 0, pill.alpha,
-                    pill.userInteractionEnabled ? 1 : 0,
-                    pill.superview ? NSStringFromClass(pill.superview.class) : @"(nil)",
-                    pill.window ? 1 : 0,
-                    NSStringFromCGRect(pill.frame),
-                    NSStringFromCGAffineTransform(pill.transform),
-                    pill.layer.opacity];
-                UIView *a = pill.superview;
-                int depth = 0;
-                while (a && depth < 12) {
-                    [s appendFormat:@"%@%d[h%d,a%.1f]", depth ? @">" : @"", depth,
-                     a.hidden ? 1 : 0, a.alpha];
-                    if (a.hidden || a.alpha < 0.99) {
-                        // 记录藏匿祖先的类名（完整）
-                        [s appendFormat:@"{%@}", NSStringFromClass(a.class)];
-                    }
-                    a = a.superview; depth++;
-                }
-                ERLogInfo(@"%@", s);
-            }
-        }
-        UIScrollView *sv = sERSPGIconSVRef;
-        // 1.2.0-41 · 删掉 contentSize 早退（抓到文件夹/小组件滚动视图时它会把
-        // 圆点永久拦下；抓错视图的问题由 FindIconSV 评分制解决）
-        if (!sERSPGDotsView || !sv || sv.bounds.size.width < 1) return;
-        // 页数：三源——桌面页控件 numberOfPages（-42 实锤本机会假报 1，仅 ≥2 可信）
-        // → contentSize 换算 → 已发布 PageCount
-        NSInteger pages = 0;
-        UIView *pc = sERSPGHomePCRef;
-        NSString *pcCls = pc ? NSStringFromClass(pc.class) : @"(nil)";
-        NSInteger npc = 0;
-        if (pc && [pc respondsToSelector:@selector(numberOfPages)])
-            npc = [(UIPageControl *)pc numberOfPages];
-        if (npc >= 2) pages = npc;
-        if (pages < 2) pages = (NSInteger)lround(sv.contentSize.width / sv.bounds.size.width);
-        NSInteger pagesRaw = pages;
-        if (pages < 1) pages = ERSPGInt(@"HomeScreen.PageCount", 0);   // 1.2.0-42 第三源
-        // 1.2.0-42 · DOTSSTATE 探针（2s 节流）前移到页数守卫之前——-41 版探针排在
-        // `pages<1 return` 之后，页数为 0 时探针被一起拦掉，盲区恰好盖住真因。
-        {
-            static NSTimeInterval sERLastDS = 0;
-            NSTimeInterval nds = [[NSDate date] timeIntervalSince1970];
-            if (nds - sERLastDS > 2.0) {
-                sERLastDS = nds;
-                NSInteger dbgCur = -1;
-                if (pc && [pc respondsToSelector:@selector(currentPage)])
-                    dbgCur = [(UIPageControl *)pc currentPage];
-                ERLogInfo(@"SPG-DOTSSTATE sv=%@ win=%d bw=%.0f cw=%.0f ox=%.1f pc=%@ npc=%ld cur=%ld pages=%ld dAlpha=%.1f pillBg=%d lock=%d",
-                          NSStringFromClass(sv.class), sv.window ? 1 : 0,
-                          sv.bounds.size.width, sv.contentSize.width, sv.contentOffset.x,
-                          pcCls, (long)npc, (long)dbgCur, (long)pages, sERSPGDotsView.alpha,
-                          sERSPGPillBg ? 1 : 0,
-                          (sERSPGPillLocked != nil) ? 1 : 0);
-            }
-        }
-        // 1.2.0-48 · 页数上限 12→24：-47 用户日志实锤桌面 14 页，pages=14 被
-        // 旧上限 12 拦截直接 return——ox 在变而 dAlpha 恒 0 的真正死因。
-        if (pages < 1 || pages > 24) return;
-        CGFloat x = sv.contentOffset.x;
-        NSInteger page = (NSInteger)lround(x / sv.bounds.size.width);
-        page = MIN(MAX(page, 0), pages - 1);
-        // 1.2.0-47 · 翻页活动双判据：offset 变化（原判据）+ 页控件 currentPage 轮询
-        //（-46 日志实锤 ox 有变化但 dAlpha=0——sv 引用可能与实际翻页滚动视图不同步，
-        // currentPage 变化兜底触发圆点亮显）。
-        NSInteger pcCur = -1;
-        if (pc && npc >= 1 && [pc respondsToSelector:@selector(currentPage)])
-            pcCur = [(UIPageControl *)pc currentPage];
-        BOOL svMoved = (sERSPGDotsLastX < 0 || fabs(x - sERSPGDotsLastX) > 0.5);
-        BOOL pcAdvanced = (pcCur >= 0 && sERSPGPCLastCur >= 0 && pcCur != sERSPGPCLastCur);
-        if (pcAdvanced && !svMoved) {
-            // currentPage 变了但 offset 没动：sv 引用失联，丢弃等下个 tick 重扫
-            sERSPGIconSVRef = nil;
-            ERLogInfo(@"SPG-SVSTALE pc cur %ld->%ld but ox static (%.1f) — refind sv",
-                      (long)sERSPGPCLastCur, (long)pcCur, x);
-        }
-        sERSPGPCLastCur = pcCur;
-        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        if (svMoved || pcAdvanced) {
-            if (svMoved) sERSPGDotsLastX = x;
-            sERSPGDotsLastChange = now;
-        }
-        BOOL pagingActive = (gERSPGPageCtlActive > 0) || (now - sERSPGDotsLastChange < 3.0);
-        // 1.2.0-43 · 翻页期间隐藏胶囊内文字/图标（底壳与圆点除外）——-42 实锤
-        // "搜索"label 与圆点叠显互相遮挡；3 秒恢复时自动放出来。
-        {
-            UIView *pillH = sERSPGPillRef;
-            if (pillH) {
-                for (UIView *v in pillH.subviews) {
-                    if (v == sERSPGDotsView || v == sERSPGPillBg || v == sERSPGNativeBg) continue;
-                    if (v.hidden != pagingActive) v.hidden = pagingActive;
-                }
-            }
-        }
-        if (pages != sERSPGDotsPages) { ERSPGDotsRebuild(pages); sERSPGDotsPages = pages; }
-        CGFloat targetAlpha = pagingActive ? 1.0 : 0.0;
-        if (sERSPGDotsView.alpha != targetAlpha) sERSPGDotsView.alpha = targetAlpha;
-        if (targetAlpha > 0 && (page != sERSPGDotsPage || pages != sERSPGDotsPages)) {
-            sERSPGDotsPage = page;
-            NSInteger hl = page % 3;   // 1.2.0-41 · 3 颗循环
-            for (NSInteger i = 0; i < (NSInteger)sERSPGDotItems.count; i++) {
-                UIView *d = sERSPGDotItems[i];
-                d.backgroundColor = [UIColor colorWithWhite:1 alpha:(i == hl) ? 0.95 : 0.40];
-                d.transform = (i == hl) ? CGAffineTransformMakeScale(1.2, 1.2) : CGAffineTransformIdentity;
-            }
-        }
-        // 位置：胶囊内部居中（1.2.0-38 用户规格：圆点在胶囊里面）
-        UIView *pill = sERSPGPillRef;
-        if (pill && sERSPGDotsView.superview == pill && !CGRectIsEmpty(pill.bounds)) {
-            CGRect nf = CGRectMake((pill.bounds.size.width - sERSPGDotsView.frame.size.width) / 2.0,
-                                   (pill.bounds.size.height - sERSPGDotsView.frame.size.height) / 2.0,
-                                   sERSPGDotsView.frame.size.width, sERSPGDotsView.frame.size.height);
-            if (!CGRectEqualToRect(nf, sERSPGDotsView.frame)) sERSPGDotsView.frame = nf;
-        }
-    } @catch (__unused NSException *e) {}
-}
-
-@interface ERSPGDotsLinkTarget : NSObject @end
-@implementation ERSPGDotsLinkTarget
-+ (instancetype)shared { static ERSPGDotsLinkTarget *s; static dispatch_once_t t; dispatch_once(&t, ^{ s = [self new]; }); return s; }
-- (void)erDotsTick:(CADisplayLink *)__unused l { ERSPGDotsRefresh(); }
-// 1.2.0-43 · 点击进搜索：-42 实锤触摸已进胶囊（hitTest 命中 SBHSearchPillView）
-// 但系统点击处理无声——自挂单击，转发给胶囊上已有的系统单击手势 action（同源）。
-// targets/action/numberOfTapsRequired 在本 SDK 不在 UIGestureRecognizer 声明上，
-// 一律 objc_msgSend 取（CI -43 首次构建实锤 property not found）。
-static NSUInteger ERSPGGRTaps(UIGestureRecognizer *g) {
-    return ((NSUInteger (*)(id, SEL))objc_msgSend)(g, @selector(numberOfTapsRequired));
-}
-static id ERSPGGRTargets(UIGestureRecognizer *g) {
-    return ((id (*)(id, SEL))objc_msgSend)(g, @selector(targets));
-}
-static id ERSPGGRTargetAny(UIGestureRecognizer *g) {
-    id ts = ERSPGGRTargets(g);
-    if ([ts isKindOfClass:[NSSet class]]) return [(NSSet *)ts anyObject];
-    if ([ts isKindOfClass:[NSArray class]]) return [(NSArray *)ts firstObject];
-    return nil;
-}
-static SEL ERSPGGRAction(UIGestureRecognizer *g) {
-    return ((SEL (*)(id, SEL))objc_msgSend)(g, @selector(action));
-}
-- (void)erPillTap:(UITapGestureRecognizer *)g {
-    @try {
-        UIView *pill = g.view;
-        if (!pill || !pill.window) return;
-        // 1.2.0-45 · -44 SRDUMP 实锤：系统点进搜索的载体是 SBIconController 的
-        // _handleSearchAffordanceTap（胶囊本身无任何点击手势）。单击直接调用它。
-        id ic = ERSPGIconController();
-        if (ic && [(id)ic respondsToSelector:@selector(_handleSearchAffordanceTap)]) {
-            ((void (*)(id, SEL))objc_msgSend)(ic, @selector(_handleSearchAffordanceTap));
-            ERLogInfo(@"SPG-PILLTAP invoked _handleSearchAffordanceTap");
-            return;
-        }
-        // 兜底：胶囊上若存在系统单击手势则转发（-43 旧路径）
-        for (UIGestureRecognizer *gr in pill.gestureRecognizers) {
-            if (gr == g || ![gr isKindOfClass:[UITapGestureRecognizer class]]) continue;
-            if (ERSPGGRTaps(gr) > 1) continue;
-            id target = ERSPGGRTargetAny(gr);
-            if (target) {
-                SEL a = ERSPGGRAction(gr);
-                ((void (*)(id, SEL, id))objc_msgSend)(target, a, gr);
-                ERLogInfo(@"SPG-PILLTAP forwarded sel=%@", NSStringFromSelector(a));
-                return;
-            }
-        }
-        ERLogInfo(@"SPG-PILLTAP no handler (icon ctl missing?)");
-    } @catch (__unused NSException *e) {
-        ERLogInfo(@"SPG-PILLTAP exception");
-    }
-}
-@end
-
-static CADisplayLink *sERSPGDotsLink = nil;
-
-// 1.2.0-49 · 显示守卫已移除（用户拍板）：-37 时代的 setHidden/setAlpha 封锁把系统
-// 的搜索借用流程卡死——进搜索时系统要把胶囊放大移到中部、返回时收回重摆，全被
-// 拦下 → 胶囊冻在放大后的空白状态 = 用户截图中的灰色长方形。防消失改由身份锁 +
-// SBRootFolderView 催重建机制兜底，系统对胶囊的显示管理完全放行。
-static void ERSPGAttachPillGuard(Class __unused cls) {
-    return;
-}
-
-// 1.2.0-43 · 单击手势挂载（每胶囊视图一次）+ 系统手势清单 dump
-static void ERSPGAttachPillTap(UIView *pill) {
-    if (!pill) return;
-    if (objc_getAssociatedObject(pill, @selector(erPillTap:))) return;
-    UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc]
-        initWithTarget:ERSPGDotsLinkTarget.shared action:@selector(erPillTap:)];
-    tap.cancelsTouchesInView = NO;   // 不吞触摸，系统流程照走
-    [pill addGestureRecognizer:tap];
-    objc_setAssociatedObject(pill, @selector(erPillTap:), tap, OBJC_ASSOCIATION_RETAIN);
-    NSMutableString *gs = [NSMutableString string];
-    for (UIGestureRecognizer *g in pill.gestureRecognizers) {
-        [gs appendFormat:@"%@(%lu)%@ ", NSStringFromClass(g.class),
-         (unsigned long)ERSPGGRTaps(g),
-         g.enabled ? @"" : @"!"];
-    }
-    ERLogInfo(@"SPG-PILLGEST grs=[%@]", gs);
-}
-
-// 每 tick 调用（ConfigurePill）：保证滚动视图引用、圆点视图在场（胶囊内部）、显示链启停
-static void ERSPGSyncDots(BOOL enabled) {
-    @try {
-        if (!enabled) {
-            if (sERSPGDotsView) { [sERSPGDotsView removeFromSuperview]; sERSPGDotsView = nil; sERSPGDotItems = nil; }
-            if (sERSPGPillBg) { [sERSPGPillBg removeFromSuperview]; sERSPGPillBg = nil; }
-            // 1.2.0-43 · 关闭时还原可能被翻页显示链藏掉的文字/图标
-            if (sERSPGPillRef) {
-                for (UIView *v in sERSPGPillRef.subviews) if (v.hidden) v.hidden = NO;
-            }
-            sERSPGDotsPage = -1; sERSPGDotsPages = -1;
-            if (sERSPGDotsLink) sERSPGDotsLink.paused = YES;
-            return;
-        }
-        UIView *pill = sERSPGPillRef;
-        if (!pill) return;
-        // 1.2.0-47 · 身份锁校验：只维护被锁定的底部真胶囊。若 pillRef 与锁不一致
-        //（被搜索借用实例顶替过），立刻丢弃引用等扫描按锁逻辑处理。
-        if (sERSPGPillLocked && pill != sERSPGPillLocked) {
-            sERSPGPillRef = nil;
-            return;
-        }
-        // 1.2.0-46 · 失效校验：父视图被藏 = 系统借用未归还的残局实例（-45 实锤），
-        // 维护它没有意义，等扫描换真胶囊。SPG-PILLBAD 记录（5s 节流）。
-        if (pill.superview && pill.superview.hidden) {
-            static NSTimeInterval sERLastPBad = 0;
-            NSTimeInterval npb = [[NSDate date] timeIntervalSince1970];
-            if (npb - sERLastPBad > 5.0) {
-                sERLastPBad = npb;
-                ERLogInfo(@"SPG-PILLBAD tracked pill invalid sv=%@ hidden — skip", NSStringFromClass(pill.superview.class));
-            }
-            return;
-        }
-        // 守卫挂载必须最前（不依赖 window/scrollview）：
-        // -38 日志实锤守卫被前置条件卡死（胶囊被藏后 pill.window 为空直接 return，
-        // 守卫永远没机会挂 → 胶囊彻底消失）。先封死 setHidden/setAlpha 再谈其他。
-        ERSPGAttachPillGuard(pill.class);
-        if (!pill.window) return;   // 被移出窗口：守卫已挂，等下个 tick 圆点恢复
-        if (pill.hidden) pill.hidden = NO;
-        if (pill.alpha < 0.99) pill.alpha = 1.0;
-        // 1.2.0-42 · -41 日志实锤：胶囊区 hitTest 落在 SBFolderScrollAccessoryView
-        // 而不是胶囊 = pill.userInteractionEnabled=NO，点击/触摸永远进不了胶囊
-        //（点击进搜索彻底失效）。按 B 方案规格恢复交互。
-        if (!pill.userInteractionEnabled) {
-            pill.userInteractionEnabled = YES;
-            ERLogInfo(@"SPG-PILL userInteraction restored");
-        }
-        // 1.2.0-48 · 完全放手（用户拍板）：去掉绘制的底板，让原生的显示出来。
-        // 撤掉一切视觉干预——不自绘底、不 remount MTMaterialView、不校正 frame；
-        // 系统底由系统自己渲染。保留：身份锁、点击进搜索、翻页圆点。
-        {
-            // 历史遗留清理：老版本挂上的自绘底彻底退役
-            if (sERSPGPillBg) {
-                [sERSPGPillBg removeFromSuperview];
-                sERSPGPillBg = nil;
-            }
-            sERSPGNativeBg = nil;
-            // SPG-PILLIVAR 一次性探针：dump 全部 UIView 类型 ivar（找系统底板真身）
-            static BOOL sERPillIvarDumped = NO;
-            if (!sERPillIvarDumped) {
-                sERPillIvarDumped = YES;
-                @try {
-                    unsigned int n = 0;
-                    Ivar *ivs = class_copyIvarList(pill.class, &n);
-                    NSMutableString *s = [NSMutableString string];
-                    for (unsigned int i = 0; i < n; i++) {
-                        const char *type = ivar_getTypeEncoding(ivs[i]);
-                        if (!type || type[0] != '@') continue;
-                        id val = object_getIvar(pill, ivs[i]);
-                        if (!val || ![val isKindOfClass:[UIView class]]) continue;
-                        UIView *uv = (UIView *)val;
-                        [s appendFormat:@"%s=%@[h%d f=%@] ",
-                         ivar_getName(ivs[i]), NSStringFromClass(uv.class),
-                         uv.hidden ? 1 : 0, NSStringFromCGRect(uv.frame)];
-                    }
-                    if (ivs) free(ivs);
-                    ERLogInfo(@"SPG-PILLIVAR %@", s);
-                } @catch (__unused NSException *e) {
-                    ERLogInfo(@"SPG-PILLIVAR exception");
-                }
-            }
-        }
-        // 1.2.0-53 · 修正（用户截图实锤）：-51/-52 的 layer 清理三行在每次布局时把系统
-        // 画在胶囊 layer 上的原生底板抹掉——底板消失+拖动失效的根因。删除清理，
-        // 原生底板/拖动恢复；自绘白圆点保留（避开系统原生页点的震动）。
-        // 1.2.0-52 · PILLCHAIN2 直落盘探针（一次性，无害）：dump 胶囊视图链落盘留证。
-            static BOOL sERPillChain2Dumped = NO;
-            if (!sERPillChain2Dumped) {
-                sERPillChain2Dumped = YES;
-                @try {
-                    NSMutableString *erRep = [NSMutableString stringWithString:@"ER-PILLCHAIN2 v53\n"];
-                    UIView *v = pill;
-                    int depth = 0;
-                    while (v && depth < 8) {
-                        NSMutableString *subs = [NSMutableString string];
-                        for (UIView *c in v.subviews)
-                            [subs appendFormat:@"%@(h%d a%.2f bg%@) ",
-                             NSStringFromClass(c.class), c.hidden, c.alpha,
-                             c.layer.backgroundColor ? @"+":@"-"];
-                        [erRep appendFormat:@"d%d %@ f=%@ bg=%@ corner=%.1f hid=%d alpha=%.2f\n  subs: %@\n",
-                         depth, NSStringFromClass(v.class), NSStringFromCGRect(v.frame),
-                         v.layer.backgroundColor ? @"yes" : @"nil", v.layer.cornerRadius,
-                         v.hidden ? 1 : 0, v.alpha, subs];
-                        v = v.superview;
-                        depth++;
-                    }
-                    [erRep appendFormat:@"ts=%@\n", [NSDate date]];
-                    BOOL erAny = NO;
-                    for (NSString *p in @[@"/var/mobile/Documents/er_pillchain2.txt",
-                                          @"/var/tmp/er_pillchain2.txt",
-                                          @"/var/mobile/Library/Logs/EchoReborn/er_pillchain2.txt"]) {
-                        NSError *erErr = nil;
-                        if ([erRep writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:&erErr]) {
-                            erAny = YES;
-                        } else {
-                            NSLog(@"[EchoReborn] PILLCHAIN2 write-fail %@ err=%@", p, erErr);
-                        }
-                    }
-                    NSLog(@"[EchoReborn] PILLCHAIN2 any=%d report:\n%@", erAny, erRep);
-                } @catch (__unused NSException *e) {
-                    NSLog(@"[EchoReborn] PILLCHAIN2 exception");
-                }
-            }
-        // 1.2.0-43 · 点击进搜索（自挂单击转发系统 action）
-        ERSPGAttachPillTap(pill);
-        if (!sERSPGIconSVRef || !sERSPGIconSVRef.window) sERSPGIconSVRef = ERSPGFindIconSV();
-        // 1.2.0-46 · 滚动视图失效校验：必须在主屏窗口内（-45 实锤搜索借用会把
-        // 引用搞失效，offset 恒死导致圆点永不出现）
-        if (sERSPGIconSVRef &&
-            (![NSStringFromClass(sERSPGIconSVRef.window.class) containsString:@"HomeScreen"])) {
-            static NSTimeInterval sERLastSVBad = 0;
-            NSTimeInterval nsb = [[NSDate date] timeIntervalSince1970];
-            if (nsb - sERLastSVBad > 5.0) {
-                sERLastSVBad = nsb;
-                ERLogInfo(@"SPG-SVBAD drop sv=%@ win=%@",
-                          NSStringFromClass(sERSPGIconSVRef.class),
-                          sERSPGIconSVRef.window ? NSStringFromClass(sERSPGIconSVRef.window.class) : @"(nil)");
-            }
-            sERSPGIconSVRef = nil;
-        }
-        if (!sERSPGIconSVRef) return;
-        // 圆点视图挂进胶囊内部（1.2.0-38 用户规格：翻页时胶囊里面变圆点）
-        if (!sERSPGDotsView) {
-            sERSPGDotsView = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 20, 5)];
-            sERSPGDotsView.userInteractionEnabled = NO;
-            sERSPGDotsView.alpha = 0.0;
-            sERSPGDotItems = [NSMutableArray new];
-            [pill addSubview:sERSPGDotsView];
-            ERLogInfo(@"SPG-DOTS created in pill cls=%@ sv=%@", pill.class, sERSPGIconSVRef.class);
-        } else if (sERSPGDotsView.superview != pill) {
-            [sERSPGDotsView removeFromSuperview];
-            [pill addSubview:sERSPGDotsView];
-        }
-        if (!sERSPGDotsLink) {
-            sERSPGDotsLink = [CADisplayLink displayLinkWithTarget:ERSPGDotsLinkTarget.shared selector:@selector(erDotsTick:)];
-            [sERSPGDotsLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-        }
-        sERSPGDotsLink.paused = NO;
-        ERSPGDotsRefresh();
-    } @catch (__unused NSException *e) {}
 }
 
 // 胶囊本体 touches 观察 hook（不吞、照常转发）：只维护胶囊区触摸活动计数
@@ -33724,38 +33051,6 @@ static void ERSPGSuppressSearchLayer(UIView *root, BOOL gestureEnabled, NSIntege
         // 桌面翻页），已回滚。
         if (ERSPGIsPageCtlClass(cn)) {
             (*n)++;
-            // 1.2.0-37 · B 方案：系统分页圆点隐藏（自绘圆点替代），仅限胶囊所在 window；关闭时恢复
-            // 1.2.0-40 · 防连坐：与胶囊同树（互为祖先/后代）的视图绝不能藏——用户实测
-            // 禁用全部其他插件胶囊仍不显示 = PCHIDE 把胶囊视图树里的 PageControl 成员藏了。
-            BOOL relatedToPill = NO;
-            if (sERSPGPillRef) {
-                UIView *p = root;
-                while (p) { if (p == sERSPGPillRef) { relatedToPill = YES; break; } p = p.superview; }
-                if (!relatedToPill) {
-                    NSMutableArray *stack = [NSMutableArray arrayWithObject:root];
-                    NSInteger g2 = 0;
-                    while (stack.count && g2++ < 200 && !relatedToPill) {
-                        UIView *v = stack.lastObject; [stack removeLastObject];
-                        if (v == sERSPGPillRef) { relatedToPill = YES; break; }
-                        [stack addObjectsFromArray:v.subviews];
-                    }
-                }
-            }
-            BOOL wantHidden = gestureEnabled && root.window && root.window == sERSPGPillRef.window && !relatedToPill;
-            // 1.2.0-42 · 本机桌面页控件类名是 UIPageControl（-41 日志 PCHIDE 行实锤），
-            // 旧条件只匹配 "_UIPageControl" → sERSPGHomePCRef 永远 nil → 圆点页数恒 0
-            // → 圆点永不出现。两个类名都收。
-            if (([cn isEqualToString:@"_UIPageControl"] || [cn isEqualToString:@"UIPageControl"]) && wantHidden)
-                sERSPGHomePCRef = root;  // 1.2.0-38 记住桌面页控件（自绘圆点读真实 numberOfPages）
-            if (root.hidden != wantHidden) {
-                root.hidden = wantHidden;
-                // 1.2.0-40 · PCHIDE 附父链前 5 级类名（判断被藏对象归属）
-                NSMutableString *pc = [NSMutableString string];
-                UIView *p2 = root.superview;
-                for (int i = 0; p2 && i < 5; i++, p2 = p2.superview)
-                    [pc appendFormat:@"%@%@", i ? @"<" : @"", NSStringFromClass(p2.class)];
-                ERLogInfo(@"SPG-PCHIDE %@ -> %d rel=%d chain=%@", cn, wantHidden ? 1 : 0, relatedToPill ? 1 : 0, pc);
-            }
             // ① 一次性 dump 手势清单
             static BOOL sERSPGGR2Logged = NO;
             if (!sERSPGGR2Logged) {
@@ -33819,23 +33114,14 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
         // 1.2.0-30 · setContentOffset 封锁（拖圆点翻页真驱动）
         ERSPGAttachSCOHook(NSClassFromString(@"SBIconScrollView"));
         ERSPGAttachSCOHook(NSClassFromString(@"SBSearchScrollView"));
-        ERSPGAttachICOHook(NSClassFromString(@"SBIconController"));  // 1.2.0-33
         ERSPGAttachSysHaptHooks();  // 1.2.0-31 系统震动封锁
-        // 1.2.0-34/35 · 圆点回溯探针：圆点指示器本体 + 页面控件全挂（frame/center/page/upd 五 selector）
-        ERSPGAttachPCTrace(NSClassFromString(@"_UIPageControlIndicatorContentView"));
-        ERSPGAttachPCTrace(NSClassFromString(@"_UIPageControl"));
-        ERSPGAttachPCTrace(NSClassFromString(@"UIPageControl"));
-        ERSPGAttachPCBlock(NSClassFromString(@"_UIPageControlIndicatorContentView"));  // 1.2.0-36 圆点焊死
     }
     // 心跳：30s 一条，证明压制在维持（0 命中也要可见，防"静默没找到"）
     static NSTimeInterval sERLastHeartbeat = 0;
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
     if (now - sERLastHeartbeat > 30.0) {
         sERLastHeartbeat = now;
-        ERLogInfo(@"SPG-SUPPRESS heartbeat enabled=%d hit=%ld icoCls=%lu coCls=%lu",
-                  gestureEnabled ? 1 : 0, (long)n,
-                  (unsigned long)gERSPGICOHooked.count,
-                  (unsigned long)gERSPGSCOHooked.count);
+        ERLogInfo(@"SPG-SUPPRESS heartbeat enabled=%d hit=%ld", gestureEnabled ? 1 : 0, (long)n);
     }
 }
 
@@ -33852,16 +33138,6 @@ static void ERSPGConfigurePill(UIView *pill) {
     // 每 tick 刷新胶囊引用与缓存帧（胶囊实例/位置可能变化，翻页变圆点等）。
     ERSPGAttachPillTouchHook(((UIView *)pill).class);  // 1.2.0-30 触摸活动观察
     sERSPGPillRef = pill;
-    // 1.2.0-47 · 身份锁：只有"底部小胶囊"才有资格被锁定（高度≤44 且位于屏幕底部
-    // 1/4）。搜索层借用的大胶囊（高 48、y 中部）永远不会上锁——扫描/追踪从此
-    // 不会被它顶替。
-    if (ERSPGIsBottomPill(pill)) {
-        BOOL wasLocked = (sERSPGPillLocked == pill);
-        sERSPGPillLocked = pill;
-        if (!wasLocked) ERLogInfo(@"SPG-PILLLOCK acquired cls=%@ frame=%@",
-                                  NSStringFromClass(pill.class),
-                                  NSStringFromCGRect(pill.frame));
-    }
     if (pill.window) {
         CGRect f = [pill convertRect:pill.bounds toView:pill.window];
         if (!CGRectIsEmpty(f)) {
@@ -33927,8 +33203,6 @@ static void ERSPGConfigurePill(UIView *pill) {
     ERSPGSyncSystemGestures(pill, enabled);
     // 1.2.0-23 · 搜索层 pan 压制/恢复（总开关联动，每 tick 心跳维持）。
     ERSPGSyncSearchLayerPan(enabled);
-    // 1.2.0-37 · B 方案：自绘圆点（滚动视图引用/圆点视图/显示链维持）
-    ERSPGSyncDots(enabled);
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
@@ -33957,39 +33231,6 @@ static void ERSPGDumpSelectors(void) {
               [hits componentsJoinedByString:@", "]);
 }
 
-// 1.2.0-44 · 一次性 dump 四个胶囊相关类的 "earch" selector（类方法+实例方法）——
-// -43 实锤系统胶囊上没有任何点击手势，点进搜索的载体在别处，锁定真实 API 后
-// 下一版把自挂单击接到正确的调用上。
-static void ERSPGDumpSearchSelectors(void) {
-    static BOOL sDumped = NO;
-    if (sDumped) return;
-    sDumped = YES;
-    NSArray *names = @[@"SBHSearchPillView", @"SBFolderScrollAccessoryView",
-                       @"SBRootFolderView", @"SBIconScrollView",
-                       @"SBIconController", @"SBRootFolderController"];
-    for (NSString *cn in names) {
-        Class cls = NSClassFromString(cn);
-        if (!cls) { ERLogInfo(@"SPG-SRDUMP %@ (class not found)", cn); continue; }
-        for (int pass = 0; pass < 2; pass++) {
-            // pass 0: 实例方法；pass 1: 类方法（metaclass）
-            Class target = pass == 0 ? cls : object_getClass(cls);
-            NSMutableArray<NSString *> *hits = [NSMutableArray array];
-            unsigned int n = 0;
-            Method *ms = class_copyMethodList(target, &n);
-            for (unsigned int i = 0; i < n; i++) {
-                NSString *name = NSStringFromSelector(method_getName(ms[i]));
-                if ([name rangeOfString:@"earch" options:NSCaseInsensitiveSearch].location != NSNotFound)
-                    [hits addObject:name];
-            }
-            if (ms) free(ms);
-            ERLogInfo(@"SPG-SRDUMP %@ %@ earch selectors (%lu): %@", cn,
-                      pass == 0 ? @"inst" : @"cls",
-                      (unsigned long)hits.count,
-                      hits.count ? [hits componentsJoinedByString:@", "] : @"-");
-        }
-    }
-}
-
 // 1.2.0-9 · 前向声明：ScanTick 探针用到 ERBootLog，但其定义在下方（编译顺序）。
 static void ERBootLog(NSString *tag);
 // 周期扫描（主线程）：找到搜索胶囊 → 挂/启停手势；顺手把探测到的桌面页数写进
@@ -34009,14 +33250,8 @@ static void ERSPGScanTick(void) {
             ERBootLog(msg);
         }
         ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
-        ERSPGDumpSearchSelectors();   // 1.2.0-44 首个 tick dump 搜索相关 selector
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
-        // 1.2.0-39 · 补充源：桌面 _UIPageControl 的真实 numberOfPages（iconLists 探测失败时的可靠来源）
-        if (sERSPGHomePCRef && [sERSPGHomePCRef respondsToSelector:@selector(numberOfPages)]) {
-            NSInteger npc = [(UIPageControl *)sERSPGHomePCRef numberOfPages];
-            if (npc >= 1) cnt = npc;
-        }
         if (cnt >= 1) {
             NSInteger cached = ERSPGInt(@"HomeScreen.PageCount", 0);
             if (cached != cnt) {
@@ -34038,57 +33273,7 @@ static void ERSPGScanTick(void) {
         // 1.2.0-16 · 日志里存在两个 SBHSearchPillView（一个离屏旧实例 @-31,-15、
         // 一个当前胶囊 @24,13）——不能"命中即止"，优先挂完全落在父视图 bounds
         // 内的实例；找不到屏内命中才退回第一个候选。
-        // 1.2.0-46 · 失效校验：-45 实锤点击搜索返回后，桌面真胶囊被系统"借用"
-        // 未归还，扫描会命中一个父视图 hidden=1 的搜索层胶囊副本（追踪它=全面
-        // 消失）。父视图隐藏的候选不再追踪，改为触发 SBRootFolderView 重排版
-        // 催系统重建桌面胶囊。
-        // 1.2.0-47 · 身份锁优先：-46 日志实锤——第二次点击搜索后追踪实例被切成
-        // 搜索层大胶囊（frame {8,496,414,48}），返回后残局全面消失。治本方案：
-        // 认准一个"底部小胶囊"，只要它还活着就绝不换实例；锁失效（被借走/移除）
-        // 时也不另寻新欢，只催 SBRootFolderView 重建，重建出的新胶囊由下轮扫描
-        // 重新锁定。（erFallback 声明前置于本块：C++ goto 不得跨越其初始化）
         UIView *erFallback = nil;
-        {
-            UIView *locked = sERSPGPillLocked;
-            BOOL lockAlive = locked && locked.window &&
-                             !(locked.superview && locked.superview.hidden) && !locked.hidden;
-            if (lockAlive) {
-                ERSPGConfigurePill(locked);
-                goto erScanDone;
-            }
-            if (locked && !lockAlive) {
-                static NSTimeInterval sERLastLockGone = 0;
-                NSTimeInterval nlg = [[NSDate date] timeIntervalSince1970];
-                if (nlg - sERLastLockGone > 5.0) {
-                    sERLastLockGone = nlg;
-                    ERLogInfo(@"SPG-PILLLOCK lost (borrowed/removed) — coax rebuild, no re-hunt");
-                }
-                sERSPGPillLocked = nil;
-                sERSPGPillRef = nil;
-                // 复用重排版催重建逻辑（下方代码块同名节流，直接 fall through 到它）
-                {
-                    static NSTimeInterval sERLastCoax2 = 0;
-                    NSTimeInterval ncoax2 = [[NSDate date] timeIntervalSince1970];
-                    if (ncoax2 - sERLastCoax2 > 5.0) {
-                        sERLastCoax2 = ncoax2;
-                        BOOL coaxed2 = NO;
-                        for (UIWindow *w in ERAllApplicationWindows()) {
-                            NSMutableArray *st3 = [NSMutableArray arrayWithObject:w];
-                            while (st3.count) {
-                                UIView *v3 = st3.lastObject; [st3 removeLastObject];
-                                if ([NSStringFromClass(v3.class) isEqualToString:@"SBRootFolderView"]) {
-                                    [v3 setNeedsLayout];
-                                    coaxed2 = YES;
-                                }
-                                [st3 addObjectsFromArray:v3.subviews];
-                            }
-                        }
-                        if (coaxed2) ERLogInfo(@"SPG-PILLLOCK coax relayout");
-                    }
-                }
-                goto erScanDone;
-            }
-        }
         for (UIView *root in roots) {
             NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
             NSInteger guard = 0;
@@ -34098,51 +33283,16 @@ static void ERSPGScanTick(void) {
                 if (ERSPGLooksLikePill(v)) {
                     CGRect f = v.frame;
                     CGRect pb = v.superview.bounds;
-                    BOOL parentOk = v.superview && !v.superview.hidden;
                     BOOL onscreen = !CGRectIsNull(pb) && f.origin.x >= -1.0 && f.origin.y >= -1.0 &&
                                     CGRectGetMaxX(f) <= CGRectGetWidth(pb) + 1.0 &&
                                     CGRectGetMaxY(f) <= CGRectGetHeight(pb) + 1.0;
-                    if (onscreen && parentOk) { ERSPGConfigurePill(v); goto erScanDone; }
-                    if (onscreen && !parentOk) {
-                        static NSTimeInterval sERLastBad = 0;
-                        NSTimeInterval nbad = [[NSDate date] timeIntervalSince1970];
-                        if (nbad - sERLastBad > 5.0) {
-                            sERLastBad = nbad;
-                            ERLogInfo(@"SPG-PILLBAD skip cls=%@ sv=%@ svHidden=%d frame=%@",
-                                      NSStringFromClass(v.class),
-                                      NSStringFromClass(v.superview.class),
-                                      v.superview.hidden ? 1 : 0, NSStringFromCGRect(f));
-                        }
-                        continue;   // 失效候选：不追踪，继续扫（可能还有别的实例）
-                    }
+                    if (onscreen) { ERSPGConfigurePill(v); return; }
                     if (!erFallback) erFallback = v;
                 }
                 [stack addObjectsFromArray:v.subviews];
             }
         }
-        if (erFallback && !erFallback.superview.hidden) { ERSPGConfigurePill(erFallback); goto erScanDone; }
-        {
-            // 全部候选失效/没找到：每 5s 催一次系统重排版（重建桌面胶囊 accessory）
-            static NSTimeInterval sERLastCoax = 0;
-            NSTimeInterval ncoax = [[NSDate date] timeIntervalSince1970];
-            if (ncoax - sERLastCoax > 5.0) {
-                sERLastCoax = ncoax;
-                BOOL coaxed = NO;
-                for (UIWindow *w in ERAllApplicationWindows()) {
-                    NSMutableArray *st2 = [NSMutableArray arrayWithObject:w];
-                    while (st2.count) {
-                        UIView *v2 = st2.lastObject; [st2 removeLastObject];
-                        if ([NSStringFromClass(v2.class) isEqualToString:@"SBRootFolderView"]) {
-                            [v2 setNeedsLayout];
-                            coaxed = YES;
-                        }
-                        [st2 addObjectsFromArray:v2.subviews];
-                    }
-                }
-                if (coaxed) ERLogInfo(@"SPG-PILLBAD coax relayout (no valid pill candidate)");
-            }
-        }
-        erScanDone:;
+        if (erFallback) { ERSPGConfigurePill(erFallback); return; }
         // 1.2.0-7 · 诊断：整轮没找到胶囊，30s 节流记一条（区分「没找到胶囊」与
         // 「找到了但手势没触发」）。1.2.0-14 · 同时 dump 尺寸落在胶囊区间内的候选
         // 类名（类名特征没匹配上 → 拿真实类名修 ERSPGLooksLikePill）。
