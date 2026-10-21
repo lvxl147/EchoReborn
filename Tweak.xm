@@ -32267,7 +32267,9 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-23 · 用户实锤（-22 日志起手触点散布胶囊中心 ±35 环带）：
                 // ±30 外扩 + pan 迟到 ~10pt 合成了过大触发区。收紧到 ±6（只补
                 // pan 迟到漂移），起手区=胶囊本体。
-                CGRect f = CGRectInset(sERSPGPillWinFrame, -6.0, -6.0);
+                // 1.2.0-55 · 起手区收紧到胶囊本体（外扩 6→0，用户拍板）：
+                // 贴边起手因坐标漂移偶尔不识别，属可接受代价；误触率最低。
+                CGRect f = CGRectInset(sERSPGPillWinFrame, 0.0, 0.0);
                 inside = CGRectContainsPoint(f, p) && !CGRectIsEmpty(f);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
@@ -32806,7 +32808,8 @@ static BOOL ERSPGGRGateShouldBegin(id self, SEL _cmd, UIGestureRecognizer *gr) {
             UIWindow *w = v.window;
             CGPoint wp = w ? [gr locationInView:w] : CGPointZero;
             // 1.2.0-29 · 命中任一候选胶囊帧即拒（单帧会在底部/顶部两个胶囊间跳）
-            if (w && ERSPGPointInAnyPill(wp, -15.0)) {
+            // 1.2.0-55 · 闸门外扩 15→0（误触真凶：胶囊附近扫过即放行，现必须本体起手）
+            if (w && ERSPGPointInAnyPill(wp, 0.0)) {
                 static NSTimeInterval sERLastGate = 0;
                 NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
                 if (now - sERLastGate > 30.0) {
