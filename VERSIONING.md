@@ -269,3 +269,7 @@
 
 ## 1.2.0-60
 - 修文件夹枚举：-59 落盘探针实锤 iOS16/17 图标模型为 SBHIconModel、无 folders 字典 → 改 rootFolder 递归遍历（rootFolder→lists→icons→SBFolderIcon.folder 取 uniqueIdentifier+displayName），旧 folders 通道保留兜底；打开文件夹同样遍历定位 SBFolderIcon 再走候选链
+
+## 1.2.0-61
+- 与乌贼手势（SquidGesturePro 2.7.6-2）共存：拆包实锤其主屏幕下划按底部左/中/右分区判定，与胶囊触发区重叠。① 触发区收回胶囊本体（撤销 -58 外扩，外扩带正压其起手带）；② 手势开关关时 pan/touches 全通道完全透传（pan began/TouchArm/TouchRelease 补 Enabled 前置检查，不再压 pager/记闸门）；③ pan delegate 本就声明同时识别（-8 已有），松手才动作不变
+- 修设置页不显示「文件夹」：根因=设置进程缓存旧代码，装机脚本 kill Settings 没杀到真正的 Preferences 进程，补 killall Preferences
