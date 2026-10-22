@@ -310,3 +310,8 @@
 ## 1.2.0-69
 - v67 探针实锤（313KB 方法表）：真入口 = SBHIconManager.openFolderIcon:location:animated:withCompletion:（manager=SBHIconManager）；-67 的 17 个候选恰无此 4 参选择器所以全落空；图标侧 launchFromLocation: 对文件夹无效
 - 修复：ERSPGOpenFolder 候选链最前精确调用该选择器（location=icon.location 兜底 rootFolder.location，animated=YES），调用后 0.8s 验证 openedFolder 非空并写日志（区分真打开与静默失败）
+
+## 1.2.0-71
+- 用户实测 -70：跨页无效果。日志盲区：targetPage 定位失败时代码走立即打开分支且探针没写（条件含 targetPage>=0）
+- 修复①（已审核新功能）：手势管理子页触发范围上面新增「手势区域」滑块（HomeScreen.SearchPill.AreaExpand，0~40pt 默认 0）——起手判定区=胶囊本体四周外扩 N pt 矩形（含四角均可触发）；ERSPGPointInAnyPill/GR 竞争闸门同步外扩保证行为一致；footer 注明外扩过大可能压乌贼手势起手区
+- 修复②：探针条件放宽为 !switched 必写，附 targetPage/listCount/iconLists 每页详情（list 类名+图标数+是否含目标图标）
