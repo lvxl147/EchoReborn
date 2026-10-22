@@ -338,3 +338,11 @@
 - 修复②：文件夹诊断直写 /var/mobile/Documents/er_folderlog.txt（主日志走 buffer 需导出，直写立即可拉），open/verify/retry/give up 全记录
 - 修复③：负一屏 activateTodayViewWithCompletion: 调用后 0.3s/0.9s 两次重发（排队过渡强制推进，幂等无害）
 - 修复④：下拉框收起态测量基准加 4 字样例「乌贼软件」（约 +15pt，内部结构不动）
+
+## 1.2.0-76
+- 用户实测 -75：负一屏已修好✅、下拉框4字✅；**回归：文件夹完全打不开**（所属页也不行）
+- 根因实锤（er_folderlog.txt）：忙碌护栏把桌面误判——_currentFolderController 恒为 SBRootFolderController（桌面本身就是根文件夹控制器），非空检查全被"busy skip"跳过，日志无一条 open 记录
+- 修复①：新增 ERSPGCurIsRealFolder()——类名含 RootFolderController 的不算忙碌；前置护栏与 retry 路径都改用它
+- 新功能②：「搜索胶囊手势」行标题右侧加蓝色 ⓘ 按钮，点击弹窗显示原 footer 说明文字（删乌贼手势那句——实测 60 也不影响）；原 g1 footer 整段删除
+- 新功能③：左滑/右滑胶囊图标 teal→blue（与上下滑一致）；手势区域/触发范围图标改 purple（纯色，用户指定不要渐变）
+- 新功能④：下拉框间距定版（用户审核）：文字距左 4pt、文字到箭头 3pt、箭头距右边框 4pt（箭头中心去 +1 视觉补偿），按钮总宽=文字宽+25（较 -75 窄 7pt），4 字仍完整显示
