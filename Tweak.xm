@@ -32268,7 +32268,12 @@ static NSString *ERSPGGestureRaw(NSString *key) {
 
 // 1.2.0-60 · rootFolder 递归遍历（-59 探针实锤：iOS16/17 模型为 SBHIconModel，
 // 无 folders 字典）：rootFolder → lists → icons → SBFolderIcon.folder 取 id+名称
-static void ERSPGWalkFolderIcons(id node, NSMutableArray<NSDictionary *> *out, NSInteger depth) {
+// 1.2.0-66 · walk 加 iconMap（fid→SBFolderIcon）+ seen 去重：-65 实锤 lists/icons
+// 两条路径重叠导致每个文件夹枚举两次（dumped=16 实为 8 个）；iconMap 供打开手势
+// 直接查 SBFolderIcon（FindFolderIcon 复用同一条已验证成功的遍历路径）
+static void ERSPGWalkFolderIcons(id node, NSMutableArray<NSDictionary *> *out,
+                                 NSMutableDictionary<NSString *, id> *iconMap,
+                                 NSMutableSet<NSString *> *seen, NSInteger depth) {
     @try {
         if (!node || depth > 5) return;
         Class fiCls = objc_getClass("SBFolderIcon");
@@ -32291,7 +32296,11 @@ static void ERSPGWalkFolderIcons(id node, NSMutableArray<NSDictionary *> *out, N
                     id r = ((id (*)(id, SEL))objc_msgSend)(node, @selector(displayName));
                     if ([r isKindOfClass:[NSString class]]) nm = r;
                 }
-                if (fid.length) [out addObject:@{@"id": fid, @"name": nm ?: @"文件夹"}];
+                if (fid.length && ![seen containsObject:fid]) {
+                    [seen addObject:fid];
+                    [out addObject:@{@"id": fid, @"name": nm ?: @"文件夹"}];
+                    if (iconMap) iconMap[fid] = node;
+                }
             }
         }
         for (NSString *sel in @[@"lists", @"icons"]) {
@@ -32299,7 +32308,7 @@ static void ERSPGWalkFolderIcons(id node, NSMutableArray<NSDictionary *> *out, N
             if ([node respondsToSelector:s]) {
                 id arr = ((id (*)(id, SEL))objc_msgSend)(node, s);
                 if ([arr isKindOfClass:[NSArray class]])
-                    for (id child in arr) ERSPGWalkFolderIcons(child, out, depth + 1);
+                    for (id child in arr) ERSPGWalkFolderIcons(child, out, iconMap, seen, depth + 1);
             }
         }
     } @catch (__unused NSException *e) {}
@@ -32335,9 +32344,9 @@ static void ERSPGDumpFolders(void) {
                 [out addObject:@{@"id": fid ?: @"", @"name": nm ?: (fid ?: @"文件夹")}];
             }
         } else if (model && [(id)model respondsToSelector:@selector(rootFolder)]) {
-            // 1.2.0-60 · 主通道：rootFolder 递归
+            // 1.2.0-60 · 主通道：rootFolder 递归（-66 加去重）
             id root = ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder));
-            ERSPGWalkFolderIcons(root, out, 0);
+            ERSPGWalkFolderIcons(root, out, nil, [NSMutableSet set], 0);
         }
         if (out.count || folders)
             [out writeToFile:@"/var/mobile/Documents/er_folders.plist" atomically:YES];
@@ -32366,8 +32375,8 @@ static void ERSPGDumpFolders(void) {
     } @catch (__unused NSException *e) {}
 }
 
-// 1.2.0-60 · 遍历 rootFolder 找指定 id 的 SBFolderIcon（-59 folders 字典通道在
-// SBHIconModel 上落空）；找到时同时回传 folder 对象
+// 1.2.0-66 · 复用 -65 实锤可枚举全部文件夹的 walk（build iconMap 后查 id）；
+// 兜底再试 rootFolder 的 folderWithUniqueIdentifier:（探针实锤 SBFolder 有此方法）
 static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
     @try {
         if (!model || !folderId.length) return nil;
@@ -32390,29 +32399,26 @@ static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
         if ([model respondsToSelector:@selector(rootFolder)])
             root = ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder));
         if (!root) return nil;
-        NSMutableArray<id> *stack = [NSMutableArray arrayWithObject:root];
-        Class fiCls = objc_getClass("SBFolderIcon");
-        while (stack.count) {
-            id node = stack.lastObject;
-            [stack removeLastObject];
-            if (!node) continue;
-            if (fiCls && [node isKindOfClass:fiCls]) {
+        NSMutableDictionary<NSString *, id> *map = [NSMutableDictionary dictionary];
+        ERSPGWalkFolderIcons(root, nil, map, [NSMutableSet set], 0);
+        id icon = map[folderId];
+        if (icon) {
+            if (outFolder) {
                 id f = nil;
-                if ([node respondsToSelector:@selector(folder)])
-                    f = ((id (*)(id, SEL))objc_msgSend)(node, @selector(folder));
-                if (f && [f respondsToSelector:@selector(uniqueIdentifier)]) {
-                    id fid = ((id (*)(id, SEL))objc_msgSend)(f, @selector(uniqueIdentifier));
-                    if ([fid isKindOfClass:[NSString class]] && [fid isEqualToString:folderId]) {
-                        if (outFolder) *outFolder = f;
-                        return node;
-                    }
-                }
+                if ([icon respondsToSelector:@selector(folder)])
+                    f = ((id (*)(id, SEL))objc_msgSend)(icon, @selector(folder));
+                *outFolder = f;
             }
-            for (NSString *sel in @[@"lists", @"icons"]) {
-                SEL s = NSSelectorFromString(sel);
-                if ([node respondsToSelector:s]) {
-                    id arr = ((id (*)(id, SEL))objc_msgSend)(node, s);
-                    if ([arr isKindOfClass:[NSArray class]]) [stack addObjectsFromArray:arr];
+            return icon;
+        }
+        // 兜底：SBFolder.folderWithUniqueIdentifier:（探针实锤存在）
+        for (NSString *sel in @[@"folderWithUniqueIdentifier:", @"firstFolderWithUniqueIdentifier:"]) {
+            SEL s = NSSelectorFromString(sel);
+            if ([root respondsToSelector:s]) {
+                id f = ((id (*)(id, SEL, id))objc_msgSend)(root, s, folderId);
+                if (f) {
+                    if (outFolder) *outFolder = f;
+                    return nil;   // 只有 folder 没有 icon，打开链用 folderObj 兜
                 }
             }
         }
@@ -32435,33 +32441,97 @@ static void ERSPGOpenFolder(NSString *folderId) {
         id folderObj = nil, iconObj = nil;
         // 1.2.0-60 · rootFolder 遍历找指定 id 的 SBFolderIcon（-59 folders 字典通道落空）
         iconObj = ERSPGFindFolderIcon(model, folderId, &folderObj);
+        ERLogInfo(@"SPG-FOLDER find id=%@ icon=%@ folder=%@", folderId,
+                  iconObj ? NSStringFromClass(object_getClass(iconObj)) : @"nil",
+                  folderObj ? NSStringFromClass(object_getClass(folderObj)) : @"nil");
         id arg = iconObj ?: folderObj;
         if (arg) {
-            for (NSString *sn in @[@"openFolderWithIcon:", @"_openFolderWithIcon:",
-                                   @"openFolder:", @"presentFolder:"]) {
-                SEL s = NSSelectorFromString(sn);
-                if ([ico respondsToSelector:s]) {
-                    ERLogInfo(@"SPG-FOLDER hit %@ id=%@", sn, folderId);
-                    ((void (*)(id, SEL, id))objc_msgSend)(ico, s, arg);
-                    return;
+            // 1.2.0-66 · 多目标宽候选链：-65 探针实锤 SBIconController 没有
+            // openFolderWithIcon: 系（4 候选全落空）；iconManager:willOpenFolder:
+            // 表明真实入口在 iconManager，把 ico/manager/model/rootFolder/图标/文件夹
+            // 全试一遍。命中即开。
+            id manager = nil;
+            for (NSString *pn in @[@"iconManager", @"_iconManager"]) {
+                SEL ps = NSSelectorFromString(pn);
+                if ([ico respondsToSelector:ps]) {
+                    id r = ((id (*)(id, SEL))objc_msgSend)(ico, ps);
+                    if (r) { manager = r; break; }
                 }
+            }
+            id rootFolder = nil;
+            if ([model respondsToSelector:@selector(rootFolder)])
+                rootFolder = ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder));
+            NSMutableArray<id> *targets = [NSMutableArray array];
+            for (id t in @[ico, manager, model, rootFolder, iconObj, folderObj])
+                if (t && ![targets containsObject:t]) [targets addObject:t];
+            NSArray<NSString *> *opensels = @[
+                @"openFolderWithIcon:", @"_openFolderWithIcon:", @"openFolder:",
+                @"presentFolder:", @"_presentFolder:", @"openFolderController:",
+                @"presentFolderController:", @"openFolderIcon:", @"launchFolder:",
+                @"_launchFolder:", @"openIconList:", @"showFolder:"];
+            for (NSString *sn in opensels) {
+                SEL s = NSSelectorFromString(sn);
+                for (id t in targets) {
+                    if ([t respondsToSelector:s]) {
+                        ERLogInfo(@"SPG-FOLDER hit %@ on %@ id=%@", sn,
+                                  NSStringFromClass(object_getClass(t)), folderId);
+                        @try {
+                            ((void (*)(id, SEL, id))objc_msgSend)(t, s, arg);
+                            return;
+                        } @catch (__unused NSException *e) {
+                            ERLogInfo(@"SPG-FOLDER threw %@ on %@", sn,
+                                      NSStringFromClass(object_getClass(t)));
+                        }
+                    }
+                }
+            }
+            // 无参兜底：_openFolderController（可能只开"当前"文件夹，最后再试）
+            SEL oc = @selector(_openFolderController);
+            if ([ico respondsToSelector:oc]) {
+                ERLogInfo(@"SPG-FOLDER hit _openFolderController (no-arg) id=%@", folderId);
+                ((void (*)(id, SEL))objc_msgSend)(ico, oc);
+                return;
             }
         }
         if (!sERSPGFolderDumped) {
             sERSPGFolderDumped = YES;
-            NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v59 (open)\n"];
+            NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v66 (open)\n"];
+            id manager = nil;
+            {   SEL ps = NSSelectorFromString(@"iconManager");
+                if ([ico respondsToSelector:ps])
+                    manager = ((id (*)(id, SEL))objc_msgSend)(ico, ps); }
+            id rootFolder = nil;
+            if ([model respondsToSelector:@selector(rootFolder)])
+                rootFolder = ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder));
             NSMutableArray<id> *targets = [NSMutableArray array];
-            if (ico) [targets addObject:ico];
-            if (model) [targets addObject:model];
-            if (folderObj) [targets addObject:folderObj];
+            for (id t in @[ico, manager, model, rootFolder, iconObj, folderObj])
+                if (t && ![targets containsObject:t]) [targets addObject:t];
+            Class fctrl = objc_getClass("SBFolderController");
             for (id t in targets) {
                 for (Class c = object_getClass(t); c; c = class_getSuperclass(c)) {
                     unsigned int n = 0;
                     Method *ms = class_copyMethodList(c, &n);
                     for (unsigned int i = 0; i < n; i++) {
                         NSString *nm = NSStringFromSelector(method_getName(ms[i]));
-                        if ([nm localizedCaseInsensitiveContainsString:@"folder"])
+                        if ([nm localizedCaseInsensitiveContainsString:@"folder"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"open"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"present"])
                             [rep appendFormat:@"%@ %@\n", NSStringFromClass(c), nm];
+                    }
+                    if (ms) free(ms);
+                }
+            }
+            if (fctrl) {
+                [rep appendFormat:@"-- SBFolderController class+instance\n"];
+                for (Class c = fctrl; c; c = class_getSuperclass(c)) {
+                    unsigned int n = 0;
+                    Method *ms = class_copyMethodList(c, &n);
+                    for (unsigned int i = 0; i < n; i++) {
+                        NSString *nm = NSStringFromSelector(method_getName(ms[i]));
+                        if ([nm localizedCaseInsensitiveContainsString:@"folder"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"present"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"open"])
+                            [rep appendFormat:@"SBFolderController(%@) %@\n", NSStringFromClass(c), nm];
                     }
                     if (ms) free(ms);
                 }
