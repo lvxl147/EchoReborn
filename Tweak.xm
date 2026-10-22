@@ -32183,7 +32183,7 @@ static void ERSPGJumpToPageInner(NSInteger page1based) {
         UIScrollView *pager = ERSPGPager();
         if (pager && sERSPGPagerPageW > 1) {
             CGPoint off = CGPointMake(idx * sERSPGPagerPageW, 0);
-            [pager setContentOffset:off animated:YES];
+            [pager setContentOffset:off animated:NO];   // 1.2.0-74 用户需求：瞬间跳页
             ERLogInfo(@"SPG-JUMP pager page=%ld offset=%.0f cls=%@",
                       (long)page1based, off.x, NSStringFromClass(pager.class));
         } else {
@@ -32501,8 +32501,11 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     {
                         SEL ss = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
                         if (manager && iconObj && [manager respondsToSelector:ss]) {
-                            ERLogInfo(@"SPG-FOLDER hit scrollToIconListContainingIcon:animate: id=%@", folderId);
-                            ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss, iconObj, YES);
+                            // 1.2.0-74 · animate:NO（用户需求：瞬间跳页，零动画零等待）——
+                            // 翻页同步完成，openFolderIcon 不再有动画竞态（-73 成功率
+                            // 1-2/10 的根因），也不再需要 0.45s 固定等待
+                            ERLogInfo(@"SPG-FOLDER hit scrollToIconListContainingIcon (no-anim) id=%@", folderId);
+                            ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss, iconObj, NO);
                             switched = YES;
                         } else {
                             ERLogInfo(@"SPG-FOLDER manager lacks scrollToIconListContainingIcon:animate:");
@@ -32605,15 +32608,24 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@ switched=%d",
                               folderId, loc, switched);
                     @try {
-                        // 1.2.0-73 · 重试机制（用户实测 -72 成功率 2/10：翻页动画时长
-                        // 不定，固定 0.45s 后开文件夹常撞在半路）。改为：开一次 →
-                        // 0.6s 后自检 openedFolder，为空就再开，最多 3 次尝试。
+                        // 1.2.0-73 · 重试机制（0.6s 自检 openedFolder，为空补开最多 3 次）
+                        // 1.2.0-74 · 两处升级：
+                        //   ① animate:NO 后翻页同步完成 → openFolderIcon **立即调用**，
+                        //      不再等 0.45s（已在文件夹页时零延迟，跨页也无动画竞态）
+                        //   ② completion 护栏修"关文件夹时注销"：用户实测 3-4/5 崩溃，
+                        //      根因 = 成功打开后用户快速关闭，排队中的重试把 openFolderIcon
+                        //      打在关闭动画里。传入 completion 标记 erOpened，打开过就
+                        //      永不重试
                         __block NSInteger erRetries = 2;
+                        __block BOOL erOpened = NO;
                         __block void (^erTryOpen)(void) = nil;
+                        void (^erCompletion)(void) = ^{
+                            erOpened = YES;
+                        };
                         erTryOpen = ^{
                             @try {
                                 ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
-                                    manager, os, iconObj ?: arg, loc, YES, nil);
+                                    manager, os, iconObj ?: arg, loc, YES, erCompletion);
                             } @catch (__unused NSException *e) {
                                 ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
                                           NSStringFromClass(object_getClass(e)));
@@ -32631,10 +32643,11 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     SEL vs = NSSelectorFromString(@"openedFolder");
                                     id of = (mgr2 && [mgr2 respondsToSelector:vs])
                                                 ? ((id (*)(id, SEL))objc_msgSend)(mgr2, vs) : nil;
-                                    if (of) {
-                                        ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ id=%@ (ok)",
-                                                  NSStringFromClass(object_getClass(of)), folderId);
-                                        erTryOpen = nil;   // 终态才释放自引用
+                                    if (of || erOpened) {
+                                        ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ erOpened=%d id=%@ (ok)",
+                                                  of ? NSStringFromClass(object_getClass(of)) : @"nil",
+                                                  erOpened ? 1 : 0, folderId);
+                                        erTryOpen = nil;   // 打开过就永不重试（关闭中绝不补开）
                                     } else if (erRetries-- > 0) {
                                         ERLogInfo(@"SPG-FOLDER openedFolder=nil, retry id=%@", folderId);
                                         erTryOpen();
@@ -32644,14 +32657,8 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     }
                                 });
                         };
-                        if (switched) {
-                            // 翻页动画 ~0.45s 后再开（失败还有重试兜底）
-                            dispatch_after(
-                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
-                                dispatch_get_main_queue(), erTryOpen);
-                        } else {
-                            erTryOpen();
-                        }
+                        // 1.2.0-74 · animate:NO → 翻页同步完成，立即打开（无 0.45s 等待）
+                        erTryOpen();
                         return;
                     } @catch (__unused NSException *e) {}
                 } else {
@@ -32864,7 +32871,20 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // 1.2.0-71 · 外扩改回用户可调（手势区域滑块 0~40，默认 0 不影响
                 // 乌贼共存）；外扩矩形（含四角）内任意点起手均可触发
                 CGFloat erExpand = ERSPGTriggerExpand();
-                CGRect erArea = ERSPGExpandPillRect(sERSPGPillWinFrame, erExpand);
+                // 1.2.0-74 · 实时取胶囊帧：App 返回桌面后缓存帧可能是旧的（用户实测
+                // 5-15s 手势失灵根因），起手瞬间直接向 pill.window 转换实时帧并顺手
+                // 校正缓存，缓存只作兜底
+                CGRect erArea = CGRectZero;
+                UIView *erLivePill = sERSPGPillRef;
+                if (erLivePill && erLivePill.window) {
+                    CGRect erLive = [erLivePill convertRect:erLivePill.bounds toView:erLivePill.window];
+                    if (!CGRectIsEmpty(erLive)) {
+                        sERSPGPillWinFrame = erLive;
+                        erArea = ERSPGExpandPillRect(erLive, erExpand);
+                    }
+                }
+                if (CGRectIsEmpty(erArea))
+                    erArea = ERSPGExpandPillRect(sERSPGPillWinFrame, erExpand);
                 inside = !CGRectIsEmpty(erArea) && CGRectContainsPoint(erArea, p);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
@@ -33414,6 +33434,12 @@ static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
         // 1.2.0-71 · 判定区=胶囊帧外扩 ERSPGTriggerExpand() pt（+调用方 inset），
         // 与起手闸门同一几何，保证外扩带内我们的 pan 一致胜出
         CGFloat expand = ERSPGTriggerExpand() + inset;
+        // 1.2.0-74 · 与起手判定同步：先实时校正缓存帧（返回桌面后缓存过期）
+        UIView *lp = sERSPGPillRef;
+        if (lp && lp.window) {
+            CGRect lf = [lp convertRect:lp.bounds toView:lp.window];
+            if (!CGRectIsEmpty(lf)) sERSPGPillWinFrame = lf;
+        }
         CGRect a0 = ERSPGExpandPillRect(sERSPGPillWinFrame, expand);
         if (!CGRectIsEmpty(a0) && CGRectContainsPoint(a0, wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
