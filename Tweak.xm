@@ -32464,6 +32464,49 @@ static void ERSPGOpenFolder(NSString *folderId) {
             NSMutableArray<id> *targets = [NSMutableArray array];
             for (id t in @[ico, manager, model, rootFolder, iconObj, folderObj])
                 if (t && ![targets containsObject:t]) [targets addObject:t];
+            // 1.2.0-69 · v67 探针实锤真入口：SBHIconManager.openFolderIcon:location:animated:withCompletion:
+            //（manager=SBHIconManager，-67 的 17 个候选恰无此 4 参选择器所以全落空）
+            // location 取图标自身的 location（SBIcon.location），兜底 rootFolder.location
+            {
+                SEL os = NSSelectorFromString(@"openFolderIcon:location:animated:withCompletion:");
+                if (manager && [manager respondsToSelector:os]) {
+                    id loc = nil;
+                    SEL ls = NSSelectorFromString(@"location");
+                    if (iconObj && [iconObj respondsToSelector:ls])
+                        loc = ((id (*)(id, SEL))objc_msgSend)(iconObj, ls);
+                    if (!loc && rootFolder && [rootFolder respondsToSelector:ls])
+                        loc = ((id (*)(id, SEL))objc_msgSend)(rootFolder, ls);
+                    ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@",
+                              folderId, loc);
+                    @try {
+                        ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
+                            manager, os, iconObj ?: arg, loc, YES, nil);
+                        // 0.8s 后验证 openedFolder 是否非空（确认真打开而非静默失败）
+                        dispatch_after(
+                            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                            dispatch_get_main_queue(), ^{
+                                id ico2 = ERSPGIconController();
+                                id mgr2 = nil;
+                                SEL ps = NSSelectorFromString(@"iconManager");
+                                if (ico2 && [ico2 respondsToSelector:ps])
+                                    mgr2 = ((id (*)(id, SEL))objc_msgSend)(ico2, ps);
+                                SEL vs = NSSelectorFromString(@"openedFolder");
+                                id of = (mgr2 && [mgr2 respondsToSelector:vs])
+                                            ? ((id (*)(id, SEL))objc_msgSend)(mgr2, vs) : nil;
+                                ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ id=%@",
+                                          of ? NSStringFromClass(object_getClass(of)) : @"nil",
+                                          folderId);
+                            });
+                        return;
+                    } @catch (__unused NSException *e) {
+                        ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
+                                  NSStringFromClass(object_getClass(e)));
+                    }
+                } else {
+                    ERLogInfo(@"SPG-FOLDER manager=%@ lacks openFolderIcon:location:…",
+                              manager ? NSStringFromClass(object_getClass(manager)) : @"nil");
+                }
+            }
             NSArray<NSString *> *opensels = @[
                 @"openFolderWithIcon:", @"_openFolderWithIcon:", @"openFolder:",
                 @"presentFolder:", @"_presentFolder:", @"openFolderController:",
