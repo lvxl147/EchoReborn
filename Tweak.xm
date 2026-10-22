@@ -32551,6 +32551,19 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             of0 ? NSStringFromClass(object_getClass(of0)) : @"nil", folderId]);
                         return;
                     }
+                    // 1.2.0-77 · 冷却期（修"秒关空白 100% 注销"）：folderlog 实锤
+                    // 文件夹关闭过渡中 openedFolder/_currentFolderController 双双读空
+                    // （guard 盲区）→ 关闭动画里再打 openFolderIcon 必崩。打开后 2.5s
+                    // 内的一切手势直接跳过（覆盖：打开动画+用户点空白+关闭过渡）。
+                    static NSDate *sERSPGLastFolderOpen = nil;
+                    if (sERSPGLastFolderOpen &&
+                        [-sERSPGLastFolderOpen timeIntervalSinceNow] > -2.5) {
+                        ERSPGFolderNote([NSString stringWithFormat:
+                            @"cooldown skip %.1fs id=%@",
+                            -[sERSPGLastFolderOpen timeIntervalSinceNow], folderId]);
+                        return;
+                    }
+                    sERSPGLastFolderOpen = [NSDate date];
                 }
                 if (manager && [manager respondsToSelector:os]) {
                     id loc = nil;
@@ -32559,6 +32572,25 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         loc = ((id (*)(id, SEL))objc_msgSend)(iconObj, ls);
                     if (!loc && rootFolder && [rootFolder respondsToSelector:ls])
                         loc = ((id (*)(id, SEL))objc_msgSend)(rootFolder, ls);
+                    // 1.2.0-77 · 成功率根因候选：folderlog 实锤 loc 恒为 (null)，
+                    // 而 verify 里 of=SBFolder（真打开）的次数 = 肉眼成功的次数。
+                    // openFolderIcon 很可能需要有效 location 才稳定成功。依次尝试
+                    // rootFolder/model 的 locationForIcon:/locationOfIcon:。
+                    if (!loc) {
+                        SEL lfi = NSSelectorFromString(@"locationForIcon:");
+                        SEL loi = NSSelectorFromString(@"locationOfIcon:");
+                        for (id src in @[rootFolder, model]) {
+                            if (!src || loc) continue;
+                            if ([src respondsToSelector:lfi])
+                                loc = ((id (*)(id, SEL, id))objc_msgSend)(src, lfi, iconObj ?: arg);
+                            if (!loc && [src respondsToSelector:loi])
+                                loc = ((id (*)(id, SEL, id))objc_msgSend)(src, loi, iconObj ?: arg);
+                        }
+                    }
+                    ERSPGFolderNote([NSString stringWithFormat:
+                        @"loc=%@ class=%@ id=%@",
+                        loc ? @"nonnull" : @"null",
+                        loc ? NSStringFromClass(object_getClass(loc)) : @"-", folderId]);
                     // 1.2.0-72 · v70 探针实锤系统自带翻页 API：SBHIconManager
                     // scrollToIconListContainingIcon:animate: ——滚到包含该图标的页，
                     // 无需自己定位页码（-71 实锤 rootFolder 不响应 iconLists）。
