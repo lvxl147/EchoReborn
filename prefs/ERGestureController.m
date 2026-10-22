@@ -450,9 +450,8 @@ static void ERGestureShowDropdown(UIButton *anchor,
     CGFloat chevW = 14.0;
     // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
     // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
-    // 1.2.0-76 · 用户审核定版：文字距左 4、文字到箭头 3、箭头距右 4
-    //（箭头中心 = 右边框内 11pt，去掉旧的 +1 视觉补偿），总宽 = 文字 + 25。
-    CGFloat pad = 4.0;
+    // 1.2.0-77 · 用户实测 -76 的 4/3/4 观感不好，整体退回 -75 几何（pad6/+1 补偿）。
+    CGFloat pad = 6.0;
     // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本定宽，不随各自值伸缩。
     // 1.2.0-75 · 用户需求：收起态要能完整显示 4 个字——测量基准加 4 字样例
     //（较 3 字基准加宽约一个字宽 ~15pt），按钮内部结构（pad/箭头槽位）不动。
@@ -464,7 +463,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
         CGSize t3 = [@"乌贼软件" sizeWithAttributes:@{NSFontAttributeName: f}];   // 4 字基准
         sERMaxTSW = MAX(MAX(t1.width, t2.width), t3.width);
     }
-    CGFloat btnW = MIN(MAX(sERMaxTSW + pad + 3.0 + chevW + 4.0, 72.0), 216.0);
+    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 6.0, 72.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -475,7 +474,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
 #pragma clang diagnostic pop
-    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0, btnH / 2.0);   // 1.2.0-76 · 去 +1，箭头右缘距边框 4pt
+    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);   // 1.2.0-77 · 退回 -75（恢复 +1）
     CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);
@@ -956,8 +955,7 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                           symbols:@[@"hand.tap", @"hand.point.up.left.fill", @"cursorarrow.click"]
                                            color:@"teal"
                                           defVal:NO];
-            [sw setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发。"
-                     forKey:@"erInfoText"];
+            // 1.2.0-77 · ⓘ 移到组头「搜索胶囊」右侧（用户指定位置），行上不再挂
             [specs addObject:sw];
         }
         [specs addObject:[self erGestureNamed:@"上滑胶囊" key:@"HomeScreen.SearchPill.GestureUp"   symbol:@"arrow.up"    color:@"blue"]];
@@ -1154,6 +1152,55 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                 (unsigned long)self.specifiers.count);
     // 1.2.0-7：页面标题与入口行文字统一为「手势管理」（只改显示文字）。
     self.title = @"手势管理";
+}
+
+// 1.2.0-77 · ⓘ 挂到组头「搜索胶囊」右侧（用户指定位置）。PS 的组头是
+// UITableViewHeaderFooterView 里的 UILabel，直接扫描找到后挂小按钮。
+static void ERGestureInstallGroupInfo(ERGestureController *self) {
+    if (!self.tableView || !self.tableView.window) return;
+    __block UILabel *found = nil;
+    __block void (^scan)(UIView *) = ^(UIView *v) {
+        for (UIView *sub in v.subviews) {
+            if ([sub isKindOfClass:[UILabel class]] &&
+                [(UILabel *)sub.text isEqualToString:@"搜索胶囊"]) { found = (UILabel *)sub; return; }
+            if (sub.subviews.count) { scan(sub); if (found) return; }
+        }
+    };
+    scan(self.tableView);
+    scan = nil;   // 打破 __block 保留环
+    if (!found) return;
+    UIView *host = found.superview ?: self.tableView;
+    if ([host viewWithTag:7601]) return;   // 已装过
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.tag = 7601;
+    UIImage *img = [UIImage systemImageNamed:@"info.circle"];
+    if (!img) img = [UIImage imageNamed:@"info.circle"];
+    [btn setImage:img forState:UIControlStateNormal];
+    btn.tintColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.55],
+                               [UIColor colorWithRed:0.25 green:0.55 blue:1.00 alpha:1.0]);
+    [btn addTarget:self action:@selector(erGroupInfoTapped)
+      forControlEvents:UIControlEventTouchUpInside];
+    CGFloat side = 18.0;
+    btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 6.0,
+                           CGRectGetMidY(found.frame) - side / 2.0, side, side);
+    [host addSubview:btn];
+}
+
+- (void)erGroupInfoTapped {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"搜索胶囊"
+        message:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发。"
+        preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
+    // 组头延迟出现（PS 异步构建），多试几个时机
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ ERGestureInstallGroupInfo(self); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ ERGestureInstallGroupInfo(self); });
 }
 
 @end
