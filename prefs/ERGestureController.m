@@ -148,6 +148,8 @@ static NSString *ERSpecLabel(PSSpecifier *spec) {
     cell.indentationWidth = 0.0;
     if (@available(iOS 11.0, *)) cell.textLabel.insetsLayoutMarginsFromSafeArea = NO;
     NSString *opt = _options[(NSUInteger)indexPath.row];
+    ERGPrefsLog(@"dropdown-64 row %ld text=%@ optionsCount=%lu",
+                (long)indexPath.row, opt, (unsigned long)_options.count);
     cell.textLabel.text = opt;
     cell.textLabel.textColor = [opt isEqualToString:_current]
         ? [UIColor colorWithRed:0.30 green:0.80 blue:1.00 alpha:1.0]   // 当前值高亮青色
@@ -254,8 +256,16 @@ static void ERGestureShowDropdown(UIButton *anchor,
     panel.layer.masksToBounds = YES;
     [container addSubview:panel];
 
-    UITableView *menu = [[UITableView alloc] initWithFrame:panel.contentView.bounds
+    // 1.2.0-64 · 显式 frame（不再依赖 contentView.bounds 时序）+ 禁 safe-area
+    // 内容Inset调整 + 显式行高 —— 独立 UIWindow 下 UITableView 布局行为实测异常
+    //（-63 截图：3 项面板只渲染 ~98pt/2 行，像素实测行距 40pt 正常、宽度 132 正常）。
+    UITableView *menu = [[UITableView alloc] initWithFrame:CGRectMake(0, 0, width, tableH)
                                                      style:UITableViewStylePlain];
+    if (@available(iOS 11.0, *)) {
+        menu.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
+    }
+    menu.rowHeight = rowH;
+    menu.estimatedRowHeight = rowH;
     menu.backgroundColor = ERGDynamic([UIColor colorWithWhite:0.10 alpha:0.88],
                                       [UIColor colorWithWhite:1.0 alpha:0.96]);
     menu.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
@@ -280,6 +290,23 @@ static void ERGestureShowDropdown(UIButton *anchor,
     [sERGestureOverlays addObject:overlay];
     overlay.hidden = NO;
     [UIView animateWithDuration:0.15 animations:^{ container.alpha = 1.0; }];
+
+    // 1.2.0-64 · 诊断：布局完成后把关键几何落盘，定位"3 项只渲染 2 行"
+    dispatch_async(dispatch_get_main_queue(), ^{
+        NSMutableString *vis = [NSMutableString string];
+        for (UITableViewCell *c in menu.visibleCells) {
+            [vis appendFormat:@"[%@]", c.textLabel.text ?: @""];
+        }
+        ERGPrefsLog(@"dropdown-64 cnt=%lu anchor=%@ overlay=%@ panel=%@ menu=%@ rows=%ld content=%@ vis=%@",
+                    (unsigned long)options.count,
+                    NSStringFromCGRect(anchorRect),
+                    NSStringFromCGRect(overlay.frame),
+                    NSStringFromCGRect(panel.frame),
+                    NSStringFromCGRect(menu.frame),
+                    (long)[menu numberOfRowsInSection:0],
+                    NSStringFromCGSize(menu.contentSize),
+                    vis);
+    });
 }
 
 #pragma mark - 手势值 cell
@@ -541,7 +568,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
         });
     };
     // 1.2.0-62 · 诊断：确认设置进程加载的是新代码（一级应为 3 项）
-    ERGPrefsLog(@"gesture dropdown open key=%@ code=-62 level1=3", key);
+    ERGPrefsLog(@"gesture dropdown open key=%@ code=-64 level1=3", key);
     ERGestureShowDropdown(btn, @[@"无动作", @"桌面页 ›", @"文件夹 ›"],
                           ERGestureValueText(ERGestureReadValue(key)), pick);
 }
