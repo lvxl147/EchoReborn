@@ -32557,10 +32557,10 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     // 内的一切手势直接跳过（覆盖：打开动画+用户点空白+关闭过渡）。
                     static NSDate *sERSPGLastFolderOpen = nil;
                     if (sERSPGLastFolderOpen &&
-                        [-sERSPGLastFolderOpen timeIntervalSinceNow] > -2.5) {
+                        [[NSDate date] timeIntervalSinceDate:sERSPGLastFolderOpen] < 2.5) {
                         ERSPGFolderNote([NSString stringWithFormat:
                             @"cooldown skip %.1fs id=%@",
-                            -[sERSPGLastFolderOpen timeIntervalSinceNow], folderId]);
+                            [[NSDate date] timeIntervalSinceDate:sERSPGLastFolderOpen], folderId]);
                         return;
                     }
                     sERSPGLastFolderOpen = [NSDate date];
