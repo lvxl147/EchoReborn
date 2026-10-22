@@ -32463,6 +32463,15 @@ static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
 // 同款打法），命中即开；落空一次性方法表落盘 er_folderprobe.txt 供下一版锁定入口
 // 1.2.0-75 · 文件夹手势直写诊断日志（主日志走 buffer 只有导出才落盘，这里
 // 逐条 append 到独立文件，装机后立即可拉，成功率/崩溃排查不再盲猜）
+// 1.2.0-76 · 忙碌护栏修正：桌面本身就是 SBRootFolderController，_currentFolderController
+// 恒非空 → -75 把桌面误判成"文件夹忙碌"导致手势全被跳过（folderlog 实锤：
+// busy skip cur=SBRootFolderController of=nil）。只有真正的文件夹控制器
+//（类名不含 RootFolderController）才算忙碌。
+static BOOL ERSPGCurIsRealFolder(id cur) {
+    if (!cur) return NO;
+    NSString *cls = NSStringFromClass(object_getClass(cur));
+    return ![cls containsString:@"RootFolderController"];
+}
 static void ERSPGFolderNote(NSString *line) {
     @try {
         NSString *p = @"/var/mobile/Documents/er_folderlog.txt";
@@ -32530,7 +32539,8 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                  ? ((id (*)(id, SEL))objc_msgSend)(manager, cfs) : nil;
                     id of0 = [manager respondsToSelector:ofs]
                                  ? ((id (*)(id, SEL))objc_msgSend)(manager, ofs) : nil;
-                    if (cur || of0) {
+                    // 1.2.0-76 · 根控制器（桌面）不算忙碌，见 ERSPGCurIsRealFolder
+                    if ((cur && ERSPGCurIsRealFolder(cur)) || of0) {
                         ERLogInfo(@"SPG-FOLDER busy skip cur=%@ of=%@ id=%@",
                                   cur ? NSStringFromClass(object_getClass(cur)) : @"nil",
                                   of0 ? NSStringFromClass(object_getClass(of0)) : @"nil",
@@ -32713,7 +32723,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                             of ? NSStringFromClass(object_getClass(of)) : @"nil",
                                             erOpened ? 1 : 0, folderId]);
                                         erTryOpen = nil;   // 打开过就永不重试（关闭中绝不补开）
-                                    } else if (cur) {
+                                    } else if (cur && ERSPGCurIsRealFolder(cur)) {
                                         // 1.2.0-75 · 护栏：文件夹控制器还在（开/关过渡中）绝不补开
                                         ERLogInfo(@"SPG-FOLDER retry skip busy cur=%@ id=%@",
                                                   NSStringFromClass(object_getClass(cur)), folderId);
