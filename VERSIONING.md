@@ -301,3 +301,8 @@
 - -66 日志实锤：find 已通（icon=SBFolderIcon folder=SBFolder），12 个宽候选全落空，_openFolderController 无参兜底无效果且提前 return 导致 v66 探针没写出
 - 候选再加：openFolderForIcon:/_openFolderForIcon:/openFolderControllerForIcon:/_openFolderControllerForIcon:/_openFolderControllerAnimated:（目标侧）+ 图标自身 launchFromLocation:/open/launch/openFolder（tweak 圈标准启动 API，nil 实参=整数 0）
 - miss 探针必写（修 -66 提前 return 问题）：v67 过滤放宽 folder/open/present/launch/tap/show，manager/iconObj 全方法表 + SBFolderController 类全方法表
+
+## 1.2.0-68
+- -67 日志：17 候选（含 manager 侧 + 图标自身 launchFromLocation:/open/launch）全落空，查找链完美（icon=SBFolderIcon folder=SBFolder）；_openFolderController no-arg 无可见效果且 return 又一次跳过探针（-66 同坑二犯）
+- 修复：no-arg 兜底不再 return，miss 探针 v67 必达（manager/iconObj/rootFolder 过滤表 + SBFolderController 全表），下一版按真实方法表精确锁定打开入口
+- 附注：尝试离线 strings SpringBoard 二进制失败（iOS 系统二进制为空壳，真代码在 dyld 共享缓存），运行时方法表是唯一可靠途径
