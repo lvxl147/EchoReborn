@@ -32493,6 +32493,21 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         loc = ((id (*)(id, SEL))objc_msgSend)(iconObj, ls);
                     if (!loc && rootFolder && [rootFolder respondsToSelector:ls])
                         loc = ((id (*)(id, SEL))objc_msgSend)(rootFolder, ls);
+                    // 1.2.0-72 · v70 探针实锤系统自带翻页 API：SBHIconManager
+                    // scrollToIconListContainingIcon:animate: ——滚到包含该图标的页，
+                    // 无需自己定位页码（-71 实锤 rootFolder 不响应 iconLists）。
+                    // 命中即翻页成功；落空才走下面的手写定位+候选链兜底。
+                    BOOL switched = NO;
+                    {
+                        SEL ss = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
+                        if (manager && iconObj && [manager respondsToSelector:ss]) {
+                            ERLogInfo(@"SPG-FOLDER hit scrollToIconListContainingIcon:animate: id=%@", folderId);
+                            ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss, iconObj, YES);
+                            switched = YES;
+                        } else {
+                            ERLogInfo(@"SPG-FOLDER manager lacks scrollToIconListContainingIcon:animate:");
+                        }
+                    }
                     // ---- 定位文件夹所在页（rootFolder.iconLists 里找包含该图标的 list 下标）
                     NSInteger targetPage = -1;
                     NSUInteger listCount = 0;
@@ -32520,8 +32535,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     ERLogInfo(@"SPG-FOLDER page lookup targetPage=%ld lists=%lu id=%@",
                               (long)targetPage, (unsigned long)listCount, folderId);
                     // ---- 翻页（带日志的窄候选；全部落空则 v70 探针补 page/scroll 方法表）
-                    BOOL switched = NO;
-                    if (targetPage >= 0) {
+                    if (!switched && targetPage >= 0) {
                         for (NSString *sn in @[@"setCurrentIconListIndex:", @"_setCurrentIconListIndex:",
                                                @"scrollToIconListIndex:", @"_scrollToIconListIndex:",
                                                @"scrollToIconListIndexAnimated:", @"setCurrentPage:",
