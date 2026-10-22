@@ -32230,6 +32230,22 @@ static BOOL ERSPGJumpToToday(void) {
                     ((void (*)(id, SEL, id))objc_msgSend)(ico, s, nil);   // block 参数传 nil
                 else if (oneArg) ((void (*)(id, SEL, BOOL))objc_msgSend)(ico, s, YES);
                 else ((void (*)(id, SEL))objc_msgSend)(ico, s);
+                // 1.2.0-75 · 用户实测：手势触发负一屏"没效果"，下一次翻页才补跳——
+                // 过渡请求被排队到下一次分页状态机推进。0.3s/0.9s 两次重发（幂等：
+                // 已在负一屏时重复调用无副作用），强制推进。
+                if ([sn isEqualToString:@"activateTodayViewWithCompletion:"]) {
+                    __weak id wico = ico;
+                    SEL ws = s;
+                    for (NSNumber *dn in @[@0.3, @0.9]) {
+                        NSTimeInterval d = dn.doubleValue;
+                        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
+                                       dispatch_get_main_queue(), ^{
+                            id c = wico;
+                            if (c && [c respondsToSelector:ws])
+                                ((void (*)(id, SEL, id))objc_msgSend)(c, ws, nil);
+                        });
+                    }
+                }
                 return YES;
             }
         }
@@ -32445,10 +32461,27 @@ static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
 
 // 1.2.0-59 · 一键打开桌面文件夹：候选链探测（负一屏 activateTodayViewWithCompletion:
 // 同款打法），命中即开；落空一次性方法表落盘 er_folderprobe.txt 供下一版锁定入口
+// 1.2.0-75 · 文件夹手势直写诊断日志（主日志走 buffer 只有导出才落盘，这里
+// 逐条 append 到独立文件，装机后立即可拉，成功率/崩溃排查不再盲猜）
+static void ERSPGFolderNote(NSString *line) {
+    @try {
+        NSString *p = @"/var/mobile/Documents/er_folderlog.txt";
+        NSString *s = [NSString stringWithFormat:@"%@ %@\n",
+                       [NSDate date], line];
+        NSFileHandle *fh = [NSFileHandle fileHandleForWritingAtPath:p];
+        if (!fh) {
+            [s writeToFile:p atomically:YES encoding:NSUTF8StringEncoding error:nil];
+            return;
+        }
+        [fh seekToEndOfFile];
+        [fh writeData:[s dataUsingEncoding:NSUTF8StringEncoding]];
+        [fh closeFile];
+    } @catch (__unused NSException *e) {}
+}
+
 static void ERSPGOpenFolder(NSString *folderId) {
     @try {
-        if (!folderId.length) return;
-        id ico = ERSPGIconController();
+        if (!folderId.length) return;        id ico = ERSPGIconController();
         if (!ico) return;
         id model = nil;
         if ([ico respondsToSelector:@selector(iconModel)])
@@ -32486,6 +32519,29 @@ static void ERSPGOpenFolder(NSString *folderId) {
             // 1.2.0-70 · 用户实测：只在文件夹所在页才能打开 → 先算出目标页并翻页，再 openFolderIcon
             {
                 SEL os = NSSelectorFromString(@"openFolderIcon:location:animated:withCompletion:");
+                // 1.2.0-75 · 忙碌护栏（修"秒关手势 4-5 次注销一次"）：openedFolder
+                // 或 _currentFolderController 任一非空 = 文件夹正在打开/已打开/正在
+                // 关闭，此时再调 openFolderIcon 会打在过渡动画里 → SBHIconManager
+                // 崩溃注销。护栏下直接跳过本次手势。
+                {
+                    SEL cfs = NSSelectorFromString(@"_currentFolderController");
+                    SEL ofs = NSSelectorFromString(@"openedFolder");
+                    id cur = [manager respondsToSelector:cfs]
+                                 ? ((id (*)(id, SEL))objc_msgSend)(manager, cfs) : nil;
+                    id of0 = [manager respondsToSelector:ofs]
+                                 ? ((id (*)(id, SEL))objc_msgSend)(manager, ofs) : nil;
+                    if (cur || of0) {
+                        ERLogInfo(@"SPG-FOLDER busy skip cur=%@ of=%@ id=%@",
+                                  cur ? NSStringFromClass(object_getClass(cur)) : @"nil",
+                                  of0 ? NSStringFromClass(object_getClass(of0)) : @"nil",
+                                  folderId);
+                        ERSPGFolderNote([NSString stringWithFormat:
+                            @"busy skip cur=%@ of=%@ id=%@",
+                            cur ? NSStringFromClass(object_getClass(cur)) : @"nil",
+                            of0 ? NSStringFromClass(object_getClass(of0)) : @"nil", folderId]);
+                        return;
+                    }
+                }
                 if (manager && [manager respondsToSelector:os]) {
                     id loc = nil;
                     SEL ls = NSSelectorFromString(@"location");
@@ -32607,6 +32663,8 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     }
                     ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@ switched=%d",
                               folderId, loc, switched);
+                    ERSPGFolderNote([NSString stringWithFormat:
+                        @"open id=%@ loc=%@ switched=%d", folderId, loc, switched]);
                     @try {
                         // 1.2.0-73 · 重试机制（0.6s 自检 openedFolder，为空补开最多 3 次）
                         // 1.2.0-74 · 两处升级：
@@ -32643,16 +32701,34 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     SEL vs = NSSelectorFromString(@"openedFolder");
                                     id of = (mgr2 && [mgr2 respondsToSelector:vs])
                                                 ? ((id (*)(id, SEL))objc_msgSend)(mgr2, vs) : nil;
+                                    SEL cfs = NSSelectorFromString(@"_currentFolderController");
+                                    id cur = (mgr2 && [mgr2 respondsToSelector:cfs])
+                                                 ? ((id (*)(id, SEL))objc_msgSend)(mgr2, cfs) : nil;
                                     if (of || erOpened) {
                                         ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ erOpened=%d id=%@ (ok)",
                                                   of ? NSStringFromClass(object_getClass(of)) : @"nil",
                                                   erOpened ? 1 : 0, folderId);
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"verify ok of=%@ erOpened=%d id=%@",
+                                            of ? NSStringFromClass(object_getClass(of)) : @"nil",
+                                            erOpened ? 1 : 0, folderId]);
                                         erTryOpen = nil;   // 打开过就永不重试（关闭中绝不补开）
+                                    } else if (cur) {
+                                        // 1.2.0-75 · 护栏：文件夹控制器还在（开/关过渡中）绝不补开
+                                        ERLogInfo(@"SPG-FOLDER retry skip busy cur=%@ id=%@",
+                                                  NSStringFromClass(object_getClass(cur)), folderId);
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"retry skip busy id=%@", folderId]);
+                                        erTryOpen = nil;
                                     } else if (erRetries-- > 0) {
                                         ERLogInfo(@"SPG-FOLDER openedFolder=nil, retry id=%@", folderId);
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"retry id=%@ left=%ld", folderId, (long)erRetries]);
                                         erTryOpen();
                                     } else {
                                         ERLogInfo(@"SPG-FOLDER openedFolder=nil, give up id=%@", folderId);
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"give up id=%@", folderId]);
                                         erTryOpen = nil;   // 终态才释放自引用
                                     }
                                 });
