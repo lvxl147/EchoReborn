@@ -570,9 +570,12 @@ static void ERGestureShowDropdown(UIButton *anchor,
             @"/var/mobile/Documents/er_folders.plist"];
         NSMutableArray<NSString *> *names = [NSMutableArray array];
         NSMutableArray<NSString *> *ids = [NSMutableArray array];
+        NSMutableSet<NSString *> *seenIds = [NSMutableSet set];   // 1.2.0-66 · 旧 plist 可能含重复项，显示层去重
         for (NSDictionary *d in folders) {
             NSString *fid = d[@"id"];
             if (![fid isKindOfClass:[NSString class]] || !fid.length) continue;
+            if ([seenIds containsObject:fid]) continue;
+            [seenIds addObject:fid];
             [ids addObject:fid];
             [names addObject:(d[@"name"] ?: fid)];
         }
