@@ -32816,6 +32816,20 @@ static const void *kERSPGPillRecognizersKey = &kERSPGPillRecognizersKey;
         (UIGestureRecognizer *)otherGestureRecognizer {
     return YES;
 }
+// 1.2.0-63 · 乌贼手势共存根因修复：window pan 挂在整个桌面窗口上，任意位置一动
+// 就 Began 抢跑（日志实锤：用户下划起手全被记为 begin outside），非同时识别的
+// 乌贼下划被系统强制失败（15 次仅成 2 次）。起手不在胶囊内直接不许开始。
+- (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+    @try {
+        UIView *view = gestureRecognizer.view;
+        UIWindow *w = view.window ?: (UIWindow *)view;
+        if (!w) return NO;
+        CGPoint p = [gestureRecognizer locationInView:w];
+        return !CGRectIsEmpty(sERSPGPillWinFrame) &&
+               CGRectContainsPoint(sERSPGPillWinFrame, p);
+    } @catch (__unused NSException *e) {}
+    return NO;
+}
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer
 shouldRequireFailureOfGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer {
     return NO;
