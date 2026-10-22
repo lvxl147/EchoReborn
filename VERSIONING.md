@@ -353,3 +353,9 @@
 - folderlog 实锤②：17:37:23 open → verify ok of=SBFolder（真打开）→ 用户点空白秒关 → 17:37:24 又一次 open 后无 verify = 当场崩 → 关闭过渡中 openedFolder/_currentFolderController 双双读空（guard 盲区）→ 修：打开后 2.5s 冷却期，冷却内手势直接跳过（cooldown skip 记日志）
 - ⓘ 移位：删行上 erInfoText；ERGestureController 新增 ERGestureInstallGroupInfo（扫描 tableView 找「搜索胶囊」label 挂 18pt ⓘ 按钮 tag 7601，viewWillAppear 0.3/0.9s 双时机）+ erGroupInfoTapped 弹窗
 - 下拉框：pad 6 / btnW=T+12+14+6 / chevron +1 全部恢复 -75
+
+## 1.2.0-78
+- 用户实测 -77：手势管理子页面打开即闪退（EXC_GUARD，Sileo 崩溃日志无符号栈）
+- prefs 日志实锤崩溃窗口：viewDidLoad 完成 + 4 个下拉 cell init 后 1~2s 进程消失 = 组头 ⓘ 安装定时器（0.3/0.9s）运行窗
+- 排查版改动：安装前后埋点（group info install begin/ok/label not found/ threw）+ @try 保护 + 延迟 0.6/1.2s + 开关行 layoutSubviews 加 _erInfoBtn 非空守卫（nil 消息 hidden=NO 导致分支误入的隐患）
+- 下次拉 EchoReborn-prefs.log：见 begin 无 ok = addSubview/scan 段；无 begin = 崩在更早（cell/viewWillAppear）
