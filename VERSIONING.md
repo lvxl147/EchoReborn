@@ -331,3 +331,10 @@
 - 修复②：completion 护栏——openFolderIcon 传 erCompletion 标记 erOpened，打开过就永不重试（重试打在关闭动画里 = SBHIconManager 崩溃 = 注销，3-4/5 根因）
 - 修复③：起手判定与 GR 闸门实时取胶囊帧（返回桌面后缓存过期 = 5-15s 失灵根因），缓存只作兜底
 - 修复④：页码跳页 pager 兜底路径 setContentOffset animated:NO（瞬时跳页，用户需求）
+
+## 1.2.0-75
+- 用户实测 -74：秒关手势仍 4-5 次注销一次；成功率仍 1-2/10；跳页瞬时效果满意；负一屏手势无效果、翻页后才补跳；下拉框收起态只放得下 3 字
+- 修复①：忙碌护栏——openFolderIcon 前置检查 openedFolder/_currentFolderController，任一非空（正在打开/已打开/正在关闭）直接跳过本次手势；重试路径同样检查（retry skip busy）。崩溃=重复 openFolderIcon 打在过渡动画里
+- 修复②：文件夹诊断直写 /var/mobile/Documents/er_folderlog.txt（主日志走 buffer 需导出，直写立即可拉），open/verify/retry/give up 全记录
+- 修复③：负一屏 activateTodayViewWithCompletion: 调用后 0.3s/0.9s 两次重发（排队过渡强制推进，幂等无害）
+- 修复④：下拉框收起态测量基准加 4 字样例「乌贼软件」（约 +15pt，内部结构不动）
