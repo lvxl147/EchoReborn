@@ -277,3 +277,7 @@
 ## 1.2.0-62
 - 乌贼冲突硬修复：window pan 创建时 cancelsTouchesInView/delaysTouchesBegan/delaysTouchesEnded 全关——pan 识别成功后默认向视图发 touchesCancelled，起手在胶囊内的乌贼下划收不到 touchesEnded 即死（-61 透传修复未覆盖此机制）
 - 下拉框打开加诊断日志（code=-62 level1=3）：定位"设置只显示两项"是加载旧代码还是渲染问题
+
+## 1.2.0-63
+- 乌贼冲突真根因修复：-62 日志实锤用户 15 次下划全记 `SPG-PAN begin outside`——window pan 挂整个 SBHomeScreenWindow、桌面任意移动即 Began 抢跑，非同时识别的乌贼手势被系统强制失败。ERSPGPanDelegate 新增 gestureRecognizerShouldBegin:：起手点不在胶囊矩形 sERSPGPillWinFrame 内直接 return NO，pan 只在胶囊内生效
+- 下拉框 z-order 修复：用户截图实锤面板被设置表格内容压底（"文件夹 ›" 被遮挡，prefs 日志 code=-62 level1=3 证明 3 项已构建）。ERGestureShowDropdown 改为独立悬浮 UIWindow（同 windowScene、windowLevel=anchor+2000、rootViewController 持 container、closer 统一收起、静态表持有防释放），不再 addSubview 进设置 window
