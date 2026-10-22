@@ -319,3 +319,8 @@
 ## 1.2.0-72
 - v70 探针实锤（-71 必写生效）：SBHIconManager.scrollToIconListContainingIcon:animate: = 系统自带"滚到包含该图标的页"；-71 的 targetPage=-1 根因=rootFolder 不响应 iconLists（listCount=0）
 - 修复：openFolderIcon 前优先调用该 API（animated=YES，命中即 switched）；落空才走 iconLists 手写定位+8 候选链兜底；探针逻辑保留
+
+## 1.2.0-73
+- 用户实测 -72：跨页文件夹能打开了，但成功率仅 2/10（翻页动画时长不定，固定 0.45s 后开文件夹常撞在半路）
+- 修复①：重试机制——openFolderIcon 后 0.6s 自检 openedFolder，为空自动补开，最多 3 次尝试（递归块自引用仅终态释放）
+- 修复②（用户需求）：手势区域滑块默认 0→20、上限 40→60（prefs 与 Tweak clamp 同步）
