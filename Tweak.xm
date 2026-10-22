@@ -32468,7 +32468,10 @@ static void ERSPGOpenFolder(NSString *folderId) {
                 @"openFolderWithIcon:", @"_openFolderWithIcon:", @"openFolder:",
                 @"presentFolder:", @"_presentFolder:", @"openFolderController:",
                 @"presentFolderController:", @"openFolderIcon:", @"launchFolder:",
-                @"_launchFolder:", @"openIconList:", @"showFolder:"];
+                @"_launchFolder:", @"openIconList:", @"showFolder:",
+                @"openFolderForIcon:", @"_openFolderForIcon:",
+                @"openFolderControllerForIcon:", @"_openFolderControllerForIcon:",
+                @"_openFolderControllerAnimated:"];
             for (NSString *sn in opensels) {
                 SEL s = NSSelectorFromString(sn);
                 for (id t in targets) {
@@ -32485,6 +32488,25 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     }
                 }
             }
+            // 1.2.0-67 · 图标自身候选：SBFolderIcon.launchFromLocation: 是 tweak 圈
+            // 标准图标启动 API（文件夹图标的 launch 即打开文件夹）；nil 实参=整数 0
+            if (iconObj) {
+                for (NSString *sn in @[@"launchFromLocation:", @"open", @"launch", @"openFolder"]) {
+                    SEL s = NSSelectorFromString(sn);
+                    if ([iconObj respondsToSelector:s]) {
+                        ERLogInfo(@"SPG-FOLDER hit icon.%@ id=%@", sn, folderId);
+                        @try {
+                            if ([sn hasSuffix:@":"])
+                                ((void (*)(id, SEL, id))objc_msgSend)(iconObj, s, nil);
+                            else
+                                ((void (*)(id, SEL))objc_msgSend)(iconObj, s);
+                            return;
+                        } @catch (__unused NSException *e) {
+                            ERLogInfo(@"SPG-FOLDER threw icon.%@", sn);
+                        }
+                    }
+                }
+            }
             // 无参兜底：_openFolderController（可能只开"当前"文件夹，最后再试）
             SEL oc = @selector(_openFolderController);
             if ([ico respondsToSelector:oc]) {
@@ -32493,21 +32515,24 @@ static void ERSPGOpenFolder(NSString *folderId) {
                 return;
             }
         }
+        // 1.2.0-67 · miss 探针必写（-66 因 no-arg 兜底提前 return 没写成），
+        // 过滤放宽 folder/open/present/launch/tap/show；manager/iconObj 全方法表
         if (!sERSPGFolderDumped) {
             sERSPGFolderDumped = YES;
-            NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v66 (open)\n"];
+            NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v67 (open)\n"];
             id manager = nil;
             {   SEL ps = NSSelectorFromString(@"iconManager");
                 if ([ico respondsToSelector:ps])
                     manager = ((id (*)(id, SEL))objc_msgSend)(ico, ps); }
+            [rep appendFormat:@"manager=%@\n", manager ? NSStringFromClass(object_getClass(manager)) : @"nil"];
             id rootFolder = nil;
             if ([model respondsToSelector:@selector(rootFolder)])
                 rootFolder = ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder));
             NSMutableArray<id> *targets = [NSMutableArray array];
             for (id t in @[ico, manager, model, rootFolder, iconObj, folderObj])
                 if (t && ![targets containsObject:t]) [targets addObject:t];
-            Class fctrl = objc_getClass("SBFolderController");
             for (id t in targets) {
+                [rep appendFormat:@"== TARGET %@\n", NSStringFromClass(object_getClass(t))];
                 for (Class c = object_getClass(t); c; c = class_getSuperclass(c)) {
                     unsigned int n = 0;
                     Method *ms = class_copyMethodList(c, &n);
@@ -32515,12 +32540,16 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         NSString *nm = NSStringFromSelector(method_getName(ms[i]));
                         if ([nm localizedCaseInsensitiveContainsString:@"folder"] ||
                             [nm localizedCaseInsensitiveContainsString:@"open"] ||
-                            [nm localizedCaseInsensitiveContainsString:@"present"])
+                            [nm localizedCaseInsensitiveContainsString:@"present"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"launch"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"tap"] ||
+                            [nm localizedCaseInsensitiveContainsString:@"show"])
                             [rep appendFormat:@"%@ %@\n", NSStringFromClass(c), nm];
                     }
                     if (ms) free(ms);
                 }
             }
+            Class fctrl = objc_getClass("SBFolderController");
             if (fctrl) {
                 [rep appendFormat:@"-- SBFolderController class+instance\n"];
                 for (Class c = fctrl; c; c = class_getSuperclass(c)) {
@@ -32528,10 +32557,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     Method *ms = class_copyMethodList(c, &n);
                     for (unsigned int i = 0; i < n; i++) {
                         NSString *nm = NSStringFromSelector(method_getName(ms[i]));
-                        if ([nm localizedCaseInsensitiveContainsString:@"folder"] ||
-                            [nm localizedCaseInsensitiveContainsString:@"present"] ||
-                            [nm localizedCaseInsensitiveContainsString:@"open"])
-                            [rep appendFormat:@"SBFolderController(%@) %@\n", NSStringFromClass(c), nm];
+                        [rep appendFormat:@"SBFolderController(%@) %@\n", NSStringFromClass(c), nm];
                     }
                     if (ms) free(ms);
                 }
