@@ -784,8 +784,8 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
                                      swSize.width, swSize.height);
         CGFloat lx = left + 29.0 + 12.0;
         CGFloat titleW = _erSwitch.frame.origin.x - lx - 12.0;
-        // 1.2.0-76 · ⓘ 按钮排布：紧跟标题文字右缘 +6pt；无 ⓘ 时标题吃满原宽度
-        if (!_erInfoBtn.hidden) {
+        // 1.2.0-77 · ⓘ 按钮排布：紧跟标题文字右缘 +6pt；无 ⓘ 时标题吃满原宽度
+        if (_erInfoBtn && !_erInfoBtn.hidden) {
             CGSize tsz = [_erTitle sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
             CGFloat btnSide = 22.0;
             CGFloat ibx = MIN(lx + tsz.width + 6.0,
@@ -1170,8 +1170,9 @@ static UILabel *ERGestureFindHeaderLabel(UIView *v) {
 
 static void ERGestureInstallGroupInfo(ERGestureController *self) {
     if (!self.tableView || !self.tableView.window) return;
+    ERGPrefsLog(@"group info install begin");
     UILabel *found = ERGestureFindHeaderLabel(self.tableView);
-    if (!found) return;
+    if (!found) { ERGPrefsLog(@"group info label not found"); return; }
     UIView *host = found.superview ?: self.tableView;
     if ([host viewWithTag:7601]) return;   // 已装过
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -1187,6 +1188,8 @@ static void ERGestureInstallGroupInfo(ERGestureController *self) {
     btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 6.0,
                            CGRectGetMidY(found.frame) - side / 2.0, side, side);
     [host addSubview:btn];
+    ERGPrefsLog(@"group info install ok frame=%@ host=%@",
+                NSStringFromCGRect(btn.frame), NSStringFromClass(object_getClass(host)));
 }
 
 - (void)erGroupInfoTapped {
@@ -1199,11 +1202,20 @@ static void ERGestureInstallGroupInfo(ERGestureController *self) {
 
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    // 组头延迟出现（PS 异步构建），多试几个时机
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.3 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ ERGestureInstallGroupInfo(self); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.9 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{ ERGestureInstallGroupInfo(self); });
+    ERGPrefsLog(@"viewWillAppear (group info scheduled)");
+    // 组头延迟出现（PS 异步构建），多试几个时机；安装全程 @try 保护
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
+            ERGPrefsLog(@"group info install threw: %@", e);
+        }
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
+            ERGPrefsLog(@"group info install threw(2): %@", e);
+        }
+    });
 }
 
 @end
