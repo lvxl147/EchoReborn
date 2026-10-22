@@ -296,3 +296,8 @@
 - 文件夹二级去重：-65 日志 dumped=16 实为 8 个文件夹各两遍（walk 的 lists/icons 两路径重叠）→ walk 加 seen 集合去重 + prefs 显示层按 id 去重兜底
 - 文件夹打开手势 miss 真相（-65 探针 v59）：folderObj(SBFolder) 找到了，但 SBIconController 没有 openFolderWithIcon:/_openFolderWithIcon:/openFolder:/presentFolder: 任何一个 → 4 候选全落空。新证据：iconManager:willOpenFolder: 系（入口在 iconManager）、_openFolderController、SBFolder.folderWithUniqueIdentifier:
 - 修复：FindFolderIcon 复用已验证的 walk 建 iconMap 查 id（旧手写 DFS 废弃），兜底 folderWithUniqueIdentifier:；OpenFolder 改多目标宽候选链（ico/iconManager/model/rootFolder/图标/文件夹 × 12 个 open/present/launch 选择器，命中即调 + 异常保护），miss 时探针升级 v66（+iconManager/rootFolder 方法表 + SBFolderController 类方法表，filter folder/open/present）
+
+## 1.2.0-67
+- -66 日志实锤：find 已通（icon=SBFolderIcon folder=SBFolder），12 个宽候选全落空，_openFolderController 无参兜底无效果且提前 return 导致 v66 探针没写出
+- 候选再加：openFolderForIcon:/_openFolderForIcon:/openFolderControllerForIcon:/_openFolderControllerForIcon:/_openFolderControllerAnimated:（目标侧）+ 图标自身 launchFromLocation:/open/launch/openFolder（tweak 圈标准启动 API，nil 实参=整数 0）
+- miss 探针必写（修 -66 提前 return 问题）：v67 过滤放宽 folder/open/present/launch/tap/show，manager/iconObj 全方法表 + SBFolderController 类全方法表
