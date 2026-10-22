@@ -451,14 +451,16 @@ static void ERGestureShowDropdown(UIButton *anchor,
     // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
     // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
     CGFloat pad = 6.0;
-    // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本（"第10页"/"无动作"）定宽，
-    // 不再随各自值伸缩（用户反馈宽度不一致 + 整体偏大）。
+    // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本定宽，不随各自值伸缩。
+    // 1.2.0-75 · 用户需求：收起态要能完整显示 4 个字——测量基准加 4 字样例
+    //（较 3 字基准加宽约一个字宽 ~15pt），按钮内部结构（pad/箭头槽位）不动。
     static CGFloat sERMaxTSW = 0.0;
     if (sERMaxTSW < 1.0) {
         UIFont *f = _valueButton.titleLabel.font;
         CGSize t1 = [@"第10页" sizeWithAttributes:@{NSFontAttributeName: f}];
         CGSize t2 = [@"无动作" sizeWithAttributes:@{NSFontAttributeName: f}];
-        sERMaxTSW = MAX(t1.width, t2.width);
+        CGSize t3 = [@"乌贼软件" sizeWithAttributes:@{NSFontAttributeName: f}];   // 4 字基准
+        sERMaxTSW = MAX(MAX(t1.width, t2.width), t3.width);
     }
     CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 6.0, 72.0), 216.0);
     CGFloat btnH = 30.0;
