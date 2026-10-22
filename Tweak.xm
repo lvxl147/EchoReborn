@@ -31995,6 +31995,22 @@ static CGFloat ERSPGTriggerRange(void) {
     return (CGFloat)r;
 }
 
+// 1.2.0-71 · 手势区域（外扩 pt）：起手判定区从胶囊本体向四周外扩（用户滑块
+// 0~40，默认 0=胶囊本体，行为不变）。外扩矩形（含四角）内任意点起手均可触发。
+// 注意：外扩带会压住乌贼手势在胶囊附近的起手区（-61 实锤），故默认 0。
+static CGFloat ERSPGTriggerExpand(void) {
+    NSInteger e = ERSPGInt(@"HomeScreen.SearchPill.AreaExpand", 0);
+    if (e < 0) e = 0;
+    if (e > 40) e = 40;
+    return (CGFloat)e;
+}
+
+// 1.2.0-71 · 胶囊帧外扩工具：expand>0 时返回向四周外扩后的矩形
+static CGRect ERSPGExpandPillRect(CGRect f, CGFloat expand) {
+    if (expand > 0 && !CGRectIsEmpty(f)) return CGRectInset(f, -expand, -expand);
+    return f;
+}
+
 // SBIconController.sharedInstance —— 各 helper 共用。
 static id ERSPGIconController(void) {
     Class cls = objc_getClass("SBIconController");
@@ -32519,9 +32535,36 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             }
                         }
                     }
-                    if (targetPage >= 0 && !switched && !sERSPGPageDumped) {
+                    // 1.2.0-71 · 探针条件放宽：翻页候选没命中（switched=NO）就必写，
+                    // 包括 targetPage<0（-70 实锤定位失败时探针没写，盲区一轮）；
+                    // 附带 iconLists 详情（每页 list 类名+图标数+是否含目标图标）
+                    if (!switched && !sERSPGPageDumped) {
                         sERSPGPageDumped = YES;
                         NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v70 (page)\n"];
+                        [rep appendFormat:@"targetPage=%ld listCount=%lu iconClass=%@\n",
+                            (long)targetPage, (unsigned long)listCount,
+                            iconObj ? NSStringFromClass(object_getClass(iconObj)) : @"nil"];
+                        if ([lists isKindOfClass:[NSArray class]]) {
+                            NSArray *arr = (NSArray *)lists;
+                            for (NSUInteger i = 0; i < arr.count && i < 12; i++) {
+                                id lst = arr[i];
+                                if (!lst) continue;
+                                SEL gs2 = NSSelectorFromString(@"icons");
+                                id icons2 = [lst respondsToSelector:gs2]
+                                                ? ((id (*)(id, SEL))objc_msgSend)(lst, gs2) : nil;
+                                NSUInteger cnt = [icons2 isKindOfClass:[NSArray class]]
+                                                     ? [(NSArray *)icons2 count] : 0;
+                                BOOL has = [icons2 isKindOfClass:[NSArray class]] &&
+                                           [(NSArray *)icons2 containsObject:iconObj];
+                                [rep appendFormat:@"list[%lu]=%@ icons=%lu hasIcon=%d\n",
+                                    (unsigned long)i, NSStringFromClass(object_getClass(lst)),
+                                    (unsigned long)cnt, has ? 1 : 0];
+                            }
+                        } else {
+                            [rep appendFormat:@"iconLists=%@ (rootFolder=%@)\n",
+                                lists ? NSStringFromClass(object_getClass(lists)) : @"nil",
+                                rootFolder ? NSStringFromClass(object_getClass(rootFolder)) : @"nil"];
+                        }
                         for (id t in @[ico, manager, rootFolder]) {
                             if (!t) continue;
                             [rep appendFormat:@"== TARGET %@\n", NSStringFromClass(object_getClass(t))];
@@ -32790,8 +32833,11 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                 // pan 迟到漂移），起手区=胶囊本体。
                 // 1.2.0-61 · 触发区收回胶囊本体（与乌贼手势共存：撤销 -58 的
                 // 左右+4/上下+12 外扩——外扩带正压乌贼底部下划起手区）
-                inside = !CGRectIsEmpty(sERSPGPillWinFrame) &&
-                         CGRectContainsPoint(sERSPGPillWinFrame, p);
+                // 1.2.0-71 · 外扩改回用户可调（手势区域滑块 0~40，默认 0 不影响
+                // 乌贼共存）；外扩矩形（含四角）内任意点起手均可触发
+                CGFloat erExpand = ERSPGTriggerExpand();
+                CGRect erArea = ERSPGExpandPillRect(sERSPGPillWinFrame, erExpand);
+                inside = !CGRectIsEmpty(erArea) && CGRectContainsPoint(erArea, p);
                 if (inside) {
                     // 1.2.0-23 · SPG-HIT：起手点 hitTest 命中视图链（4 层），
                     // 实锤胶囊区域触摸到底落在哪个视图（系统行为载体定位）。
@@ -32801,8 +32847,8 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
                         [hitChain appendFormat:@"%@%s", NSStringFromClass(hit.class),
                          d < 3 ? " < " : ""];
                     }
-                    ERLogInfo(@"SPG-PAN begin ok p=(%.0f,%.0f) frame=%@ winFrame=%@",
-                              p.x, p.y, NSStringFromCGRect(pill.frame),
+                    ERLogInfo(@"SPG-PAN begin ok p=(%.0f,%.0f) expand=%.0f frame=%@ winFrame=%@",
+                              p.x, p.y, erExpand, NSStringFromCGRect(pill.frame),
                               NSStringFromCGRect(pill.window.frame));
                     ERLogInfo(@"SPG-HIT %@", hitChain);
                     // 防横向被桌面翻页 pan 抢走：压住 pager pan，结束再恢复。
@@ -33337,10 +33383,13 @@ static void ERSPGAttachGRGate(Class cls) {
 // 主胶囊帧与帧列表同步；inset 参数保留但忽略。
 static BOOL ERSPGPointInAnyPill(CGPoint wp, CGFloat inset) {
     @try {
-        if (!CGRectIsEmpty(sERSPGPillWinFrame) &&
-            CGRectContainsPoint(sERSPGPillWinFrame, wp)) return YES;
+        // 1.2.0-71 · 判定区=胶囊帧外扩 ERSPGTriggerExpand() pt（+调用方 inset），
+        // 与起手闸门同一几何，保证外扩带内我们的 pan 一致胜出
+        CGFloat expand = ERSPGTriggerExpand() + inset;
+        CGRect a0 = ERSPGExpandPillRect(sERSPGPillWinFrame, expand);
+        if (!CGRectIsEmpty(a0) && CGRectContainsPoint(a0, wp)) return YES;
         for (NSValue *e in gERSPGPillFrameList) {
-            CGRect f = e.CGRectValue;
+            CGRect f = ERSPGExpandPillRect(e.CGRectValue, expand);
             if (!CGRectIsEmpty(f) && CGRectContainsPoint(f, wp)) return YES;
         }
     } @catch (__unused NSException *e) {}
