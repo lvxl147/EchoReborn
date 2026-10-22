@@ -895,7 +895,7 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 
         // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
         PSSpecifier *g1 = [PSSpecifier groupSpecifierWithName:@"搜索胶囊"];
-        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。"
+        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~40pt，默认 0 只认胶囊本体），调大后外扩矩形内（含四角）任意点起手都可触发；注意外扩过大可能压住胶囊附近的乌贼手势起手区，若乌贼变迟钝请调小。"
                  forKey:@"footerText"];
         [specs addObject:g1];
         [specs addObject:[self erSwitchNamed:@"搜索胶囊手势"
@@ -907,6 +907,15 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
         [specs addObject:[self erGestureNamed:@"下滑胶囊" key:@"HomeScreen.SearchPill.GestureDown" symbol:@"arrow.down"  color:@"blue"]];
         [specs addObject:[self erGestureNamed:@"左滑胶囊" key:@"HomeScreen.SearchPill.GestureLeft" symbol:@"arrow.left"  color:@"teal"]];
         [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"teal"]];
+        // 1.2.0-71 · 手势区域（外扩）滑块行（用户需求·已审核）：触发范围上面，
+        // 起手判定区从胶囊本体向四周外扩 0~40pt（默认 0=胶囊本体，行为不变）。
+        // -61 实锤：外扩带会压住乌贼手势在胶囊附近的起手区，默认 0 不影响；
+        // 用户调大后若乌贼手势变迟钝，调小即可（说明写进卡片 footer）。
+        [specs addObject:[self erSliderNamed:@"手势区域"
+                                          key:@"HomeScreen.SearchPill.AreaExpand"
+                                          min:0 max:40 def:0
+                                       symbol:@"arrow.up.left.and.arrow.down.right.square"
+                                        color:@"teal"]];
         // 1.2.0-21 · 触发范围滑块行（用户需求）：右滑胶囊下面，左图标+文字、右滑块。
         [specs addObject:[self erSliderNamed:@"触发范围"
                                           key:@"HomeScreen.SearchPill.TriggerRange"
