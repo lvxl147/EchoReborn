@@ -32512,7 +32512,8 @@ static void ERSPGOpenFolder(NSString *folderId) {
             if ([ico respondsToSelector:oc]) {
                 ERLogInfo(@"SPG-FOLDER hit _openFolderController (no-arg) id=%@", folderId);
                 ((void (*)(id, SEL))objc_msgSend)(ico, oc);
-                return;
+                // 1.2.0-68 · 不再 return：-67 实锤 no-arg 无可见效果却两次跳过探针，
+                // 落到 miss 探针必须执行，下一版靠 v67 方法表锁定真入口
             }
         }
         // 1.2.0-67 · miss 探针必写（-66 因 no-arg 兜底提前 return 没写成），
