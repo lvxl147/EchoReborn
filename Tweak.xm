@@ -31996,12 +31996,12 @@ static CGFloat ERSPGTriggerRange(void) {
 }
 
 // 1.2.0-71 · 手势区域（外扩 pt）：起手判定区从胶囊本体向四周外扩（用户滑块
-// 0~40，默认 0=胶囊本体，行为不变）。外扩矩形（含四角）内任意点起手均可触发。
-// 注意：外扩带会压住乌贼手势在胶囊附近的起手区（-61 实锤），故默认 0。
+// 0~60，默认 20=已审核调整）。外扩矩形（含四角）内任意点起手均可触发。
+// 注意：外扩带会压住乌贼手势在胶囊附近的起手区（-61 实锤），过大致乌贼迟钝。
 static CGFloat ERSPGTriggerExpand(void) {
-    NSInteger e = ERSPGInt(@"HomeScreen.SearchPill.AreaExpand", 0);
+    NSInteger e = ERSPGInt(@"HomeScreen.SearchPill.AreaExpand", 20);
     if (e < 0) e = 0;
-    if (e > 40) e = 40;
+    if (e > 60) e = 60;
     return (CGFloat)e;
 }
 
@@ -32605,17 +32605,23 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@ switched=%d",
                               folderId, loc, switched);
                     @try {
-                        void (^callOpen)(void) = ^{
+                        // 1.2.0-73 · 重试机制（用户实测 -72 成功率 2/10：翻页动画时长
+                        // 不定，固定 0.45s 后开文件夹常撞在半路）。改为：开一次 →
+                        // 0.6s 后自检 openedFolder，为空就再开，最多 3 次尝试。
+                        __block NSInteger erRetries = 2;
+                        __block void (^erTryOpen)(void) = nil;
+                        erTryOpen = ^{
                             @try {
                                 ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
                                     manager, os, iconObj ?: arg, loc, YES, nil);
                             } @catch (__unused NSException *e) {
                                 ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
                                           NSStringFromClass(object_getClass(e)));
+                                erTryOpen = nil;
+                                return;
                             }
-                            // 0.8s 后验证 openedFolder 是否非空（确认真打开而非静默失败）
                             dispatch_after(
-                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
                                 dispatch_get_main_queue(), ^{
                                     id ico2 = ERSPGIconController();
                                     id mgr2 = nil;
@@ -32625,18 +32631,26 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     SEL vs = NSSelectorFromString(@"openedFolder");
                                     id of = (mgr2 && [mgr2 respondsToSelector:vs])
                                                 ? ((id (*)(id, SEL))objc_msgSend)(mgr2, vs) : nil;
-                                    ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ id=%@",
-                                              of ? NSStringFromClass(object_getClass(of)) : @"nil",
-                                              folderId);
+                                    if (of) {
+                                        ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ id=%@ (ok)",
+                                                  NSStringFromClass(object_getClass(of)), folderId);
+                                        erTryOpen = nil;   // 终态才释放自引用
+                                    } else if (erRetries-- > 0) {
+                                        ERLogInfo(@"SPG-FOLDER openedFolder=nil, retry id=%@", folderId);
+                                        erTryOpen();
+                                    } else {
+                                        ERLogInfo(@"SPG-FOLDER openedFolder=nil, give up id=%@", folderId);
+                                        erTryOpen = nil;   // 终态才释放自引用
+                                    }
                                 });
                         };
                         if (switched) {
-                            // 翻页动画 ~0.45s 后再开
+                            // 翻页动画 ~0.45s 后再开（失败还有重试兜底）
                             dispatch_after(
                                 dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
-                                dispatch_get_main_queue(), callOpen);
+                                dispatch_get_main_queue(), erTryOpen);
                         } else {
-                            callOpen();
+                            erTryOpen();
                         }
                         return;
                     } @catch (__unused NSException *e) {}
