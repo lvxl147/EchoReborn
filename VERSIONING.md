@@ -315,3 +315,7 @@
 - 用户实测 -70：跨页无效果。日志盲区：targetPage 定位失败时代码走立即打开分支且探针没写（条件含 targetPage>=0）
 - 修复①（已审核新功能）：手势管理子页触发范围上面新增「手势区域」滑块（HomeScreen.SearchPill.AreaExpand，0~40pt 默认 0）——起手判定区=胶囊本体四周外扩 N pt 矩形（含四角均可触发）；ERSPGPointInAnyPill/GR 竞争闸门同步外扩保证行为一致；footer 注明外扩过大可能压乌贼手势起手区
 - 修复②：探针条件放宽为 !switched 必写，附 targetPage/listCount/iconLists 每页详情（list 类名+图标数+是否含目标图标）
+
+## 1.2.0-72
+- v70 探针实锤（-71 必写生效）：SBHIconManager.scrollToIconListContainingIcon:animate: = 系统自带"滚到包含该图标的页"；-71 的 targetPage=-1 根因=rootFolder 不响应 iconLists（listCount=0）
+- 修复：openFolderIcon 前优先调用该 API（animated=YES，命中即 switched）；落空才走 iconLists 手写定位+8 候选链兜底；探针逻辑保留
