@@ -32318,6 +32318,7 @@ static void ERSPGWalkFolderIcons(id node, NSMutableArray<NSDictionary *> *out,
 // 1.2.0-60 · 通道一 SBIconModel.folders（旧路径保留），通道二 rootFolder 递归遍历
 // → [{id,name}] → /var/mobile/Documents/er_folders.plist；ctor 后 20s 执行一次
 static BOOL sERSPGFolderDumped = NO;
+static BOOL sERSPGPageDumped = NO;   // 1.2.0-70 翻页方法表探针
 static void ERSPGDumpFolders(void) {
     @try {
         if (!objc_getClass("SBIconModel")) return;   // 非 SpringBoard 进程不跑
@@ -32466,7 +32467,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                 if (t && ![targets containsObject:t]) [targets addObject:t];
             // 1.2.0-69 · v67 探针实锤真入口：SBHIconManager.openFolderIcon:location:animated:withCompletion:
             //（manager=SBHIconManager，-67 的 17 个候选恰无此 4 参选择器所以全落空）
-            // location 取图标自身的 location（SBIcon.location），兜底 rootFolder.location
+            // 1.2.0-70 · 用户实测：只在文件夹所在页才能打开 → 先算出目标页并翻页，再 openFolderIcon
             {
                 SEL os = NSSelectorFromString(@"openFolderIcon:location:animated:withCompletion:");
                 if (manager && [manager respondsToSelector:os]) {
@@ -32476,32 +32477,112 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         loc = ((id (*)(id, SEL))objc_msgSend)(iconObj, ls);
                     if (!loc && rootFolder && [rootFolder respondsToSelector:ls])
                         loc = ((id (*)(id, SEL))objc_msgSend)(rootFolder, ls);
-                    ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@",
-                              folderId, loc);
-                    @try {
-                        ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
-                            manager, os, iconObj ?: arg, loc, YES, nil);
-                        // 0.8s 后验证 openedFolder 是否非空（确认真打开而非静默失败）
-                        dispatch_after(
-                            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
-                            dispatch_get_main_queue(), ^{
-                                id ico2 = ERSPGIconController();
-                                id mgr2 = nil;
-                                SEL ps = NSSelectorFromString(@"iconManager");
-                                if (ico2 && [ico2 respondsToSelector:ps])
-                                    mgr2 = ((id (*)(id, SEL))objc_msgSend)(ico2, ps);
-                                SEL vs = NSSelectorFromString(@"openedFolder");
-                                id of = (mgr2 && [mgr2 respondsToSelector:vs])
-                                            ? ((id (*)(id, SEL))objc_msgSend)(mgr2, vs) : nil;
-                                ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ id=%@",
-                                          of ? NSStringFromClass(object_getClass(of)) : @"nil",
-                                          folderId);
-                            });
-                        return;
-                    } @catch (__unused NSException *e) {
-                        ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
-                                  NSStringFromClass(object_getClass(e)));
+                    // ---- 定位文件夹所在页（rootFolder.iconLists 里找包含该图标的 list 下标）
+                    NSInteger targetPage = -1;
+                    NSUInteger listCount = 0;
+                    SEL ils = NSSelectorFromString(@"iconLists");
+                    id lists = (rootFolder && [rootFolder respondsToSelector:ils])
+                                   ? ((id (*)(id, SEL))objc_msgSend)(rootFolder, ils) : nil;
+                    if ([lists isKindOfClass:[NSArray class]]) {
+                        NSArray *arr = (NSArray *)lists;
+                        listCount = arr.count;
+                        for (NSUInteger i = 0; i < arr.count && targetPage < 0; i++) {
+                            id lst = arr[i];
+                            if (!lst) continue;
+                            SEL gs = NSSelectorFromString(@"icons");
+                            id icons = [lst respondsToSelector:gs]
+                                           ? ((id (*)(id, SEL))objc_msgSend)(lst, gs) : nil;
+                            if ([icons isKindOfClass:[NSArray class]] &&
+                                [(NSArray *)icons containsObject:iconObj]) { targetPage = (NSInteger)i; break; }
+                            SEL iis = NSSelectorFromString(@"indexOfIcon:");
+                            if ([lst respondsToSelector:iis]) {
+                                NSUInteger idx = ((NSUInteger (*)(id, SEL, id))objc_msgSend)(lst, iis, iconObj);
+                                if (idx != NSNotFound) targetPage = (NSInteger)i;
+                            }
+                        }
                     }
+                    ERLogInfo(@"SPG-FOLDER page lookup targetPage=%ld lists=%lu id=%@",
+                              (long)targetPage, (unsigned long)listCount, folderId);
+                    // ---- 翻页（带日志的窄候选；全部落空则 v70 探针补 page/scroll 方法表）
+                    BOOL switched = NO;
+                    if (targetPage >= 0) {
+                        for (NSString *sn in @[@"setCurrentIconListIndex:", @"_setCurrentIconListIndex:",
+                                               @"scrollToIconListIndex:", @"_scrollToIconListIndex:",
+                                               @"scrollToIconListIndexAnimated:", @"setCurrentPage:",
+                                               @"setSelectedIconListIndex:", @"gotoIconListIndex:"]) {
+                            SEL s = NSSelectorFromString(sn);
+                            if ([ico respondsToSelector:s]) {
+                                ERLogInfo(@"SPG-FOLDER page switch hit %@ -> %ld", sn, (long)targetPage);
+                                ((void (*)(id, SEL, NSInteger))objc_msgSend)(ico, s, targetPage);
+                                switched = YES;
+                                break;
+                            }
+                        }
+                    }
+                    if (targetPage >= 0 && !switched && !sERSPGPageDumped) {
+                        sERSPGPageDumped = YES;
+                        NSMutableString *rep = [NSMutableString stringWithString:@"ER-FOLDERPROBE v70 (page)\n"];
+                        for (id t in @[ico, manager, rootFolder]) {
+                            if (!t) continue;
+                            [rep appendFormat:@"== TARGET %@\n", NSStringFromClass(object_getClass(t))];
+                            for (Class c = object_getClass(t); c; c = class_getSuperclass(c)) {
+                                unsigned int n = 0;
+                                Method *ms = class_copyMethodList(c, &n);
+                                for (unsigned int i = 0; i < n; i++) {
+                                    NSString *nm = NSStringFromSelector(method_getName(ms[i]));
+                                    if ([nm localizedCaseInsensitiveContainsString:@"page"] ||
+                                        [nm localizedCaseInsensitiveContainsString:@"list"] ||
+                                        [nm localizedCaseInsensitiveContainsString:@"index"] ||
+                                        [nm localizedCaseInsensitiveContainsString:@"scroll"] ||
+                                        [nm localizedCaseInsensitiveContainsString:@"transition"] ||
+                                        [nm localizedCaseInsensitiveContainsString:@"state"])
+                                        [rep appendFormat:@"%@ %@\n", NSStringFromClass(c), nm];
+                                }
+                                if (ms) free(ms);
+                            }
+                        }
+                        [rep appendFormat:@"ts=%@\n", [NSDate date]];
+                        [rep writeToFile:@"/var/mobile/Documents/er_folderprobe.txt"
+                              atomically:YES encoding:NSUTF8StringEncoding error:nil];
+                    }
+                    ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@ switched=%d",
+                              folderId, loc, switched);
+                    @try {
+                        void (^callOpen)(void) = ^{
+                            @try {
+                                ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
+                                    manager, os, iconObj ?: arg, loc, YES, nil);
+                            } @catch (__unused NSException *e) {
+                                ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
+                                          NSStringFromClass(object_getClass(e)));
+                            }
+                            // 0.8s 后验证 openedFolder 是否非空（确认真打开而非静默失败）
+                            dispatch_after(
+                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)),
+                                dispatch_get_main_queue(), ^{
+                                    id ico2 = ERSPGIconController();
+                                    id mgr2 = nil;
+                                    SEL ps = NSSelectorFromString(@"iconManager");
+                                    if (ico2 && [ico2 respondsToSelector:ps])
+                                        mgr2 = ((id (*)(id, SEL))objc_msgSend)(ico2, ps);
+                                    SEL vs = NSSelectorFromString(@"openedFolder");
+                                    id of = (mgr2 && [mgr2 respondsToSelector:vs])
+                                                ? ((id (*)(id, SEL))objc_msgSend)(mgr2, vs) : nil;
+                                    ERLogInfo(@"SPG-FOLDER verify openedFolder=%@ id=%@",
+                                              of ? NSStringFromClass(object_getClass(of)) : @"nil",
+                                              folderId);
+                                });
+                        };
+                        if (switched) {
+                            // 翻页动画 ~0.45s 后再开
+                            dispatch_after(
+                                dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
+                                dispatch_get_main_queue(), callOpen);
+                        } else {
+                            callOpen();
+                        }
+                        return;
+                    } @catch (__unused NSException *e) {}
                 } else {
                     ERLogInfo(@"SPG-FOLDER manager=%@ lacks openFolderIcon:location:…",
                               manager ? NSStringFromClass(object_getClass(manager)) : @"nil");
