@@ -306,3 +306,7 @@
 - -67 日志：17 候选（含 manager 侧 + 图标自身 launchFromLocation:/open/launch）全落空，查找链完美（icon=SBFolderIcon folder=SBFolder）；_openFolderController no-arg 无可见效果且 return 又一次跳过探针（-66 同坑二犯）
 - 修复：no-arg 兜底不再 return，miss 探针 v67 必达（manager/iconObj/rootFolder 过滤表 + SBFolderController 全表），下一版按真实方法表精确锁定打开入口
 - 附注：尝试离线 strings SpringBoard 二进制失败（iOS 系统二进制为空壳，真代码在 dyld 共享缓存），运行时方法表是唯一可靠途径
+
+## 1.2.0-69
+- v67 探针实锤（313KB 方法表）：真入口 = SBHIconManager.openFolderIcon:location:animated:withCompletion:（manager=SBHIconManager）；-67 的 17 个候选恰无此 4 参选择器所以全落空；图标侧 launchFromLocation: 对文件夹无效
+- 修复：ERSPGOpenFolder 候选链最前精确调用该选择器（location=icon.location 兜底 rootFolder.location，animated=YES），调用后 0.8s 验证 openedFolder 非空并写日志（区分真打开与静默失败）
