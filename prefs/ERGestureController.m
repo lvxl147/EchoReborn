@@ -163,24 +163,74 @@ static NSString *ERSpecLabel(PSSpecifier *spec) {
 
 #pragma mark - 下拉浮层
 
+// 1.2.0-63 · 独立悬浮 UIWindow 方案：面板不再 addSubview 进设置 window
+//（用户截图实锤：面板被表格内容压底，"文件夹 ›" 行被描述文字遮挡）。
+// 每次弹出一个独立 UIWindow（同 windowScene、windowLevel 拉高），保证盖在一切之上。
+@interface ERGestureOverlayCloser : NSObject
+@property (nonatomic, strong) UIWindow *overlay;
+- (void)dismiss;
+@end
+@implementation ERGestureOverlayCloser
+- (void)dismiss {
+    UIWindow *w = _overlay;
+    if (!w || w.hidden) return;
+    [UIView animateWithDuration:0.15 animations:^{ w.alpha = 0.0; }
+                     completion:^(BOOL finished) {
+        w.hidden = YES;
+        w.rootViewController = nil;
+    }];
+    // 从静态持有表移除（释放窗口本身）
+    static NSMutableArray<UIWindow *> *sERGestureOverlays;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ sERGestureOverlays = [NSMutableArray new]; });
+    [sERGestureOverlays removeObject:w];
+}
+@end
+
 static void ERGestureShowDropdown(UIButton *anchor,
                                   NSArray<NSString *> *options,
                                   NSString *current,
                                   void (^onPick)(NSInteger idx)) {
-    UIWindow *window = anchor.window;
-    if (!window) return;
+    UIWindow *anchorWindow = anchor.window;
+    if (!anchorWindow) return;
 
-    CGRect anchorRect = [anchor convertRect:anchor.bounds toView:window];
-    // 1.2.0-59 · 选项列表由调用方构造（两级菜单各自传）
-    UIView *container = [[UIView alloc] initWithFrame:window.bounds];
+    static NSMutableArray<UIWindow *> *sERGestureOverlays;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ sERGestureOverlays = [NSMutableArray new]; });
+    // 先收掉上一个还开着的浮层（幂等）
+    for (UIWindow *old in [sERGestureOverlays copy]) {
+        old.hidden = YES; old.rootViewController = nil;
+    }
+    [sERGestureOverlays removeAllObjects];
+
+    // 锚点在设置 window 内的坐标；overlay 与 anchorWindow 同尺寸，坐标系一致
+    CGRect anchorRect = [anchor convertRect:anchor.bounds toView:anchorWindow];
+
+    UIWindow *overlay = nil;
+    UIWindowScene *scene = anchorWindow.windowScene;
+    if (scene) overlay = [[UIWindow alloc] initWithWindowScene:scene];
+    if (!overlay) overlay = [[UIWindow alloc] initWithFrame:anchorWindow.bounds];
+    overlay.frame = anchorWindow.bounds;
+    overlay.windowLevel = anchorWindow.windowLevel + 2000.0;   // 压过一切常规层级
+    overlay.backgroundColor = UIColor.clearColor;
+
+    UIViewController *rootVC = [[UIViewController alloc] initWithNibName:nil bundle:nil];
+    rootVC.view.backgroundColor = UIColor.clearColor;
+    overlay.rootViewController = rootVC;
+
+    UIView *container = rootVC.view;
+    container.frame = overlay.bounds;
     container.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     container.alpha = 0.0;
+
+    ERGestureOverlayCloser *closer = [ERGestureOverlayCloser new];
+    closer.overlay = overlay;
 
     // 透明遮罩：接住"点外面收起"。
     UIControl *backdrop = [[UIControl alloc] initWithFrame:container.bounds];
     backdrop.backgroundColor = [UIColor colorWithWhite:0.0 alpha:0.001];
     backdrop.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    [backdrop addTarget:container action:@selector(removeFromSuperview)
+    [backdrop addTarget:closer action:@selector(dismiss)
        forControlEvents:UIControlEventTouchUpInside];
     [container addSubview:backdrop];
 
@@ -190,9 +240,9 @@ static void ERGestureShowDropdown(UIButton *anchor,
     CGFloat width = 132.0;
     CGFloat tableH = MIN((CGFloat)options.count, 8.0) * rowH;   // 最多 8 行，超出滚动
     CGFloat x = MIN(MAX(anchorRect.origin.x + anchorRect.size.width - width, 8.0),
-                    window.bounds.size.width - width - 8.0);
+                    overlay.bounds.size.width - width - 8.0);
     CGFloat y = anchorRect.origin.y + anchorRect.size.height + 6.0;
-    if (y + tableH > window.bounds.size.height - 12.0) {
+    if (y + tableH > overlay.bounds.size.height - 12.0) {
         y = MAX(anchorRect.origin.y - tableH - 6.0, 12.0);      // 放不下就往上弹
     }
 
@@ -218,15 +268,17 @@ static void ERGestureShowDropdown(UIButton *anchor,
                                                                                current:current
                                                                                   pick:^(NSInteger idx) {
         onPick(idx);
-        [UIView animateWithDuration:0.15 animations:^{ container.alpha = 0.0; }
-                         completion:^(BOOL finished) { [container removeFromSuperview]; }];
+        [closer dismiss];
     }];
     menu.dataSource = bridge;
     menu.delegate = bridge;
     objc_setAssociatedObject(container, @selector(erGestureMenuBridge), bridge, OBJC_ASSOCIATION_RETAIN);
+    objc_setAssociatedObject(container, @selector(erGestureOverlayCloser), closer, OBJC_ASSOCIATION_RETAIN);
     [panel.contentView addSubview:menu];
 
-    [window addSubview:container];
+    // 1.2.0-63 · 静态持有 window（UIWindow 不会被系统自动持有），显示之
+    [sERGestureOverlays addObject:overlay];
+    overlay.hidden = NO;
     [UIView animateWithDuration:0.15 animations:^{ container.alpha = 1.0; }];
 }
 
