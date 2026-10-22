@@ -450,7 +450,9 @@ static void ERGestureShowDropdown(UIButton *anchor,
     CGFloat chevW = 14.0;
     // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
     // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
-    CGFloat pad = 6.0;
+    // 1.2.0-76 · 用户审核定版：文字距左 4、文字到箭头 3、箭头距右 4
+    //（箭头中心 = 右边框内 11pt，去掉旧的 +1 视觉补偿），总宽 = 文字 + 25。
+    CGFloat pad = 4.0;
     // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本定宽，不随各自值伸缩。
     // 1.2.0-75 · 用户需求：收起态要能完整显示 4 个字——测量基准加 4 字样例
     //（较 3 字基准加宽约一个字宽 ~15pt），按钮内部结构（pad/箭头槽位）不动。
@@ -462,7 +464,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
         CGSize t3 = [@"乌贼软件" sizeWithAttributes:@{NSFontAttributeName: f}];   // 4 字基准
         sERMaxTSW = MAX(MAX(t1.width, t2.width), t3.width);
     }
-    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 6.0, 72.0), 216.0);
+    CGFloat btnW = MIN(MAX(sERMaxTSW + pad + 3.0 + chevW + 4.0, 72.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -473,7 +475,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
 #pragma clang diagnostic pop
-    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);
+    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0, btnH / 2.0);   // 1.2.0-76 · 去 +1，箭头右缘距边框 4pt
     CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);
@@ -640,6 +642,7 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
     UILabel     *_erTitle;
     UISwitch    *_erSwitch;
     PSSpecifier *_erSpec;
+    UIButton    *_erInfoBtn;   // 1.2.0-76 · 标题右侧 ⓘ（有 erInfoText 才显示）
 }
 
 - (instancetype)initWithStyle:(UITableViewCellStyle)style
@@ -670,6 +673,28 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
     [self.contentView addSubview:_erSwitch];
     [self _erSyncSwitch];
     return self;
+}
+
+// 1.2.0-76 · ⓘ 点击弹窗：沿 responder 链找最近ViewController，找不到就用 keyWindow rootVC
+- (UIViewController *)_erHostVC {
+    UIResponder *r = self;
+    while (r) {
+        if ([r isKindOfClass:[UIViewController class]]) return (UIViewController *)r;
+        r = r.nextResponder;
+    }
+    return nil;
+}
+
+- (void)_erInfoTapped {
+    NSString *text = [_erSpec propertyForKey:@"erInfoText"];
+    if (!text.length) return;
+    UIViewController *vc = [self _erHostVC];
+    if (!vc) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:ERSpecLabel(_erSpec)
+                                                                   message:text
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]];
+    [vc presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)_erSyncSwitch {
@@ -713,6 +738,21 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
     self.imageView.image = nil;
     _erIcon.image = [_erSpec propertyForKey:@"iconImage"];
     _erTitle.text = ERSpecLabel(_erSpec);
+    // 1.2.0-76 · 有 erInfoText 才建/显示 ⓘ 按钮
+    NSString *infoText = [_erSpec propertyForKey:@"erInfoText"];
+    if (infoText.length && !_erInfoBtn) {
+        _erInfoBtn = [UIButton buttonWithType:UIButtonTypeSystem];
+        UIImage *img = [UIImage systemImageNamed:@"info.circle"];
+        if (!img) img = [UIImage imageNamed:@"info.circle"];
+        [_erInfoBtn setImage:img forState:UIControlStateNormal];
+        _erInfoBtn.tintColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.55],
+                                          [UIColor colorWithRed:0.25 green:0.55 blue:1.00 alpha:1.0]);
+        _erInfoBtn.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        [_erInfoBtn addTarget:self action:@selector(_erInfoTapped)
+             forControlEvents:UIControlEventTouchUpInside];
+        [self.contentView addSubview:_erInfoBtn];
+    }
+    _erInfoBtn.hidden = (infoText.length == 0);
     [self _erSyncSwitch];
     [self setNeedsLayout];
 }
@@ -744,8 +784,17 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
                                      (h - swSize.height) / 2.0,
                                      swSize.width, swSize.height);
         CGFloat lx = left + 29.0 + 12.0;
-        _erTitle.frame = CGRectMake(lx, 0,
-                                    _erSwitch.frame.origin.x - lx - 12.0, h);
+        CGFloat titleW = _erSwitch.frame.origin.x - lx - 12.0;
+        // 1.2.0-76 · ⓘ 按钮排布：紧跟标题文字右缘 +6pt；无 ⓘ 时标题吃满原宽度
+        if (!_erInfoBtn.hidden) {
+            CGSize tsz = [_erTitle sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+            CGFloat btnSide = 22.0;
+            CGFloat ibx = MIN(lx + tsz.width + 6.0,
+                              _erSwitch.frame.origin.x - 12.0 - btnSide);
+            _erInfoBtn.frame = CGRectMake(ibx, (h - btnSide) / 2.0, btnSide, btnSide);
+            titleW = ibx - lx - 4.0;
+        }
+        _erTitle.frame = CGRectMake(lx, 0, MAX(titleW, 40.0), h);
     } @catch (__unused NSException *e) {}
 }
 
@@ -896,19 +945,25 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
         NSMutableArray *specs = [NSMutableArray array];
 
         // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
+        // 1.2.0-76 · 用户需求（已审核）：说明文字从卡片 footer 移到「搜索胶囊手势」
+        // 行标题右侧的 ⓘ 按钮弹窗（删乌贼手势那句——实测拉到 60 也不影响乌贼），
+        // 原 footer 整段删除。
         PSSpecifier *g1 = [PSSpecifier groupSpecifierWithName:@"搜索胶囊"];
-        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发；注意外扩过大可能压住胶囊附近的乌贼手势起手区，若乌贼变迟钝请调小。"
-                 forKey:@"footerText"];
         [specs addObject:g1];
-        [specs addObject:[self erSwitchNamed:@"搜索胶囊手势"
-                                          key:@"HomeScreen.SearchPill.Enabled"
-                                      symbols:@[@"hand.tap", @"hand.point.up.left.fill", @"cursorarrow.click"]
-                                       color:@"teal"
-                                      defVal:NO]];
+        {
+            PSSpecifier *sw = [self erSwitchNamed:@"搜索胶囊手势"
+                                              key:@"HomeScreen.SearchPill.Enabled"
+                                          symbols:@[@"hand.tap", @"hand.point.up.left.fill", @"cursorarrow.click"]
+                                           color:@"teal"
+                                          defVal:NO];
+            [sw setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发。"
+                     forKey:@"erInfoText"];
+            [specs addObject:sw];
+        }
         [specs addObject:[self erGestureNamed:@"上滑胶囊" key:@"HomeScreen.SearchPill.GestureUp"   symbol:@"arrow.up"    color:@"blue"]];
         [specs addObject:[self erGestureNamed:@"下滑胶囊" key:@"HomeScreen.SearchPill.GestureDown" symbol:@"arrow.down"  color:@"blue"]];
-        [specs addObject:[self erGestureNamed:@"左滑胶囊" key:@"HomeScreen.SearchPill.GestureLeft" symbol:@"arrow.left"  color:@"teal"]];
-        [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"teal"]];
+        [specs addObject:[self erGestureNamed:@"左滑胶囊" key:@"HomeScreen.SearchPill.GestureLeft" symbol:@"arrow.left"  color:@"blue"]];   // 1.2.0-76 · teal→blue（用户审核）
+        [specs addObject:[self erGestureNamed:@"右滑胶囊" key:@"HomeScreen.SearchPill.GestureRight" symbol:@"arrow.right" color:@"blue"]]; // 1.2.0-76 · teal→blue（用户审核）
         // 1.2.0-71 · 手势区域（外扩）滑块行（用户需求·已审核）：触发范围上面，
         // 起手判定区从胶囊本体向四周外扩 0~40pt（默认 0=胶囊本体，行为不变）。
         // -61 实锤：外扩带会压住乌贼手势在胶囊附近的起手区，默认 0 不影响；
@@ -917,13 +972,13 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                                           key:@"HomeScreen.SearchPill.AreaExpand"
                                           min:0 max:60 def:20
                                        symbol:@"arrow.up.left.and.arrow.down.right.square"
-                                        color:@"teal"]];
+                                        color:@"purple"]];   // 1.2.0-76 · teal→purple（用户审核）
         // 1.2.0-21 · 触发范围滑块行（用户需求）：右滑胶囊下面，左图标+文字、右滑块。
         [specs addObject:[self erSliderNamed:@"触发范围"
                                           key:@"HomeScreen.SearchPill.TriggerRange"
                                           min:10 max:80 def:20
                                        symbol:@"arrow.up.left.and.arrow.down.right"
-                                        color:@"blue"]];
+                                        color:@"purple"]];   // 1.2.0-76 · blue→purple（用户审核）
 
         // ---- 卡片2 · 震动反馈 ----
         PSSpecifier *g3 = [PSSpecifier groupSpecifierWithName:@"震动反馈"];
