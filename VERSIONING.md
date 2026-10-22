@@ -290,3 +290,9 @@
 ## 1.2.0-65
 - 下拉框末行不可见真根因实锤（-64 日志）：独立 UIWindow 下的 UITableViewStylePlain 恒定多 72.33pt（content = rows×40 + 72.33，3 行/13 行两级菜单均精确吻合）= section header 36.16pt + footer 36.16pt，cell 整体下移 36pt → 一级菜单第 3 行"文件夹›"起点 116pt、面板 120pt 截断只露 4pt。同时解释 -59 以来"设置只显示两项"的全部现象（此前误判为进程缓存/z-order）
 - 修复：bridge 实现 heightForHeader/Footer=0.01 + viewForHeader/Footer=nil；menu sectionHeaderHeight/sectionFooterHeight/estimated*/sectionHeaderTopPadding 全部清零
+
+## 1.2.0-66
+- 下拉框三项显示确认修复（-65 日志实锤：cells 在 0/40/80 全可见）
+- 文件夹二级去重：-65 日志 dumped=16 实为 8 个文件夹各两遍（walk 的 lists/icons 两路径重叠）→ walk 加 seen 集合去重 + prefs 显示层按 id 去重兜底
+- 文件夹打开手势 miss 真相（-65 探针 v59）：folderObj(SBFolder) 找到了，但 SBIconController 没有 openFolderWithIcon:/_openFolderWithIcon:/openFolder:/presentFolder: 任何一个 → 4 候选全落空。新证据：iconManager:willOpenFolder: 系（入口在 iconManager）、_openFolderController、SBFolder.folderWithUniqueIdentifier:
+- 修复：FindFolderIcon 复用已验证的 walk 建 iconMap 查 id（旧手写 DFS 废弃），兜底 folderWithUniqueIdentifier:；OpenFolder 改多目标宽候选链（ico/iconManager/model/rootFolder/图标/文件夹 × 12 个 open/present/launch 选择器，命中即调 + 异常保护），miss 时探针升级 v66（+iconManager/rootFolder 方法表 + SBFolderController 类方法表，filter folder/open/present）
