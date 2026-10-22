@@ -161,6 +161,22 @@ static NSString *ERSpecLabel(PSSpecifier *spec) {
     [tableView deselectRowAtIndexPath:indexPath animated:NO];
     if (_pick) _pick(indexPath.row);
 }
+// 1.2.0-65 · 真根因修复：独立 UIWindow 下的 UITableViewStylePlain 恒定多出
+// 72.33pt 的 section header(36.16)+footer(36.16)（-64 日志实锤：content=
+// rows*40+72.33，3 行/13 行均吻合），cell 整体下移 36pt → 末行在 120pt 面板里
+// 只露 4pt（"文件夹›"不可见）。显式清零全部 header/footer。
+- (CGFloat)tableView:(UITableView *)tableView heightForHeaderInSection:(NSInteger)section {
+    return 0.01;
+}
+- (CGFloat)tableView:(UITableView *)tableView heightForFooterInSection:(NSInteger)section {
+    return 0.01;
+}
+- (UIView *)tableView:(UITableView *)tableView viewForHeaderInSection:(NSInteger)section {
+    return nil;
+}
+- (UIView *)tableView:(UITableView *)tableView viewForFooterInSection:(NSInteger)section {
+    return nil;
+}
 @end
 
 #pragma mark - 下拉浮层
@@ -266,6 +282,12 @@ static void ERGestureShowDropdown(UIButton *anchor,
     }
     menu.rowHeight = rowH;
     menu.estimatedRowHeight = rowH;
+    // 1.2.0-65 · 配套清零：section header/footer 高度 + iOS15+ 顶部 padding
+    menu.sectionHeaderHeight = 0;
+    menu.sectionFooterHeight = 0;
+    menu.estimatedSectionHeaderHeight = 0;
+    menu.estimatedSectionFooterHeight = 0;
+    if (@available(iOS 15.0, *)) menu.sectionHeaderTopPadding = 0;
     menu.backgroundColor = ERGDynamic([UIColor colorWithWhite:0.10 alpha:0.88],
                                       [UIColor colorWithWhite:1.0 alpha:0.96]);
     menu.separatorStyle = UITableViewCellSeparatorStyleSingleLine;
@@ -295,9 +317,9 @@ static void ERGestureShowDropdown(UIButton *anchor,
     dispatch_async(dispatch_get_main_queue(), ^{
         NSMutableString *vis = [NSMutableString string];
         for (UITableViewCell *c in menu.visibleCells) {
-            [vis appendFormat:@"[%@]", c.textLabel.text ?: @""];
+            [vis appendFormat:@"[%@|%@]", c.textLabel.text ?: @"", NSStringFromCGRect(c.frame)];
         }
-        ERGPrefsLog(@"dropdown-64 cnt=%lu anchor=%@ overlay=%@ panel=%@ menu=%@ rows=%ld content=%@ vis=%@",
+        ERGPrefsLog(@"dropdown-65 cnt=%lu anchor=%@ overlay=%@ panel=%@ menu=%@ rows=%ld content=%@ vis=%@",
                     (unsigned long)options.count,
                     NSStringFromCGRect(anchorRect),
                     NSStringFromCGRect(overlay.frame),
