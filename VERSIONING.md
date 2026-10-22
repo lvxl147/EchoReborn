@@ -346,3 +346,10 @@
 - 新功能②：「搜索胶囊手势」行标题右侧加蓝色 ⓘ 按钮，点击弹窗显示原 footer 说明文字（删乌贼手势那句——实测 60 也不影响）；原 g1 footer 整段删除
 - 新功能③：左滑/右滑胶囊图标 teal→blue（与上下滑一致）；手势区域/触发范围图标改 purple（纯色，用户指定不要渐变）
 - 新功能④：下拉框间距定版（用户审核）：文字距左 4pt、文字到箭头 3pt、箭头距右边框 4pt（箭头中心去 +1 视觉补偿），按钮总宽=文字宽+25（较 -75 窄 7pt），4 字仍完整显示
+
+## 1.2.0-77
+- 用户实测 -76：成功率仍 1-2/10；**点空白关闭 100% 注销**；图标颜色已解决；下拉框退回上一版；ⓘ 移到组头「搜索胶囊」右侧
+- folderlog 实锤①：open 每次都调、completion 每次都触发（erOpened=1），但 verify of=SBFolder 的次数才=肉眼成功次数 → openFolderIcon 静默失败为主；共同点 loc 恒 (null) → -77 依次尝试 rootFolder/model 的 locationForIcon:/locationOfIcon: 并把 loc 状态写进 folderlog
+- folderlog 实锤②：17:37:23 open → verify ok of=SBFolder（真打开）→ 用户点空白秒关 → 17:37:24 又一次 open 后无 verify = 当场崩 → 关闭过渡中 openedFolder/_currentFolderController 双双读空（guard 盲区）→ 修：打开后 2.5s 冷却期，冷却内手势直接跳过（cooldown skip 记日志）
+- ⓘ 移位：删行上 erInfoText；ERGestureController 新增 ERGestureInstallGroupInfo（扫描 tableView 找「搜索胶囊」label 挂 18pt ⓘ 按钮 tag 7601，viewWillAppear 0.3/0.9s 双时机）+ erGroupInfoTapped 弹窗
+- 下拉框：pad 6 / btnW=T+12+14+6 / chevron +1 全部恢复 -75
