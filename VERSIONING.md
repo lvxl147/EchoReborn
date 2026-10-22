@@ -286,3 +286,7 @@
 - 下拉框仍只显示 2 项排查：设备侧实锤（bundle 唯一副本含 -63 新代码、prefs 日志 level1=3、二级制含"文件夹›"UTF-16LE 串），像素级测量 -63 截图：面板 132pt 宽/y 定位精确吻合、行距 40pt 正常，但总高只有 ~98pt=2 行——3 项在独立 UIWindow 下的 UITableView 布局行为异常
 - 防御修复：menu 显式 frame（不再用 contentView.bounds 时序）+ contentInsetAdjustmentBehavior=Never + 显式 rowHeight/estimatedRowHeight
 - 诊断日志：布局完成后落盘 options.count/anchor/overlay/panel/menu 几何 + rows + 可见 cell 文本；cellForRow 逐行落盘文本
+
+## 1.2.0-65
+- 下拉框末行不可见真根因实锤（-64 日志）：独立 UIWindow 下的 UITableViewStylePlain 恒定多 72.33pt（content = rows×40 + 72.33，3 行/13 行两级菜单均精确吻合）= section header 36.16pt + footer 36.16pt，cell 整体下移 36pt → 一级菜单第 3 行"文件夹›"起点 116pt、面板 120pt 截断只露 4pt。同时解释 -59 以来"设置只显示两项"的全部现象（此前误判为进程缓存/z-order）
+- 修复：bridge 实现 heightForHeader/Footer=0.01 + viewForHeader/Footer=nil；menu sectionHeaderHeight/sectionFooterHeight/estimated*/sectionHeaderTopPadding 全部清零
