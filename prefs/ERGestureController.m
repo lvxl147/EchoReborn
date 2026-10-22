@@ -895,7 +895,7 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 
         // ---- 卡片1 · 搜索胶囊（1.2.0-7：与手势设置合并为一张卡片） ----
         PSSpecifier *g1 = [PSSpecifier groupSpecifierWithName:@"搜索胶囊"];
-        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~40pt，默认 0 只认胶囊本体），调大后外扩矩形内（含四角）任意点起手都可触发；注意外扩过大可能压住胶囊附近的乌贼手势起手区，若乌贼变迟钝请调小。"
+        [g1 setProperty:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发；注意外扩过大可能压住胶囊附近的乌贼手势起手区，若乌贼变迟钝请调小。"
                  forKey:@"footerText"];
         [specs addObject:g1];
         [specs addObject:[self erSwitchNamed:@"搜索胶囊手势"
@@ -913,7 +913,7 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
         // 用户调大后若乌贼手势变迟钝，调小即可（说明写进卡片 footer）。
         [specs addObject:[self erSliderNamed:@"手势区域"
                                           key:@"HomeScreen.SearchPill.AreaExpand"
-                                          min:0 max:40 def:0
+                                          min:0 max:60 def:20
                                        symbol:@"arrow.up.left.and.arrow.down.right.square"
                                         color:@"teal"]];
         // 1.2.0-21 · 触发范围滑块行（用户需求）：右滑胶囊下面，左图标+文字、右滑块。
