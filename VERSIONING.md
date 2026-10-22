@@ -324,3 +324,10 @@
 - 用户实测 -72：跨页文件夹能打开了，但成功率仅 2/10（翻页动画时长不定，固定 0.45s 后开文件夹常撞在半路）
 - 修复①：重试机制——openFolderIcon 后 0.6s 自检 openedFolder，为空自动补开，最多 3 次尝试（递归块自引用仅终态释放）
 - 修复②（用户需求）：手势区域滑块默认 0→20、上限 40→60（prefs 与 Tweak clamp 同步）
+
+## 1.2.0-74
+- 用户实测 -73：成功率仍 1-2/10（重试全撞翻页动画半路）；关文件夹时 3-4/5 注销崩溃；回桌面手势失灵 5-15s；0.45s 延迟
+- 修复①：scrollToIconListContainingIcon 改 animate:NO 瞬间跳页（用户需求），翻页同步完成 → openFolderIcon 立即调用，删除 0.45s 固定等待（动画竞态根除，同时修成功率与延迟）
+- 修复②：completion 护栏——openFolderIcon 传 erCompletion 标记 erOpened，打开过就永不重试（重试打在关闭动画里 = SBHIconManager 崩溃 = 注销，3-4/5 根因）
+- 修复③：起手判定与 GR 闸门实时取胶囊帧（返回桌面后缓存过期 = 5-15s 失灵根因），缓存只作兜底
+- 修复④：页码跳页 pager 兜底路径 setContentOffset animated:NO（瞬时跳页，用户需求）
