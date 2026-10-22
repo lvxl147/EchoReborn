@@ -1156,18 +1156,21 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 
 // 1.2.0-77 · ⓘ 挂到组头「搜索胶囊」右侧（用户指定位置）。PS 的组头是
 // UITableViewHeaderFooterView 里的 UILabel，直接扫描找到后挂小按钮。
+// 递归找组头 label（静态函数避免 block 保留环）
+static UILabel *ERGestureFindHeaderLabel(UIView *v) {
+    if (!v) return nil;
+    for (UIView *sub in v.subviews) {
+        if ([sub isKindOfClass:[UILabel class]] &&
+            [((UILabel *)sub).text isEqualToString:@"搜索胶囊"]) return (UILabel *)sub;
+        UILabel *deeper = ERGestureFindHeaderLabel(sub);
+        if (deeper) return deeper;
+    }
+    return nil;
+}
+
 static void ERGestureInstallGroupInfo(ERGestureController *self) {
     if (!self.tableView || !self.tableView.window) return;
-    __block UILabel *found = nil;
-    __block void (^scan)(UIView *) = ^(UIView *v) {
-        for (UIView *sub in v.subviews) {
-            if ([sub isKindOfClass:[UILabel class]] &&
-                [(UILabel *)sub.text isEqualToString:@"搜索胶囊"]) { found = (UILabel *)sub; return; }
-            if (sub.subviews.count) { scan(sub); if (found) return; }
-        }
-    };
-    scan(self.tableView);
-    scan = nil;   // 打破 __block 保留环
+    UILabel *found = ERGestureFindHeaderLabel(self.tableView);
     if (!found) return;
     UIView *host = found.superview ?: self.tableView;
     if ([host viewWithTag:7601]) return;   // 已装过
