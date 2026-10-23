@@ -32981,6 +32981,40 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                 // launchFromLocation:context:（= 用户手指点击文件夹图标的
                                 // 原生启动入口，翻页/动画/状态全由系统管）；无 loc 才
                                 // openFolderIcon。verify/retry 链共用
+                                // 1.2.0-95 · 点空白关闭注销主修：folderlog 实锤 loc 恒为
+                                // 常量串 SBIconLocationRoot（__NSCFConstantString）——
+                                // 系统按真实格子位置登记"展开图标"，残缺登记 → 关闭
+                                // 缩回动画 SIGSEGV。图标视图就绪后直接问视图要真实
+                                // location（SBIconView.location/_location/iconLocation），
+                                // 只接受非 NSString 对象（Root 常量串即 NSString，自然
+                                // 被排除），拿到即替换 launch 用的 loc
+                                if (iv) {
+                                    id realLoc = nil;
+                                    SEL lq1 = NSSelectorFromString(@"location");
+                                    SEL lq2 = NSSelectorFromString(@"_location");
+                                    SEL lq3 = NSSelectorFromString(@"iconLocation");
+                                    if ([iv respondsToSelector:lq1]) {
+                                        @try { realLoc = ((id (*)(id, SEL))objc_msgSend)(iv, lq1); } @catch (__unused NSException *e) { realLoc = nil; }
+                                    }
+                                    if (!realLoc && [iv respondsToSelector:lq2]) {
+                                        @try { realLoc = ((id (*)(id, SEL))objc_msgSend)(iv, lq2); } @catch (__unused NSException *e) { realLoc = nil; }
+                                    }
+                                    if (!realLoc && [iv respondsToSelector:lq3]) {
+                                        @try { realLoc = ((id (*)(id, SEL))objc_msgSend)(iv, lq3); } @catch (__unused NSException *e) { realLoc = nil; }
+                                    }
+                                    if (realLoc && [realLoc isKindOfClass:[NSString class]]) realLoc = nil;
+                                    if (realLoc) {
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"realLoc=%@ class=%@ t=%.0fms", realLoc,
+                                            NSStringFromClass(object_getClass(realLoc)),
+                                            (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
+                                        loc = realLoc;
+                                    } else {
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"realLoc=nil (keep fallback) t=%.0fms",
+                                            (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
+                                    }
+                                }
                                 SEL lfc = NSSelectorFromString(@"launchFromLocation:context:");
                                 if (loc && (iconObj ?: arg) &&
                                     [(iconObj ?: arg) respondsToSelector:lfc]) {
