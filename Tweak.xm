@@ -30,6 +30,7 @@
 #import <execinfo.h>
 #import <fcntl.h>
 #import <stdio.h>
+#import <pthread.h>
 
 // ---------------------------------------------------------------------------
 // jailbreak root resolution
