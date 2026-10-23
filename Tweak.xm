@@ -32496,10 +32496,13 @@ static void ERSPGFolderNote(NSString *line) {
     } @catch (__unused NSException *e) {}
 }
 
+static CFAbsoluteTime gERSPGOpenT0 = 0.0;   // 1.2.0-91 · 本次打开计时起点（提速埋点）
+
 static void ERSPGOpenFolder(NSString *folderId) {
     @try {
         if (!folderId.length) return;        id ico = ERSPGIconController();
         if (!ico) return;
+        gERSPGOpenT0 = CACurrentMediaTime();
         id model = nil;
         if ([ico respondsToSelector:@selector(iconModel)])
             model = ((id (*)(id, SEL))objc_msgSend)(ico, @selector(iconModel));
@@ -32843,7 +32846,8 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     ERLogInfo(@"SPG-FOLDER hit openFolderIcon:location:animated:withCompletion: id=%@ loc=%@ switched=%d",
                               folderId, loc, switched);
                     ERSPGFolderNote([NSString stringWithFormat:
-                        @"open id=%@ loc=%@ switched=%d", folderId, loc, switched]);
+                        @"open id=%@ loc=%@ switched=%d t=%.0fms", folderId, loc, switched,
+                        (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                     @try {
                         // 1.2.0-73 · 重试机制（0.6s 自检 openedFolder，为空补开最多 3 次）
                         // 1.2.0-74 · 两处升级：
@@ -32896,39 +32900,49 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             // 未就绪全败；location 有效后 iconViewForIcon 能返回真视图）
                             erPollN++;
                             if (!iv && erPollsLeft-- > 0) {
-                                // 1.2.0-85 · 每 1s 重发一次翻页（-84 实锤：超时案例疑似滚动
-                                // 没落地/布局被打断）；顺带记 currentIconListIndex 对比目标页
-                                if (erPollN % 20 == 0 && manager && (iconObj ?: arg)) {
-                                    SEL ss2 = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
-                                    if ([manager respondsToSelector:ss2])
-                                        ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss2, iconObj ?: arg, NO);
-                                    // 1.2.0-87 · 提速实验：主动强制布局（探针实锤
-                                    // layoutIconListsWithAnimationType:），让图标视图提前
-                                    // 就绪，而不是干等系统布局节奏（用户目标：跨页 1s → 0.5s）
+                                // 1.2.0-91 · 提速主刀：强制布局从 poll#20（1s 后）提前到
+                                // poll#2（~0.1s）+ 每 10 跳补发——视图就绪等待从最长 1s
+                                // 压到 ~0.1s；同时每跳计时（t=毫秒），下次 folderlog 直接
+                                // 看到 1s 到底花在哪一段
+                                if ((erPollN == 2 || erPollN % 10 == 0) && manager && (iconObj ?: arg)) {
                                     SEL lay = NSSelectorFromString(@"layoutIconListsWithAnimationType:");
                                     if ([manager respondsToSelector:lay]) {
                                         @try {
                                             ((void (*)(id, SEL, NSInteger))objc_msgSend)(manager, lay, 0);
+                                            ERSPGFolderNote([NSString stringWithFormat:
+                                                @"poll#%ld forced-layout t=%.0fms",
+                                                (long)erPollN,
+                                                (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                                         } @catch (__unused NSException *e) { }
                                     }
-                                    SEL cil = NSSelectorFromString(@"currentIconListIndex");
-                                    if ([manager respondsToSelector:cil]) {
-                                        @try {
-                                            ERSPGFolderNote([NSString stringWithFormat:
-                                                @"poll#%ld curList=%ld", (long)erPollN,
-                                                (long)((NSInteger (*)(id, SEL))objc_msgSend)(manager, cil)]);
-                                        } @catch (__unused NSException *e) { }
+                                    // 1.2.0-85 · 每 1s 重发一次翻页（保留兜底）
+                                    if (erPollN % 20 == 0) {
+                                        SEL ss2 = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
+                                        if ([manager respondsToSelector:ss2])
+                                            ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss2, iconObj ?: arg, NO);
+                                        SEL cil = NSSelectorFromString(@"currentIconListIndex");
+                                        if ([manager respondsToSelector:cil]) {
+                                            @try {
+                                                ERSPGFolderNote([NSString stringWithFormat:
+                                                    @"poll#%ld curList=%ld", (long)erPollN,
+                                                    (long)((NSInteger (*)(id, SEL))objc_msgSend)(manager, cil)]);
+                                            } @catch (__unused NSException *e) { }
+                                        }
                                     }
                                 }
+                                // 1.2.0-91 · 前 3 跳加密到 0.03s（视图一旦就绪立刻开，
+                                // 不再固定 0.05s 粒度白等）
+                                NSTimeInterval erPollGap = (erPollN <= 3) ? 0.03 : 0.05;
                                 dispatch_after(
-                                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(erPollGap * NSEC_PER_SEC)),
                                     dispatch_get_main_queue(), erTryOpen);
                                 return;
                             }
                             ERSPGFolderNote([NSString stringWithFormat:
-                                @"iconView=%@ pollsUsed=%ld",
+                                @"iconView=%@ pollsUsed=%ld t=%.0fms",
                                 iv ? NSStringFromClass(object_getClass(iv)) : @"timeout",
-                                (long)(80 - erPollsLeft)]);
+                                (long)(80 - erPollsLeft),
+                                (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                             @try {
                                 // 1.2.0-83 · 有真 location 走 SBFolderIcon 实锤的
                                 // launchFromLocation:context:（= 用户手指点击文件夹图标的
@@ -32937,7 +32951,9 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                 SEL lfc = NSSelectorFromString(@"launchFromLocation:context:");
                                 if (loc && (iconObj ?: arg) &&
                                     [(iconObj ?: arg) respondsToSelector:lfc]) {
-                                    ERSPGFolderNote(@"open via launchFromLocation:context:");
+                                    ERSPGFolderNote([NSString stringWithFormat:
+                                        @"open via launchFromLocation:context: t=%.0fms",
+                                        (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                                     ((void (*)(id, SEL, id, id))objc_msgSend)(
                                         iconObj ?: arg, lfc, loc, nil);
                                 } else {
@@ -32969,9 +32985,10 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                                   of ? NSStringFromClass(object_getClass(of)) : @"nil",
                                                   erOpened ? 1 : 0, folderId);
                                         ERSPGFolderNote([NSString stringWithFormat:
-                                            @"verify ok of=%@ erOpened=%d id=%@",
+                                            @"verify ok of=%@ erOpened=%d id=%@ t=%.0fms",
                                             of ? NSStringFromClass(object_getClass(of)) : @"nil",
-                                            erOpened ? 1 : 0, folderId]);
+                                            erOpened ? 1 : 0, folderId,
+                                            (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                                         erTryOpen = nil;   // 打开过就永不重试（关闭中绝不补开）
                                     } else if (cur && ERSPGCurIsRealFolder(cur)) {
                                         // 1.2.0-75 · 护栏：文件夹控制器还在（开/关过渡中）绝不补开
