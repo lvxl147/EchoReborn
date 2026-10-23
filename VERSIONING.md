@@ -413,3 +413,8 @@
 - 用户实测 -85：成功率 100%！注销不锁屏功能完全可用；遗留：打开后立刻点空白关闭 → 注销（停留 2-5s 则不注销）；速度有延迟待后续优化
 - 主日志实锤注销机制：打开 → verify(0.6s) 时用户已秒关 → of=nil → retry 分支在关闭过渡中重发 launch → SB 状态崩 → respring（停留 2-5s 时 verify 早已终态故不注销，与用户观察完全吻合）
 - 修复：彻底移除重试（of=nil 一律按"已被用户关闭"处理，no-retry give up 日志）；erRetries 变量删除
+
+## 1.2.0-87
+- 冲突排查：禁乌贼仍注销→Choicy 白名单仅 EchoReborn 仍注销→确认是 EchoReborn 自身关闭路径触发；干净 respring 无 .ips → 疑未捕获 ObjC 异常被 roothide 引导程序静默 respring
+- 修复：NSSetUncaughtExceptionHandler（applicationDidFinishLaunching 里 dispatch_once 安装）→ 异常名/原因/调用栈写 folderlog（EXCEPTION name=... 前缀）
+- 提速实验：erTryOpen 轮询 poll#20 时除重发翻页外追加 layoutIconListsWithAnimationType:0 强制布局（目标跨页 1s→0.5s）
