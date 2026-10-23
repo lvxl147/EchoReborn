@@ -1168,12 +1168,25 @@ static UILabel *ERGestureFindHeaderLabel(UIView *v) {
     return nil;
 }
 
+// 1.2.0-79 · -78 埋点实锤：PSListController 运行时无 tableView 方法
+//（unrecognized selector = -77 闪退真凶）。改为从 self.view 递归找 UITableView。
+static UITableView *ERGestureFindTableView(UIView *v) {
+    if (!v) return nil;
+    for (UIView *sub in v.subviews) {
+        if ([sub isKindOfClass:[UITableView class]]) return (UITableView *)sub;
+        UITableView *deeper = ERGestureFindTableView(sub);
+        if (deeper) return deeper;
+    }
+    return nil;
+}
+
 static void ERGestureInstallGroupInfo(ERGestureController *self) {
-    if (!self.tableView || !self.tableView.window) return;
+    UITableView *tv = ERGestureFindTableView(self.view);
+    if (!tv || !tv.window) return;
     ERGPrefsLog(@"group info install begin");
-    UILabel *found = ERGestureFindHeaderLabel(self.tableView);
+    UILabel *found = ERGestureFindHeaderLabel(tv);
     if (!found) { ERGPrefsLog(@"group info label not found"); return; }
-    UIView *host = found.superview ?: self.tableView;
+    UIView *host = found.superview ?: tv;
     if ([host viewWithTag:7601]) return;   // 已装过
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
     btn.tag = 7601;
