@@ -33019,6 +33019,78 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                             } @catch (__unused NSException *e) { realLoc = nil; }
                                         }
                                     }
+                                    // 1.2.0-97 · -96 实锤六个探测点全灭（realLoc=nil）
+                                    // 且崩溃轮在 open 后无 verify → openFolderIcon 传
+                                    // Root 常量串照样残缺登记。换必中路：从 manager/
+                                    // model 拿 rootFolder，遍历 iconLists，找包含本
+                                    // 文件夹图标的 list，取 list.location——系统手点
+                                    // 时用的就是这个串
+                                    if (!realLoc && manager) {
+                                        id erModel = nil;
+                                        SEL gmod = NSSelectorFromString(@"iconModel");
+                                        if ([manager respondsToSelector:gmod]) {
+                                            @try { erModel = ((id (*)(id, SEL))objc_msgSend)(manager, gmod); } @catch (__unused NSException *e) { erModel = nil; }
+                                        }
+                                        id erRoot = nil;
+                                        SEL groot = NSSelectorFromString(@"rootFolder");
+                                        if (erModel && [erModel respondsToSelector:groot]) {
+                                            @try { erRoot = ((id (*)(id, SEL))objc_msgSend)(erModel, groot); } @catch (__unused NSException *e) { erRoot = nil; }
+                                        }
+                                        if (!erRoot && [manager respondsToSelector:groot]) {
+                                            @try { erRoot = ((id (*)(id, SEL))objc_msgSend)(manager, groot); } @catch (__unused NSException *e) { erRoot = nil; }
+                                        }
+                                        if (erRoot) {
+                                            SEL glists = NSSelectorFromString(@"iconLists");
+                                            if ([erRoot respondsToSelector:glists]) {
+                                                id erLists = nil;
+                                                @try { erLists = ((id (*)(id, SEL))objc_msgSend)(erRoot, glists); } @catch (__unused NSException *e) { erLists = nil; }
+                                                if ([erLists isKindOfClass:[NSArray class]]) {
+                                                    id erTarget = iconObj ?: arg;
+                                                    SEL gicons = NSSelectorFromString(@"icons");
+                                                    SEL gloc2 = NSSelectorFromString(@"location");
+                                                    SEL gid = NSSelectorFromString(@"identifier");
+                                                    NSString *erTid = nil;
+                                                    if (erTarget && [erTarget respondsToSelector:gid]) {
+                                                        @try { erTid = ((id (*)(id, SEL))objc_msgSend)(erTarget, gid); } @catch (__unused NSException *e) { erTid = nil; }
+                                                    }
+                                                    for (id erList in erLists) {
+                                                        if (!erList || ![erList respondsToSelector:gicons]) continue;
+                                                        id erIcons = nil;
+                                                        @try { erIcons = ((id (*)(id, SEL))objc_msgSend)(erList, gicons); } @catch (__unused NSException *e) { erIcons = nil; }
+                                                        if (![erIcons isKindOfClass:[NSArray class]]) continue;
+                                                        BOOL erHit = NO;
+                                                        if (erTarget && [erIcons containsObject:erTarget]) {
+                                                            erHit = YES;
+                                                        } else if (erTid && [erTid isKindOfClass:[NSString class]]) {
+                                                            for (id erIc in erIcons) {
+                                                                if (erIc && [erIc respondsToSelector:gid]) {
+                                                                    NSString *erIid = nil;
+                                                                    @try { erIid = ((id (*)(id, SEL))objc_msgSend)(erIc, gid); } @catch (__unused NSException *e) { erIid = nil; }
+                                                                    if ([erIid isEqualToString:erTid]) { erHit = YES; break; }
+                                                                }
+                                                            }
+                                                        }
+                                                        if (!erHit) continue;
+                                                        if ([erList respondsToSelector:gloc2]) {
+                                                            @try { realLoc = ((id (*)(id, SEL))objc_msgSend)(erList, gloc2); } @catch (__unused NSException *e) { realLoc = nil; }
+                                                        }
+                                                        if (realLoc) break;
+                                                    }
+                                                    ERSPGFolderNote([NSString stringWithFormat:
+                                                        @"listscan lists=%lu target=%@ hit=%@",
+                                                        (unsigned long)[erLists count],
+                                                        erTid ?: @"(no-id)", realLoc ?: @"nil"]);
+                                                } else {
+                                                    ERSPGFolderNote(@"listscan iconLists not-array");
+                                                }
+                                            } else {
+                                                ERSPGFolderNote(@"listscan iconLists missing");
+                                            }
+                                        } else {
+                                            ERSPGFolderNote(@"listscan rootFolder=nil");
+                                        }
+                                    }
+                                    if (realLoc && [realLoc isKindOfClass:[NSString class]] && [realLoc isEqualToString:@"SBIconLocationRoot"]) realLoc = nil;
                                     if (realLoc && [realLoc isKindOfClass:[NSString class]]) realLoc = nil;
                                     if (realLoc) {
                                         ERSPGFolderNote([NSString stringWithFormat:
