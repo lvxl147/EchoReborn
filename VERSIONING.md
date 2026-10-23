@@ -418,3 +418,10 @@
 - 冲突排查：禁乌贼仍注销→Choicy 白名单仅 EchoReborn 仍注销→确认是 EchoReborn 自身关闭路径触发；干净 respring 无 .ips → 疑未捕获 ObjC 异常被 roothide 引导程序静默 respring
 - 修复：NSSetUncaughtExceptionHandler（applicationDidFinishLaunching 里 dispatch_once 安装）→ 异常名/原因/调用栈写 folderlog（EXCEPTION name=... 前缀）
 - 提速实验：erTryOpen 轮询 poll#20 时除重发翻页外追加 layoutIconListsWithAnimationType:0 强制布局（目标跨页 1s→0.5s）
+
+## 1.2.0-88（2026-10-23）
+- 重大诊断：-87 watchdog .ips（bug_type 288）实锤注销 = SpringBoard 死于 SIGNAL 11（段错误），非 ObjC 异常（folderlog 0 字节、NSSetUncaughtExceptionHandler 抓不到）
+- 用户实测新情报：手动快速开关文件夹也 4-5 次注销，手势触发 1-2 次即注销 → 疑"开/关过渡期"我们的 launch/open 调用踩已释放对象
+- sigaction 装 SIGSEGV/SIGBUS/SIGABRT/SIGILL 处理器（async-signal-safe：open/write/backtrace_symbols_fd），信号号+出错地址+完整调用栈写 folderlog（前缀 `SIGNAL sig=`），写完恢复默认并 re-raise 保留正常崩溃流程
+- erTryOpen 每跳轮询前查 openedFolder/_currentFolderController，检测到开/关过渡一律中止（`poll aborted (transition)`），防止向过渡中的系统打 launch
+- 版本 1.2.0-88 / 1002170
