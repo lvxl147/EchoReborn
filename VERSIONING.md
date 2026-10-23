@@ -373,3 +373,10 @@
 - 根因链：loc=nil 打开的文件夹系统状态残缺 → 只有少数次"歪打正着"真打开（of=SBFolder）→ 残缺状态关闭过渡崩 = 点空白注销。修 location = 同时修成功率 + 注销
 - 修复①：location 候选链 = manager bestLocationForIcon: → bestHomeScreenLocationForIcon: → icon.iconLocations 首个 → 旧链兜底
 - 修复②：ⓘ 用组头文字字号生成 SF Symbol（configurationWithFont），side = 文字行高
+
+## 1.2.0-81
+- 用户实测 -80：成功率更低（20 中 1-2）；点空白关闭仍注销；ⓘ 延迟约 1s 显示、距文字间距太宽
+- folderlog 实锤：loc=nonnull 但 class=__NSCFConstantString → bestLocationForIcon: 返回 SBIconLocationRoot 常量（"往根桌面加新图标"的方法）——不是图标本体位置
+- 修复①：location 候选链改为 icon.iconLocations 首个优先（真格子位置；respondsToSelector 含继承，-80 时被 best* 抢先永远轮不到），Root 常量字符串视为无效跳过；附 iconLocations count/first 日志
+- 修复②（成功率真根因）：翻页后图标视图要等一次布局才创建，就绪前 openFolderIcon 静默失败 → 打开前轮询 manager iconViewForIcon:location: 每 0.1s 一次最长 1.5s，出现即开；iconView 类名/pollsUsed 记日志
+- 修复③：ⓘ 定时器 0.6/1.2→0.25/0.6s（-78 实锤异常已修，1 秒延迟是定时器太晚）；间距 6→3pt
