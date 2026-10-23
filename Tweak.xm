@@ -32847,7 +32847,8 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         //      永不重试
                         __block NSInteger erRetries = 1;       // 1.2.0-84 · 2→1（-83 日志：连发 2-3 次 launch 是点空白注销嫌疑）
                         __block BOOL erOpened = NO;
-                        __block NSInteger erPollsLeft = 40;   // 1.2.0-84 · 0.05s×40=2s（-83 A/B 实锤：iconView 就绪才 launch 全成、未就绪全败 → 必须等视图，最长窗口放宽）
+                        __block NSInteger erPollsLeft = 80;   // 1.2.0-85 · 0.05s×80=4s（-84 实锤部分场景 2s 内视图都没出现）
+                        __block NSInteger erPollN = 0;        // 1.2.0-85 · 轮询计数（每 1s 重发翻页 + 记 currentIconListIndex）
                         __block void (^erTryOpen)(void) = nil;
                         void (^erCompletion)(void) = ^{
                             erOpened = YES;
@@ -32866,7 +32867,23 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             }
                             // 1.2.0-84 · 一律等 iconView 就绪再开（-83 实锤：就绪 launch 全成、
                             // 未就绪全败；location 有效后 iconViewForIcon 能返回真视图）
+                            erPollN++;
                             if (!iv && erPollsLeft-- > 0) {
+                                // 1.2.0-85 · 每 1s 重发一次翻页（-84 实锤：超时案例疑似滚动
+                                // 没落地/布局被打断）；顺带记 currentIconListIndex 对比目标页
+                                if (erPollN % 20 == 0 && manager && (iconObj ?: arg)) {
+                                    SEL ss2 = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
+                                    if ([manager respondsToSelector:ss2])
+                                        ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss2, iconObj ?: arg, NO);
+                                    SEL cil = NSSelectorFromString(@"currentIconListIndex");
+                                    if ([manager respondsToSelector:cil]) {
+                                        @try {
+                                            ERSPGFolderNote([NSString stringWithFormat:
+                                                @"poll#%ld curList=%ld", (long)erPollN,
+                                                (long)((NSInteger (*)(id, SEL))objc_msgSend)(manager, cil)]);
+                                        } @catch (__unused NSException *e) { }
+                                    }
+                                }
                                 dispatch_after(
                                     dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
                                     dispatch_get_main_queue(), erTryOpen);
@@ -32875,7 +32892,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             ERSPGFolderNote([NSString stringWithFormat:
                                 @"iconView=%@ pollsUsed=%ld",
                                 iv ? NSStringFromClass(object_getClass(iv)) : @"timeout",
-                                (long)(40 - erPollsLeft)]);
+                                (long)(80 - erPollsLeft)]);
                             @try {
                                 // 1.2.0-83 · 有真 location 走 SBFolderIcon 实锤的
                                 // launchFromLocation:context:（= 用户手指点击文件夹图标的
@@ -35136,3 +35153,40 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
 }
 
 // 1.2.0-32 · AudioServices C 函数震动封锁改用 MSHookFunction（在 ERSPGAttachSysHaptHooks 内挂载）
+
+// 1.2.0-85 · 注销不锁屏（Respring.SkipLockscreen，默认关）。
+// 实现逆向自 byg.iosios.net.zhuxiao_0.0.3（NoPassAfterRespringSafe）反汇编：
+//   ① SBBootDefaults dontLockAfterCrash 恒 YES（开机默认"注销后不锁屏"）
+//   ② SpringBoard applicationDidFinishLaunching: 尾部
+//      [SBLockScreenManager sharedInstance].coverSheetViewController setAuthenticated:YES
+//      （coverSheet 被标记已认证 → 锁屏界面直接放行进桌面，不要求密码）
+%hook SBBootDefaults
++ (BOOL)dontLockAfterCrash {
+    if (ERPreferenceBool(@"Respring.SkipLockscreen", NO)) return YES;
+    return %orig;
+}
+- (BOOL)dontLockAfterCrash {
+    if (ERPreferenceBool(@"Respring.SkipLockscreen", NO)) return YES;
+    return %orig;
+}
+%end
+
+%hook SpringBoard
+- (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    %orig;
+    @try {
+        if (!ERPreferenceBool(@"Respring.SkipLockscreen", NO)) return;
+        Class mgrCls = %c(SBLockScreenManager);
+        id mgr = mgrCls ? ((id (*)(id, SEL))objc_msgSend)(mgrCls, @selector(sharedInstance)) : nil;
+        id cover = mgr ? ((id (*)(id, SEL))objc_msgSend)(mgr, @selector(coverSheetViewController)) : nil;
+        if (cover) {
+            ((void (*)(id, SEL, BOOL))objc_msgSend)(cover, @selector(setAuthenticated:), YES);
+            ERLogInfo(@"ER-RESPRING skip-lockscreen setAuthenticated=YES");
+        } else {
+            ERLogInfo(@"ER-RESPRING skip-lockscreen coverSheetViewController=nil");
+        }
+    } @catch (NSException *e) {
+        ERLogInfo(@"ER-RESPRING skip-lockscreen threw %@", e);
+    }
+}
+%end
