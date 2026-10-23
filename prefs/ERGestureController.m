@@ -1201,7 +1201,7 @@ static void ERGestureInstallGroupInfo(ERGestureController *self) {
     [btn addTarget:self action:@selector(erGroupInfoTapped)
       forControlEvents:UIControlEventTouchUpInside];
     CGFloat side = ceil(hfont.lineHeight);
-    btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 6.0,
+    btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 3.0,   // 1.2.0-81 · 用户反馈间距减半 6→3
                            CGRectGetMidY(found.frame) - side / 2.0, side, side);
     [host addSubview:btn];
     ERGPrefsLog(@"group info install ok frame=%@ host=%@",
@@ -1219,14 +1219,14 @@ static void ERGestureInstallGroupInfo(ERGestureController *self) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     ERGPrefsLog(@"viewWillAppear (group info scheduled)");
-    // 组头延迟出现（PS 异步构建），多试几个时机；安装全程 @try 保护
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+    // 组头延迟出现（PS 异步构建）；-80 实锤异常已修，1 秒才显示是定时器太晚 → 调回 0.25/0.6s
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
             ERGPrefsLog(@"group info install threw: %@", e);
         }
     });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
                    dispatch_get_main_queue(), ^{
         @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
             ERGPrefsLog(@"group info install threw(2): %@", e);
