@@ -32576,6 +32576,27 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     // 而 verify 里 of=SBFolder（真打开）的次数 = 肉眼成功的次数。
                     // openFolderIcon 很可能需要有效 location 才稳定成功。依次尝试
                     // rootFolder/model 的 locationForIcon:/locationOfIcon:。
+                    // 1.2.0-80 · -79 探针金矿：SBHIconManager 实锤有
+                    // bestLocationForIcon: / bestHomeScreenLocationForIcon:
+                    //（此前试的 locationForIcon:/locationOfIcon: 都不存在 → loc 恒 null）
+                    // loc=nil 打开的文件夹状态残缺 = 点空白关闭注销的根源，一并修
+                    if (manager) {
+                        SEL bl = NSSelectorFromString(@"bestLocationForIcon:");
+                        SEL bh = NSSelectorFromString(@"bestHomeScreenLocationForIcon:");
+                        if (!loc && [manager respondsToSelector:bl])
+                            loc = ((id (*)(id, SEL, id))objc_msgSend)(manager, bl, iconObj ?: arg);
+                        if (!loc && [manager respondsToSelector:bh])
+                            loc = ((id (*)(id, SEL, id))objc_msgSend)(manager, bh, iconObj ?: arg);
+                    }
+                    if (!loc && (iconObj ?: arg)) {
+                        id ico0 = iconObj ?: arg;
+                        SEL ils = NSSelectorFromString(@"iconLocations");
+                        if ([ico0 respondsToSelector:ils]) {
+                            id locs = ((id (*)(id, SEL))objc_msgSend)(ico0, ils);
+                            if ([locs isKindOfClass:[NSArray class]] && [(NSArray *)locs count] > 0)
+                                loc = [(NSArray *)locs firstObject];
+                        }
+                    }
                     if (!loc) {
                         SEL lfi = NSSelectorFromString(@"locationForIcon:");
                         SEL loi = NSSelectorFromString(@"locationOfIcon:");
