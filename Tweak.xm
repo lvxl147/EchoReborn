@@ -33337,12 +33337,8 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f val=%@", t.x, t.y, range, val);
         if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
         ERSPGHaptic();           // 达标提示震（一次）
-        // 1.2.0-91 · 文件夹动作达标即触发（不等松手）：用户实测"当页停留一下再跳"
-        // 的体感主要来自"松手才派发"+派发后的同步枚举；页码跳转保持松手落地不变
-        if ([val hasPrefix:@"folder:"]) {
-            ERSPGDispatchGestureValue(val);
-            return;
-        }
+        // 1.2.0-93 · 回退 -92 达标即触发：实测提前派发后手势事件链未走完，
+        // SB 手势状态悬空 → 桌面整页锁死（翻页/滑动全无响应），判死刑
         objc_setAssociatedObject(gesture, @selector(erPanPendingPage), val, OBJC_ASSOCIATION_RETAIN);
     } @catch (__unused NSException *e) {}
 }
@@ -33385,12 +33381,7 @@ static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
         if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
         ERLogInfo(@"SPG-TOUCH armed d=(%.0f,%.0f) val=%@", d.x, d.y, val);
         ERSPGHaptic();
-        // 1.2.0-91 · folder 动作达标即触发（同 pan 通道）
-        if ([val hasPrefix:@"folder:"]) {
-            ERLogInfo(@"SPG-TOUCH #%ld arm-instant val=%@", (long)++sERSPGTouchN, val);
-            ERSPGDispatchGestureValue(val);
-            return;
-        }
+        // 1.2.0-93 · 回退 -92 touch 通道达标即触发（同 pan：提前派发锁死桌面）
         if (!gERSPGTouchPending) gERSPGTouchPending = [NSMutableDictionary new];
         gERSPGTouchPending[[NSValue valueWithNonretainedObject:touch]] = val;
     } @catch (__unused NSException *e) {}
