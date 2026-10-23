@@ -408,3 +408,8 @@
   ① %hook SBBootDefaults dontLockAfterCrash（+/- 两个变体）开关开时返 YES
   ② %hook SpringBoard applicationDidFinishLaunching: 尾部 [SBLockScreenManager sharedInstance].coverSheetViewController setAuthenticated:YES
   开关 Respring.SkipLockscreen（-84 已加 UI），关=全部 %orig
+
+## 1.2.0-86
+- 用户实测 -85：成功率 100%！注销不锁屏功能完全可用；遗留：打开后立刻点空白关闭 → 注销（停留 2-5s 则不注销）；速度有延迟待后续优化
+- 主日志实锤注销机制：打开 → verify(0.6s) 时用户已秒关 → of=nil → retry 分支在关闭过渡中重发 launch → SB 状态崩 → respring（停留 2-5s 时 verify 早已终态故不注销，与用户观察完全吻合）
+- 修复：彻底移除重试（of=nil 一律按"已被用户关闭"处理，no-retry give up 日志）；erRetries 变量删除
