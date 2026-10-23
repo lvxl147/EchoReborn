@@ -366,3 +366,10 @@
 - 修复①：ERGestureFindTableView 从 self.view 递归找 UITableView 替代 self.tableView
 - folderlog 实锤：locationForIcon:/locationOfIcon: 在 rootFolder/model 均不响应，loc 仍全 null；成功次数仍精确对应 of=SBFolder
 - 修复②：location 候选补 model/manager 的 iconLists 逐页 locationOfIcon:；加一次性方法表探针——把 rootFolder/model/manager/iconObj 所有含 "ocatio" 的方法名 dump 进 folderlog，为下一版拿准真 API
+
+## 1.2.0-80
+- 用户实测 -79：ⓘ 已显示可点击✅但偏大；成功率依旧（18 中 2）；点空白关闭仍注销
+- 探针金矿：SBHIconManager 有 bestLocationForIcon: / bestHomeScreenLocationForIcon: / _folderControllerForIcon:inLocation: / _animateFolderIcon:open:location:animated:withCompletion: / SBFolderIcon launchFromLocation:context:；此前试的 locationForIcon:/locationOfIcon: 均不存在 → loc 恒 null
+- 根因链：loc=nil 打开的文件夹系统状态残缺 → 只有少数次"歪打正着"真打开（of=SBFolder）→ 残缺状态关闭过渡崩 = 点空白注销。修 location = 同时修成功率 + 注销
+- 修复①：location 候选链 = manager bestLocationForIcon: → bestHomeScreenLocationForIcon: → icon.iconLocations 首个 → 旧链兜底
+- 修复②：ⓘ 用组头文字字号生成 SF Symbol（configurationWithFont），side = 文字行高
