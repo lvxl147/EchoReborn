@@ -32416,9 +32416,36 @@ static void ERSPGDumpFolders(void) {
     } @catch (__unused NSException *e) {}
 }
 
+// 1.2.0-91 · folderId→icon 弱引用缓存：每次手势都要全模型遍历找图标（主线程
+// 同步 100-300ms），手势高频使用纯浪费。图标对象随模型变化由弱引用自动失效，
+// 失效后自然回落到全量查找
+static NSMapTable<NSString *, id> *gERSPGFolderIconCache = nil;
+static id ERSPGFindFolderIconUncached(id model, NSString *folderId, id *outFolder);
+
+// 1.2.0-91 · 缓存包装层：命中弱引用缓存零遍历；未命中走全量查找并回填缓存
+static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
+    @try {
+        if (!model || !folderId.length) return nil;
+        if (!gERSPGFolderIconCache)
+            gERSPGFolderIconCache = [NSMapTable mapTableWithKeyOptions:NSMapTableStrongMemory
+                                                         valueOptions:NSMapTableWeakMemory];
+        id cached = [gERSPGFolderIconCache objectForKey:folderId];
+        if (cached && [cached respondsToSelector:@selector(folder)]) {
+            if (outFolder)
+                *outFolder = ((id (*)(id, SEL))objc_msgSend)(cached, @selector(folder));
+            return cached;
+        }
+        id folderObj2 = nil;
+        id icon = ERSPGFindFolderIconUncached(model, folderId, outFolder ?: &folderObj2);
+        if (icon) [gERSPGFolderIconCache setObject:icon forKey:folderId];
+        return icon;
+    } @catch (__unused NSException *e) {}
+    return nil;
+}
+
 // 1.2.0-66 · 复用 -65 实锤可枚举全部文件夹的 walk（build iconMap 后查 id）；
 // 兜底再试 rootFolder 的 folderWithUniqueIdentifier:（探针实锤 SBFolder 有此方法）
-static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
+static id ERSPGFindFolderIconUncached(id model, NSString *folderId, id *outFolder) {
     @try {
         if (!model || !folderId.length) return nil;
         if ([model respondsToSelector:@selector(folders)]) {
@@ -33309,6 +33336,12 @@ static void ERSPGPagerPanSetEnabled(BOOL on) {
         ERLogInfo(@"SPG-PAN armed t=(%.0f,%.0f) range=%.0f val=%@", t.x, t.y, range, val);
         if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
         ERSPGHaptic();           // 达标提示震（一次）
+        // 1.2.0-91 · 文件夹动作达标即触发（不等松手）：用户实测"当页停留一下再跳"
+        // 的体感主要来自"松手才派发"+派发后的同步枚举；页码跳转保持松手落地不变
+        if ([val hasPrefix:@"folder:"]) {
+            ERSPGDispatchGestureValue(val);
+            return;
+        }
         objc_setAssociatedObject(gesture, @selector(erPanPendingPage), val, OBJC_ASSOCIATION_RETAIN);
     } @catch (__unused NSException *e) {}
 }
@@ -33351,6 +33384,12 @@ static void ERSPGTouchArm(UITouch *touch, CGPoint start, CGPoint end) {
         if (val.length == 0 || [val isEqualToString:@"0"]) return;   // 无动作=0
         ERLogInfo(@"SPG-TOUCH armed d=(%.0f,%.0f) val=%@", d.x, d.y, val);
         ERSPGHaptic();
+        // 1.2.0-91 · folder 动作达标即触发（同 pan 通道）
+        if ([val hasPrefix:@"folder:"]) {
+            ERLogInfo(@"SPG-TOUCH #%ld arm-instant val=%@", (long)++sERSPGTouchN, val);
+            ERSPGDispatchGestureValue(val);
+            return;
+        }
         if (!gERSPGTouchPending) gERSPGTouchPending = [NSMutableDictionary new];
         gERSPGTouchPending[[NSValue valueWithNonretainedObject:touch]] = val;
     } @catch (__unused NSException *e) {}
