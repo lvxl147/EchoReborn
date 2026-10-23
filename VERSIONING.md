@@ -461,3 +461,9 @@
 - 修复：翻页重发提前到 poll#2(~0.1s)/poll#6(~0.3s)（幂等），poll#20 兜底保留，curList 每个重发点记录；预期 1.1s → ~0.3s
 - 版本 1.2.0-94 / 1002188
 - 关键修复：信号/atexit 探针裸 open("/var/mobile/...") 在 roothide SB 内未被路径翻译（实际落 /rootfs/private/...），SIGSEGV(-11) 现场被静默丢弃 → 双路径重试（rootfs 优先）
+
+## 1.2.0-95（2026-10-24 凌晨）
+- -94 实测：跨页打开提速成功（pollsUsed=2 t=104-124ms，原 1100ms）✅；但点空白关闭注销仍在，且双路径探针仍零痕迹
+- 注销主修：folderlog 实锤 launch 传的 loc 恒为常量串 SBIconLocationRoot（__NSCFConstantString）——系统按真实格子位置登记"展开图标"，残缺登记 → 关闭缩回动画崩溃（-80 埋的伏笔）
+- 修复：iconView 就绪后问视图要真实 location（SBIconView.location/_location/iconLocation），只接受非 NSString 对象（Root 常量自然排除），拿到替换 launch 的 loc；realLoc 写日志
+- 版本 1.2.0-95 / 1002189
