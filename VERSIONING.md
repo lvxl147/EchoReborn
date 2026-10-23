@@ -359,3 +359,10 @@
 - prefs 日志实锤崩溃窗口：viewDidLoad 完成 + 4 个下拉 cell init 后 1~2s 进程消失 = 组头 ⓘ 安装定时器（0.3/0.9s）运行窗
 - 排查版改动：安装前后埋点（group info install begin/ok/label not found/ threw）+ @try 保护 + 延迟 0.6/1.2s + 开关行 layoutSubviews 加 _erInfoBtn 非空守卫（nil 消息 hidden=NO 导致分支误入的隐患）
 - 下次拉 EchoReborn-prefs.log：见 begin 无 ok = addSubview/scan 段；无 begin = 崩在更早（cell/viewWillAppear）
+
+## 1.2.0-79
+- 用户实测 -78：不闪退了✅（@try 兜住）；但 ⓘ 不显示；成功率仍 2/18
+- 埋点实锤闪退真凶：-[ERGestureController tableView]: unrecognized selector——PSListController 运行时无 tableView 方法（编译有声明、运行时没实现）。-77 的闪退 = 同一异常无 @try 直接崩；ⓘ 不显示 = 每次安装都在这一句抛异常
+- 修复①：ERGestureFindTableView 从 self.view 递归找 UITableView 替代 self.tableView
+- folderlog 实锤：locationForIcon:/locationOfIcon: 在 rootFolder/model 均不响应，loc 仍全 null；成功次数仍精确对应 of=SBFolder
+- 修复②：location 候选补 model/manager 的 iconLists 逐页 locationOfIcon:；加一次性方法表探针——把 rootFolder/model/manager/iconObj 所有含 "ocatio" 的方法名 dump 进 folderlog，为下一版拿准真 API
