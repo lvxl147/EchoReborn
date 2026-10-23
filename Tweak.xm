@@ -32620,7 +32620,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                 Method *ms = class_copyMethodList(cls, &n);
                                 for (unsigned int i = 0; i < n; i++) {
                                     NSString *nm = NSStringFromSelector(method_getName(ms[i]));
-                                    if ([nm lowercaseString].rangeOfString:@"ocatio"].location != NSNotFound)
+                                    if ([[nm lowercaseString] rangeOfString:@"ocatio"].location != NSNotFound)
                                         [dump appendFormat:@" %@", nm];
                                 }
                                 free(ms);
