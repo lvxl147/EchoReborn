@@ -32845,9 +32845,9 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         //      根因 = 成功打开后用户快速关闭，排队中的重试把 openFolderIcon
                         //      打在关闭动画里。传入 completion 标记 erOpened，打开过就
                         //      永不重试
-                        __block NSInteger erRetries = 2;
+                        __block NSInteger erRetries = 1;       // 1.2.0-84 · 2→1（-83 日志：连发 2-3 次 launch 是点空白注销嫌疑）
                         __block BOOL erOpened = NO;
-                        __block NSInteger erPollsLeft = 10;   // 1.2.0-82 · 0.05s×10=0.5s（-81 白等 1.5s 是慢的直接原因；location 修对后 iconView 应立即就绪）
+                        __block NSInteger erPollsLeft = 40;   // 1.2.0-84 · 0.05s×40=2s（-83 A/B 实锤：iconView 就绪才 launch 全成、未就绪全败 → 必须等视图，最长窗口放宽）
                         __block void (^erTryOpen)(void) = nil;
                         void (^erCompletion)(void) = ^{
                             erOpened = YES;
@@ -32864,9 +32864,9 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                         manager, ivs, iconObj ?: arg, loc);
                                 } @catch (__unused NSException *e) { iv = nil; }
                             }
-                            // 1.2.0-83 · loc 非空（真位置已拿到）跳过轮询 → 恢复 -80 即时手感；
-                            // 仅 loc 空时才轮询等 iconView
-                            if (!iv && !loc && erPollsLeft-- > 0) {
+                            // 1.2.0-84 · 一律等 iconView 就绪再开（-83 实锤：就绪 launch 全成、
+                            // 未就绪全败；location 有效后 iconViewForIcon 能返回真视图）
+                            if (!iv && erPollsLeft-- > 0) {
                                 dispatch_after(
                                     dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
                                     dispatch_get_main_queue(), erTryOpen);
@@ -32875,7 +32875,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             ERSPGFolderNote([NSString stringWithFormat:
                                 @"iconView=%@ pollsUsed=%ld",
                                 iv ? NSStringFromClass(object_getClass(iv)) : @"timeout",
-                                (long)(10 - erPollsLeft)]);
+                                (long)(40 - erPollsLeft)]);
                             @try {
                                 // 1.2.0-83 · 有真 location 走 SBFolderIcon 实锤的
                                 // launchFromLocation:context:（= 用户手指点击文件夹图标的
