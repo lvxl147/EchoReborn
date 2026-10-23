@@ -23,6 +23,13 @@
 #import <AVFoundation/AVFoundation.h>
 #import <AudioToolbox/AudioToolbox.h>
 #include <dlfcn.h>
+// 1.2.0-88 · 信号级崩溃捕获器（SIGSEGV 等）：-87 实锤注销 = SpringBoard 死于
+// SIGNAL 11（watchdog .ips 原文 last exited with reason namespace: SIGNAL, code 11），
+// NSSetUncaughtExceptionHandler 抓不到段错误 → 用 sigaction + backtrace 抓现场
+#import <signal.h>
+#import <execinfo.h>
+#import <fcntl.h>
+#import <stdio.h>
 
 // ---------------------------------------------------------------------------
 // jailbreak root resolution
@@ -32853,6 +32860,26 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             erOpened = YES;
                         };
                         erTryOpen = ^{
+                            // 1.2.0-88 · 防段错误护栏：-87 watchdog .ips 实锤注销 =
+                            // SpringBoard 死于 SIGNAL 11（段错误）。手动开关也 4-5 次
+                            // 注销、手势 1-2 次 → 疑"文件夹开/关过渡期"我们再打
+                            // launch/openFolderIcon 踩到已释放对象。每跳轮询先查
+                            // openedFolder/_currentFolderController，过渡期一律中止
+                            SEL ofc2 = NSSelectorFromString(@"openedFolder");
+                            SEL cfc2 = NSSelectorFromString(@"_currentFolderController");
+                            id ofNow = [manager respondsToSelector:ofc2]
+                                ? ((id (*)(id, SEL))objc_msgSend)(manager, ofc2) : nil;
+                            id curNow = [manager respondsToSelector:cfc2]
+                                ? ((id (*)(id, SEL))objc_msgSend)(manager, cfc2) : nil;
+                            if ((ofNow || (curNow && ERSPGCurIsRealFolder(curNow)))) {
+                                ERSPGFolderNote([NSString stringWithFormat:
+                                    @"poll aborted (transition) of=%@ cur=%@ id=%@",
+                                    ofNow ? NSStringFromClass(object_getClass(ofNow)) : @"nil",
+                                    curNow ? NSStringFromClass(object_getClass(curNow)) : @"nil",
+                                    folderId]);
+                                erTryOpen = nil;
+                                return;
+                            }
                             // 1.2.0-81 · iconView 就绪轮询（成功率真根因）：翻页后图标
                             // 视图要等一次布局才创建，就绪前 openFolderIcon 静默失败。
                             // 每 0.1s 查 iconViewForIcon:location:，出现即开，最长 1.5s。
@@ -35192,6 +35219,39 @@ static void ERFolderExceptionLogHandler(NSException *exc) {
     } @catch (__unused NSException *e) { }
 }
 
+// 1.2.0-88 · 信号级崩溃捕获器：SIGSEGV/SIGBUS/SIGABRT/SIGILL 不走 ObjC 异常机制
+//（-87 folderlog 0 字节实锤），handler 必须用 async-signal-safe 的 open/write/
+// backtrace_symbols_fd，把信号号、出错地址、完整用户态调用栈写进 folderlog，
+// 然后恢复默认处理并 re-raise（保留系统正常崩溃/重启流程）
+static void ERSignalHandler(int sig, siginfo_t *info, void *uctx) {
+    int fd = open("/var/mobile/Documents/er_folderlog.txt",
+                  O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd >= 0) {
+        char buf[192];
+        int n = snprintf(buf, sizeof(buf),
+                         "SIGNAL sig=%d addr=%p pid=%d\n",
+                         sig, info ? info->si_addr : NULL, getpid());
+        if (n > 0) write(fd, buf, (size_t)n);
+        void *frames[128];
+        int cnt = backtrace(frames, 128);
+        backtrace_symbols_fd(frames, cnt, fd);
+        write(fd, "\n", 1);
+        close(fd);
+    }
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+static void ERInstallSignalHandlers(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_sigaction = ERSignalHandler;
+    sa.sa_flags = SA_SIGINFO;
+    sigemptyset(&sa.sa_mask);
+    const int sigs[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL };
+    for (unsigned long i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
+        sigaction(sigs[i], &sa, NULL);
+}
+
 %hook SpringBoard
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     %orig;
@@ -35199,6 +35259,8 @@ static void ERFolderExceptionLogHandler(NSException *exc) {
         static dispatch_once_t onceTokExc;
         dispatch_once(&onceTokExc, ^{
             NSSetUncaughtExceptionHandler(ERFolderExceptionLogHandler);
+            // 1.2.0-88 · 段错误不走 ObjC 异常，补装信号处理器抓真现场
+            ERInstallSignalHandlers();
         });
         if (!ERPreferenceBool(@"Respring.SkipLockscreen", NO)) return;
         Class mgrCls = %c(SBLockScreenManager);
