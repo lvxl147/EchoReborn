@@ -393,3 +393,9 @@
 - 探针金矿（er_folderprobe.txt）：SBRootFolder 有 `listAtIndex:`/`lastVisibleNonEmptyListIndex`；SBFolderIcon 有 `launchFromLocation:context:`（原生点击启动入口）
 - 修复①：list 定位改 rootFolder listAtIndex: 逐页循环（上界 lastVisibleNonEmptyListIndex，兜底 49），找到含图标页 → manager iconLocationForList:inFolder:ofRootFolder: 换算真 location，日志 listFound page/idx/locClass
 - 修复②：loc 非空时跳过 iconView 轮询（触发即开，恢复 -80 手感）；opener 改 launchFromLocation:context:（无 loc 才 openFolderIcon）；verify/retry 链共用
+
+## 1.2.0-84
+- 用户实测 -83 + folderlog A/B 铁证：listFound page=2 idx=2 每次命中（页面绑定没问题，locClass=__NSCFConstantString=SBIconLocationRoot 是桌面图标正规位置写法）；iconView=SBIconView 时 launch 全部 of=SBFolder 成功，iconView=timeout 时硬 launch 全部 retry→give up 失败——成功率 100% 对应"图标视图是否就绪"
+- 修复：一律等 iconView 就绪再 launch（轮询 0.05s×40=2s，就绪瞬间即开零延迟）；重试 2→1（连发 launch 是点空白注销嫌疑）
+- prefs：系统增强子页录屏设置/锁屏音乐卡片下新增「注销设置项」卡片——开关「注销不锁屏」（Respring.SkipLockscreen，默认关，lock.open 图标），本版仅 UI，功能下版接（用户自己找插件参考）
+- push 脚本补 push9/SystemEnhance.plist
