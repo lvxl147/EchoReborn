@@ -32583,6 +32583,43 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     // 1.2.0-81 · -80 日志实锤：bestLocationForIcon: 返回的是常量字符串
                     // SBIconLocationRoot（"往根桌面加新图标"的方法，不是图标本体位置）
                     // → 优先用 icon.iconLocations 首个（真格子位置）；Root 常量视为无效
+                    // 1.2.0-82 · -81 folderlog 实锤：SBFolderIcon 不响应 iconLocations
+                    //（selector missing 刷屏 → loc=(null)），轮询 iconView 永远 nil
+                    // 白耗 1.5s（用户实测慢 2-3s + 成功率仍 1-2/20）。
+                    // 新主候选：枚举 rootFolder.iconLists 找含该图标的 list（页+序），
+                    // 用 manager 实锤存在的 iconLocationForList:inFolder:ofRootFolder:
+                    // 换算成真 SBIconLocation（"第 X 页"语义，非常量字符串）
+                    if (!loc && rootFolder && manager) {
+                        SEL ils82 = NSSelectorFromString(@"iconLists");
+                        id lists82 = [rootFolder respondsToSelector:ils82]
+                            ? ((id (*)(id, SEL))objc_msgSend)(rootFolder, ils82) : nil;
+                        if ([lists82 isKindOfClass:[NSArray class]]) {
+                            NSArray *arr82 = (NSArray *)lists82;
+                            for (NSUInteger i = 0; i < arr82.count; i++) {
+                                id lst82 = arr82[i];
+                                if (!lst82) continue;
+                                SEL gs82 = NSSelectorFromString(@"icons");
+                                id ics82 = [lst82 respondsToSelector:gs82]
+                                    ? ((id (*)(id, SEL))objc_msgSend)(lst82, gs82) : nil;
+                                if (![ics82 isKindOfClass:[NSArray class]]) continue;
+                                NSUInteger idx82 = [(NSArray *)ics82 indexOfObject:iconObj ?: arg];
+                                if (idx82 == NSNotFound) continue;
+                                SEL ifs = NSSelectorFromString(@"iconLocationForList:inFolder:ofRootFolder:");
+                                if ([manager respondsToSelector:ifs]) {
+                                    @try {
+                                        loc = ((id (*)(id, SEL, id, id, id))objc_msgSend)(
+                                            manager, ifs, lst82, rootFolder, rootFolder);
+                                    } @catch (__unused NSException *e) { loc = nil; }
+                                }
+                                ERSPGFolderNote([NSString stringWithFormat:
+                                    @"listFound page=%lu idx=%lu locClass=%@",
+                                    (unsigned long)i, (unsigned long)idx82,
+                                    loc ? NSStringFromClass(object_getClass(loc)) : @"nil"]);
+                                if (loc) break;
+                            }
+                        }
+                    }
+                    // iconLocations 降兜底（-81 实锤 SBFolderIcon 不响应）
                     if (iconObj ?: arg) {
                         id ico0 = iconObj ?: arg;
                         SEL ils = NSSelectorFromString(@"iconLocations");
@@ -32799,7 +32836,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         //      永不重试
                         __block NSInteger erRetries = 2;
                         __block BOOL erOpened = NO;
-                        __block NSInteger erPollsLeft = 15;   // 1.2.0-81 · 0.1s×15=1.5s 就绪轮询
+                        __block NSInteger erPollsLeft = 10;   // 1.2.0-82 · 0.05s×10=0.5s（-81 白等 1.5s 是慢的直接原因；location 修对后 iconView 应立即就绪）
                         __block void (^erTryOpen)(void) = nil;
                         void (^erCompletion)(void) = ^{
                             erOpened = YES;
@@ -32818,14 +32855,14 @@ static void ERSPGOpenFolder(NSString *folderId) {
                             }
                             if (!iv && erPollsLeft-- > 0) {
                                 dispatch_after(
-                                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
                                     dispatch_get_main_queue(), erTryOpen);
                                 return;
                             }
                             ERSPGFolderNote([NSString stringWithFormat:
                                 @"iconView=%@ pollsUsed=%ld",
                                 iv ? NSStringFromClass(object_getClass(iv)) : @"timeout",
-                                (long)(15 - erPollsLeft)]);
+                                (long)(10 - erPollsLeft)]);
                             @try {
                                 ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
                                     manager, os, iconObj ?: arg, loc, YES, erCompletion);
