@@ -425,3 +425,9 @@
 - sigaction 装 SIGSEGV/SIGBUS/SIGABRT/SIGILL 处理器（async-signal-safe：open/write/backtrace_symbols_fd），信号号+出错地址+完整调用栈写 folderlog（前缀 `SIGNAL sig=`），写完恢复默认并 re-raise 保留正常崩溃流程
 - erTryOpen 每跳轮询前查 openedFolder/_currentFolderController，检测到开/关过渡一律中止（`poll aborted (transition)`），防止向过渡中的系统打 launch
 - 版本 1.2.0-88 / 1002170
+
+## 1.2.0-89（2026-10-23 晚）
+- -88 实测：手动开关 10 次注销、手势 100% 注销；但 SIGNAL sig= 零触发、无 .ips、JetsamEvent 最大进程是抖音（干扰项）
+- 用户体感："哪里都没点，注销完自动进桌面，和手动点注销一模一样" → 干净退出
+- 取证三件套：①atexit → ER-ATEXIT+backtrace（exit() 必经）②hook _relaunchSpringBoardNow:/relaunchSpringBoard/_relaunchSpringBoardIfRequested → ER-RELAUNCH+调用者backtrace ③主线程心跳 2s/5s 超时 → MAIN HANG
+- 版本 1.2.0-89 / 1002175
