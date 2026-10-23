@@ -443,3 +443,9 @@
 - 用户拍板方案A：挂起低频注销（~5%，探针继续攒样本），主力提速 1s→0.5s
 - 提速三刀：①layoutIconListsWithAnimationType 强制布局 poll#20→poll#2（0.1s）+每10跳补发 ②前3跳轮询 0.05s→0.03s ③全程计时埋点（open/forced-layout/iconView/launch/verify 均带 t=毫秒）
 - 版本 1.2.0-91 / 1002185
+
+## 1.2.0-92（2026-10-23 夜）
+- 用户关键情报："触发手势后先当页停留一下再跳转"→ 定位两个延迟源：①松手才派发 ②每次手势全模型遍历找文件夹图标（100-300ms）
+- 达标即触发：pan/touch 双通道中 folder 动作达标瞬间直接派发（不等松手），日志 arm-instant；页码跳转保持松手落地
+- folderId→icon 弱引用缓存（NSMapTable strong key/weak value），命中零遍历
+- 版本 1.2.0-92 / 1002186
