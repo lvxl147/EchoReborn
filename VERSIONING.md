@@ -474,3 +474,10 @@
 - 主修：打开 API 主路径对调——manager 级 openFolderIcon:location:animated:withCompletion:（-69 实锤真入口，自管展开登记+上下文）为主，launchFromLocation 降兜底；当年弃用只因视图未就绪静默失败，pollsUsed=2 就绪轮询已解决
 - realLoc 探测扩面：iconObj.location + manager bestHomeScreenLocationForIcon:（-95 实锤视图三选择器全落空）
 - 版本 1.2.0-96 / 1002190
+
+## 1.2.0-97（2026-10-24 凌晨）
+- -96 实测：仍注销（5 次必 1 次）。folderlog 实锤：open via openFolderIcon 每次都走（新路径生效），但 realLoc 六探测点全灭（视图三选择器/iconObj.location/bestHomeScreenLocationForIcon 全 nil），loc 始终 Root 常量串 → openFolderIcon 传残缺 loc 照样残缺登记，换汤不换药
+- 崩溃轮实锤：最后一轮 open via openFolderIcon t=2ms（pollsUsed=0 极速路径）后无 verify 行，日志戛然而止 → 崩在 open 后/关闭缩回中
+- 主修：listscan 必中探测——manager.iconModel→rootFolder（manager.iconModel / model.rootFolder / manager.rootFolder 三路兜底）→ 遍历 iconLists，按 containsObject / identifier 双匹配找包含本文件夹图标的 list，取 list.location（系统手点时用的真实串）替换 loc；listscan 结果（lists 数/target id/hit）写 folderlog
+- 防御：realLoc 若恰为 SBIconLocationRoot 常量串则丢弃（保持 fallback），杜绝再次传入
+- 版本 1.2.0-97 / 1002195
