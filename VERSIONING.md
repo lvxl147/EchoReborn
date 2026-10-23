@@ -438,3 +438,8 @@
 - 信号捕获器补 SIGHUP/SIGTERM → 下次现场写 SIGNAL sig=1/15
 - roothide 核心组件（jailbreakd/hookd/boomerang）无杀进程字符串；idownloadd 为 roothide 自带 iDownload 调试台（Disabled=true）
 - 版本 1.2.0-90 / 1002180
+
+## 1.2.0-91（2026-10-23 夜）
+- 用户拍板方案A：挂起低频注销（~5%，探针继续攒样本），主力提速 1s→0.5s
+- 提速三刀：①layoutIconListsWithAnimationType 强制布局 poll#20→poll#2（0.1s）+每10跳补发 ②前3跳轮询 0.05s→0.03s ③全程计时埋点（open/forced-layout/iconView/launch/verify 均带 t=毫秒）
+- 版本 1.2.0-91 / 1002185
