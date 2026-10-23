@@ -35252,6 +35252,58 @@ static void ERInstallSignalHandlers(void) {
         sigaction(sigs[i], &sa, NULL);
 }
 
+// 1.2.0-89 · 取证三件套（"点空白关闭 → 无 .ips 无信号触发 → 疑干净退出"）：
+//   ① atexit 探针：exit() 干净退出必经之路；SIGKILL 则不会出现。
+//      写 ER-ATEXIT + 当前线程 backtrace 到 folderlog
+//   ② relaunch hook：SpringBoard 正规注销入口（_relaunchSpringBoardNow: 等）
+//      被调时先抓调用者 backtrace —— 谁（系统/哪个插件/我们）发起注销一击命中
+//   ③ 主线程心跳：后台线程每 2s 用带 5s 超时的信号量 ping 主队列；
+//      主线程卡死 → 写 MAIN HANG（不阻塞后台线程，可反复记录）
+static void ERWriteBacktraceNote(const char *tag) {
+    void *frames[128];
+    int cnt = backtrace(frames, 128);
+    char **syms = backtrace_symbols(frames, cnt);
+    if (!syms) return;
+    FILE *f = fopen("/var/mobile/Documents/er_folderlog.txt", "a");
+    if (f) {
+        fprintf(f, "%s tid=%p\n", tag, (void *)pthread_self());
+        for (int i = 0; i < cnt; i++) fprintf(f, "%s [%d] %s\n", tag, i, syms[i]);
+        fprintf(f, "\n");
+        fclose(f);
+    }
+    free(syms);
+}
+static void ERAtExitHandler(void) {
+    ERWriteBacktraceNote("ER-ATEXIT");
+}
+static CFAbsoluteTime gERMainLastBeat = 0.0;
+static void ERInstallMainThreadWatchdog(void) {
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        while (1) {
+            CFAbsoluteTime mark = CFAbsoluteTimeGetCurrent();
+            gERMainLastBeat = mark;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                gERMainLastBeat = CFAbsoluteTimeGetCurrent();
+                dispatch_semaphore_signal(sem);
+            });
+            long r = dispatch_semaphore_wait(
+                sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(5 * NSEC_PER_SEC)));
+            if (r != 0) {
+                CFAbsoluteTime lag = CFAbsoluteTimeGetCurrent() - mark;
+                ERSPGFolderNote([NSString stringWithFormat:
+                    @"MAIN HANG >%.1fs (main last beat %.1fs ago)",
+                    lag, CFAbsoluteTimeGetCurrent() - gERMainLastBeat]);
+            }
+            [NSThread sleepForTimeInterval:2.0];
+        }
+    });
+}
+static void ERInstallForensicsKit(void) {
+    atexit(ERAtExitHandler);
+    ERInstallMainThreadWatchdog();
+}
+
 %hook SpringBoard
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     %orig;
@@ -35261,6 +35313,8 @@ static void ERInstallSignalHandlers(void) {
             NSSetUncaughtExceptionHandler(ERFolderExceptionLogHandler);
             // 1.2.0-88 · 段错误不走 ObjC 异常，补装信号处理器抓真现场
             ERInstallSignalHandlers();
+            // 1.2.0-89 · 取证三件套：atexit / 主线程心跳（relaunch hook 见下方 %hook）
+            ERInstallForensicsKit();
         });
         if (!ERPreferenceBool(@"Respring.SkipLockscreen", NO)) return;
         Class mgrCls = %c(SBLockScreenManager);
@@ -35275,5 +35329,23 @@ static void ERInstallSignalHandlers(void) {
     } @catch (NSException *e) {
         ERLogInfo(@"ER-RESPRING skip-lockscreen threw %@", e);
     }
+}
+
+// 1.2.0-89 · relaunch 取证 hook：SpringBoard 正规注销入口被调 → 先抓调用者
+// backtrace 写 folderlog（ER-RELAUNCH 前缀），再放行 %orig。覆盖三个已知变体，
+// 不存在的 selector Logos 只警告不崩溃
+- (void)_relaunchSpringBoardNow:(id)arg {
+    ERWriteBacktraceNote("ER-RELAUNCH _relaunchSpringBoardNow:");
+    ERSPGFolderNote(@"relaunch entry _relaunchSpringBoardNow: hit");
+    %orig;
+}
+- (void)relaunchSpringBoard {
+    ERWriteBacktraceNote("ER-RELAUNCH relaunchSpringBoard");
+    ERSPGFolderNote(@"relaunch entry relaunchSpringBoard hit");
+    %orig;
+}
+- (void)_relaunchSpringBoardIfRequested {
+    ERSPGFolderNote(@"relaunch entry _relaunchSpringBoardIfRequested hit");
+    %orig;
 }
 %end
