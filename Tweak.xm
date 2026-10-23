@@ -35248,7 +35248,10 @@ static void ERInstallSignalHandlers(void) {
     sa.sa_sigaction = ERSignalHandler;
     sa.sa_flags = SA_SIGINFO;
     sigemptyset(&sa.sa_mask);
-    const int sigs[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL };
+    const int sigs[] = { SIGSEGV, SIGBUS, SIGABRT, SIGILL,
+                         SIGHUP, SIGTERM };  // 1.2.0-90 · 补 SIGHUP/SIGTERM：
+    // killall -1 SpringBoard（SIGHUP）是社区插件的经典软注销手法，默认动作即终止、
+    // 无崩溃报告、atexit 不执行 —— 与残余注销（~5-10%、探针全沉默）完全吻合
     for (unsigned long i = 0; i < sizeof(sigs) / sizeof(sigs[0]); i++)
         sigaction(sigs[i], &sa, NULL);
 }
