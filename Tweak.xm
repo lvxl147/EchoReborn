@@ -32874,6 +32874,15 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     SEL ss2 = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
                                     if ([manager respondsToSelector:ss2])
                                         ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss2, iconObj ?: arg, NO);
+                                    // 1.2.0-87 · 提速实验：主动强制布局（探针实锤
+                                    // layoutIconListsWithAnimationType:），让图标视图提前
+                                    // 就绪，而不是干等系统布局节奏（用户目标：跨页 1s → 0.5s）
+                                    SEL lay = NSSelectorFromString(@"layoutIconListsWithAnimationType:");
+                                    if ([manager respondsToSelector:lay]) {
+                                        @try {
+                                            ((void (*)(id, SEL, NSInteger))objc_msgSend)(manager, lay, 0);
+                                        } @catch (__unused NSException *e) { }
+                                    }
                                     SEL cil = NSSelectorFromString(@"currentIconListIndex");
                                     if ([manager respondsToSelector:cil]) {
                                         @try {
@@ -35170,10 +35179,27 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
 }
 %end
 
+// 1.2.0-87 · 全局未捕获异常捕获器：点空白关闭注销 = 干净 respring 且无 .ips
+// → 高度怀疑是未捕获 ObjC 异常被 roothide 引导程序静默 respring。装
+// NSSetUncaughtExceptionHandler 把异常名/原因/调用栈写进 folderlog，让现场自己说话
+static void ERFolderExceptionLogHandler(NSException *exc) {
+    @try {
+        NSMutableString *s = [NSMutableString stringWithFormat:
+            @"EXCEPTION name=%@ reason=%@\n",
+            exc.name ?: @"nil", exc.reason ?: @"nil"];
+        for (NSString *fr in exc.callStackSymbols) [s appendFormat:@"%@\n", fr];
+        ERSPGFolderNote(s);
+    } @catch (__unused NSException *e) { }
+}
+
 %hook SpringBoard
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     %orig;
     @try {
+        static dispatch_once_t onceTokExc;
+        dispatch_once(&onceTokExc, ^{
+            NSSetUncaughtExceptionHandler(ERFolderExceptionLogHandler);
+        });
         if (!ERPreferenceBool(@"Respring.SkipLockscreen", NO)) return;
         Class mgrCls = %c(SBLockScreenManager);
         id mgr = mgrCls ? ((id (*)(id, SEL))objc_msgSend)(mgrCls, @selector(sharedInstance)) : nil;
