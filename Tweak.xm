@@ -32435,8 +32435,9 @@ static id ERSPGFindFolderIcon(id model, NSString *folderId, id *outFolder) {
                 *outFolder = ((id (*)(id, SEL))objc_msgSend)(cached, @selector(folder));
             return cached;
         }
-        id folderObj2 = nil;
-        id icon = ERSPGFindFolderIconUncached(model, folderId, outFolder ?: &folderObj2);
+        __autoreleasing id folderObj2 = nil;
+        id icon = ERSPGFindFolderIconUncached(model, folderId, &folderObj2);
+        if (icon && outFolder) *outFolder = folderObj2;
         if (icon) [gERSPGFolderIconCache setObject:icon forKey:folderId];
         return icon;
     } @catch (__unused NSException *e) {}
