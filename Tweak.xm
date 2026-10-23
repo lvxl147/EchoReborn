@@ -32589,16 +32589,27 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     // 新主候选：枚举 rootFolder.iconLists 找含该图标的 list（页+序），
                     // 用 manager 实锤存在的 iconLocationForList:inFolder:ofRootFolder:
                     // 换算成真 SBIconLocation（"第 X 页"语义，非常量字符串）
+                    // 1.2.0-83 · -82 folderlog 实锤 listFound 一条没有 → 根因：rootFolder
+                    // （SBRootFolder）不响应 iconLists（v70 探针 iconLists=nil 再次实锤），
+                    // 枚举空转。改用 SBRootFolder 实锤存在的 listAtIndex: 逐页循环，
+                    // 页数上界用 lastVisibleNonEmptyListIndex（探针实锤）兜底 49
                     if (!loc && rootFolder && manager) {
-                        SEL ils82 = NSSelectorFromString(@"iconLists");
-                        id lists82 = [rootFolder respondsToSelector:ils82]
-                            ? ((id (*)(id, SEL))objc_msgSend)(rootFolder, ils82) : nil;
-                        if ([lists82 isKindOfClass:[NSArray class]]) {
-                            NSArray *arr82 = (NSArray *)lists82;
-                            for (NSUInteger i = 0; i < arr82.count; i++) {
-                                id lst82 = arr82[i];
+                        SEL las = NSSelectorFromString(@"listAtIndex:");
+                        SEL lvn = NSSelectorFromString(@"lastVisibleNonEmptyListIndex");
+                        NSInteger maxList = -1;
+                        if ([rootFolder respondsToSelector:lvn]) {
+                            @try {
+                                maxList = ((NSInteger (*)(id, SEL))objc_msgSend)(rootFolder, lvn);
+                            } @catch (__unused NSException *e) { maxList = -1; }
+                        }
+                        if (maxList < 0 || maxList > 49) maxList = 49;
+                        SEL gs82 = NSSelectorFromString(@"icons");
+                        for (NSInteger i = 0; i <= maxList && !loc; i++) {
+                            @try {
+                                id lst82 = [rootFolder respondsToSelector:las]
+                                    ? ((id (*)(id, SEL, NSUInteger))objc_msgSend)(rootFolder, las, (NSUInteger)i)
+                                    : nil;
                                 if (!lst82) continue;
-                                SEL gs82 = NSSelectorFromString(@"icons");
                                 id ics82 = [lst82 respondsToSelector:gs82]
                                     ? ((id (*)(id, SEL))objc_msgSend)(lst82, gs82) : nil;
                                 if (![ics82 isKindOfClass:[NSArray class]]) continue;
@@ -32612,11 +32623,11 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     } @catch (__unused NSException *e) { loc = nil; }
                                 }
                                 ERSPGFolderNote([NSString stringWithFormat:
-                                    @"listFound page=%lu idx=%lu locClass=%@",
-                                    (unsigned long)i, (unsigned long)idx82,
+                                    @"listFound page=%ld idx=%lu locClass=%@",
+                                    (long)i, (unsigned long)idx82,
                                     loc ? NSStringFromClass(object_getClass(loc)) : @"nil"]);
-                                if (loc) break;
-                            }
+                                break;
+                            } @catch (__unused NSException *e) { }
                         }
                     }
                     // iconLocations 降兜底（-81 实锤 SBFolderIcon 不响应）
@@ -32853,7 +32864,9 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                         manager, ivs, iconObj ?: arg, loc);
                                 } @catch (__unused NSException *e) { iv = nil; }
                             }
-                            if (!iv && erPollsLeft-- > 0) {
+                            // 1.2.0-83 · loc 非空（真位置已拿到）跳过轮询 → 恢复 -80 即时手感；
+                            // 仅 loc 空时才轮询等 iconView
+                            if (!iv && !loc && erPollsLeft-- > 0) {
                                 dispatch_after(
                                     dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
                                     dispatch_get_main_queue(), erTryOpen);
@@ -32864,8 +32877,20 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                 iv ? NSStringFromClass(object_getClass(iv)) : @"timeout",
                                 (long)(10 - erPollsLeft)]);
                             @try {
-                                ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
-                                    manager, os, iconObj ?: arg, loc, YES, erCompletion);
+                                // 1.2.0-83 · 有真 location 走 SBFolderIcon 实锤的
+                                // launchFromLocation:context:（= 用户手指点击文件夹图标的
+                                // 原生启动入口，翻页/动画/状态全由系统管）；无 loc 才
+                                // openFolderIcon。verify/retry 链共用
+                                SEL lfc = NSSelectorFromString(@"launchFromLocation:context:");
+                                if (loc && (iconObj ?: arg) &&
+                                    [(iconObj ?: arg) respondsToSelector:lfc]) {
+                                    ERSPGFolderNote(@"open via launchFromLocation:context:");
+                                    ((void (*)(id, SEL, id, id))objc_msgSend)(
+                                        iconObj ?: arg, lfc, loc, nil);
+                                } else {
+                                    ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
+                                        manager, os, iconObj ?: arg, loc, YES, erCompletion);
+                                }
                             } @catch (__unused NSException *e) {
                                 ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
                                           NSStringFromClass(object_getClass(e)));
