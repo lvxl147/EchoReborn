@@ -32605,7 +32605,7 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     sERSPGLastFolderOpen = [NSDate date];
                 }
                 if (manager && [manager respondsToSelector:os]) {
-                    id loc = nil;
+                    __block id loc = nil;   // 1.2.0-95 · block 内 realLoc 覆写需要 __block
                     SEL ls = NSSelectorFromString(@"location");
                     if (iconObj && [iconObj respondsToSelector:ls])
                         loc = ((id (*)(id, SEL))objc_msgSend)(iconObj, ls);
