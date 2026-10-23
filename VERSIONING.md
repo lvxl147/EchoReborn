@@ -431,3 +431,10 @@
 - 用户体感："哪里都没点，注销完自动进桌面，和手动点注销一模一样" → 干净退出
 - 取证三件套：①atexit → ER-ATEXIT+backtrace（exit() 必经）②hook _relaunchSpringBoardNow:/relaunchSpringBoard/_relaunchSpringBoardIfRequested → ER-RELAUNCH+调用者backtrace ③主线程心跳 2s/5s 超时 → MAIN HANG
 - 版本 1.2.0-89 / 1002175
+
+## 1.2.0-90（2026-10-23 夜）
+- 单变量实验：卸载 memorycontrold 守护进程 + Enabled=false → 注销 100% → ~5-10%（主帮凶实锤；其配置实为给 SB 提 jetsam 优先级 210，但与抖音 900MB 常驻相互作用的机制待定）
+- 残余注销：探针仍全沉默、无 jetsam、无 .ips → 锁定 killall -1（SIGHUP）/SIGTERM 软注销手法（默认动作终止、无报告、atexit 跳过）
+- 信号捕获器补 SIGHUP/SIGTERM → 下次现场写 SIGNAL sig=1/15
+- roothide 核心组件（jailbreakd/hookd/boomerang）无杀进程字符串；idownloadd 为 roothide 自带 iDownload 调试台（Disabled=true）
+- 版本 1.2.0-90 / 1002180
