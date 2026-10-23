@@ -386,3 +386,10 @@
 - folderlog 三实锤：①每次 `iconLocations selector missing`——SBFolderIcon 不响应 iconLocations，候选链全落空 → loc=(null)；②iconView 轮询全部 `timeout pollsUsed=16`（loc=null 时 iconViewForIcon 恒 nil）→ 每次白等 1.5s = 慢 2-3s 直接原因；③loc=(null) 仍有 ~3/15 of=SBFolder 偶发成功（图标恰在当前页时系统兜底）——所有版本的随机成败都源于此
 - 修复①：location 主候选改为枚举 rootFolder.iconLists 找含该图标的 list（page+idx）→ manager `iconLocationForList:inFolder:ofRootFolder:` 换算真 SBIconLocation（探针实锤存在）；iconLocations/best* 全降兜底；日志 listFound page=%lu idx=%lu locClass=%@
 - 修复②：iconView 轮询 0.1s×15 → 0.05s×10（最长 0.5s）；location 修对后 iconView 应立即就绪，正常路径零等待，恢复 -80 手感
+
+## 1.2.0-83
+- 用户实测 -82：成功率更低、仍慢 1-2s、点空白关闭进安全模式（新证据：loc 残缺时 openFolderIcon 打开的状态连关闭都崩）
+- folderlog：-82 的 listFound 一条没有 → er_folderprobe.txt 实锤 `iconLists=nil (rootFolder=SBRootFolder)`，SBRootFolder 不响应 iconLists，-82 枚举空转
+- 探针金矿（er_folderprobe.txt）：SBRootFolder 有 `listAtIndex:`/`lastVisibleNonEmptyListIndex`；SBFolderIcon 有 `launchFromLocation:context:`（原生点击启动入口）
+- 修复①：list 定位改 rootFolder listAtIndex: 逐页循环（上界 lastVisibleNonEmptyListIndex，兜底 49），找到含图标页 → manager iconLocationForList:inFolder:ofRootFolder: 换算真 location，日志 listFound page/idx/locClass
+- 修复②：loc 非空时跳过 iconView 轮询（触发即开，恢复 -80 手感）；opener 改 launchFromLocation:context:（无 loc 才 openFolderIcon）；verify/retry 链共用
