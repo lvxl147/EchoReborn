@@ -467,3 +467,10 @@
 - 注销主修：folderlog 实锤 launch 传的 loc 恒为常量串 SBIconLocationRoot（__NSCFConstantString）——系统按真实格子位置登记"展开图标"，残缺登记 → 关闭缩回动画崩溃（-80 埋的伏笔）
 - 修复：iconView 就绪后问视图要真实 location（SBIconView.location/_location/iconLocation），只接受非 NSString 对象（Root 常量自然排除），拿到替换 launch 的 loc；realLoc 写日志
 - 版本 1.2.0-95 / 1002189
+
+## 1.2.0-96（2026-10-24 凌晨）
+- -95 实测：手动开/关不注销了（realLoc 修复起效？实为未生效——realLoc=nil 每次都落空）；手势跨页打开第 2-4 次注销
+- 真凶推理：launchFromLocation:context: 恒传 nil context——系统手点的 context 是真实 SBIconInteractionContext（来源图标视图/起始位置，关闭缩回靠它找家），nil context+Root 常量 loc 残缺状态累积后崩溃
+- 主修：打开 API 主路径对调——manager 级 openFolderIcon:location:animated:withCompletion:（-69 实锤真入口，自管展开登记+上下文）为主，launchFromLocation 降兜底；当年弃用只因视图未就绪静默失败，pollsUsed=2 就绪轮询已解决
+- realLoc 探测扩面：iconObj.location + manager bestHomeScreenLocationForIcon:（-95 实锤视图三选择器全落空）
+- 版本 1.2.0-96 / 1002190
