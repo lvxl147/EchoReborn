@@ -32580,21 +32580,39 @@ static void ERSPGOpenFolder(NSString *folderId) {
                     // bestLocationForIcon: / bestHomeScreenLocationForIcon:
                     //（此前试的 locationForIcon:/locationOfIcon: 都不存在 → loc 恒 null）
                     // loc=nil 打开的文件夹状态残缺 = 点空白关闭注销的根源，一并修
-                    if (manager) {
-                        SEL bl = NSSelectorFromString(@"bestLocationForIcon:");
-                        SEL bh = NSSelectorFromString(@"bestHomeScreenLocationForIcon:");
-                        if (!loc && [manager respondsToSelector:bl])
-                            loc = ((id (*)(id, SEL, id))objc_msgSend)(manager, bl, iconObj ?: arg);
-                        if (!loc && [manager respondsToSelector:bh])
-                            loc = ((id (*)(id, SEL, id))objc_msgSend)(manager, bh, iconObj ?: arg);
-                    }
-                    if (!loc && (iconObj ?: arg)) {
+                    // 1.2.0-81 · -80 日志实锤：bestLocationForIcon: 返回的是常量字符串
+                    // SBIconLocationRoot（"往根桌面加新图标"的方法，不是图标本体位置）
+                    // → 优先用 icon.iconLocations 首个（真格子位置）；Root 常量视为无效
+                    if (iconObj ?: arg) {
                         id ico0 = iconObj ?: arg;
                         SEL ils = NSSelectorFromString(@"iconLocations");
                         if ([ico0 respondsToSelector:ils]) {
                             id locs = ((id (*)(id, SEL))objc_msgSend)(ico0, ils);
-                            if ([locs isKindOfClass:[NSArray class]] && [(NSArray *)locs count] > 0)
-                                loc = [(NSArray *)locs firstObject];
+                            if ([locs isKindOfClass:[NSArray class]] && [(NSArray *)locs count] > 0) {
+                                id first = [(NSArray *)locs firstObject];
+                                if (![first isKindOfClass:[NSString class]]) loc = first;
+                                ERSPGFolderNote([NSString stringWithFormat:
+                                    @"iconLocations count=%lu first=%@",
+                                    (unsigned long)[(NSArray *)locs count],
+                                    first ? NSStringFromClass(object_getClass(first)) : @"nil"]);
+                            } else {
+                                ERSPGFolderNote(@"iconLocations unresponsive or not array");
+                            }
+                        } else {
+                            ERSPGFolderNote(@"iconLocations selector missing");
+                        }
+                    }
+                    // best* 仅兜底（Root 常量字符串视为无效）
+                    if (manager) {
+                        SEL bl = NSSelectorFromString(@"bestLocationForIcon:");
+                        SEL bh = NSSelectorFromString(@"bestHomeScreenLocationForIcon:");
+                        if (!loc && [manager respondsToSelector:bl]) {
+                            id l = ((id (*)(id, SEL, id))objc_msgSend)(manager, bl, iconObj ?: arg);
+                            if (l && ![l isKindOfClass:[NSString class]]) loc = l;
+                        }
+                        if (!loc && [manager respondsToSelector:bh]) {
+                            id l = ((id (*)(id, SEL, id))objc_msgSend)(manager, bh, iconObj ?: arg);
+                            if (l && ![l isKindOfClass:[NSString class]]) loc = l;
                         }
                     }
                     if (!loc) {
@@ -32781,11 +32799,33 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         //      永不重试
                         __block NSInteger erRetries = 2;
                         __block BOOL erOpened = NO;
+                        __block NSInteger erPollsLeft = 15;   // 1.2.0-81 · 0.1s×15=1.5s 就绪轮询
                         __block void (^erTryOpen)(void) = nil;
                         void (^erCompletion)(void) = ^{
                             erOpened = YES;
                         };
                         erTryOpen = ^{
+                            // 1.2.0-81 · iconView 就绪轮询（成功率真根因）：翻页后图标
+                            // 视图要等一次布局才创建，就绪前 openFolderIcon 静默失败。
+                            // 每 0.1s 查 iconViewForIcon:location:，出现即开，最长 1.5s。
+                            SEL ivs = NSSelectorFromString(@"iconViewForIcon:location:");
+                            id iv = nil;
+                            if ([manager respondsToSelector:ivs]) {
+                                @try {
+                                    iv = ((id (*)(id, SEL, id, id))objc_msgSend)(
+                                        manager, ivs, iconObj ?: arg, loc);
+                                } @catch (__unused NSException *e) { iv = nil; }
+                            }
+                            if (!iv && erPollsLeft-- > 0) {
+                                dispatch_after(
+                                    dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)),
+                                    dispatch_get_main_queue(), erTryOpen);
+                                return;
+                            }
+                            ERSPGFolderNote([NSString stringWithFormat:
+                                @"iconView=%@ pollsUsed=%ld",
+                                iv ? NSStringFromClass(object_getClass(iv)) : @"timeout",
+                                (long)(15 - erPollsLeft)]);
                             @try {
                                 ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
                                     manager, os, iconObj ?: arg, loc, YES, erCompletion);
