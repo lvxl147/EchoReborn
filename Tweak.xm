@@ -33002,6 +33002,23 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                     if (!realLoc && [iv respondsToSelector:lq3]) {
                                         @try { realLoc = ((id (*)(id, SEL))objc_msgSend)(iv, lq3); } @catch (__unused NSException *e) { realLoc = nil; }
                                     }
+                                    // 1.2.0-96 · -95 实锤三个视图选择器全落空（realLoc=nil）→
+                                    // 扩面：icon 本体 location + manager bestHomeScreenLocationForIcon:
+                                    if (!realLoc) {
+                                        SEL lq4 = NSSelectorFromString(@"location");
+                                        id iconTry = iconObj ?: arg;
+                                        if (iconTry && [iconTry respondsToSelector:lq4]) {
+                                            @try { realLoc = ((id (*)(id, SEL))objc_msgSend)(iconTry, lq4); } @catch (__unused NSException *e) { realLoc = nil; }
+                                        }
+                                    }
+                                    if (!realLoc) {
+                                        SEL lq5 = NSSelectorFromString(@"bestHomeScreenLocationForIcon:");
+                                        if (manager && (iconObj ?: arg) && [manager respondsToSelector:lq5]) {
+                                            @try {
+                                                realLoc = ((id (*)(id, SEL, id))objc_msgSend)(manager, lq5, iconObj ?: arg);
+                                            } @catch (__unused NSException *e) { realLoc = nil; }
+                                        }
+                                    }
                                     if (realLoc && [realLoc isKindOfClass:[NSString class]]) realLoc = nil;
                                     if (realLoc) {
                                         ERSPGFolderNote([NSString stringWithFormat:
@@ -33015,17 +33032,34 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                             (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                                     }
                                 }
-                                SEL lfc = NSSelectorFromString(@"launchFromLocation:context:");
-                                if (loc && (iconObj ?: arg) &&
-                                    [(iconObj ?: arg) respondsToSelector:lfc]) {
+                                // 1.2.0-96 · 打开 API 主路径对调（手势 2-4 次注销主修）：
+                                // -83~95 走 launchFromLocation:context: 且 context 恒 nil——
+                                // 系统手点的 context 是真实 SBIconInteractionContext（记录
+                                // 来源图标视图/起始位置，关闭缩回动画靠它找"家"）。nil
+                                // context+Root 常量 loc 第 1 次侥幸通过，残缺状态累积后
+                                // 第 2-4 次关闭必崩。manager 级 openFolderIcon（-69 实锤
+                                // 真入口）自己管理展开登记+上下文，当年弃用只因视图未
+                                // 就绪时静默失败——现在 pollsUsed=2 就绪轮询已解决。
+                                // launchFromLocation 降为兜底（openFolderIcon 不可用时）
+                                if (manager && [manager respondsToSelector:os]) {
                                     ERSPGFolderNote([NSString stringWithFormat:
-                                        @"open via launchFromLocation:context: t=%.0fms",
+                                        @"open via openFolderIcon(animated) t=%.0fms",
                                         (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
-                                    ((void (*)(id, SEL, id, id))objc_msgSend)(
-                                        iconObj ?: arg, lfc, loc, nil);
-                                } else {
                                     ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
                                         manager, os, iconObj ?: arg, loc, YES, erCompletion);
+                                } else {
+                                    SEL lfc = NSSelectorFromString(@"launchFromLocation:context:");
+                                    if (loc && (iconObj ?: arg) &&
+                                        [(iconObj ?: arg) respondsToSelector:lfc]) {
+                                        ERSPGFolderNote([NSString stringWithFormat:
+                                            @"open via launchFromLocation:context: (fallback) t=%.0fms",
+                                            (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
+                                        ((void (*)(id, SEL, id, id))objc_msgSend)(
+                                            iconObj ?: arg, lfc, loc, nil);
+                                    } else {
+                                        ((void (*)(id, SEL, id, id, BOOL, id))objc_msgSend)(
+                                            manager, os, iconObj ?: arg, loc, YES, erCompletion);
+                                    }
                                 }
                             } @catch (__unused NSException *e) {
                                 ERLogInfo(@"SPG-FOLDER threw openFolderIcon:location:… %@",
