@@ -399,3 +399,12 @@
 - 修复：一律等 iconView 就绪再 launch（轮询 0.05s×40=2s，就绪瞬间即开零延迟）；重试 2→1（连发 launch 是点空白注销嫌疑）
 - prefs：系统增强子页录屏设置/锁屏音乐卡片下新增「注销设置项」卡片——开关「注销不锁屏」（Respring.SkipLockscreen，默认关，lock.open 图标），本版仅 UI，功能下版接（用户自己找插件参考）
 - push 脚本补 push9/SystemEnhance.plist
+
+## 1.2.0-85
+- 用户实测 -84：成功率仍 1/20-30；注销规律——立刻开立刻点空白必注销，停留 2-5s 不注销
+- folderlog：成功案例 pollsUsed=0（图标已在当前页），失败案例 pollsUsed=41 全超时（2s 视图都不出现）→ 疑似 scrollToIconListContainingIcon 没真正落地或布局被打断
+- 修复：轮询 4s（0.05×80）+ 每 1s 重发一次翻页 + 每 1s 记 currentIconListIndex 对比目标页（page=2）
+- 注销不锁屏功能（用户提供参考插件 byg.iosios.net.zhuxiao_0.0.3 / NoPassAfterRespringSafe，已反汇编破解）：
+  ① %hook SBBootDefaults dontLockAfterCrash（+/- 两个变体）开关开时返 YES
+  ② %hook SpringBoard applicationDidFinishLaunching: 尾部 [SBLockScreenManager sharedInstance].coverSheetViewController setAuthenticated:YES
+  开关 Respring.SkipLockscreen（-84 已加 UI），关=全部 %orig
