@@ -165,6 +165,40 @@
 			<string>隐藏系统锁屏音乐</string>
 		</dict>
 
+		<!-- 1.2.0-84 · 注销设置项：注销跳过锁屏直接回桌面（本版仅 UI，功能下版接）。位置：锁屏音乐卡片与录屏设置之间 -->
+		<dict>
+			<key>cell</key>
+			<string>PSGroupCell</string>
+			<key>footerText</key>
+			<string>开启后，注销将跳过锁屏界面，直接进入桌面（功能将在后续版本生效）。</string>
+			<key>label</key>
+			<string>注销设置项</string>
+		</dict>
+		<dict>
+			<key>PostNotification</key>
+			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>cell</key>
+			<string>PSSwitchCell</string>
+			<key>default</key>
+			<false/>
+			<key>defaults</key>
+			<string>com.strive.echoreborn.preferences</string>
+			<key>erIcon</key>
+			<string>lock.open</string>
+			<key>erIconColor</key>
+			<string>blue</string>
+			<key>erIconSymbols</key>
+			<array>
+				<string>lock.open</string>
+				<string>lock</string>
+				<string>arrow.uturn.forward.circle</string>
+			</array>
+			<key>key</key>
+			<string>Respring.SkipLockscreen</string>
+			<key>label</key>
+			<string>注销不锁屏</string>
+		</dict>
+
 		<!-- 1.0.9-175 · 录屏设置：无延迟开始录屏（跳过 3 秒倒计时）+ 自动收起控制中心 -->
 		<dict>
 			<key>cell</key>
@@ -197,40 +231,6 @@
 			<string>CCRecord.NoDelay</string>
 			<key>label</key>
 			<string>录屏无延迟</string>
-		</dict>
-
-		<!-- 1.2.0-84 · 注销设置项：注销跳过锁屏直接回桌面（本版仅 UI，功能下版接） -->
-		<dict>
-			<key>cell</key>
-			<string>PSGroupCell</string>
-			<key>footerText</key>
-			<string>开启后，注销将跳过锁屏界面，直接进入桌面（功能将在后续版本生效）。</string>
-			<key>label</key>
-			<string>注销设置项</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>erIcon</key>
-			<string>lock.open</string>
-			<key>erIconColor</key>
-			<string>blue</string>
-			<key>erIconSymbols</key>
-			<array>
-				<string>lock.open</string>
-				<string>lock</string>
-				<string>arrow.uturn.forward.circle</string>
-			</array>
-			<key>key</key>
-			<string>Respring.SkipLockscreen</string>
-			<key>label</key>
-			<string>注销不锁屏</string>
 		</dict>
 		<dict>
 			<key>cell</key>
