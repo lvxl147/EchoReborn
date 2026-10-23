@@ -32943,8 +32943,13 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                                 (CACurrentMediaTime() - gERSPGOpenT0) * 1000.0]);
                                         } @catch (__unused NSException *e) { }
                                     }
-                                    // 1.2.0-85 · 每 1s 重发一次翻页（保留兜底）
-                                    if (erPollN % 20 == 0) {
+                                    // 1.2.0-94 · 翻页重发提前：-93 folderlog 实锤打开瞬间的
+                                    // 第一次 scrollTo 被吞（松手瞬间 SB 手势/分页状态机未
+                                    // 交还控制权），iconView 要等 poll#20 重发翻页才就绪
+                                    // （pollsUsed=20 t=1100ms；同页打开 pollsUsed=0 t=2ms）。
+                                    // poll#2(~0.1s)/poll#6(~0.3s) 各补发一次（幂等），预期
+                                    // 1.1s → ~0.3s；curList 每个重发点都记录
+                                    if (erPollN == 2 || erPollN == 6 || erPollN % 20 == 0) {
                                         SEL ss2 = NSSelectorFromString(@"scrollToIconListContainingIcon:animate:");
                                         if ([manager respondsToSelector:ss2])
                                             ((void (*)(id, SEL, id, BOOL))objc_msgSend)(manager, ss2, iconObj ?: arg, NO);
@@ -35273,7 +35278,14 @@ static void ERFolderExceptionLogHandler(NSException *exc) {
 // backtrace_symbols_fd，把信号号、出错地址、完整用户态调用栈写进 folderlog，
 // 然后恢复默认处理并 re-raise（保留系统正常崩溃/重启流程）
 static void ERSignalHandler(int sig, siginfo_t *info, void *uctx) {
-    int fd = open("/var/mobile/Documents/er_folderlog.txt",
+    // 1.2.0-94 · 关键修复：裸 open() 的 /var/mobile/... 在 roothide SB 内
+    // 未被路径翻译（ObjC 侧写入实际落在 /rootfs/private/var/mobile/...），
+    // handler 一直 open 失败静默丢弃 → SIGSEGV(-11) 现场从未记录。
+    // 先试 rootfs 绝对路径，失败再回退原路径
+    int fd = open("/rootfs/private/var/mobile/Documents/er_folderlog.txt",
+                  O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd < 0)
+        fd = open("/var/mobile/Documents/er_folderlog.txt",
                   O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) {
         char buf[192];
@@ -35316,7 +35328,9 @@ static void ERWriteBacktraceNote(const char *tag) {
     int cnt = backtrace(frames, 128);
     char **syms = backtrace_symbols(frames, cnt);
     if (!syms) return;
-    FILE *f = fopen("/var/mobile/Documents/er_folderlog.txt", "a");
+    // 1.2.0-94 · 双路径（同信号 handler）：rootfs 优先，原路径回退
+    FILE *f = fopen("/rootfs/private/var/mobile/Documents/er_folderlog.txt", "a");
+    if (!f) f = fopen("/var/mobile/Documents/er_folderlog.txt", "a");
     if (f) {
         fprintf(f, "%s tid=%p\n", tag, (void *)pthread_self());
         for (int i = 0; i < cnt; i++) fprintf(f, "%s [%d] %s\n", tag, i, syms[i]);
