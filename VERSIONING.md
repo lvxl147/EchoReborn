@@ -380,3 +380,9 @@
 - 修复①：location 候选链改为 icon.iconLocations 首个优先（真格子位置；respondsToSelector 含继承，-80 时被 best* 抢先永远轮不到），Root 常量字符串视为无效跳过；附 iconLocations count/first 日志
 - 修复②（成功率真根因）：翻页后图标视图要等一次布局才创建，就绪前 openFolderIcon 静默失败 → 打开前轮询 manager iconViewForIcon:location: 每 0.1s 一次最长 1.5s，出现即开；iconView 类名/pollsUsed 记日志
 - 修复③：ⓘ 定时器 0.6/1.2→0.25/0.6s（-78 实锤异常已修，1 秒延迟是定时器太晚）；间距 6→3pt
+
+## 1.2.0-82
+- 用户实测 -81：成功率仍 1-2/20；触发到打开 2-3 秒不可接受；ⓘ 大小/间距已解决
+- folderlog 三实锤：①每次 `iconLocations selector missing`——SBFolderIcon 不响应 iconLocations，候选链全落空 → loc=(null)；②iconView 轮询全部 `timeout pollsUsed=16`（loc=null 时 iconViewForIcon 恒 nil）→ 每次白等 1.5s = 慢 2-3s 直接原因；③loc=(null) 仍有 ~3/15 of=SBFolder 偶发成功（图标恰在当前页时系统兜底）——所有版本的随机成败都源于此
+- 修复①：location 主候选改为枚举 rootFolder.iconLists 找含该图标的 list（page+idx）→ manager `iconLocationForList:inFolder:ofRootFolder:` 换算真 SBIconLocation（探针实锤存在）；iconLocations/best* 全降兜底；日志 listFound page=%lu idx=%lu locClass=%@
+- 修复②：iconView 轮询 0.1s×15 → 0.05s×10（最长 0.5s）；location 修对后 iconView 应立即就绪，正常路径零等待，恢复 -80 手感
