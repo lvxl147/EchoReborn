@@ -32587,6 +32587,48 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                 loc = ((id (*)(id, SEL, id))objc_msgSend)(src, loi, iconObj ?: arg);
                         }
                     }
+                    // 1.2.0-79 · 继续补候选：model/manager 的 iconLists 逐页找
+                    // locationOfIcon:（-71 只实锤了 rootFolder 不响应 iconLists）
+                    if (!loc) {
+                        SEL ils = NSSelectorFromString(@"iconLists");
+                        for (id src in @[model, manager]) {
+                            if (!src || loc || ![src respondsToSelector:ils]) continue;
+                            id lists = ((id (*)(id, SEL))objc_msgSend)(src, ils);
+                            if ([lists respondsToSelector:@selector(allObjects)])
+                                lists = [(id)lists allObjects];
+                            if (![lists isKindOfClass:[NSArray class]]) continue;
+                            SEL loi2 = NSSelectorFromString(@"locationOfIcon:");
+                            for (id list in lists) {
+                                if ([list respondsToSelector:loi2]) {
+                                    loc = ((id (*)(id, SEL, id))objc_msgSend)(list, loi2, iconObj ?: arg);
+                                    if (loc) break;
+                                }
+                            }
+                        }
+                    }
+                    // 1.2.0-79 · 一次性方法表探针：把 rootFolder/model/manager/iconObj
+                    // 上所有含 "ocatio" 的方法名 dump 进 folderlog，拿准真 location API
+                    {
+                        static dispatch_once_t onceTok;
+                        dispatch_once(&onceTok, ^{
+                            NSMutableString *dump = [NSMutableString string];
+                            for (id src in @[rootFolder, model, manager, iconObj]) {
+                                if (!src) continue;
+                                Class cls = object_getClass(src);
+                                [dump appendFormat:@"probe %@:", NSStringFromClass(cls)];
+                                unsigned int n = 0;
+                                Method *ms = class_copyMethodList(cls, &n);
+                                for (unsigned int i = 0; i < n; i++) {
+                                    NSString *nm = NSStringFromSelector(method_getName(ms[i]));
+                                    if ([nm lowercaseString].rangeOfString:@"ocatio"].location != NSNotFound)
+                                        [dump appendFormat:@" %@", nm];
+                                }
+                                free(ms);
+                                [dump appendString:@"\n"];
+                            }
+                            ERSPGFolderNote(dump);
+                        });
+                    }
                     ERSPGFolderNote([NSString stringWithFormat:
                         @"loc=%@ class=%@ id=%@",
                         loc ? @"nonnull" : @"null",
