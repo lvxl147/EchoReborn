@@ -32845,7 +32845,6 @@ static void ERSPGOpenFolder(NSString *folderId) {
                         //      根因 = 成功打开后用户快速关闭，排队中的重试把 openFolderIcon
                         //      打在关闭动画里。传入 completion 标记 erOpened，打开过就
                         //      永不重试
-                        __block NSInteger erRetries = 1;       // 1.2.0-84 · 2→1（-83 日志：连发 2-3 次 launch 是点空白注销嫌疑）
                         __block BOOL erOpened = NO;
                         __block NSInteger erPollsLeft = 80;   // 1.2.0-85 · 0.05s×80=4s（-84 实锤部分场景 2s 内视图都没出现）
                         __block NSInteger erPollN = 0;        // 1.2.0-85 · 轮询计数（每 1s 重发翻页 + 记 currentIconListIndex）
@@ -32944,16 +32943,16 @@ static void ERSPGOpenFolder(NSString *folderId) {
                                         ERSPGFolderNote([NSString stringWithFormat:
                                             @"retry skip busy id=%@", folderId]);
                                         erTryOpen = nil;
-                                    } else if (erRetries-- > 0) {
-                                        ERLogInfo(@"SPG-FOLDER openedFolder=nil, retry id=%@", folderId);
-                                        ERSPGFolderNote([NSString stringWithFormat:
-                                            @"retry id=%@ left=%ld", folderId, (long)erRetries]);
-                                        erTryOpen();
                                     } else {
-                                        ERLogInfo(@"SPG-FOLDER openedFolder=nil, give up id=%@", folderId);
+                                        // 1.2.0-86 · 彻底移除重试：主日志实锤"立刻点空白注销"
+                                        // 机制 = 用户秒关后 verify 读到 of=nil → retry 在关闭
+                                        // 过渡中重发 launch → SB 状态崩 → respring。成功率已
+                                        // 100%（-85），of=nil 只可能是"开成功后已被用户关闭"，
+                                        // 重试没有任何正面价值
+                                        ERLogInfo(@"SPG-FOLDER of=nil no-retry (assume user closed) id=%@", folderId);
                                         ERSPGFolderNote([NSString stringWithFormat:
-                                            @"give up id=%@", folderId]);
-                                        erTryOpen = nil;   // 终态才释放自引用
+                                            @"no-retry give up id=%@", folderId]);
+                                        erTryOpen = nil;
                                     }
                                 });
                         };
