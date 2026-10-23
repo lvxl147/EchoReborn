@@ -1190,14 +1190,17 @@ static void ERGestureInstallGroupInfo(ERGestureController *self) {
     if ([host viewWithTag:7601]) return;   // 已装过
     UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
     btn.tag = 7601;
-    UIImage *img = [UIImage systemImageNamed:@"info.circle"];
+    // 1.2.0-80 · 用户反馈 ⓘ 偏大：按组头文字字号生成 SF Symbol（文字同高）
+    UIFont *hfont = found.font ?: [UIFont systemFontOfSize:13.0];
+    UIImage *img = [UIImage systemImageNamed:@"info.circle"
+        withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
     if (!img) img = [UIImage imageNamed:@"info.circle"];
     [btn setImage:img forState:UIControlStateNormal];
     btn.tintColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.55],
                                [UIColor colorWithRed:0.25 green:0.55 blue:1.00 alpha:1.0]);
     [btn addTarget:self action:@selector(erGroupInfoTapped)
       forControlEvents:UIControlEventTouchUpInside];
-    CGFloat side = 18.0;
+    CGFloat side = ceil(hfont.lineHeight);
     btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 6.0,
                            CGRectGetMidY(found.frame) - side / 2.0, side, side);
     [host addSubview:btn];
