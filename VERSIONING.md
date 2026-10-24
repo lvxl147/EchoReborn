@@ -615,3 +615,12 @@
   ③ ERBootLog 目录创建（-7）
 - 下一步（1.2.1-16 规划）：installQuickAccessHostOnOverlay: 挂载点从 CCUIHeaderPocketView
   改到原生模块网格容器，删除旧开环补偿全链
+
+## 1.2.1-16（1002116）· 基线再纠正：还原 1.2.0-97 + 保留手势修复
+- **用户实锤**：控制中心一系列 bug 的源头是 1.2.1-1 的「编辑模式降负」五项优化（BFS 缓存/代际失效/帧级跳过/mask 复用/CATransaction），要全部还原；1.2.1-2 的手势崩溃修复要保留
+- 本版 = git aaf0d9766a（1.2.0-97）为基底（-1 优化零残留，已 grep 验证），移植三件事：
+  ① 1.2.1-2 手势自毒免疫三修法（ERSPGSCOImpIsOwn + LookupOrig 跳过自身 IMP + AttachSCOHook/广谱扫描不存不挂）——防 490 层递归栈爆
+  ② 横屏音量/亮度 1×3 钳制（自 -4，slider 类模块横屏高度钳 2 行）
+  ③ ERBootLog 建目录（自 -7）
+- 不带入：-1 全部优化、-3~-15 胶囊补偿线、翻页点缓存活性校验（依赖 -1 缓存基础设施，随优化一起还原后自然 moot）
+- 待办：操作按钮重构（host 离开 CCUIHeaderPocketView 顶部 chrome，进原生模块网格）在稳定基线验证后另版进行
