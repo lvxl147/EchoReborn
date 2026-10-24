@@ -510,3 +510,21 @@
   ③ 补偿量升级：优先用实测压低量 drift=layoutWinY-baseline（开环单次读取，layoutWinY 已剥离自身 ty，无反馈回路不发散；夹取 [0,44]）；drift≤2pt 时退回旧常量 23.5 兜底
 - QABTN-COMP 日志增加 capsule/drift 字段，装机后可凭日志复核
 - 版本 1.2.1-3 / 1002103
+
+## 1.2.1-4（2026-10-24 下午）—— 翻页点消失回归修复 + 横屏 slider 钳制 + 日志落盘根治
+- 用户实测反馈：①1.2.1-3 胶囊补偿仍不生效（+号/电源仍下移）②右侧竖排翻页点消失（回归）
+- 翻页点根因：1.2.1-1 的 ERCollectModuleControllers 缓存失效点只覆盖编辑路径 7 个变化点，
+  CC 重开/provider 重建等非编辑路径改了模块集合却没失效 → normalizePagedLayoutForOverlay
+  拿到陈旧缩水列表 → highestPage 缩水 → gERPageCount=1 → updatePageIndicatorsForOverlay
+  的 host.hidden（gERPageCount<=1）把翻页点整体隐藏
+- 修复三层：①缓存命中时活性校验（任一 controller.view.superview 为空即丢弃重收）
+  ②normalizePagedLayoutForOverlay 入口强制失效（低频路径必须新鲜）③缩水防御重试一次
+- 问题 2 保守钳制：横屏态无自定义尺寸的 slider 类模块（audio/displaymodule）高度钳 2 行，
+  两处 hook 同步钳制（moduleLayoutSizeForContentModuleContext: + layoutView:layoutRectForSubview:）；
+  用户自定义过尺寸的完全尊重。等日志实锤后再精修
+- 日志落盘根治：实测 SpringBoard 写 /var/mobile/Library/Logs/EchoReborn 一直失败
+  （目录需 root 预建）→ echoreborn.log 从未落盘过。写失败自动切 /var/mobile/Documents/echoreborn.log
+  备用路径（Documents 已验证可写）；ERLogPath 智能选择存在的文件
+- 1.2.1-3 复盘：代码确认已上设备（QABTN-COMP/capsule=%d 以 UTF-16 存在 dylib，之前
+  ASCII 搜索误判为旧包）。补偿仍不生效待日志（capsule=/drift= 字段）实锤后精修
+- 版本 1.2.1-4 / 1002104
