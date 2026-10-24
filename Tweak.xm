@@ -34157,11 +34157,26 @@ static BOOL ERSPGSCOShouldBlock(id self) {
     return YES;
 }
 
+// 1.2.1-2 · 自毒免疫：广谱扫描曾把「继承方法的 orig」存成了我们自己的 hook
+// （子类 S 的 class_getInstanceMethod 拿到的是已挂钩父类的 IMP），LookupOrig
+// 查到后调自己 → 无限递归 → 栈溢出 SIGSEGV（.ips SpringBoard-2026-10-24-124602
+// 实锤：490 层同帧递归 + stringByAppendingFormat，d0/d1 = impactOccurredWithIntensity:）。
+// 修法①：查到的 IMP 是我们任何 hook 自身 → 跳过该条目继续向父类找。
+static void ERSPGSysHaptHook1(id self, SEL _cmd);
+static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i);
+static void ERSPGSysHaptHook3(id self, SEL _cmd, NSInteger t);
+static BOOL ERSPGSCOImpIsOwn(IMP p) {
+    return p == (IMP)ERSPGSCOOff1 || p == (IMP)ERSPGSCOOff2
+        || p == (IMP)ERSPGSysHaptHook1 || p == (IMP)ERSPGSysHaptHook2 || p == (IMP)ERSPGSysHaptHook3;
+}
 static IMP ERSPGSCOLookupOrig(id self, SEL _cmd) {
     Class c = object_getClass(self);
     while (c) {
         NSValue *ov = gERSPGSCOOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
-        if (ov) return (IMP)ov.pointerValue;
+        if (ov) {
+            IMP p = (IMP)ov.pointerValue;
+            if (!ERSPGSCOImpIsOwn(p)) return p;
+        }
         c = class_getSuperclass(c);
     }
     return NULL;
@@ -34191,6 +34206,8 @@ static void ERSPGAttachSCOHook(Class cls) {
     for (int i = 0; i < 2; i++) {
         Method m = class_getInstanceMethod(cls, items[i].sel);
         IMP orig = m ? method_getImplementation(m) : NULL;
+        // 1.2.1-2 · 修法②：orig 已是我们 hook（纯继承自已挂钩父类）→ 不存不挂
+        if (orig && ERSPGSCOImpIsOwn(orig)) continue;
         NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
         if (orig && !gERSPGSCOOrig[key])
             gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
@@ -34289,6 +34306,8 @@ static void ERSPGAttachSysHaptHooks(void) {
             Method m = class_getInstanceMethod(c, it[k].sel);
             if (!m) continue;
             IMP orig = method_getImplementation(m);
+            // 1.2.1-2 · 修法③：同款防御——orig 是自己 hook（继承自已挂钩父类）→ 跳过
+            if (ERSPGSCOImpIsOwn(orig)) continue;
             NSString *key = [n stringByAppendingFormat:@"#%@", NSStringFromSelector(it[k].sel)];
             if (!gERSPGSCOOrig[key]) gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
             if (!class_addMethod(c, it[k].sel, it[k].imp, it[k].types))
