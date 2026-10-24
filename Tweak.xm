@@ -4185,12 +4185,8 @@ static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
 static const void *kERQAAnchorOffsetKey = &kERQAAnchorOffsetKey;   // 1.2.1-10 · 几何跟随的锚偏移
 static const void *kERQARefPortraitKey = &kERQARefPortraitKey;     // 1.2.1-11 · 竖屏冻结目标 Y（窗口绝对坐标）
 static const void *kERQARefLandscapeKey = &kERQARefLandscapeKey;   // 1.2.1-11 · 横屏冻结目标 Y
-// 1.2.1-13 · 双 REF：绿点（权限胶囊紧凑态）在场/不在场各一个冻结值。
-//   1.2.1-12 死锁实证：用户开控制中心时绿点常在场（相机/麦克风使用中），REF-DEFER 无限循环
-//   → 永不标定 → 永不补偿。实测两个稳定态：layout≈69（无绿点）、layout≈95（有绿点，差≈26pt）。
-//   → 接受两个稳定态，各自钉死：有绿点用 capsule-REF，无绿点用 normal-REF。
-static const void *kERQARefPortraitCapsuleKey = &kERQARefPortraitCapsuleKey;   // 竖屏 · 绿点在场冻结值
-static const void *kERQARefLandscapeCapsuleKey = &kERQARefLandscapeCapsuleKey; // 横屏 · 绿点在场冻结值
+// 1.2.1-14 注：-13 的 capsule 双 REF 键已废弃——compact 探针在 CC 打开时恒真（灵动岛让位收紧），
+// 双 REF 选错分支且 REF 被动画瞬态污染（111.0 → ty 撞 60 上限）。现每方向单 REF，CC 关闭重标定。
 // 1.0.9-19 · 按钮「开环补偿」的两个独立偏移量（用户确认：横竖屏显示位置不同，必须分开）。
 // 依据：20260921-2009 日志实测 —— 正常时 hostWinY=45.7、胶囊在场时稳定在 69.2，差值 ≈ 23.5pt。
 // 开环 = 只用「是否被压低」这个状态决定偏移，位移取固定常量：
@@ -4365,12 +4361,8 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     hbWinY = [host.superview convertPoint:host.frame.origin toView:window].y;
                     // 1.0.9-17 · 同时记录 transform.ty：校正若写入失败（被系统重置），这里会一直是 0。
                     hbTransformTY = host.transform.ty;
-                    // 1.2.1-11 · 心跳字段语义更新：hbBase 复用为当前方向的冻结目标 REF
-                    // 1.2.1-13 · 心跳 REF 读取同样按绿点状态选双 REF 之一
-                    BOOL hbCompact = ERCapsuleCompactPresent();
-                    void *hbRefKey = ERLandscapePresentationActive()
-                        ? (hbCompact ? (void *)kERQARefLandscapeCapsuleKey : (void *)kERQARefLandscapeKey)
-                        : (hbCompact ? (void *)kERQARefPortraitCapsuleKey : (void *)kERQARefPortraitKey);
+                    // 1.2.1-14 · 心跳 REF 读取改回单 REF（capsule 键废弃）
+                    void *hbRefKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
                     NSNumber *hbRef = objc_getAssociatedObject(host, hbRefKey);
                     hbBase = hbRef ? hbRef.doubleValue : -1.0;
                 }
@@ -4395,8 +4387,6 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     if (!sQARefCleared) {
                         objc_setAssociatedObject(host, (void *)kERQARefPortraitKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                         objc_setAssociatedObject(host, (void *)kERQARefLandscapeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                        static CGFloat sPrev1b = -999, sPrev2b = -999;
-                        sPrev1b = -999; sPrev2b = -999;
                         sQARefCleared = YES;
                         ERQAMirrorAppend(@"REF-CLEAR（CC 关闭，下次打开重标定）");
                     }
