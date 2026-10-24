@@ -468,11 +468,6 @@ static const void *kEREditGridBaseOriginKey = &kEREditGridBaseOriginKey;
 // 1.0.6-9（第 1 条）：编辑网格对齐探针的去重状态。
 static const void *kEREditGridProbeStateKey = &kEREditGridProbeStateKey;
 static const void *kERRemoveButtonKey = &kERRemoveButtonKey;
-// 1.2.1-1 · 编辑模式降负的帧级跳过缓存 key
-static const void *kERModuleLastChromeFrameKey = &kERModuleLastChromeFrameKey;
-static const void *kERModuleLastChromeStateKey = &kERModuleLastChromeStateKey;
-static const void *kERAddControlLastBoundsKey = &kERAddControlLastBoundsKey;
-static const void *kERAddControlLastInsetsKey = &kERAddControlLastInsetsKey;
 static const void *kERRemoveModuleViewKey = &kERRemoveModuleViewKey;
 static const void *kERDragPreviewTargetKey = &kERDragPreviewTargetKey;
 static const void *kERDragProxyKey = &kERDragProxyKey;
@@ -6272,40 +6267,21 @@ static void ERHapticWithStrength(NSInteger strength) {
     [gTapHapticGenerator impactOccurred];
 }
 
-// 1.2.1-1 · 编辑模式降负（第 3 项）：模块 identifier 代际缓存。
-// identifier 只在模块重建时才会变，但 ERModuleIdentifier 每次都走 2~4 层
-// KVC（moduleIdentifier/_moduleIdentifier/module.contentModuleContext…），
-// 编辑态 display link 每帧 × 每模块都在跑 → 挂关联对象按代际缓存。
-// 代际号 gERModuleListGeneration 在模块集合变化点递增（见 ERCollectModuleControllers）。
-static NSUInteger gERModuleListGeneration = 1;
-static const void *kERIdentifierCacheValKey = &kERIdentifierCacheValKey;
-static const void *kERIdentifierCacheGenKey = &kERIdentifierCacheGenKey;
 static NSString *ERModuleIdentifier(UIViewController *controller) {
-    if (!controller) return nil;
-    NSNumber *cachedGen = objc_getAssociatedObject(controller, kERIdentifierCacheGenKey);
-    NSString *cachedVal = objc_getAssociatedObject(controller, kERIdentifierCacheValKey);
-    if (cachedGen && cachedVal && cachedGen.unsignedIntegerValue == gERModuleListGeneration) return cachedVal;
-    NSString *resolved = nil;
     NSArray<NSString *> *keys = @[@"moduleIdentifier", @"_moduleIdentifier"];
     for (NSString *key in keys) {
         @try {
             id value = [controller valueForKey:key];
-            if ([value isKindOfClass:[NSString class]] && [value length]) { resolved = value; break; }
+            if ([value isKindOfClass:[NSString class]] && [value length]) return value;
         } @catch (__unused NSException *exception) {}
     }
-    if (!resolved) {
-        @try {
-            id module = [controller valueForKey:@"module"];
-            id context = [module valueForKey:@"contentModuleContext"];
-            id value = [context valueForKey:@"moduleIdentifier"];
-            if ([value isKindOfClass:[NSString class]]) resolved = value;
-        } @catch (__unused NSException *exception) {}
-    }
-    if (resolved) {
-        objc_setAssociatedObject(controller, kERIdentifierCacheValKey, resolved, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(controller, kERIdentifierCacheGenKey, @(gERModuleListGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    return resolved;
+    @try {
+        id module = [controller valueForKey:@"module"];
+        id context = [module valueForKey:@"contentModuleContext"];
+        id value = [context valueForKey:@"moduleIdentifier"];
+        if ([value isKindOfClass:[NSString class]]) return value;
+    } @catch (__unused NSException *exception) {}
+    return nil;
 }
 
 static UIViewController *ERModuleControllerForView(UIView *view) {
@@ -9105,41 +9081,8 @@ static void ERSliderReadoutTick(UIView *slider, float value) {
     ERSliderReadoutBegin(slider);
 }
 
-// 1.2.1-1 · 编辑模式降负（第 2 项）：BFS 结果按 overlay 缓存 + 代际失效。
-// 编辑态 display link 每帧对每个 overlay 跑一次全量 BFS（childViewControllers
-// 递归收集），帧率随页数/模块数线性劣化 → 缓存列表，模块集合变化点调
-// ERInvalidateModuleListCache() 递增代际使全部失效。
-static NSMutableDictionary<NSValue *, NSArray<UIViewController *> *> *gERModuleListCache = nil;
-static NSMutableDictionary<NSValue *, NSNumber *> *gERModuleListCacheGen = nil;
-static void ERInvalidateModuleListCache(void) { gERModuleListGeneration++; }
-
 static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root) {
     if (!root) return @[];
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        gERModuleListCache = [NSMutableDictionary dictionary];
-        gERModuleListCacheGen = [NSMutableDictionary dictionary];
-    });
-    NSValue *key = [NSValue valueWithNonretainedObject:root];
-    NSNumber *gen = [gERModuleListCacheGen objectForKey:key];
-    if (gen && gen.unsignedIntegerValue == gERModuleListGeneration) {
-        NSArray<UIViewController *> *hit = [gERModuleListCache objectForKey:key];
-        if (hit) {
-            // 1.2.1-15 · 活性校验（自 1.2.1-4 移植，翻页点消失回归的修复）：
-            // 失效点只覆盖编辑路径的 7 个变化点，CC 重开 / provider 重建等
-            // 非编辑路径改了模块集合却没失效 → 命中陈旧缓存（视图已 detach）→
-            // normalizePagedLayoutForOverlay 拿到缩水列表 → gERPageCount 被算成 1
-            // → 翻页点整体隐藏。命中后抽查每个 controller 的 view 是否仍在视图树：
-            // 任一 detach 即视为过期，丢弃缓存重收集。
-            BOOL stale = NO;
-            for (UIViewController *module in hit) {
-                if (!module || !module.view.superview) { stale = YES; break; }
-            }
-            if (!stale) return hit;
-            [gERModuleListCache removeObjectForKey:key];
-            [gERModuleListCacheGen removeObjectForKey:key];
-        }
-    }
     NSMutableArray *result = [NSMutableArray array];
     NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
     while (queue.count) {
@@ -9148,10 +9091,7 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
         if (candidate != root && ERIsModuleController(candidate)) [result addObject:candidate];
         [queue addObjectsFromArray:candidate.childViewControllers];
     }
-    NSArray *frozen = [result copy];
-    [gERModuleListCache setObject:frozen forKey:key];
-    [gERModuleListCacheGen setObject:@(gERModuleListGeneration) forKey:key];
-    return frozen;
+    return result;
 }
 
 static UIViewController *ERModuleControllerMatchingObject(UIViewController *overlay, id object) {
@@ -14065,15 +14005,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
 - (void)normalizePagedLayoutForOverlay:(UIViewController *)overlay {
     if (!overlay) return;
     [self syncOwnedDuplicateModulesForOverlay:overlay];
-    // 1.2.1-15 · 双重防御（自 1.2.1-4 移植，翻页点消失回归）：本函数是低频路径
-    // （rebuild/resettle 才跑），收集结果必须新鲜——入口强制失效；若仍拿到的列表
-    // 明显缩水（<2 个但原生 rect 已登记多个），再失效重试一次。
-    ERInvalidateModuleListCache();
     NSArray<UIViewController *> *modules = ERCollectModuleControllers(overlay);
-    if (modules.count < 2 && gERNativeLayoutRects.count >= 2) {
-        ERInvalidateModuleListCache();
-        modules = ERCollectModuleControllers(overlay);
-    }
     if (!modules.count) return;
 
     NSMutableDictionary<NSString *, UIViewController *> *moduleByIdentifier = [NSMutableDictionary dictionary];
@@ -18894,7 +18826,6 @@ static void ERActClsProbe(void) {
 }
 
 - (void)addControlSheetDidSelectIdentifier:(NSString *)identifier fromSheet:(UIViewController *)sheet {
-    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     @try {
         [self erAddControlSheetDidSelectIdentifierCore:identifier fromSheet:sheet];
     } @catch (NSException *exception) {
@@ -18922,7 +18853,6 @@ static void ERActClsProbe(void) {
 }
 
 - (void)erRemoveTappedCore:(UIButton *)sender {
-    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     ERHaptic();
     NSString *identifier = objc_getAssociatedObject(sender, @selector(removeTapped:));
     if (!identifier.length) return;
@@ -19018,7 +18948,6 @@ static void ERActClsProbe(void) {
     // hierarchy settles.
     for (NSNumber *delay in @[@0.15, @0.35, @0.65]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            ERInvalidateModuleListCache();  // 1.2.1-1 · 集合重建后失效
             UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
             if (!overlay) return;
             [self installQuickAccessHostOnOverlay:overlay];
@@ -19114,37 +19043,16 @@ static CGFloat EROversizedMediaCornerRadius(void) {
     return isRectangularGridModule ? radius + 4.0 : radius;
 }
 
-// 1.2.1-1 · 编辑模式降负（第 1 项，头号杀手）：
-// 旧实现每帧每模块 new UIBezierPath 环 + new CAShapeLayer 设 layer.mask ——
-// 10~20 个模块 × 60fps = 每秒几百次对象分配 + mask 全量重设，GPU/主线程双杀。
-// 现在：① frame+radius 没变直接 return（编辑态静止时逐帧归零）；② mask 层挂
-// 关联对象复用，只更新 path；③ layer.mask 只在真正变化时赋值。
-static NSMapTable *gERBorderLastFrame = nil;   // border -> 上次布局目标 frame
-static const void *kERBorderMaskLayerKey = &kERBorderMaskLayerKey;
-
 - (void)configureEditingBorder:(UIVisualEffectView *)border moduleFrame:(CGRect)moduleFrame {
     if (!border) return;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ gERBorderLastFrame = [NSMapTable strongToStrongObjectsMapTable]; });
-    CGRect target = CGRectInset(moduleFrame, -3.5, -3.5);
+    border.frame = CGRectInset(moduleFrame, -3.5, -3.5);
     CGFloat radius = [self refinedCornerRadiusForSize:moduleFrame.size];
-    NSValue *last = [gERBorderLastFrame objectForKey:border];
-    if (last) {
-        CGRect lastFrame = last.CGRectValue;
-        if (CGRectEqualToRect(lastFrame, target) && border.layer.mask) return;
-    }
-    [gERBorderLastFrame setObject:[NSValue valueWithCGRect:target] forKey:border];
-    border.frame = target;
-    CAShapeLayer *mask = objc_getAssociatedObject(border, kERBorderMaskLayerKey);
-    if (![mask isKindOfClass:[CAShapeLayer class]]) {
-        mask = [CAShapeLayer layer];
-        mask.fillRule = kCAFillRuleEvenOdd;
-        objc_setAssociatedObject(border, kERBorderMaskLayerKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
     UIBezierPath *ring = [UIBezierPath bezierPathWithRoundedRect:border.bounds cornerRadius:radius + 3.5];
     [ring appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectInset(border.bounds, 3.5, 3.5) cornerRadius:radius]];
+    CAShapeLayer *mask = [CAShapeLayer layer];
     mask.path = ring.CGPath;
-    if (border.layer.mask != mask) border.layer.mask = mask;
+    mask.fillRule = kCAFillRuleEvenOdd;
+    border.layer.mask = mask;
 }
 
 - (id)labelBlurFilterWithRadius:(CGFloat)radius {
@@ -19901,7 +19809,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (BOOL)applyExplicitGridMoveFrom:(NSString *)sourceID toOrigin:(CCUILayoutPoint)destination onPage:(NSUInteger)page overlay:(UIViewController *)overlay {
-    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     NSValue *sourceValue = gERNativeLayoutRects[sourceID];
     if (!sourceValue) return NO;
     NSMutableDictionary<NSString *, NSValue *> *proposed = ERLayoutForPage(overlay, page, kERMinimumGridRows);
@@ -19947,7 +19854,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (BOOL)applyExplicitGridInsertionFrom:(NSString *)sourceID toOrigin:(CCUILayoutPoint)destination onPage:(NSUInteger)page maxRows:(NSUInteger)maxRows overlay:(UIViewController *)overlay {
-    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     NSValue *sourceValue = gERNativeLayoutRects[sourceID];
     if (!sourceValue || maxRows == 0) return NO;
     NSMutableDictionary<NSString *, NSValue *> *initial = ERLayoutForPage(overlay, page, maxRows);
@@ -21879,55 +21785,26 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (gERDragInProgress || gERPagerTransitionActive || gERPagerScrubbingActive) return;
     UIButton *addControl = (UIButton *)[overlay.view viewWithTag:kERAddControlButtonTag];
     if (addControl) {
-        // 1.2.1-1 · 编辑模式降负（第 4 项）：addControl 的 sizeToFit+落位只在
-        // bounds/安全区真的变化时重算，静止帧不再做 measure 一遍。
-        NSValue *lastBounds = objc_getAssociatedObject(addControl, kERAddControlLastBoundsKey);
-        NSValue *lastInsets = objc_getAssociatedObject(addControl, kERAddControlLastInsetsKey);
-        UIEdgeInsets insets = overlay.view.safeAreaInsets;
-        BOOL changed = !lastBounds || !CGRectEqualToRect(lastBounds.CGRectValue, overlay.view.bounds)
-                       || !lastInsets || !UIEdgeInsetsEqualToEdgeInsets(lastInsets.UIEdgeInsetsValue, insets);
-        if (changed) {
-            [addControl sizeToFit];
-            CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
-            CGRect bounds = overlay.view.bounds;
-            // 1.0.6-10（第 4 条）：整体上移 2pt（对应「距底 4 → 6，增加二分之一」）。
-            //
-            // 方向务必注意：origin.y = 高度 − bottomInset − size.height，所以**增大**
-            // bottomInset 才是上移。此前记录里写的「−14 → −16」会得到更小的 bottomInset，
-            // 方向相反、实际是下移 2pt。这里两个分支同时 +2：常规分支 −14 → −12，
-            // 下限分支 16 → 18 —— 无论设备是否命中下限，视觉位移都恰好是 2pt。
-            CGFloat bottomInset = MAX(insets.bottom - 12.0, 18.0);
-            addControl.frame = CGRectMake((CGRectGetWidth(bounds) - size.width) / 2.0, CGRectGetHeight(bounds) - bottomInset - size.height, size.width, size.height);
-            objc_setAssociatedObject(addControl, kERAddControlLastBoundsKey, [NSValue valueWithCGRect:overlay.view.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            objc_setAssociatedObject(addControl, kERAddControlLastInsetsKey, [NSValue valueWithUIEdgeInsets:insets], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
+        // Centered in the blank space between the last module row and the
+        // bottom of the display, sitting just above the home indicator.
+        [addControl sizeToFit];
+        CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
+        CGRect bounds = overlay.view.bounds;
+        // 1.0.6-10（第 4 条）：整体上移 2pt（对应「距底 4 → 6，增加二分之一」）。
+        //
+        // 方向务必注意：origin.y = 高度 − bottomInset − size.height，所以**增大**
+        // bottomInset 才是上移。此前记录里写的「−14 → −16」会得到更小的 bottomInset，
+        // 方向相反、实际是下移 2pt。这里两个分支同时 +2：常规分支 −14 → −12，
+        // 下限分支 16 → 18 —— 无论设备是否命中下限，视觉位移都恰好是 2pt。
+        CGFloat bottomInset = MAX(overlay.view.safeAreaInsets.bottom - 12.0, 18.0);
+        addControl.frame = CGRectMake((CGRectGetWidth(bounds) - size.width) / 2.0, CGRectGetHeight(bounds) - bottomInset - size.height, size.width, size.height);
     }
-    // 1.2.1-1 · 编辑模式降负（第 5 项）：每帧的 frame/hidden/alpha 写入包进
-    // 禁隐式动画的事务——既省掉每帧隐式动画的调度，也防止抖动。
-    [CATransaction begin];
-    [CATransaction setDisableActions:YES];
     for (UIViewController *module in ERCollectModuleControllers(overlay)) {
-        if (!module.view) continue;
         if ((gERDragInProgress && module.view == gERActiveDragModuleView) ||
             (gERResizeInProgress && module.view == gERActiveResizeModuleView)) continue;
         UIButton *remove = objc_getAssociatedObject(module.view, kERRemoveButtonKey);
         UIButton *resize = objc_getAssociatedObject(module.view, kERResizeButtonKey);
         CGRect moduleFrame = [module.view convertRect:module.view.bounds toView:overlay.view];
-        // 1.2.1-1 · 编辑模式降负（第 3 项）：帧级快速跳过——模块 frame 与 chrome
-        // 状态位（抑制/边框开关/删除钮开关/当前页）都没变时，本模块整段跳过。
-        // 只比 frame 不够：gEREditChromeSuppressedForPaging 等开关变化时 frame 不动，
-        // 但 hidden/alpha 必须跟上。
-        NSUInteger chromeState = (gEREditChromeSuppressedForPaging ? 1u : 0u)
-                               | (gModuleBordersEnabled ? 2u : 0u)
-                               | (gRemovalButtonsEnabled ? 4u : 0u)
-                               | ((gERCurrentPage & 0xFFu) << 3);
-        NSValue *lastFrameValue = objc_getAssociatedObject(module.view, kERModuleLastChromeFrameKey);
-        NSNumber *lastState = objc_getAssociatedObject(module.view, kERModuleLastChromeStateKey);
-        if (lastFrameValue && lastState
-            && CGRectEqualToRect(lastFrameValue.CGRectValue, moduleFrame)
-            && lastState.unsignedIntegerValue == chromeState) continue;
-        objc_setAssociatedObject(module.view, kERModuleLastChromeFrameKey, [NSValue valueWithCGRect:moduleFrame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        objc_setAssociatedObject(module.view, kERModuleLastChromeStateKey, @(chromeState), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         // Borders live with their module wrapper and are naturally clipped by
         // the moving collection. Remove/resize controls live on overlay.view,
         // so explicitly cull them when their owner is outside the viewport;
@@ -21948,7 +21825,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (resize) resize.hidden = !ownerVisible || ![self moduleIdentifierSupportsResizing:identifier];
         [self positionEditControlsForModuleView:module.view overlay:overlay overlayFrame:moduleFrame];
     }
-    [CATransaction commit];
 }
 
 - (void)editChromeDisplayLinkFired:(__unused CADisplayLink *)displayLink {
@@ -21983,7 +21859,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (void)setEditing:(BOOL)editing {
-    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     if (!gEnabled) editing = NO;
     if (editing && gERExpandedModuleOpen) return;
     NSUInteger editTransitionGeneration = ++gEREditTransitionGeneration;
@@ -22022,7 +21897,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (void)dismissEditingImmediately {
-    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     if (!gEditModeActive) return;
     ++gEREditTransitionGeneration;
     gEREditTransitionActive = NO;
@@ -22373,7 +22247,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (identifier.length && !gERBaseLayoutSizes[identifier]) gERBaseLayoutSizes[identifier] = [NSValue value:&size withObjCType:@encode(CCUILayoutSize)];
     NSArray<NSNumber *> *custom = gERCustomSizes[identifier];
     if (custom.count >= 2) size = (CCUILayoutSize){custom[0].unsignedIntegerValue, custom[1].unsignedIntegerValue};
-    // 1.2.1-15 · 问题 2 修复（自 1.2.1-4 移植）：横屏下音量/亮度被拉成 1×3。
+    // 1.2.1-16 · 问题 2 修复（自 1.2.1-4 移植）：横屏下音量/亮度被拉成 1×3。
     // 原生布局引擎在横屏态会把 slider 类模块给到 3 行高（1.0.9-2x 时代就有
     // 「拖拽时 1×3 强改回 2」的补丁佐证）；折行逻辑只改 origin 不改 size，3 行高
     // 直接体现在最终布局上。这里对无自定义尺寸的 slider 类模块在横屏态钳制 1×2；
@@ -22405,7 +22279,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (customOrigin.count >= 2) rect.origin = (CCUILayoutPoint){customOrigin[0].unsignedIntegerValue, customOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[identifier];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
-        // 1.2.1-15 · 问题 2 同源钳制（自 1.2.1-4 移植，与 moduleLayoutSizeForContentModuleContext: 一致）：
+        // 1.2.1-16 · 问题 2 同源钳制（自 1.2.1-4 移植，与 moduleLayoutSizeForContentModuleContext: 一致）：
         // 横屏下 slider 类模块无自定义尺寸时高度钳到 2 行，杜绝 1×3。
         if (gEnabled && ERLandscapePresentationActive() && customSize.count < 2 && rect.size.height > 2) {
             BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
@@ -34187,6 +34061,17 @@ static NSMutableDictionary<NSString *, NSValue *> *gERSPGSCOOrig = nil;
 static NSMutableSet *gERSPGSCOHooked = nil;
 static void ERSPGSCOOff1(id self, SEL _cmd, CGPoint off);
 static void ERSPGSCOOff2(id self, SEL _cmd, CGPoint off, BOOL anim);
+// 1.2.1-16 · 自毒免疫（自 1.2.1-2 移植）：广谱扫描曾把「继承方法的 orig」存成
+// 我们自己的 hook（子类 S 的 class_getInstanceMethod 拿到的是已挂钩父类的 IMP），
+// LookupOrig 查到后调自己 → 无限递归 → 栈溢出 SIGSEGV（.ips 实锤 490 层同帧递归）。
+// 修法①：查到的 IMP 是我们任何 hook 自身 → 跳过该条目继续向父类找。
+static void ERSPGSysHaptHook1(id self, SEL _cmd);
+static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i);
+static void ERSPGSysHaptHook3(id self, SEL _cmd, NSInteger t);
+static BOOL ERSPGSCOImpIsOwn(IMP p) {
+    return p == (IMP)ERSPGSCOOff1 || p == (IMP)ERSPGSCOOff2
+        || p == (IMP)ERSPGSysHaptHook1 || p == (IMP)ERSPGSysHaptHook2 || p == (IMP)ERSPGSysHaptHook3;
+}
 
 static BOOL ERSPGSCOShouldBlock(id self) {
     if (!ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO)) return NO;
@@ -34201,25 +34086,13 @@ static BOOL ERSPGSCOShouldBlock(id self) {
     return YES;
 }
 
-// 1.2.1-2 · 自毒免疫：广谱扫描曾把「继承方法的 orig」存成了我们自己的 hook
-// （子类 S 的 class_getInstanceMethod 拿到的是已挂钩父类的 IMP），LookupOrig
-// 查到后调自己 → 无限递归 → 栈溢出 SIGSEGV（.ips SpringBoard-2026-10-24-124602
-// 实锤：490 层同帧递归 + stringByAppendingFormat，d0/d1 = impactOccurredWithIntensity:）。
-// 修法①：查到的 IMP 是我们任何 hook 自身 → 跳过该条目继续向父类找。
-static void ERSPGSysHaptHook1(id self, SEL _cmd);
-static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i);
-static void ERSPGSysHaptHook3(id self, SEL _cmd, NSInteger t);
-static BOOL ERSPGSCOImpIsOwn(IMP p) {
-    return p == (IMP)ERSPGSCOOff1 || p == (IMP)ERSPGSCOOff2
-        || p == (IMP)ERSPGSysHaptHook1 || p == (IMP)ERSPGSysHaptHook2 || p == (IMP)ERSPGSysHaptHook3;
-}
 static IMP ERSPGSCOLookupOrig(id self, SEL _cmd) {
     Class c = object_getClass(self);
     while (c) {
         NSValue *ov = gERSPGSCOOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
         if (ov) {
             IMP p = (IMP)ov.pointerValue;
-            if (!ERSPGSCOImpIsOwn(p)) return p;
+            if (!ERSPGSCOImpIsOwn(p)) return p;   // 1.2.1-16 · 修法①：查到自身 IMP → 跳过继续向父类找
         }
         c = class_getSuperclass(c);
     }
@@ -34250,9 +34123,9 @@ static void ERSPGAttachSCOHook(Class cls) {
     for (int i = 0; i < 2; i++) {
         Method m = class_getInstanceMethod(cls, items[i].sel);
         IMP orig = m ? method_getImplementation(m) : NULL;
-        // 1.2.1-2 · 修法②：orig 已是我们 hook（纯继承自已挂钩父类）→ 不存不挂
-        if (orig && ERSPGSCOImpIsOwn(orig)) continue;
         NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
+        // 1.2.1-16 · 修法②：orig 已是我们 hook（纯继承自已挂钩父类）→ 不存不挂
+        if (orig && ERSPGSCOImpIsOwn(orig)) continue;
         if (orig && !gERSPGSCOOrig[key])
             gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
         if (!class_addMethod(cls, items[i].sel, items[i].imp, items[i].types) && m)
@@ -34350,9 +34223,9 @@ static void ERSPGAttachSysHaptHooks(void) {
             Method m = class_getInstanceMethod(c, it[k].sel);
             if (!m) continue;
             IMP orig = method_getImplementation(m);
-            // 1.2.1-2 · 修法③：同款防御——orig 是自己 hook（继承自已挂钩父类）→ 跳过
-            if (ERSPGSCOImpIsOwn(orig)) continue;
             NSString *key = [n stringByAppendingFormat:@"#%@", NSStringFromSelector(it[k].sel)];
+            // 1.2.1-16 · 修法③：同款防御——orig 是自己 hook（继承自已挂钩父类）→ 跳过
+            if (ERSPGSCOImpIsOwn(orig)) continue;
             if (!gERSPGSCOOrig[key]) gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
             if (!class_addMethod(c, it[k].sel, it[k].imp, it[k].types))
                 method_setImplementation(m, it[k].imp);
@@ -34838,7 +34711,7 @@ static void ERBootLog(NSString *tag) {
         NSString *line = [NSString stringWithFormat:@"[%@] BOOT %@ proc=%@\n",
                           [NSDate date], tag,
                           NSProcessInfo.processInfo.processName ?: @"?"];
-        // 1.2.1-15 · 目录历史上不存在 → fopen 从未成功过（BOOT 日志悬案根因）。先建目录。
+        // 1.2.1-16 · 目录历史上不存在 → fopen 从未成功过（BOOT 日志悬案根因）。先建目录。
         [[NSFileManager defaultManager] createDirectoryAtPath:@"/var/mobile/Library/Accessibility"
                                   withIntermediateDirectories:YES attributes:nil error:nil];
         FILE *f = fopen("/var/mobile/Library/Accessibility/echoreborn-boot.log", "a");
