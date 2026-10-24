@@ -577,3 +577,9 @@
 - **方案废掉基线/drift/胶囊探测整套状态机，改为几何跟随**：锚 = CCUIContentModuleContainerView（日志实测胶囊在场时 Y 恒定），host 目标 Y = 锚窗口 Y + 固定偏移（首次见面用剥离 ty 的布局 Y 标定一次，之后冻结）；差值仍用 transform.ty 承载；锚不可见时冻结不猜
 - 心跳改记 anchorY/offset；OFFSET-SET / FOLLOW 事件进 ERQAMirror
 - 用户已确认方案（成功率评估 85-90%，失败模式温和：锚丢失=按钮静止）
+
+## 1.2.1-11（1002111）· 绝对钉死（1.2.1-10 跟随方案的实证修正）
+- **1.2.1-10 复现实锤**：胶囊出现时 CC 面板整体下移——锚容器 +25.8pt（410.4→436.2），host 被跟着带到 winY 69.2→86.0（+16.8）。跟随任何原生视图都会被带着走，"永不动"的唯一几何解释 = **窗口绝对坐标恒定**
+- 方案：目标 = 每方向冻结常量窗口 Y（REF，首次见面标定；胶囊紧凑态在场时推迟标定），ty = REF − layout 反向抵消，夹取 [-60,60]
+- 新胶囊几何探针 ERCapsuleCompactPresent：SBSystemApertureContainerView 宽度 ∈ (100,160) = 紧凑态（实证：166↔125.3 切换），类名探测 iOS 17 失效后的可靠替代
+- 心跳改记 ref/compact；REF-SET/REF-DEFER/PIN 事件进 ERQAMirror
