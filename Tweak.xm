@@ -6250,6 +6250,37 @@ static void ERLoadPrefs(void) {
     gVolumeControlEnabled = ERPreferenceBool(@"VolumeControlEnabled", YES);
     gBrightnessControlEnabled = ERPreferenceBool(@"BrightnessControlEnabled", YES);
     gERLoggingEnabled = ERPreferenceBool(@"LoggingEnabled", NO);
+    // 1.2.1-6 · **决定性诊断**（无条件写，不依赖日志开关）：echoreborn.log 两条路径
+    // 都从未出现文件，为一步拿到进程内真相，把关键状态直接写
+    // /var/mobile/Documents/er_diag.txt（folderlog 同款通道，已验证 SpringBoard 可写）：
+    //   ① CFPreferences 与文件兜底各自读到的 LoggingEnabled
+    //   ② 两个日志路径的写权限实测（access W_OK + 实写探针）
+    //   ③ plist 文件兜底缓存的规模
+    @try {
+        NSMutableString *diag = [NSMutableString string];
+        [diag appendFormat:@"time=%@\npid=%d\n", [NSDate date], getpid()];
+        Boolean cfValid = false;
+        Boolean cfVal = CFPreferencesGetAppBooleanValue(CFSTR("LoggingEnabled"), kERPrefsDomain, &cfValid);
+        [diag appendFormat:@"CF LoggingEnabled valid=%d value=%d\n", (int)cfValid, (int)cfVal];
+        [diag appendFormat:@"fileFallback keys=%lu fileValue=%@\n",
+            (unsigned long)gERPrefsFileFallback.count, gERPrefsFileFallback[@"LoggingEnabled"]];
+        [diag appendFormat:@"gERLoggingEnabled=%d\n", (int)gERLoggingEnabled];
+        [diag appendFormat:@"access LogsDir W=%d Documents W=%d\n",
+            (int)(access("/var/mobile/Library/Logs/EchoReborn", W_OK) == 0),
+            (int)(access("/var/mobile/Documents", W_OK) == 0)];
+        // 实写探针：三个候选位置各写一个探针文件，谁出现 = 谁真的可写
+        NSArray<NSString *> *probePaths = @[
+            @"/var/mobile/Library/Logs/EchoReborn/er_probe.txt",
+            @"/var/mobile/Documents/er_probe.txt",
+            @"/var/root/Library/Preferences/er_probe_sb.txt",
+        ];
+        for (NSString *pp in probePaths) {
+            NSError *err = nil;
+            [@"probe" writeToFile:pp atomically:YES encoding:NSUTF8StringEncoding error:&err];
+            [diag appendFormat:@"probe %@ ok=%d err=%@\n", pp, [[NSFileManager defaultManager] fileExistsAtPath:pp] ? 1 : 0, err.localizedDescription ?: @"-"];
+        }
+        [diag writeToFile:@"/var/mobile/Documents/er_diag.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    } @catch (__unused NSException *exception) {}
     gERLandscapeLayoutEnabled = ERPreferenceBool(@"LandscapeLayout.Enabled", NO);
     // 1.0.7-23：横屏账本每次重载都重读一遍 —— 设置页的「恢复横屏布局」删掉
     // COSMICLandscapeOrigins 后，不需要注销就能立刻回到折行布局。
