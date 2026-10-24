@@ -481,3 +481,14 @@
 - 主修：listscan 必中探测——manager.iconModel→rootFolder（manager.iconModel / model.rootFolder / manager.rootFolder 三路兜底）→ 遍历 iconLists，按 containsObject / identifier 双匹配找包含本文件夹图标的 list，取 list.location（系统手点时用的真实串）替换 loc；listscan 结果（lists 数/target id/hit）写 folderlog
 - 防御：realLoc 若恰为 SBIconLocationRoot 常量串则丢弃（保持 fallback），杜绝再次传入
 - 版本 1.2.0-97 / 1002195
+
+## 1.2.1-1（2026-10-24 中午）—— 1.2.1 系列起点：控制中心专项优化至丝滑
+- 竞品分析：ControlCenter18 3.0-beta 解包——整体自绘重写（~90 个 C18* 类、自研网格/分页/编辑/模糊、CADisplayLink+弹簧动画器），我们深 hook 原生 CC 与布局引擎对抗是卡顿根源
+- 用户痛点优先级：编辑状态卡 → 本版先做"编辑模式降负"（纯性能减法，不改观感）
+- 五项优化：
+  ① configureEditingBorder：frame+radius 不变直接 return（旧实现每帧每模块 new UIBezierPath+new CAShapeLayer 设 mask，10-20 模块×60fps=每秒数百次分配）；CAShapeLayer 挂关联对象复用只更新 path；layer.mask 只在变化时赋值
+  ② ERCollectModuleControllers：BFS 结果按 overlay 缓存 + 代际失效（gERModuleListGeneration），7 个模块集合变化点（setEditing/dismissEditing/resettle 三连/Move/Insert/Remove/AddSheet）调 ERInvalidateModuleListCache
+  ③ updateEditControlFramesForOverlay 帧级快速跳过：模块 frame + chrome 状态位（抑制/边框开关/删除钮开关/当前页）都没变 → 整段跳过
+  ④ ERModuleIdentifier 挂关联对象代际缓存（旧实现每次 2-4 层 KVC）；addControl 的 sizeToFit+落位只在 bounds/安全区变化时重算
+  ⑤ 每帧 frame/hidden/alpha 写入包 CATransaction setDisableActions:YES，消除隐式动画调度
+- 版本 1.2.1-1 / 1002101
