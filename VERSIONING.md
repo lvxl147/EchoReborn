@@ -500,3 +500,13 @@
 - 完美解释：①只有手势开才崩（手势震动走 sERSPGOwnHaptic 放行路径进 LookupOrig；手动开关被 ERSPGShouldDropSysHaptic 拦掉不进）②第 2-4 次才崩（取决于哪个私有子类 generator 先走带强度的 impactOccurredWithIntensity:）③探针零痕迹（不是 SB 逻辑死，是我们把栈打爆，死亡过快）
 - 修复三层防御：①ERSPGSCOImpIsOwn() + LookupOrig 查到自身 IMP 跳过继续向父类找 ②AttachSCOHook 存储前 orig==自身则不存不挂 ③广谱扫描同款防御
 - 版本 1.2.1-2 / 1002102
+
+## 1.2.1-3（2026-10-24 下午）—— 五 bug 修复①：权限胶囊出现时顶部按钮下移
+- 用户确认 5 个历史遗留 bug 方案后动工，本版处理问题 1
+- 根因修正：+号（181001）/电源（181002）按钮就在 QA host（181000）内部，会跟随 host transform —— 理论上 1.0.9-19 的补偿应生效；用户实测仍下移 = suppressed 判据漏判（胶囊在场不总是把 host 压低 >8pt：压低量变小 / 压的是 header pocket 其他内容）
+- 修复三件套（ERStartQuickAccessPositionCorrection）：
+  ① suppressed 阈值 8→4pt
+  ② 新增权限胶囊直接探测 ERPrivacyCapsuleVisible：窗口树 DFS 找类名含 PrivacyIndicator 的可见视图（限频 0.5s 缓存），可见即视为在场，不再单靠"被压低"间接判据
+  ③ 补偿量升级：优先用实测压低量 drift=layoutWinY-baseline（开环单次读取，layoutWinY 已剥离自身 ty，无反馈回路不发散；夹取 [0,44]）；drift≤2pt 时退回旧常量 23.5 兜底
+- QABTN-COMP 日志增加 capsule/drift 字段，装机后可凭日志复核
+- 版本 1.2.1-3 / 1002103
