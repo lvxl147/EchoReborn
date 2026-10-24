@@ -557,3 +557,11 @@
 - 修复：诊断全文写入 CFPreferences 键 `ERDiagText`（root 域 plist，SSH root 可读）；另补写 /var/root/er_diag.txt、/var/tmp/er_diag.txt、/var/root/Library/Preferences/er_diag.txt 三路径兜底。
 - ERBootLog 补 createDirectoryAtPath（Accessibility 目录历史上不存在）。
 - 新增用户反馈（待修）：编辑模式下 32 个圆钮有些对不齐。
+
+## 1.2.1-8（1002108）· cfprefsd 日志镜像
+- 1.2.1-7 诊断全文到手（经 ERDiagText 偏好键，实锤 cfprefsd 通道可用）：
+  - CF LoggingEnabled valid=1 value=1 → **不存在用户域断链**，SpringBoard 即 mobile 用户，-5 的断链理论推翻（兜底无害，fileFallback keys=0 因 SpringBoard 沙盒读不了该 1.6MB 文件）
+  - gERLoggingEnabled=1、两目录 W_OK=1、两探针 fileExistsAtPath=YES
+  - **但全盘 find 无探针文件** → SpringBoard 文件写入"进程内成功但不落盘"（roothide 虚拟化），文件日志通道永久不可靠
+- 修复：ERLogAppendLines 顶部镜像日志尾部（60 行/12KB 环形）到 CFPreferences 键 ERLogMirror，SSH 读 mobile 域 plist 即得运行日志（含 QABTN-COMP）
+- 后续：读 ERLogMirror → 精修胶囊下移
