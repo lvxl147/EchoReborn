@@ -6052,7 +6052,9 @@ static void ERMirrorLogLine(NSString *line) {
 static void ERMirrorDiagLine(NSString *line) {
     if (!gERLoggingEnabled || !line.length) return;
     NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
-    ERMirrorRingUpdate(@"ERPocketMirror", stamped, 16, 4000);
+    // 1.2.1-19 · 环扩到 24 行 / 6KB：[BAND] 栈行（~400B/条）与 [POCKET]
+    // 时间线同环，16 行装不下一轮完整复现（4 次点击 = 8 条 [BAND] + 8-12 条 [POCKET]）。
+    ERMirrorRingUpdate(@"ERPocketMirror", stamped, 24, 6000);
 }
 
 static NSString *ERLogTimestamp(void) {
@@ -14302,7 +14304,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (staleFlagsSince <= 0.0) staleFlagsSince = now;
         if (now - staleFlagsSince > 1.0) {
             NSString *staleLine = [NSString stringWithFormat:
-                @"[FADE] ver=1.2.1-18 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
+                @"[FADE] ver=1.2.1-19 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
                 (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince];
             ERLogInfo(@"%@", staleLine);
             ERMirrorDiagLine(staleLine);
@@ -14323,7 +14325,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     static CGFloat lastFadeTarget = -1.0;
     if (fabs(target - lastFadeTarget) > 0.001) {
         NSString *fadeLine = [NSString stringWithFormat:
-            @"[FADE] ver=1.2.1-18 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
+            @"[FADE] ver=1.2.1-19 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
             target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
             gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen];
         ERLogInfo(@"%@", fadeLine);
@@ -14351,6 +14353,65 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
 // （gERControlCenterPresented == NO）或 overlay 析构时链自然终止。
 static NSUInteger gERHeaderPocketWatchdogGeneration = 0;
 
+// 1.2.1-19 · bug 1 收口：状态带 alpha 写入方追踪（运行时 swizzle）。
+//
+// 1.2.1-18 装机复现实锤：掉落物 = pocket 直接子视图 SensorAttrib/StatusBar
+// 的 alpha（1→0、hidden 不变、pocket 本体 alpha 保持 1、top fade 全程熄灭），
+// 持续 1.5-3.2s 后自行恢复，每次点模块触发一轮。静态排查已逐一排除：
+//   · top fade —— 掉落全程 fade=0.00/1
+//   · setHeaderChromeHiddenForScrubbing —— 它藏的是 pocket 本体，本体没掉
+//   · willOpen/didCloseExpandedModule —— 不写状态带 alpha
+//   · ERSuppressHeaderPocketMaterial —— 只藏 MTMaterialView/发丝线
+//   · 横屏 chrome 全家 —— 只写 transform，且复现为竖屏
+// 写入方不在已知代码里 —— 对这两个类 swizzle setAlpha:，在 alpha 反转点
+// （1→0 / 0→1）各落一条带调用栈前 8 帧的 [BAND] 日志（进双镜像环）。
+// NSThread 栈帧最新在前，前 8 帧即直接调用链，一次复现指名写入方。
+//
+// 安全细节：setAlpha: 在这两个类里大概率继承自 UIView —— 直接
+// method_setImplementation(class_getInstanceMethod(cls, sel)) 会把实现写到
+// UIView 本体上，影响全应用所有视图。先 class_addMethod 给子类落一份自己的
+// 实现（已覆盖则取子类自身 IMP 作原实现），再 class_replaceMethod 换成观测
+// 块，块内直调原 IMP —— 行为不变、只观测。
+static void ERSwizzleBandAlphaTraceOnce(Class cls) {
+    if (!cls) return;
+    static NSMutableSet *gERBandTraceSwizzled = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ gERBandTraceSwizzled = [NSMutableSet set]; });
+    @synchronized (gERBandTraceSwizzled) {
+        if ([gERBandTraceSwizzled containsObject:cls]) return;
+        [gERBandTraceSwizzled addObject:cls];
+    }
+    SEL sel = @selector(setAlpha:);
+    Method superMethod = class_getInstanceMethod(class_getSuperclass(cls), sel);
+    if (!superMethod) return;
+    IMP original = method_getImplementation(superMethod);
+    const char *encoding = method_getTypeEncoding(superMethod);
+    if (!class_addMethod(cls, sel, original, encoding)) {
+        // 子类已覆盖 setAlpha: —— 原实现换成子类自己的
+        Method own = class_getInstanceMethod(cls, sel);
+        if (!own) return;
+        original = method_getImplementation(own);
+        encoding = method_getTypeEncoding(own);
+    }
+    IMP replacement = imp_implementationWithBlock(^(id self, SEL _cmd, CGFloat alpha) {
+        CGFloat before = ((CGFloat (*)(id, SEL))objc_msgSend)(self, @selector(alpha));
+        BOOL toZero = before > 0.001 && alpha <= 0.001;
+        BOOL toVisible = before <= 0.001 && alpha > 0.001;
+        if (toZero || toVisible) {
+            NSArray<NSString *> *frames = [NSThread callStackSymbols];
+            if (frames.count > 8) frames = [frames subarrayWithRange:NSMakeRange(0, 8)];
+            NSString *line = [NSString stringWithFormat:
+                @"[BAND] ver=1.2.1-19 %@ alpha %.2f->%.2f hidden=%d stack=%@",
+                NSStringFromClass(self.class), before, alpha, (int)self.hidden,
+                [frames componentsJoinedByString:@" << "]];
+            ERLogInfo(@"%@", line);
+            ERMirrorDiagLine(line);
+        }
+        ((void (*)(id, SEL, CGFloat))original)(self, sel, alpha);
+    });
+    if (replacement) class_replaceMethod(cls, sel, replacement, encoding);
+}
+
 static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     if (!overlay.view) return;
     UIView *fade = [overlay.view viewWithTag:kERTopFadeTag];
@@ -14370,6 +14431,11 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     if (pocket) {
         for (UIView *child in pocket.subviews) {
             NSString *name = NSStringFromClass(child.class);
+            // 1.2.1-19 · 状态带写入方追踪：命中类即装 setAlpha: 观测（幂等，
+            // 只给子类落自己的实现，不碰 UIView 本体）。
+            if ([name hasPrefix:@"CCUISensorAttribution"] || [name isEqualToString:@"CCUIStatusBar"]) {
+                ERSwizzleBandAlphaTraceOnce(child.class);
+            }
             // 类名压缩：去 CCUI 前缀，取前 12 字符，日志行才不会爆。
             NSRange prefix = [name rangeOfString:@"CCUI"];
             if (prefix.location == 0) name = [name substringFromIndex:4];
@@ -14378,14 +14444,19 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
             [kids appendFormat:@"%@:%.2f/%d", name, child.alpha, (int)child.hidden];
         }
     }
-    NSString *signature = [NSString stringWithFormat:@"fade=%.2f/%d pocket=%.2f/%d kids=[%@]",
+    // 1.2.1-19 · 签名追加运行时状态上下文（翻页/展开/编辑/呈现状态机），
+    // 掉落瞬间的系统状态直接可读，不用再靠猜。
+    NSString *signature = [NSString stringWithFormat:@"fade=%.2f/%d pocket=%.2f/%d kids=[%@] st=scrub%d tr%d exp%d edit%d pres%lu",
                            fade ? fade.alpha : -1.0, fade ? (int)fade.hidden : -1,
                            pocket ? pocket.alpha : -1.0, pocket ? (int)pocket.hidden : -1,
-                           kids];
+                           kids,
+                           (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
+                           (int)gERExpandedModuleOpen, (int)gEREditModeActive,
+                           (unsigned long)gERControlCenterPresentationState];
     static NSString *lastSignature = nil;
     if (![signature isEqualToString:lastSignature]) {
         lastSignature = signature;
-        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-18 %@", signature];
+        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-19 %@", signature];
         ERLogInfo(@"%@", pocketLine);
         // 1.2.1-18：进专用镜像环（文件通道不落盘 + 短会话不刷盘的双保险）。
         ERMirrorDiagLine(pocketLine);
