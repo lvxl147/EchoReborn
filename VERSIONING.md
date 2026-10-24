@@ -648,3 +648,17 @@
   - 读取方式：SSH 下载 `/var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist` 后 plistlib 解析（该设备 plutil -p/-extract 对大 plist 报 keypath 错，下载解析最稳）
 - 诊断站点接入（1.2.1-17 已建，本版接入镜像）：[FADE] stale 清理 / [FADE] target 逐变 / [POCKET] 看门狗签名变化，版本串 ver=1.2.1-18
 - 装机后复现流程：竖屏 → 拉开 CC 不收起 → 点「锁定」等模块 → SSH 拉 plist 的 ERPocketMirror + ERLogMirror → 定位状态带被谁打零
+
+## 1.2.1-19（1002119）· bug 1 写入方追踪（setAlpha: 运行时观测 + 状态上下文）
+- **1.2.1-18 装机复现实锤（2026-10-25 03:57-03:58，用户竖屏 CC 不收起点屏幕方向锁定模块）**：
+  - 每次点击触发一轮「状态带消失 → 自行恢复」，消失持续 1.56 / 2.09 / 2.60 / 3.16 秒（与用户「消失 2-3 秒」吻合）
+  - **掉落物实锤**：`SensorAttrib`/`StatusBar` 两个 pocket 直接子视图 alpha 1→0（hidden 保持 0），**pocket 本体 alpha 保持 1、top fade 全程熄灭（fade=0.00/1）**——fade 假设彻底排除
+  - 另观测到 pocket 子视图顺序翻转（StatusBar 被移到最顶 → 我们的 host 被 13246 行 bringSubviewToFront 抢回），与掉落无因果关系
+  - 静态逐一排除：setHeaderChromeHiddenForScrubbing（藏 pocket 本体，本体没掉）/ willOpen·didCloseExpandedModule（不写 alpha）/ ERSuppressHeaderPocketMaterial（只藏 MTMaterialView+发丝线）/ 横屏 chrome 全家（只写 transform 且复现为竖屏）/ ERExpandedChromeRevealActive（窗口 0.65s 与变动延迟不符）
+- **本版诊断**（不改行为，纯观测）：
+  - `ERSwizzleBandAlphaTraceOnce`：看门狗采样命中 `CCUISensorAttribution*`/`CCUIStatusBar` 时对其 swizzle `setAlpha:`（幂等）。安全细节：setAlpha: 大概率继承自 UIView，直接 method_setImplementation 会改到 UIView 本体影响全应用 —— 先 class_addMethod 给子类落自己的实现（已覆盖则取子类 IMP 作原实现），再 class_replaceMethod 换观测块，块内直调原 IMP，行为不变只观测
+  - alpha 反转点（1→0 / 0→1）落 `[BAND]` 日志：类名 + 前后 alpha + hidden + **调用栈前 8 帧**（NSThread 栈最新在前，前 8 帧即直接调用链）—— 一次复现指名写入方
+  - [POCKET] 签名追加运行时状态上下文 `st=scrub/tr/exp/edit/pres`，掉落瞬间的系统状态直接可读
+  - ERPocketMirror 环扩到 24 行 / 6KB（[BAND] 栈行 ~400B/条，16 行装不下一轮完整复现）
+  - 版本串 ver=1.2.1-19
+- 装机后复现流程不变：竖屏 → CC 不收起 → 点模块 → SSH 拉 ERPocketMirror，读 [BAND] 栈顶帧定位写入方
