@@ -528,3 +528,17 @@
 - 1.2.1-3 复盘：代码确认已上设备（QABTN-COMP/capsule=%d 以 UTF-16 存在 dylib，之前
   ASCII 搜索误判为旧包）。补偿仍不生效待日志（capsule=/drift= 字段）实锤后精修
 - 版本 1.2.1-4 / 1002104
+
+## 1.2.1-5（2026-10-24 傍晚）—— 偏好用户域断链兜底（重大，解释「设置了不生效」悬案）
+- 1.2.1-4 实测：翻页点回来 ✔；日志两条路径仍无文件 → 收敛出根因：
+  **SpringBoard 以 root 运行，CFPreferencesGetAppBooleanValue 按 root 用户域找
+  /var/root/Library/Preferences/…（不存在）→ valid=false → 直接走代码 fallback**。
+  设置面板（mobile）写的 /var/mobile/Library/Preferences/… 从没被 tweak 读到过！
+- 自洽验证：所有「默认 YES」开关碰巧正常（fallback 掩盖断链）；所有「默认 NO」开关
+  （LoggingEnabled）从未生效。历史上一批「设置了不生效」疑案同源
+- 修复：ERPreferenceBool/String/Double 三入口加文件兜底——CFPreferences 读不到时
+  解析 /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist
+  （ERLoadPrefs 时解析一次缓存 gERPrefsFileFallback，绕过 cfprefsd）
+- 效果：LoggingEnabled 即刻生效 → echoreborn.log（Documents 备用路径）开始落盘
+  → QABTN-COMP 的 capsule=/drift= 实测数据到手 → 胶囊下移问题精修
+- 版本 1.2.1-5 / 1002105
