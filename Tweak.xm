@@ -14313,7 +14313,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (staleFlagsSince <= 0.0) staleFlagsSince = now;
         if (now - staleFlagsSince > 1.0) {
             NSString *staleLine = [NSString stringWithFormat:
-                @"[FADE] ver=1.2.1-21 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
+                @"[FADE] ver=1.2.1-22 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
                 (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince];
             ERLogInfo(@"%@", staleLine);
             ERMirrorDiagLine(staleLine);
@@ -14334,7 +14334,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     static CGFloat lastFadeTarget = -1.0;
     if (fabs(target - lastFadeTarget) > 0.001) {
         NSString *fadeLine = [NSString stringWithFormat:
-            @"[FADE] ver=1.2.1-21 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
+            @"[FADE] ver=1.2.1-22 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
             target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
             gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen];
         ERLogInfo(@"%@", fadeLine);
@@ -14427,7 +14427,7 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
                 if (now - gERBandFixLastLog > 5.0) {
                     gERBandFixLastLog = now;
                     NSString *line = [NSString stringWithFormat:
-                        @"[BANDFIX] ver=1.2.1-21 %@ spurious hide forced 0->1 stack=%@",
+                        @"[BANDFIX] ver=1.2.1-22 %@ spurious hide forced 0->1 stack=%@",
                         NSStringFromClass([self class]), stack];
                     ERLogInfo(@"%@", line);
                     ERMirrorDiagLine(line);
@@ -14436,7 +14436,7 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
                 return;
             }
             NSString *line = [NSString stringWithFormat:
-                @"[BAND] ver=1.2.1-21 %@ alpha %.2f->%.2f hidden=%d legit=%d stack=%@",
+                @"[BAND] ver=1.2.1-22 %@ alpha %.2f->%.2f hidden=%d legit=%d stack=%@",
                 NSStringFromClass([self class]), before, alpha, (int)[self isHidden],
                 (int)legitimate, stack];
             ERLogInfo(@"%@", line);
@@ -14456,49 +14456,82 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
 // 翻页完全空闲（无 scrub/transition/拖动、未展开、CC 呈现中）时若发现位移
 // 残留或当前页模块仍被裁隐藏，走 finishInteractivePageTransitionForOverlay:
 // 落回视觉页（视觉页 = 当前页 - 位移/页距，取整钳制），位移与可见性一并恢复。
+//
+// 1.2.1-22 · **重写判定基准**：1.2.1-21 版要求「标志位已清」才恢复，但实锤
+// （用户 06:05 会话）标志位本身就会卡死——结束事件丢失后 gERPagerTransition
+// Active 永远停在 YES，staleness 看门狗被卡住的 kERPageIndicatorDraggingKey
+// 挡着不触发，恢复永远不跑，用户看到「bug 1/2 依旧」。新判定不信标志位：
+//   · gERPagerActiveGesture —— 当前翻页手势弱引用；手指还在屏幕上
+//     （numberOfTouches > 0 且 Began/Changed）即算活跃，长按不动也不误伤；
+//   · gERPagerLastActivityTime —— 所有翻页事件刷新；超过 1.5s 无活动即闲置。
+// 闲置 + （标志位卡着 / 位移残留 / 当前页模块被裁隐藏）→ 强制收敛。
+static __weak UIGestureRecognizer *gERPagerActiveGesture = nil;
+static CFTimeInterval gERPagerLastActivityTime = 0.0;
+
+static void ERMarkPagerActivity(void) {
+    gERPagerLastActivityTime = CACurrentMediaTime();
+}
+
+static BOOL ERPagerGestureAlive(void) {
+    if (!gERPagerActiveGesture) return NO;
+    if (gERPagerActiveGesture.numberOfTouches == 0) return NO;   // 手指已离屏（结束事件可能丢了，但触摸数归零是系统级的）
+    UIGestureRecognizerState state = gERPagerActiveGesture.state;
+    return state == UIGestureRecognizerStateBegan || state == UIGestureRecognizerStateChanged;
+}
+
+static BOOL ERPagerIdleStale(void) {
+    if (gERPagerLastActivityTime <= 0.0) {
+        gERPagerLastActivityTime = CACurrentMediaTime();
+        return NO;
+    }
+    return (CACurrentMediaTime() - gERPagerLastActivityTime) > 1.5;
+}
+
 static void ERRecoverStuckPagerIfNeeded(UIViewController *overlay) {
     if (!overlay || !gERPageCount || !gERControlCenterPresented || gERExpandedModuleOpen) return;
-    if (gERPagerScrubbingActive || gERPagerTransitionActive || gERDragInProgress) return;
+    if (gERDragInProgress) return;
+    if (ERPagerGestureAlive()) return;          // 手指还在屏幕上，不抢
+    if (!ERPagerIdleStale()) return;            // 1.5s 内还有翻页活动，不抢
+    BOOL flagsSet = gERPagerScrubbingActive || gERPagerTransitionActive;
     BOOL displaced = fabs(gERPagerInteractiveTranslation) > 0.5;
     BOOL currentPageHidden = NO;
-    if (!displaced) {
-        for (UIViewController *module in ERCollectModuleControllers(overlay)) {
-            NSNumber *hidden = objc_getAssociatedObject(module.view, kERPageHiddenKey);
-            if (!hidden.boolValue) continue;
-            NSString *identifier = ERModuleIdentifier(module);
-            NSValue *nativeValue = identifier.length ? gERNativeLayoutRects[identifier] : nil;
-            if (!nativeValue) continue;
-            CCUILayoutRect rect = {};
-            [nativeValue getValue:&rect];
-            NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
-            if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
-            if (ERPageForRect(rect) == gERCurrentPage) { currentPageHidden = YES; break; }
-        }
+    for (UIViewController *module in ERCollectModuleControllers(overlay)) {
+        NSNumber *hidden = objc_getAssociatedObject(module.view, kERPageHiddenKey);
+        if (!hidden.boolValue) continue;
+        NSString *identifier = ERModuleIdentifier(module);
+        NSValue *nativeValue = identifier.length ? gERNativeLayoutRects[identifier] : nil;
+        if (!nativeValue) continue;
+        CCUILayoutRect rect = {};
+        [nativeValue getValue:&rect];
+        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
+        if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
+        if (ERPageForRect(rect) == gERCurrentPage) { currentPageHidden = YES; break; }
     }
-    if (!displaced && !currentPageHidden) return;
+    if (!flagsSet && !displaced && !currentPageHidden) return;
     CGFloat span = MAX(ERVisualPageSpan(), 1.0);
     CGFloat visualPage = (CGFloat)gERCurrentPage - gERPagerInteractiveTranslation / span;
     NSInteger target = (NSInteger)llround(MIN(MAX(visualPage, 0.0), (CGFloat)gERPageCount - 1.0));
     if (target < 0) target = 0;
     NSString *line = [NSString stringWithFormat:
-        @"[PAGERRECOVER] ver=1.2.1-21 displaced=%d hidden=%d page=%ld->%ld tr=%.1f span=%.0f",
+        @"[PAGERRECOVER] ver=1.2.1-22 flags=%d/%d displaced=%d hidden=%d page=%ld->%ld tr=%.1f span=%.0f",
+        (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
         (int)displaced, (int)currentPageHidden, (long)gERCurrentPage, (long)target,
         gERPagerInteractiveTranslation, span];
     ERLogInfo(@"%@", line);
     ERMirrorDiagLine(line);
     [[EchoRebornCoordinator shared] finishInteractivePageTransitionForOverlay:overlay targetPage:(NSUInteger)target];
+    // 兜底再清一次（finish 的 completion 会清，但那条链也可能断）
+    gERPagerScrubbingActive = NO;
+    gERPagerTransitionActive = NO;
+    UIView *indicatorHost = [overlay.view viewWithTag:kERPageIndicatorHostTag];
+    if (indicatorHost) objc_setAssociatedObject(indicatorHost, kERPageIndicatorDraggingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ERMarkPagerActivity();   // 防止下一 tick 重复触发
 }
 
 static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     if (!overlay.view) return;
-    // 1.2.1-21 · 翻页卡死安全网（2s 节流：模块遍历不便宜；位移残留判定免费，
-    // 但合并同一节流逻辑简单）
-    static CFTimeInterval gERPagerRecoverLast = 0.0;
-    CFTimeInterval recoverNow = CACurrentMediaTime();
-    if (recoverNow - gERPagerRecoverLast > 2.0) {
-        gERPagerRecoverLast = recoverNow;
-        ERRecoverStuckPagerIfNeeded(overlay);
-    }
+    // 1.2.1-22 · 翻页卡死恢复（每 tick 判定；内部有 1.5s 闲置门 + 手指存活门）
+    ERRecoverStuckPagerIfNeeded(overlay);
     UIView *fade = [overlay.view viewWithTag:kERTopFadeTag];
     // pocket 只在 overlay 视图树里找一层 BFS（命中即停），不遍历全树。
     UIView *pocket = nil;
@@ -14521,6 +14554,23 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
             if ([name hasPrefix:@"CCUISensorAttribution"] || [name isEqualToString:@"CCUIStatusBar"]) {
                 ERSwizzleBandAlphaTraceOnce(child.class);
             }
+            // 1.2.1-22 · 卡死状态带恢复。实锤（用户 06:05 会话）：iOS 的伪隐藏
+            // 动画「完成块恢复」在翻页结束事件丢失时永不来 —— 状态带永久停在
+            // alpha 0（用户看到 bug 1「依旧」）。手指已离屏 + 翻页闲置 1.5s+ +
+            // 无展开/编辑/拖动时，把状态带点回 1 并清残留动画。
+            if (([name hasPrefix:@"CCUISensorAttribution"] || [name isEqualToString:@"CCUIStatusBar"]) &&
+                child.alpha <= 0.001 && !child.hidden &&
+                !gERExpandedModuleOpen && !gEditModeActive && !gERDragInProgress &&
+                !ERPagerGestureAlive() && ERPagerIdleStale()) {
+                [child.layer removeAllAnimations];
+                [UIView animateWithDuration:0.2 delay:0.0 options:UIViewAnimationOptionCurveEaseOut animations:^{
+                    child.alpha = 1.0;
+                } completion:nil];
+                NSString *bandLine = [NSString stringWithFormat:
+                    @"[BANDRESTORE] ver=1.2.1-22 %@ alpha 0->1 (stuck)", NSStringFromClass(child.class)];
+                ERLogInfo(@"%@", bandLine);
+                ERMirrorDiagLine(bandLine);
+            }
             // 类名压缩：去 CCUI 前缀，取前 12 字符，日志行才不会爆。
             NSRange prefix = [name rangeOfString:@"CCUI"];
             if (prefix.location == 0) name = [name substringFromIndex:4];
@@ -14541,7 +14591,7 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     static NSString *lastSignature = nil;
     if (![signature isEqualToString:lastSignature]) {
         lastSignature = signature;
-        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-21 %@", signature];
+        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-22 %@", signature];
         ERLogInfo(@"%@", pocketLine);
         // 1.2.1-18：进专用镜像环（文件通道不落盘 + 短会话不刷盘的双保险）。
         ERMirrorDiagLine(pocketLine);
@@ -15328,7 +15378,11 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     slide.duration = duration;
     slide.timingFunction = curve;
     [collectionLayer addAnimation:slide forKey:@"EchoRebornPageSettleSublayerTransform"];
-    ERLogInfo(@"PAGESETTLE ver=1.0.9-109 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration);
+    NSString *settleLine = [NSString stringWithFormat:@"PAGESETTLE ver=1.2.1-22 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration];
+    ERLogInfo(@"%@", settleLine);
+    // 1.2.1-22 · 落位数据同时进诊断专用环：通用环 60 行仍可能被其他事件挤出，
+    // 诊断环（24 行、低流量）保证 bug 3 的 from/to/dur 时序一定在手。
+    ERMirrorDiagLine(settleLine);
     ERStartPageSettleProbe(collectionLayer);
 
     // 1.0.7-17（方案 A，实装）：快捷指令磁贴的宿主层参与同一条落位补间。
@@ -15362,6 +15416,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)setCurrentPage:(NSUInteger)page forOverlay:(UIViewController *)overlay animated:(BOOL)animated {
     if (!overlay || !gERPageCount) return;
+    ERMarkPagerActivity();   // 1.2.1-22 · 点按翻页也刷新活动
     if (!gPagingEnabled) {
         page = 0;
         animated = NO;
@@ -15442,6 +15497,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)beginInteractivePageTransitionForOverlay:(UIViewController *)overlay startPage:(NSUInteger)startPage {
     if (!gPagingEnabled || !overlay || gERPageCount <= 1 || gERPagerTransitionActive) return;
+    ERMarkPagerActivity();   // 1.2.1-22 · 卡死恢复的活动基准
     gERPagerTransitionActive = YES;
     gERPagerInteractiveStartPage = MIN(startPage, gERPageCount - 1);
     gERPagerInteractiveProgress = gERPagerInteractiveStartPage;
@@ -15501,6 +15557,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)updateInteractivePageTransitionForOverlay:(UIViewController *)overlay progress:(CGFloat)progress touchY:(CGFloat)touchY {
     if (!overlay || !gERPagerTransitionActive) return;
+    ERMarkPagerActivity();   // 1.2.1-22 · 拖拽推进即活跃（长按不动不刷，靠手指存活门兜住）
     ERClampNativeScrollViewForOverlay(overlay);
     CGFloat maxProgress = (CGFloat)gERPageCount - 1.0;
     CGFloat clamped = MIN(maxProgress, MAX(0.0, progress));
@@ -15699,6 +15756,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)finishInteractivePageTransitionForOverlay:(UIViewController *)overlay targetPage:(NSUInteger)targetPage {
     if (!overlay) return;
+    ERMarkPagerActivity();   // 1.2.1-22 · 收尾也刷新活动（settle 进行中不算闲置）
     ERReassertNativeScrollClampForOverlay(overlay);
     gERPagerInteractiveBeganTime = 0.0;
     NSUInteger target = MIN(targetPage, gERPageCount - 1);
@@ -15798,6 +15856,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         objc_setAssociatedObject(gesture, kERPagerStartPageKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(gesture, kERPagerOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(host, kERPageIndicatorDraggingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gERPagerActiveGesture = nil;   // 1.2.1-22 · 结束态优先块也视为放手
         ERLogInfo(@"[PAGER] indicator end-priority finish overlay=%d start=%lu target=%lu state=%ld",
                   (int)(finishOverlay != nil), (unsigned long)startPage,
                   (unsigned long)targetPage, (long)gesture.state);
@@ -15814,6 +15873,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         objc_setAssociatedObject(gesture, kERPagerStartPageKey, @(gERCurrentPage), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         // 1.2.1-21 · overlay 票根：结束态补走收尾时用（见方法开头结束态优先块）
         objc_setAssociatedObject(gesture, kERPagerOverlayKey, overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        gERPagerActiveGesture = gesture;   // 1.2.1-22 · 手指存活判定用
         [self beginInteractivePageTransitionForOverlay:overlay startPage:gERCurrentPage];
         location = [gesture locationInView:host];
         progress = ERPageProgressForScrubY(location.y, kERPageIndicatorScrubStep, gERPageCount);
@@ -16213,7 +16273,9 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     for (UIViewController *candidate in gOverlayControllers.allObjects) if (candidate.view == gesture.view) { overlay = candidate; break; }
     if (!gPagingEnabled || !overlay || gERPageCount <= 1 ||
         gERExpandedModuleOpen || gERDragInProgress) return;
+    ERMarkPagerActivity();   // 1.2.1-22 · 翻页事件即活跃
     if (gesture.state == UIGestureRecognizerStateBegan) {
+        gERPagerActiveGesture = gesture;   // 1.2.1-22 · 手指存活判定用
         gERPagerTransitionActive = YES;
         if (gEditModeActive) [self setEditControlsSuppressedForPaging:YES overlay:overlay animated:YES];
         [self updateTopFadeForOverlay:overlay presentationAlpha:1.0];
@@ -16285,6 +16347,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         return;
     }
     if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
+        gERPagerActiveGesture = nil;   // 1.2.1-22 · 结束即放手（事件丢了也会有触摸归零兜底）
         CGPoint velocity = [gesture velocityInView:overlay.view];
         NSInteger target = (NSInteger)startPage;
         if (gesture.state == UIGestureRecognizerStateEnded) {
