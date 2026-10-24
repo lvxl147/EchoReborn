@@ -583,3 +583,7 @@
 - 方案：目标 = 每方向冻结常量窗口 Y（REF，首次见面标定；胶囊紧凑态在场时推迟标定），ty = REF − layout 反向抵消，夹取 [-60,60]
 - 新胶囊几何探针 ERCapsuleCompactPresent：SBSystemApertureContainerView 宽度 ∈ (100,160) = 紧凑态（实证：166↔125.3 切换），类名探测 iOS 17 失效后的可靠替代
 - 心跳改记 ref/compact；REF-SET/REF-DEFER/PIN 事件进 ERQAMirror
+
+## 1.2.1-12（1002112）· REF 标定稳定性门
+- **1.2.1-11 实测失控**：REF 在 CC 开场动画途中被标成瞬态值（layout=95），layout 落到真实值后 ty 一路加到 60 上限，按钮被推下 60pt——100ms 定时器采到了动画中间帧
+- 修复：标定要求连续 3 帧布局几乎相同（300ms 静止）才允许；胶囊紧凑态在场照旧推迟
