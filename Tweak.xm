@@ -119,6 +119,17 @@ static void ERLogMessage(NSString *level, NSString *format, ...);
 #define ERLogWarn(...)    ERLogMessage(@"WARN", __VA_ARGS__)
 #define ERLogError(...)   ERLogMessage(@"ERROR", __VA_ARGS__)
 
+// 1.2.1-18 · cfprefsd 日志镜像（roothide 实锤文件通道不落盘后的唯一可靠通道）。
+// 1.2.1-16 回退 1.2.0-97 基底时丢失了 1.2.1-8 建的镜像，导致 1.2.1-17 装机后
+// 复现数据全部丢失（复现时产生的日志行 < 8 条不刷盘，且文件写入被 roothide
+// 虚拟化「进程内成功但不落盘」）。本版恢复双环镜像：
+//   ERMirrorLogLine  —— 通用 60 行环 → CF 键 ERLogMirror（逐行即写）
+//   ERMirrorDiagLine —— [FADE]/[POCKET] 专用 16 行环 → CF 键 ERPocketMirror
+// SSH 读 /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist 即得。
+static void ERMirrorLogLine(NSString *line);
+static void ERMirrorDiagLine(NSString *line);
+static NSString *ERLogTimestamp(void);   // 1.2.1-18 · 镜像行补时间戳用（定义在下方）
+
 // 1.0.6-10（第 1 条）：热路径诊断的最小间隔闸门。
 //
 // 背景（实机量化，1.0.6-9 日志 235006，55 秒会话）：
@@ -6005,6 +6016,45 @@ static void ERLogAppendLines(NSArray<NSString *> *lines) {
     ERLogTruncateIfNeeded();
 }
 
+// 1.2.1-18 · cfprefsd 日志镜像（实现）。
+//
+// 背景实锤链：1.2.1-7 发现 SpringBoard 文件写入「进程内成功但不落盘」
+// （roothide 虚拟化）；1.2.1-8 建立 CFPreferences 镜像通道并验证可用
+// （Diag/ERLogMirror 均经 SSH 从 mobile 域 plist 读出）；1.2.1-16 回退
+// 1.2.0-97 基底时把该通道一并还原掉了 → 1.2.1-17 装机后复现数据全丢。
+//
+// 两个环：
+//   ERLogMirror   —— 全部日志尾 60 行（12KB 上限），逐行更新。短会话不再丢。
+//   ERPocketMirror —— 仅 [FADE]/[POCKET] 尾 16 行，逐行更新。1.2.1-9 教训：
+//                     通用 60 行窗口会被批量日志（一次 38 行）冲出，专用环保证
+//                     bug 1 的诊断时序永远在手。
+static void ERMirrorRingUpdate(NSString *key, NSString *line, NSUInteger ringSize, NSUInteger maxBytes) {
+    if (!line.length) return;
+    @try {
+        NSString *existing = (__bridge_transfer NSString *)CFPreferencesCopyAppValue((__bridge CFStringRef)key, kERPrefsDomain);
+        NSMutableArray<NSString *> *ring = [NSMutableArray array];
+        if (existing.length) [ring addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
+        [ring addObject:line];
+        while (ring.count > ringSize) [ring removeObjectAtIndex:0];
+        NSString *joined = [ring componentsJoinedByString:@"\n"];
+        if (joined.length > maxBytes) joined = [joined substringFromIndex:joined.length - maxBytes];
+        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)joined, kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+    } @catch (__unused NSException *mirrorIgnored) {}
+}
+
+static void ERMirrorLogLine(NSString *line) {
+    // 入参已由 ERLogRecord 带上时间戳与级别，直接入环。
+    if (!gERLoggingEnabled) return;
+    ERMirrorRingUpdate(@"ERLogMirror", line, 60, 12000);
+}
+
+static void ERMirrorDiagLine(NSString *line) {
+    if (!gERLoggingEnabled || !line.length) return;
+    NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
+    ERMirrorRingUpdate(@"ERPocketMirror", stamped, 16, 4000);
+}
+
 static NSString *ERLogTimestamp(void) {
     static NSDateFormatter *formatter;
     static dispatch_once_t onceToken;
@@ -6034,6 +6084,9 @@ static void ERLogRecord(NSString *level, NSString *message) {
         // pipeline: at Control Center's per-layout call rate it stalled the
         // main thread badly enough that the overlay never finished presenting.
         [gERLogBuffer addObject:line];
+        // 1.2.1-18 · 逐行镜像（不再等 8 条刷盘）：短会话（< 8 条）以前会整段
+        // 丢失，而复现 bug 的会话往往就只有几条。镜像环在 CF 键里，SSH 可读。
+        ERMirrorLogLine(line);
         if (gERLogBuffer.count > kERLogMaxBufferedLines) {
             NSUInteger drop = gERLogBuffer.count - kERLogMaxBufferedLines;
             [gERLogBuffer removeObjectsInRange:NSMakeRange(0, drop)];
@@ -14248,8 +14301,11 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         CFTimeInterval now = CACurrentMediaTime();
         if (staleFlagsSince <= 0.0) staleFlagsSince = now;
         if (now - staleFlagsSince > 1.0) {
-            ERLogInfo(@"[FADE] ver=1.2.1-17 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
-                      (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince);
+            NSString *staleLine = [NSString stringWithFormat:
+                @"[FADE] ver=1.2.1-18 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
+                (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince];
+            ERLogInfo(@"%@", staleLine);
+            ERMirrorDiagLine(staleLine);
             gERPagerScrubbingActive = NO;
             gERPagerTransitionActive = NO;
             staleFlagsSince = 0.0;
@@ -14262,11 +14318,16 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     CGFloat target = active ? MIN(1.0, MAX(0.0, alpha)) : 0.0;
     // 1.2.1-17 · bug 1 诊断：fade 点亮/熄灭逐变记录（含标志位），装机后
     // 据此确认「状态区消失」是否由 fade 覆盖引起、由哪个标志点亮。
+    // 1.2.1-18：同时进 ERPocketMirror 专用环（文件通道 roothide 下不落盘，
+    // 且短会话 < 8 条不刷盘；镜像环逐行即写、SSH 可读）。
     static CGFloat lastFadeTarget = -1.0;
     if (fabs(target - lastFadeTarget) > 0.001) {
-        ERLogInfo(@"[FADE] ver=1.2.1-17 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
-                  target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
-                  gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen);
+        NSString *fadeLine = [NSString stringWithFormat:
+            @"[FADE] ver=1.2.1-18 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
+            target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
+            gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen];
+        ERLogInfo(@"%@", fadeLine);
+        ERMirrorDiagLine(fadeLine);
         lastFadeTarget = target;
     }
     fade.hidden = target <= 0.001;
@@ -14324,7 +14385,10 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     static NSString *lastSignature = nil;
     if (![signature isEqualToString:lastSignature]) {
         lastSignature = signature;
-        ERLogInfo(@"[POCKET] ver=1.2.1-17 %@", signature);
+        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-18 %@", signature];
+        ERLogInfo(@"%@", pocketLine);
+        // 1.2.1-18：进专用镜像环（文件通道不落盘 + 短会话不刷盘的双保险）。
+        ERMirrorDiagLine(pocketLine);
     }
 }
 
