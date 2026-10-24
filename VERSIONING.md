@@ -492,3 +492,11 @@
   ④ ERModuleIdentifier 挂关联对象代际缓存（旧实现每次 2-4 层 KVC）；addControl 的 sizeToFit+落位只在 bounds/安全区变化时重算
   ⑤ 每帧 frame/hidden/alpha 写入包 CATransaction setDisableActions:YES，消除隐式动画调度
 - 版本 1.2.1-1 / 1002101
+
+## 1.2.1-2（2026-10-24 午后）—— 手势注销真凶实锤修复（重大）
+- 用户翻出崩溃日志 SpringBoard-2026-10-24-124602.ips：EXC_BAD_ACCESS SIGSEGV KERN_PROTECTION_FAILURE（栈区）= 栈溢出；主线程 511 帧中 ~490 帧为 EchoReborn.dylib 同一偏移自递归 + -[NSString stringByAppendingFormat:]
+- Mach-O 符号化（UUID d2ae01dc 切片匹配）+ 反汇编定位：递归点 = ERSPGSCOLookupOrig 的 class#selector 键拼接（stringByAppendingFormat）+ ellekit 转发蹦床（d0/d1 双浮点参数 = impactOccurredWithIntensity: 签名）
+- 根因：1.2.0-32 广谱震动拦截遍历所有类名含 Feedback/Haptic 的类挂钩 4 方法——对子类 S 调 class_getInstanceMethod 拿到的是已挂钩父类的 IMP（即我们自己的 hook），仍存入 gERSPGSCOOrig["S#sel"] → 运行时 hook→LookupOrig 查到自身→调自己→490 层递归→栈爆
+- 完美解释：①只有手势开才崩（手势震动走 sERSPGOwnHaptic 放行路径进 LookupOrig；手动开关被 ERSPGShouldDropSysHaptic 拦掉不进）②第 2-4 次才崩（取决于哪个私有子类 generator 先走带强度的 impactOccurredWithIntensity:）③探针零痕迹（不是 SB 逻辑死，是我们把栈打爆，死亡过快）
+- 修复三层防御：①ERSPGSCOImpIsOwn() + LookupOrig 查到自身 IMP 跳过继续向父类找 ②AttachSCOHook 存储前 orig==自身则不存不挂 ③广谱扫描同款防御
+- 版本 1.2.1-2 / 1002102
