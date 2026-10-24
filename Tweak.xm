@@ -468,6 +468,11 @@ static const void *kEREditGridBaseOriginKey = &kEREditGridBaseOriginKey;
 // 1.0.6-9（第 1 条）：编辑网格对齐探针的去重状态。
 static const void *kEREditGridProbeStateKey = &kEREditGridProbeStateKey;
 static const void *kERRemoveButtonKey = &kERRemoveButtonKey;
+// 1.2.1-1 · 编辑模式降负的帧级跳过缓存 key
+static const void *kERModuleLastChromeFrameKey = &kERModuleLastChromeFrameKey;
+static const void *kERModuleLastChromeStateKey = &kERModuleLastChromeStateKey;
+static const void *kERAddControlLastBoundsKey = &kERAddControlLastBoundsKey;
+static const void *kERAddControlLastInsetsKey = &kERAddControlLastInsetsKey;
 static const void *kERRemoveModuleViewKey = &kERRemoveModuleViewKey;
 static const void *kERDragPreviewTargetKey = &kERDragPreviewTargetKey;
 static const void *kERDragProxyKey = &kERDragProxyKey;
@@ -6267,21 +6272,40 @@ static void ERHapticWithStrength(NSInteger strength) {
     [gTapHapticGenerator impactOccurred];
 }
 
+// 1.2.1-1 · 编辑模式降负（第 3 项）：模块 identifier 代际缓存。
+// identifier 只在模块重建时才会变，但 ERModuleIdentifier 每次都走 2~4 层
+// KVC（moduleIdentifier/_moduleIdentifier/module.contentModuleContext…），
+// 编辑态 display link 每帧 × 每模块都在跑 → 挂关联对象按代际缓存。
+// 代际号 gERModuleListGeneration 在模块集合变化点递增（见 ERCollectModuleControllers）。
+static NSUInteger gERModuleListGeneration = 1;
+static const void *kERIdentifierCacheValKey = &kERIdentifierCacheValKey;
+static const void *kERIdentifierCacheGenKey = &kERIdentifierCacheGenKey;
 static NSString *ERModuleIdentifier(UIViewController *controller) {
+    if (!controller) return nil;
+    NSNumber *cachedGen = objc_getAssociatedObject(controller, kERIdentifierCacheGenKey);
+    NSString *cachedVal = objc_getAssociatedObject(controller, kERIdentifierCacheValKey);
+    if (cachedGen && cachedVal && cachedGen.unsignedIntegerValue == gERModuleListGeneration) return cachedVal;
+    NSString *resolved = nil;
     NSArray<NSString *> *keys = @[@"moduleIdentifier", @"_moduleIdentifier"];
     for (NSString *key in keys) {
         @try {
             id value = [controller valueForKey:key];
-            if ([value isKindOfClass:[NSString class]] && [value length]) return value;
+            if ([value isKindOfClass:[NSString class]] && [value length]) { resolved = value; break; }
         } @catch (__unused NSException *exception) {}
     }
-    @try {
-        id module = [controller valueForKey:@"module"];
-        id context = [module valueForKey:@"contentModuleContext"];
-        id value = [context valueForKey:@"moduleIdentifier"];
-        if ([value isKindOfClass:[NSString class]]) return value;
-    } @catch (__unused NSException *exception) {}
-    return nil;
+    if (!resolved) {
+        @try {
+            id module = [controller valueForKey:@"module"];
+            id context = [module valueForKey:@"contentModuleContext"];
+            id value = [context valueForKey:@"moduleIdentifier"];
+            if ([value isKindOfClass:[NSString class]]) resolved = value;
+        } @catch (__unused NSException *exception) {}
+    }
+    if (resolved) {
+        objc_setAssociatedObject(controller, kERIdentifierCacheValKey, resolved, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(controller, kERIdentifierCacheGenKey, @(gERModuleListGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return resolved;
 }
 
 static UIViewController *ERModuleControllerForView(UIView *view) {
@@ -9081,8 +9105,27 @@ static void ERSliderReadoutTick(UIView *slider, float value) {
     ERSliderReadoutBegin(slider);
 }
 
+// 1.2.1-1 · 编辑模式降负（第 2 项）：BFS 结果按 overlay 缓存 + 代际失效。
+// 编辑态 display link 每帧对每个 overlay 跑一次全量 BFS（childViewControllers
+// 递归收集），帧率随页数/模块数线性劣化 → 缓存列表，模块集合变化点调
+// ERInvalidateModuleListCache() 递增代际使全部失效。
+static NSMutableDictionary<NSValue *, NSArray<UIViewController *> *> *gERModuleListCache = nil;
+static NSMutableDictionary<NSValue *, NSNumber *> *gERModuleListCacheGen = nil;
+static void ERInvalidateModuleListCache(void) { gERModuleListGeneration++; }
+
 static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root) {
     if (!root) return @[];
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gERModuleListCache = [NSMutableDictionary dictionary];
+        gERModuleListCacheGen = [NSMutableDictionary dictionary];
+    });
+    NSValue *key = [NSValue valueWithNonretainedObject:root];
+    NSNumber *gen = [gERModuleListCacheGen objectForKey:key];
+    if (gen && gen.unsignedIntegerValue == gERModuleListGeneration) {
+        NSArray<UIViewController *> *hit = [gERModuleListCache objectForKey:key];
+        if (hit) return hit;
+    }
     NSMutableArray *result = [NSMutableArray array];
     NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
     while (queue.count) {
@@ -9091,7 +9134,10 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
         if (candidate != root && ERIsModuleController(candidate)) [result addObject:candidate];
         [queue addObjectsFromArray:candidate.childViewControllers];
     }
-    return result;
+    NSArray *frozen = [result copy];
+    [gERModuleListCache setObject:frozen forKey:key];
+    [gERModuleListCacheGen setObject:@(gERModuleListGeneration) forKey:key];
+    return frozen;
 }
 
 static UIViewController *ERModuleControllerMatchingObject(UIViewController *overlay, id object) {
@@ -18826,6 +18872,7 @@ static void ERActClsProbe(void) {
 }
 
 - (void)addControlSheetDidSelectIdentifier:(NSString *)identifier fromSheet:(UIViewController *)sheet {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     @try {
         [self erAddControlSheetDidSelectIdentifierCore:identifier fromSheet:sheet];
     } @catch (NSException *exception) {
@@ -18853,6 +18900,7 @@ static void ERActClsProbe(void) {
 }
 
 - (void)erRemoveTappedCore:(UIButton *)sender {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     ERHaptic();
     NSString *identifier = objc_getAssociatedObject(sender, @selector(removeTapped:));
     if (!identifier.length) return;
@@ -18948,6 +18996,7 @@ static void ERActClsProbe(void) {
     // hierarchy settles.
     for (NSNumber *delay in @[@0.15, @0.35, @0.65]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            ERInvalidateModuleListCache();  // 1.2.1-1 · 集合重建后失效
             UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
             if (!overlay) return;
             [self installQuickAccessHostOnOverlay:overlay];
@@ -19043,16 +19092,37 @@ static CGFloat EROversizedMediaCornerRadius(void) {
     return isRectangularGridModule ? radius + 4.0 : radius;
 }
 
+// 1.2.1-1 · 编辑模式降负（第 1 项，头号杀手）：
+// 旧实现每帧每模块 new UIBezierPath 环 + new CAShapeLayer 设 layer.mask ——
+// 10~20 个模块 × 60fps = 每秒几百次对象分配 + mask 全量重设，GPU/主线程双杀。
+// 现在：① frame+radius 没变直接 return（编辑态静止时逐帧归零）；② mask 层挂
+// 关联对象复用，只更新 path；③ layer.mask 只在真正变化时赋值。
+static NSMapTable *gERBorderLastFrame = nil;   // border -> 上次布局目标 frame
+static const void *kERBorderMaskLayerKey = &kERBorderMaskLayerKey;
+
 - (void)configureEditingBorder:(UIVisualEffectView *)border moduleFrame:(CGRect)moduleFrame {
     if (!border) return;
-    border.frame = CGRectInset(moduleFrame, -3.5, -3.5);
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ gERBorderLastFrame = [NSMapTable strongToStrongObjectsMapTable]; });
+    CGRect target = CGRectInset(moduleFrame, -3.5, -3.5);
     CGFloat radius = [self refinedCornerRadiusForSize:moduleFrame.size];
+    NSValue *last = [gERBorderLastFrame objectForKey:border];
+    if (last) {
+        CGRect lastFrame = last.CGRectValue;
+        if (CGRectEqualToRect(lastFrame, target) && border.layer.mask) return;
+    }
+    [gERBorderLastFrame setObject:[NSValue valueWithCGRect:target] forKey:border];
+    border.frame = target;
+    CAShapeLayer *mask = objc_getAssociatedObject(border, kERBorderMaskLayerKey);
+    if (![mask isKindOfClass:[CAShapeLayer class]]) {
+        mask = [CAShapeLayer layer];
+        mask.fillRule = kCAFillRuleEvenOdd;
+        objc_setAssociatedObject(border, kERBorderMaskLayerKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     UIBezierPath *ring = [UIBezierPath bezierPathWithRoundedRect:border.bounds cornerRadius:radius + 3.5];
     [ring appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectInset(border.bounds, 3.5, 3.5) cornerRadius:radius]];
-    CAShapeLayer *mask = [CAShapeLayer layer];
     mask.path = ring.CGPath;
-    mask.fillRule = kCAFillRuleEvenOdd;
-    border.layer.mask = mask;
+    if (border.layer.mask != mask) border.layer.mask = mask;
 }
 
 - (id)labelBlurFilterWithRadius:(CGFloat)radius {
@@ -19809,6 +19879,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (BOOL)applyExplicitGridMoveFrom:(NSString *)sourceID toOrigin:(CCUILayoutPoint)destination onPage:(NSUInteger)page overlay:(UIViewController *)overlay {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     NSValue *sourceValue = gERNativeLayoutRects[sourceID];
     if (!sourceValue) return NO;
     NSMutableDictionary<NSString *, NSValue *> *proposed = ERLayoutForPage(overlay, page, kERMinimumGridRows);
@@ -19854,6 +19925,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (BOOL)applyExplicitGridInsertionFrom:(NSString *)sourceID toOrigin:(CCUILayoutPoint)destination onPage:(NSUInteger)page maxRows:(NSUInteger)maxRows overlay:(UIViewController *)overlay {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     NSValue *sourceValue = gERNativeLayoutRects[sourceID];
     if (!sourceValue || maxRows == 0) return NO;
     NSMutableDictionary<NSString *, NSValue *> *initial = ERLayoutForPage(overlay, page, maxRows);
@@ -21785,26 +21857,55 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (gERDragInProgress || gERPagerTransitionActive || gERPagerScrubbingActive) return;
     UIButton *addControl = (UIButton *)[overlay.view viewWithTag:kERAddControlButtonTag];
     if (addControl) {
-        // Centered in the blank space between the last module row and the
-        // bottom of the display, sitting just above the home indicator.
-        [addControl sizeToFit];
-        CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
-        CGRect bounds = overlay.view.bounds;
-        // 1.0.6-10（第 4 条）：整体上移 2pt（对应「距底 4 → 6，增加二分之一」）。
-        //
-        // 方向务必注意：origin.y = 高度 − bottomInset − size.height，所以**增大**
-        // bottomInset 才是上移。此前记录里写的「−14 → −16」会得到更小的 bottomInset，
-        // 方向相反、实际是下移 2pt。这里两个分支同时 +2：常规分支 −14 → −12，
-        // 下限分支 16 → 18 —— 无论设备是否命中下限，视觉位移都恰好是 2pt。
-        CGFloat bottomInset = MAX(overlay.view.safeAreaInsets.bottom - 12.0, 18.0);
-        addControl.frame = CGRectMake((CGRectGetWidth(bounds) - size.width) / 2.0, CGRectGetHeight(bounds) - bottomInset - size.height, size.width, size.height);
+        // 1.2.1-1 · 编辑模式降负（第 4 项）：addControl 的 sizeToFit+落位只在
+        // bounds/安全区真的变化时重算，静止帧不再做 measure 一遍。
+        NSValue *lastBounds = objc_getAssociatedObject(addControl, kERAddControlLastBoundsKey);
+        NSValue *lastInsets = objc_getAssociatedObject(addControl, kERAddControlLastInsetsKey);
+        UIEdgeInsets insets = overlay.view.safeAreaInsets;
+        BOOL changed = !lastBounds || !CGRectEqualToRect(lastBounds.CGRectValue, overlay.view.bounds)
+                       || !lastInsets || !UIEdgeInsetsEqualToEdgeInsets(lastInsets.CGRectValue, insets);
+        if (changed) {
+            [addControl sizeToFit];
+            CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
+            CGRect bounds = overlay.view.bounds;
+            // 1.0.6-10（第 4 条）：整体上移 2pt（对应「距底 4 → 6，增加二分之一」）。
+            //
+            // 方向务必注意：origin.y = 高度 − bottomInset − size.height，所以**增大**
+            // bottomInset 才是上移。此前记录里写的「−14 → −16」会得到更小的 bottomInset，
+            // 方向相反、实际是下移 2pt。这里两个分支同时 +2：常规分支 −14 → −12，
+            // 下限分支 16 → 18 —— 无论设备是否命中下限，视觉位移都恰好是 2pt。
+            CGFloat bottomInset = MAX(insets.bottom - 12.0, 18.0);
+            addControl.frame = CGRectMake((CGRectGetWidth(bounds) - size.width) / 2.0, CGRectGetHeight(bounds) - bottomInset - size.height, size.width, size.height);
+            objc_setAssociatedObject(addControl, kERAddControlLastBoundsKey, [NSValue valueWithCGRect:overlay.view.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(addControl, kERAddControlLastInsetsKey, [NSValue valueWithUIEdgeInsets:insets], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     }
+    // 1.2.1-1 · 编辑模式降负（第 5 项）：每帧的 frame/hidden/alpha 写入包进
+    // 禁隐式动画的事务——既省掉每帧隐式动画的调度，也防止抖动。
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     for (UIViewController *module in ERCollectModuleControllers(overlay)) {
+        if (!module.view) continue;
         if ((gERDragInProgress && module.view == gERActiveDragModuleView) ||
             (gERResizeInProgress && module.view == gERActiveResizeModuleView)) continue;
         UIButton *remove = objc_getAssociatedObject(module.view, kERRemoveButtonKey);
         UIButton *resize = objc_getAssociatedObject(module.view, kERResizeButtonKey);
         CGRect moduleFrame = [module.view convertRect:module.view.bounds toView:overlay.view];
+        // 1.2.1-1 · 编辑模式降负（第 3 项）：帧级快速跳过——模块 frame 与 chrome
+        // 状态位（抑制/边框开关/删除钮开关/当前页）都没变时，本模块整段跳过。
+        // 只比 frame 不够：gEREditChromeSuppressedForPaging 等开关变化时 frame 不动，
+        // 但 hidden/alpha 必须跟上。
+        NSUInteger chromeState = (gEREditChromeSuppressedForPaging ? 1u : 0u)
+                               | (gModuleBordersEnabled ? 2u : 0u)
+                               | (gRemovalButtonsEnabled ? 4u : 0u)
+                               | ((gERCurrentPage & 0xFFu) << 3);
+        NSValue *lastFrameValue = objc_getAssociatedObject(module.view, kERModuleLastChromeFrameKey);
+        NSNumber *lastState = objc_getAssociatedObject(module.view, kERModuleLastChromeStateKey);
+        if (lastFrameValue && lastState
+            && CGRectEqualToRect(lastFrameValue.CGRectValue, moduleFrame)
+            && lastState.unsignedIntegerValue == chromeState) continue;
+        objc_setAssociatedObject(module.view, kERModuleLastChromeFrameKey, [NSValue valueWithCGRect:moduleFrame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(module.view, kERModuleLastChromeStateKey, @(chromeState), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         // Borders live with their module wrapper and are naturally clipped by
         // the moving collection. Remove/resize controls live on overlay.view,
         // so explicitly cull them when their owner is outside the viewport;
@@ -21825,6 +21926,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (resize) resize.hidden = !ownerVisible || ![self moduleIdentifierSupportsResizing:identifier];
         [self positionEditControlsForModuleView:module.view overlay:overlay overlayFrame:moduleFrame];
     }
+    [CATransaction commit];
 }
 
 - (void)editChromeDisplayLinkFired:(__unused CADisplayLink *)displayLink {
@@ -21859,6 +21961,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (void)setEditing:(BOOL)editing {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     if (!gEnabled) editing = NO;
     if (editing && gERExpandedModuleOpen) return;
     NSUInteger editTransitionGeneration = ++gEREditTransitionGeneration;
@@ -21897,6 +22000,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (void)dismissEditingImmediately {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     if (!gEditModeActive) return;
     ++gEREditTransitionGeneration;
     gEREditTransitionActive = NO;
