@@ -4185,6 +4185,12 @@ static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
 static const void *kERQAAnchorOffsetKey = &kERQAAnchorOffsetKey;   // 1.2.1-10 · 几何跟随的锚偏移
 static const void *kERQARefPortraitKey = &kERQARefPortraitKey;     // 1.2.1-11 · 竖屏冻结目标 Y（窗口绝对坐标）
 static const void *kERQARefLandscapeKey = &kERQARefLandscapeKey;   // 1.2.1-11 · 横屏冻结目标 Y
+// 1.2.1-13 · 双 REF：绿点（权限胶囊紧凑态）在场/不在场各一个冻结值。
+//   1.2.1-12 死锁实证：用户开控制中心时绿点常在场（相机/麦克风使用中），REF-DEFER 无限循环
+//   → 永不标定 → 永不补偿。实测两个稳定态：layout≈69（无绿点）、layout≈95（有绿点，差≈26pt）。
+//   → 接受两个稳定态，各自钉死：有绿点用 capsule-REF，无绿点用 normal-REF。
+static const void *kERQARefPortraitCapsuleKey = &kERQARefPortraitCapsuleKey;   // 竖屏 · 绿点在场冻结值
+static const void *kERQARefLandscapeCapsuleKey = &kERQARefLandscapeCapsuleKey; // 横屏 · 绿点在场冻结值
 // 1.0.9-19 · 按钮「开环补偿」的两个独立偏移量（用户确认：横竖屏显示位置不同，必须分开）。
 // 依据：20260921-2009 日志实测 —— 正常时 hostWinY=45.7、胶囊在场时稳定在 69.2，差值 ≈ 23.5pt。
 // 开环 = 只用「是否被压低」这个状态决定偏移，位移取固定常量：
@@ -4328,7 +4334,12 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     // 1.0.9-17 · 同时记录 transform.ty：校正若写入失败（被系统重置），这里会一直是 0。
                     hbTransformTY = host.transform.ty;
                     // 1.2.1-11 · 心跳字段语义更新：hbBase 复用为当前方向的冻结目标 REF
-                    NSNumber *hbRef = objc_getAssociatedObject(host, ERLandscapePresentationActive() ? kERQARefLandscapeKey : kERQARefPortraitKey);
+                    // 1.2.1-13 · 心跳 REF 读取同样按绿点状态选双 REF 之一
+                    BOOL hbCompact = ERCapsuleCompactPresent();
+                    void *hbRefKey = ERLandscapePresentationActive()
+                        ? (hbCompact ? (void *)kERQARefLandscapeCapsuleKey : (void *)kERQARefLandscapeKey)
+                        : (hbCompact ? (void *)kERQARefPortraitCapsuleKey : (void *)kERQARefPortraitKey);
+                    NSNumber *hbRef = objc_getAssociatedObject(host, hbRefKey);
                     hbBase = hbRef ? hbRef.doubleValue : -1.0;
                 }
                 // 1.0.9-19 · **开环状态机**（用户确认方案）：
@@ -4342,26 +4353,33 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 // 1.2.1-11 · **绝对钉死**（1.2.1-10 跟随锚的实证修正）：
                 //   复现数据（12:52:30→35）证明胶囊出现时 CC 面板整体下移（锚容器 +25.8pt），
                 //   跟随任何原生视图都会被带着走。CC18 式"永不动"的唯一几何解释 =
-                //   **窗口绝对坐标恒定**。目标 = 每方向冻结常量 Y（首次见面标定，胶囊紧凑态在场
-                //   时推迟），系统推多少 ty 反向抵消多少，夹取 [-60,60] 防失控。
-                void *refKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
+                //   **窗口绝对坐标恒定**。系统推多少 ty 反向抵消多少，夹取 [-60,60] 防失控。
+                // 1.2.1-13 · **双 REF**：绿点在场/不在场是两个稳定布局态（实测 95.0 / ~69），
+                //   各自冻结一个 REF。1.2.1-12 的"胶囊在场拒绝标定"死锁（12 条 REF-DEFER 连环，
+                //   layout=95 连续通过 3 帧稳定门 → 用户开 CC 时绿点常在场 → 永不标定）就此取消：
+                //   现在两种状态都允许标定，标定后各自钉死，下移观感由反向 ty 抵消。
+                BOOL qaCompact = ERCapsuleCompactPresent();
+                void *refKey = nil;
+                if (ERLandscapePresentationActive()) {
+                    refKey = qaCompact ? (void *)kERQARefLandscapeCapsuleKey : (void *)kERQARefLandscapeKey;
+                } else {
+                    refKey = qaCompact ? (void *)kERQARefPortraitCapsuleKey : (void *)kERQARefPortraitKey;
+                }
                 NSNumber *refNum = objc_getAssociatedObject(host, refKey);
                 if (!refNum) {
                     // 1.2.1-12 · 标定稳定性门：REF 必须在布局**静止**时采集。1.2.1-11 实测教训——
                     // 100ms 定时器在 CC 开场动画途中把瞬态值（layout=95）标成 REF，随后 layout
                     // 落到真实值，ty 一路加到 60 上限把按钮推下 60pt。现在要求连续 3 帧布局
-                    // 几乎相同（300ms 静止）才允许标定。
+                    // 几乎相同（300ms 静止）才允许标定。1.2.1-13 附注：绿点在场时同样允许标定
+                    // （存入 capsule-REF），不再无限 DEFER。
                     static CGFloat sPrev1 = -999, sPrev2 = -999;
                     BOOL stable = (fabs(layoutWinY - sPrev1) < 0.5) && (fabs(sPrev1 - sPrev2) < 0.5);
                     sPrev2 = sPrev1; sPrev1 = layoutWinY;
                     if (!stable) break;
-                    if (ERCapsuleCompactPresent()) {
-                        ERQAMirrorAppend([NSString stringWithFormat:@"REF-DEFER layout=%.1f（胶囊紧凑态在场，不标定）", layoutWinY]);
-                        break;
-                    }
                     objc_setAssociatedObject(host, refKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     refNum = @(layoutWinY);
-                    ERQAMirrorAppend([NSString stringWithFormat:@"REF-SET %@ layout=%.1f（3 帧稳定后）",
+                    ERQAMirrorAppend([NSString stringWithFormat:@"%@-REF-SET %@ layout=%.1f（3 帧稳定后）",
+                                      qaCompact ? @"CAPSULE" : @"NORMAL",
                                       ERLandscapePresentationActive() ? @"landscape" : @"portrait", layoutWinY]);
                 }
                 CGFloat desiredTy = MAX(-60.0, MIN(60.0, refNum.doubleValue - layoutWinY));
