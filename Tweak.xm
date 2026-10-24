@@ -4249,6 +4249,20 @@ static BOOL ERViewTreeHasCompactAperture(UIView *root, NSInteger depth) {
     return NO;
 }
 
+// 1.2.1-14 · 配套 ERViewTreeFindApertureWidth：找到可见的 SBSystemApertureContainerView 回写宽度
+static BOOL ERViewTreeFindApertureWidth(UIView *root, NSInteger depth, CGFloat *outWidth) {
+    if (!root || depth > 14) return NO;
+    if (root.hidden || root.alpha <= 0.01) return NO;
+    if ([NSStringFromClass(root.class) isEqualToString:@"SBSystemApertureContainerView"]) {
+        CGFloat w = CGRectGetWidth(root.bounds);
+        if (w > 0.0) { *outWidth = w; return YES; }
+    }
+    for (UIView *sub in root.subviews) {
+        if (ERViewTreeFindApertureWidth(sub, depth + 1, outWidth)) return YES;
+    }
+    return NO;
+}
+
 static BOOL ERCapsuleCompactPresent(void) {
     static CFTimeInterval er_ccLastProbe = 0.0;
     static BOOL er_ccLastResult = NO;
@@ -4260,6 +4274,24 @@ static BOOL ERCapsuleCompactPresent(void) {
         if (ERViewTreeHasCompactAperture(window, 0)) { er_ccLastResult = YES; break; }
     }
     return er_ccLastResult;
+}
+
+// 1.2.1-14 · **灵动岛容器原始宽度探针**：
+// -13 实锤：控制中心打开时 SBSystemApertureContainerView 宽度恒为 125.33（灵动岛为让位 CC
+// 自动收紧成紧凑态）→ compact 布尔值恒为 1，完全丧失区分度，双 REF 选错分支、REF 被瞬态污染。
+// 改为记录原始宽度：无活动≈125、有活动（绿点/录音等）会变宽，宽度变化事件进镜像，
+// 用真实几何区分状态，不再靠布尔猜。
+static CGFloat ERApertureContainerWidth(void) {
+    static CFTimeInterval er_awLastProbe = 0.0;
+    static CGFloat er_awLastWidth = -1.0;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - er_awLastProbe < 0.25) return er_awLastWidth;
+    er_awLastProbe = now;
+    er_awLastWidth = -1.0;
+    for (UIWindow *window in ERAllApplicationWindows()) {
+        if (ERViewTreeFindApertureWidth(window, 0, &er_awLastWidth)) break;
+    }
+    return er_awLastWidth;
 }
 
 // 1.2.1-9 · QABTN 专用偏好镜像：普通日志镜像（60 行）会被 DI-TREE 一次 38 行冲掉，
@@ -4349,43 +4381,54 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 CGFloat finalWinY = [host.superview convertPoint:host.frame.origin toView:window].y;
                 CGFloat currentTy = host.transform.ty;
                 CGFloat layoutWinY = finalWinY - currentTy;
-                if (layoutWinY <= 1.0) break;              // 控制中心尚未稳定，不判断
-                // 1.2.1-11 · **绝对钉死**（1.2.1-10 跟随锚的实证修正）：
-                //   复现数据（12:52:30→35）证明胶囊出现时 CC 面板整体下移（锚容器 +25.8pt），
-                //   跟随任何原生视图都会被带着走。CC18 式"永不动"的唯一几何解释 =
-                //   **窗口绝对坐标恒定**。系统推多少 ty 反向抵消多少，夹取 [-60,60] 防失控。
-                // 1.2.1-13 · **双 REF**：绿点在场/不在场是两个稳定布局态（实测 95.0 / ~69），
-                //   各自冻结一个 REF。1.2.1-12 的"胶囊在场拒绝标定"死锁（12 条 REF-DEFER 连环，
-                //   layout=95 连续通过 3 帧稳定门 → 用户开 CC 时绿点常在场 → 永不标定）就此取消：
-                //   现在两种状态都允许标定，标定后各自钉死，下移观感由反向 ty 抵消。
-                BOOL qaCompact = ERCapsuleCompactPresent();
-                void *refKey = nil;
-                if (ERLandscapePresentationActive()) {
-                    refKey = qaCompact ? (void *)kERQARefLandscapeCapsuleKey : (void *)kERQARefLandscapeKey;
-                } else {
-                    refKey = qaCompact ? (void *)kERQARefPortraitCapsuleKey : (void *)kERQARefPortraitKey;
+                // 1.2.1-14 · **-13 双 REF 实锤失败，回退单 REF + 重标定**：
+                //   -13 镜像实录：compact 恒为 1（CC 打开时灵动岛自动收紧成 125.33 紧凑态让位，
+                //     与绿点无关）→ 双 REF 选错分支；且 REF=111.0 是 CC 动画中途瞬态，骗过
+                //     300ms 稳定门 → desiredTy=85 撞 60 上限，等于自己把按钮推下 60pt。
+                //   现在：① 每方向单 REF；② CC 关闭即清除 REF，下次打开重新标定（胶囊中途
+                //   出现/消失由 PIN 实时补偿，不需要两个 REF）；③ 稳定门 3 帧→10 帧（≈1s）；
+                //   ④ 灵动岛宽度变化事件进镜像，用真实几何观察状态而非布尔猜测。
+                //   注意：清除必须放在 layoutWinY<=1 离屏判断**之前**——CC 关闭时 host 会
+                //   离屏（layoutWinY≤1 直接 break），晚一步清就永远带着上次的 REF。
+                static BOOL sQARefCleared = NO;
+                if (!gERControlCenterPresented) {
+                    if (!sQARefCleared) {
+                        objc_setAssociatedObject(host, (void *)kERQARefPortraitKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        objc_setAssociatedObject(host, (void *)kERQARefLandscapeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        static CGFloat sPrev1b = -999, sPrev2b = -999;
+                        sPrev1b = -999; sPrev2b = -999;
+                        sQARefCleared = YES;
+                        ERQAMirrorAppend(@"REF-CLEAR（CC 关闭，下次打开重标定）");
+                    }
+                    break;
                 }
+                sQARefCleared = NO;
+                if (layoutWinY <= 1.0) break;              // 控制中心尚未稳定，不判断
+                void *refKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
                 NSNumber *refNum = objc_getAssociatedObject(host, refKey);
                 if (!refNum) {
-                    // 1.2.1-12 · 标定稳定性门：REF 必须在布局**静止**时采集。1.2.1-11 实测教训——
-                    // 100ms 定时器在 CC 开场动画途中把瞬态值（layout=95）标成 REF，随后 layout
-                    // 落到真实值，ty 一路加到 60 上限把按钮推下 60pt。现在要求连续 3 帧布局
-                    // 几乎相同（300ms 静止）才允许标定。1.2.1-13 附注：绿点在场时同样允许标定
-                    // （存入 capsule-REF），不再无限 DEFER。
+                    // 1.2.1-14 · 标定稳定性门加强：连续 10 帧（≈1s）布局几乎相同才允许标定。
+                    // -11/-13 教训：CC 开场/关闭动画会在某帧暂停，300ms 门太短，把瞬态
+                    // （layout=95 / 111）当成稳态 → ty 冲上限把按钮推下 60pt。1s 门配合
+                    // 「CC 关闭即重标定」，基本排除动画瞬态。
                     static CGFloat sPrev1 = -999, sPrev2 = -999;
-                    BOOL stable = (fabs(layoutWinY - sPrev1) < 0.5) && (fabs(sPrev1 - sPrev2) < 0.5);
+                    static NSInteger sStableCount = 0;
+                    BOOL frameStable = (fabs(layoutWinY - sPrev1) < 0.5) && (fabs(sPrev1 - sPrev2) < 0.5);
                     sPrev2 = sPrev1; sPrev1 = layoutWinY;
-                    if (!stable) break;
+                    sStableCount = frameStable ? sStableCount + 1 : 0;
+                    if (sStableCount < 10) break;
+                    sStableCount = 0;
                     objc_setAssociatedObject(host, refKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     refNum = @(layoutWinY);
-                    ERQAMirrorAppend([NSString stringWithFormat:@"%@-REF-SET %@ layout=%.1f（3 帧稳定后）",
-                                      qaCompact ? @"CAPSULE" : @"NORMAL",
-                                      ERLandscapePresentationActive() ? @"landscape" : @"portrait", layoutWinY]);
+                    ERQAMirrorAppend([NSString stringWithFormat:@"REF-SET %@ layout=%.1f apertureW=%.1f host=%@ super=%@（10 帧≈1s 稳定后）",
+                                      ERLandscapePresentationActive() ? @"landscape" : @"portrait",
+                                      layoutWinY, ERApertureContainerWidth(),
+                                      NSStringFromClass(host.class), NSStringFromClass(host.superview.class)]);
                 }
                 CGFloat desiredTy = MAX(-60.0, MIN(60.0, refNum.doubleValue - layoutWinY));
                 if (fabs(desiredTy - currentTy) > 0.5) {
-                    ERQAMirrorAppend([NSString stringWithFormat:@"PIN layout=%.1f ref=%.1f ty=%.1f→%.1f",
-                                      layoutWinY, refNum.doubleValue, currentTy, desiredTy]);
+                    ERQAMirrorAppend([NSString stringWithFormat:@"PIN layout=%.1f ref=%.1f ty=%.1f→%.1f apertureW=%.1f",
+                                      layoutWinY, refNum.doubleValue, currentTy, desiredTy, ERApertureContainerWidth()]);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
@@ -4400,13 +4443,21 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     hbAddButton = EREditAddModuleButtonContainer(hbWindow, 0);
                     if (hbAddButton) break;
                 }
-                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f ref=%.1f ty=%.1f edit=%d compact=%d 添加控制项=%@",
+                // 1.2.1-14 · 灵动岛宽度变化事件：>5pt 跳变记一行 STATE，用来把「权限胶囊出现」
+                // 与 layout 位移在时间轴上对齐（-13 已证 compact 布尔值无区分度）
+                static CGFloat sLastApertureW = -1.0;
+                CGFloat awNow = ERApertureContainerWidth();
+                if ((awNow > 0.0 || sLastApertureW > 0.0) && fabs(awNow - sLastApertureW) > 5.0) {
+                    ERQAMirrorAppend([NSString stringWithFormat:@"STATE apertureW %.1f→%.1f", sLastApertureW, awNow]);
+                    sLastApertureW = awNow;
+                }
+                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f ref=%.1f ty=%.1f edit=%d compact=%d apertureW=%.1f 添加控制项=%@",
                           (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
-                          (int)ERCapsuleCompactPresent(),
+                          (int)ERCapsuleCompactPresent(), ERApertureContainerWidth(),
                           hbAddButton ? NSStringFromClass(hbAddButton.class) : @"未找到");
-                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f ref=%.1f ty=%.1f edit=%d compact=%d",
-                                  (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
-                                  (int)ERCapsuleCompactPresent()]);
+                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f layout=%.1f ref=%.1f ty=%.1f edit=%d apertureW=%.1f",
+                                  (int)hbFoundHost, hbWinY, hbWinY - hbTransformTY, hbBase, hbTransformTY,
+                                  (int)gEditModeActive, ERApertureContainerWidth()]);
             }
             // 1.0.9-20 · **MODSIZE-PROBE**（问题 8 / 10 的数据来源）：
             // 横屏下每 2 秒打印一次「音量模块 / 亮度模块 / 编辑网格层 gridStack / 它的剪裁 mask」的窗口几何。
@@ -6148,7 +6199,7 @@ static void ERQAMirrorAppend(NSString *line) {
         NSMutableArray<NSString *> *all = [NSMutableArray array];
         if (existing.length) [all addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
         [all addObject:[NSString stringWithFormat:@"%@ %@", [NSDate date], line]];
-        while (all.count > 12) [all removeObjectAtIndex:0];
+        while (all.count > 24) [all removeObjectAtIndex:0];   // 1.2.1-14 · 12→24：REF-SET/PIN 事件不被 5s 心跳冲出视野
         CFPreferencesSetAppValue(CFSTR("ERQAMirror"), (__bridge CFPropertyListRef)[all componentsJoinedByString:@"\n"], kERPrefsDomain);
         CFPreferencesAppSynchronize(kERPrefsDomain);
     } @catch (__unused NSException *qaMirrorIgnored) {}
