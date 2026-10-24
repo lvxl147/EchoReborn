@@ -565,3 +565,8 @@
   - **但全盘 find 无探针文件** → SpringBoard 文件写入"进程内成功但不落盘"（roothide 虚拟化），文件日志通道永久不可靠
 - 修复：ERLogAppendLines 顶部镜像日志尾部（60 行/12KB 环形）到 CFPreferences 键 ERLogMirror，SSH 读 mobile 域 plist 即得运行日志（含 QABTN-COMP）
 - 后续：读 ERLogMirror → 精修胶囊下移
+
+## 1.2.1-9（1002109）· QABTN 专用镜像 + 基线胶囊门控
+- 1.2.1-8 实测：日志镜像通道工作正常，抓到 QACORR 心跳（host=1 hostWinY=69.2 baseline=69.2 ty=-9.0）——补偿状态机在跑（drift=9 被精确抵消），但 COMP 状态切换行被 DI-TREE（一次 38 行）冲出 60 行窗口
+- 修复①：QABTN 专用偏好镜像键 ERQAMirror（12 行环形，COMP 切换/心跳/BASELINE 事件全走它），SSH 读 mobile 域 plist 即得，永不被冲掉
+- 修复②（胶囊下移候选根因）：基线采集加胶囊门控——tweak 启动瞬间若胶囊在场，首帧 layoutWinY 已是压低态，min-ever 启发式会把压低值钉成基线 → 永远欠补偿（用户看到的"胶囊出现就下移"）。现在胶囊在场时推迟立基线，BASELINE-SET/DEFER 事件也进镜像
