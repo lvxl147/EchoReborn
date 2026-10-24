@@ -4191,6 +4191,39 @@ static CGFloat gERQABtnCompensationLandscape = 23.5;   // 横屏：胶囊在场�
 static CGFloat gERQABtnCompensationPortrait  = 23.5;   // 竖屏：同上（初值，按实测各自微调）
 static dispatch_source_t gERQABtnCorrectionTimer = nil;
 
+// 1.2.1-3 · **权限胶囊直接探测**（问题 1 的根因补丁）：
+// 1.0.9-19 的补偿只依赖「host 布局位置被压低 > 8pt」这个间接判据。实测（用户 2026-10-24 反馈）
+// 胶囊出现时 +号/电源仍下移 —— 说明胶囊在场并不总是把 host 压低超过阈值（压低量变小 /
+// 压的是 header pocket 内部其他内容），suppressed 判据漏判。
+// 修复 = 补一条**直接判据**：在窗口树里找隐私指示胶囊视图（类名含 PrivacyIndicator），
+// 可见即视为「胶囊在场」。查找限频 0.5s + 结果缓存，10Hz 定时器无性能压力。
+static BOOL ERViewTreeHasPrivacyCapsule(UIView *root, NSInteger depth) {
+    if (!root || depth > 14) return NO;
+    if (root.hidden || root.alpha <= 0.01) return NO;
+    NSString *cls = NSStringFromClass(root.class);
+    if (cls.length && [cls rangeOfString:@"PrivacyIndicator"].location != NSNotFound) {
+        CGRect winRect = [root convertRect:root.bounds toView:nil];
+        if (!CGRectIsEmpty(winRect)) return YES;
+    }
+    for (UIView *sub in root.subviews) {
+        if (ERViewTreeHasPrivacyCapsule(sub, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+static BOOL ERPrivacyCapsuleVisible(NSArray<UIWindow *> *windows) {
+    static CFTimeInterval er_pcLastProbe = 0.0;
+    static BOOL er_pcLastResult = NO;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - er_pcLastProbe < 0.5) return er_pcLastResult;
+    er_pcLastProbe = now;
+    er_pcLastResult = NO;
+    for (UIWindow *window in windows) {
+        if (ERViewTreeHasPrivacyCapsule(window, 0)) { er_pcLastResult = YES; break; }
+    }
+    return er_pcLastResult;
+}
+
 // 把快捷按钮 host 的窗口 Y 钉在「安装时的基线」上：胶囊出现/消失引起的任何漂移，
 // 都用 host.transform 反向抵消（不动约束体系，不会被 Auto Layout 覆盖）。
 // 1.0.9-15 · 在视图树里按文本找系统编辑态的「添加控制项」按钮（返回它的按钮容器）。
@@ -4260,16 +4293,29 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     baselineNum = @(layoutWinY);
                 }
-                BOOL suppressed = (layoutWinY > baselineNum.doubleValue + 8.0);   // 被压低（胶囊在场等）
-                CGFloat compensation = suppressed
-                    ? (ERLandscapePresentationActive() ? gERQABtnCompensationLandscape : gERQABtnCompensationPortrait)
-                    : 0.0;
+                // 1.2.1-3 · 判据升级（问题 1 修复）：
+                //   ① 阈值 8→4（压低量变小也能捕捉）
+                //   ② 直接探测权限胶囊可见性（ERPrivacyCapsuleVisible），可见即视为在场
+                //   ③ 补偿量优先用「实测压低量」（layoutWinY-baseline，开环一次读取、无累加、
+                //      layoutWinY 计算已剥离自身 ty，无反馈回路，不发散）；压低量太小(<2pt)
+                //      时退回旧常量兜底；总量夹取 [0,44]。
+                BOOL capsuleVisible = ERPrivacyCapsuleVisible(ERAllApplicationWindows());
+                CGFloat drift = MAX(0.0, layoutWinY - baselineNum.doubleValue);
+                BOOL suppressed = (drift > 4.0) || capsuleVisible;
+                CGFloat compensation = 0.0;
+                if (suppressed) {
+                    if (drift > 2.0) {
+                        compensation = MIN(drift, 44.0);
+                    } else {
+                        compensation = MIN(MAX(ERLandscapePresentationActive() ? gERQABtnCompensationLandscape : gERQABtnCompensationPortrait, 0.0), 44.0);
+                    }
+                }
                 CGFloat desiredTy = -compensation;
                 if (fabs(currentTy - desiredTy) > 0.5) {
                     // 只在状态切换时写入（两个取值之间切换），写入走禁用动作 + 移除动画
-                    ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f",
-                              (int)suppressed, compensation, desiredTy,
-                              (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue);
+                    ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d capsule=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f drift=%.1f",
+                              (int)suppressed, (int)capsuleVisible, compensation, desiredTy,
+                              (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue, drift);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
