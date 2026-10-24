@@ -677,4 +677,13 @@
   2. **翻页卡死安全网** `ERRecoverStuckPagerIfNeeded`（挂 pocket 看门狗，2s 节流）：翻页完全空闲时若发现页面位移残留（gERPagerInteractiveTranslation ≠ 0，= bug 2 末页悬停）或当前页模块仍被裁隐藏（= bug 4 不可见），走 finishInteractive 落回视觉页，位移与可见性一并恢复——不再需要 respring。落 `[PAGERRECOVER]` 日志
   3. **镜像环卫生**：DI-GEO/DI-TREE 布局几何转储不再进 ERLogMirror 环（一次 CC 布局几十条把 60 行环冲爆，PAGESETTLE/PAGEGEO/[PAGER] 全被挤出——这正是 bug 3 拿不到落位数据的原因）
 - bug 3（落位弹跳）：本版先保证数据通道（PAGESETTLE 行能留在环里），下次复现拿 from/to/dur 序列后定点修
-- 装机验证：① 长按拖动翻页点 → 模块应立即恢复可见（[PAGERRECOVER] 命中）；② 末页超长上滑 → 松手应回弹不悬停；③ 普通翻页 3-5 次 → 拉 ERLogMirror 看 PAGESETTLE 行次数
+- 装机验证：① 长按拖动翻页点 → 模块应立即恢复可见（[PAGERRECOVER] 命中）；② 末页超长上滑 → 松手应回弹不悬停；③ 普通翻页 3-5 次 → 拉 ERLogMirror 看 PAGESETTLE 行
+
+## 1.2.1-22（1002122）· 卡死恢复重写（不信标志位，信手指+活动时间戳）+ 卡死状态带恢复
+- **1.2.1-21 装机复测实锤（用户 06:05 会话）**：bug 1/2 依旧。镜像环显示翻页点 2.8s 拖拽结束后无 finish 收尾痕迹、无 PAGESETTLE；状态带 06:05:23.579 被打零（legit=1，翻页标志位卡着）后**再无恢复行**——状态带永久卡隐藏。1.2.1-21 的安全网没触发：**它要求「标志位已清」才动作，而标志位本身卡死了**（结束事件丢失 → gERPagerTransitionActive 永停 YES；staleness 看门狗被卡住的 kERPageIndicatorDraggingKey 挡着不触发）
+- **根因统一**：翻页手势结束路径不可靠（长按/超长拖动场景结束事件丢失）→ 标志位卡死 → 状态带卡隐藏（bug 1 复现）+ 页面卡位移（bug 2 悬停）+ 模块卡 opacity 0（bug 4 不可见），三症同根
+- **本版修复**：
+  1. **卡死恢复重写判定基准**（ERRecoverStuckPagerIfNeeded）：不再信标志位。`gERPagerActiveGesture` 弱引用 + `numberOfTouches > 0` 判手指是否真在屏幕上（结束事件丢了触摸数也归零，长按不动不误伤）；`gERPagerLastActivityTime` 由全部翻页事件（begin/update/finish/setCurrentPage/两个 pan）刷新，1.5s 无活动即闲置。闲置 +（标志位卡着 / 位移残留 / 当前页模块被裁隐藏）→ finishInteractive 落回视觉页 + 强制清标志位 + 清卡住的 dragging 票根。落 `[PAGERRECOVER]`
+  2. **卡死状态带恢复**：看门狗采样发现状态带 alpha 卡 0 且手指已离屏、翻页闲置、无展开/编辑 → 0.2s 淡回 1 并清残留动画（iOS 的「完成块恢复」永不来时的兜底）。落 `[BANDRESTORE]`
+  3. **PAGESETTLE 接诊断环**：落位 from/to/dur 同时进 ERPocketMirror（24 行低流量环），保证 bug 3 时序数据不再被通用环挤出
+- 装机验证：① 长按拖动翻页点 → 2 秒内自动恢复、不用 respring；② 末页超长上滑松手回弹；③ 竖屏点模块状态带不消失；④ 翻页几次后拉 ERPocketMirror 看 PAGESETTLE/PAGERRECOVER/BANDRESTORE次数
