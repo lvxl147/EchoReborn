@@ -4182,6 +4182,7 @@ static BOOL ERLandscapePresentationActive(void);   // 同上：前向声明
 static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root);   // 前向声明
 static NSString *ERModuleIdentifier(UIViewController *controller);                        // 前向声明
 static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
+static const void *kERQAAnchorOffsetKey = &kERQAAnchorOffsetKey;   // 1.2.1-10 · 几何跟随的锚偏移
 // 1.0.9-19 · 按钮「开环补偿」的两个独立偏移量（用户确认：横竖屏显示位置不同，必须分开）。
 // 依据：20260921-2009 日志实测 —— 正常时 hostWinY=45.7、胶囊在场时稳定在 69.2，差值 ≈ 23.5pt。
 // 开环 = 只用「是否被压低」这个状态决定偏移，位移取固定常量：
@@ -4228,6 +4229,21 @@ static BOOL ERPrivacyCapsuleVisible(NSArray<UIWindow *> *windows) {
 // 补偿状态切换行必须落在一个不被冲掉的专用键里（cfprefsd 通道，SSH 可读）。
 static void ERQAMirrorAppend(NSString *line);
 
+// 1.2.1-10 · 几何跟随的锚视图查找：原生模块网格容器 CCUIContentModuleContainerView。
+// 日志实测（2026-10-24）：胶囊在场时该容器窗口 Y 纹丝不动（2531/902 恒定）——
+// CC18 的按钮"永远不动"正因为它住在原生模块体系里。把 host 绑到这个锚上，
+// 按钮与网格的相对位置成为几何恒等式，胶囊推挤被天然免疫。
+static UIView *ERFindCCGridContainerInView(UIView *root, NSInteger depth) {
+    if (!root || depth > 16) return nil;
+    NSString *cls = NSStringFromClass(root.class);
+    if ([cls isEqualToString:@"CCUIContentModuleContainerView"]) return root;
+    for (UIView *sub in root.subviews) {
+        UIView *found = ERFindCCGridContainerInView(sub, depth + 1);
+        if (found) return found;
+    }
+    return nil;
+}
+
 // 把快捷按钮 host 的窗口 Y 钉在「安装时的基线」上：胶囊出现/消失引起的任何漂移，
 // 都用 host.transform 反向抵消（不动约束体系，不会被 Auto Layout 覆盖）。
 // 1.0.9-15 · 在视图树里按文本找系统编辑态的「添加控制项」按钮（返回它的按钮容器）。
@@ -4272,16 +4288,21 @@ static void ERStartQuickAccessPositionCorrection(void) {
             if (hbDue) gERQACorrHeartbeat = hbNow;
             BOOL hbFoundHost = NO;
             CGFloat hbWinY = -1.0, hbBase = -1.0, hbTransformTY = 0.0;
+            CGFloat hbAnchorY = -1.0;
             for (UIWindow *window in ERAllApplicationWindows()) {
                 UIView *host = [window viewWithTag:181000];
                 if (!host || !host.window) continue;
                 if (hbDue) {
                     hbFoundHost = YES;
                     hbWinY = [host.superview convertPoint:host.frame.origin toView:window].y;
-                    NSNumber *hbBaseNum = objc_getAssociatedObject(host, kERQAHostBaselineWinYKey);
-                    hbBase = hbBaseNum ? hbBaseNum.doubleValue : -1.0;
                     // 1.0.9-17 · 同时记录 transform.ty：校正若写入失败（被系统重置），这里会一直是 0。
                     hbTransformTY = host.transform.ty;
+                    UIView *hbAnchor = ERFindCCGridContainerInView(window, 0);
+                    if (hbAnchor && hbAnchor.window) {
+                        hbAnchorY = [hbAnchor convertRect:hbAnchor.bounds toView:hbAnchor.window].origin.y;
+                        NSNumber *hbOff = objc_getAssociatedObject(host, kERQAAnchorOffsetKey);
+                        hbBase = hbOff ? hbOff.doubleValue : -1.0;   // 心跳里 hbBase 字段复用为 offset
+                    }
                 }
                 // 1.0.9-19 · **开环状态机**（用户确认方案）：
                 //   状态判据：读一次「布局位置」（= 最终位置 − 当前 ty，剥离自身补偿，避免自我反馈）
@@ -4291,51 +4312,34 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 CGFloat currentTy = host.transform.ty;
                 CGFloat layoutWinY = finalWinY - currentTy;
                 if (layoutWinY <= 1.0) break;              // 控制中心尚未稳定，不判断
-                NSNumber *baselineNum = objc_getAssociatedObject(host, kERQAHostBaselineWinYKey);
-                // 1.2.1-9 · 基线采集加胶囊门控：若 tweak 启动时胶囊恰好在场，首帧 layoutWinY
-                // 已是"被压低态"，min-ever 启发式会把压低值钉成基线 → 永远欠补偿。
-                // 胶囊在场时绝不立首个基线（推迟到胶囊消失的那一帧）；已有基线时保留 min-ever。
-                BOOL baselineWasMissing = (baselineNum == nil);
-                if (baselineWasMissing) {
-                    BOOL capsuleNow = ERPrivacyCapsuleVisible(ERAllApplicationWindows());
-                    if (!capsuleNow) {
-                        objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                        baselineNum = @(layoutWinY);
-                        ERQAMirrorAppend([NSString stringWithFormat:@"BASELINE-SET %.1f", layoutWinY]);
-                    } else {
-                        ERQAMirrorAppend([NSString stringWithFormat:@"BASELINE-DEFER layout=%.1f（胶囊在场，不立基线）", layoutWinY]);
-                    }
-                } else if (layoutWinY < baselineNum.doubleValue) {
-                    // 基线 = 未被压低时的布局位置（取见过的最小值）
-                    objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    baselineNum = @(layoutWinY);
-                }
-                // 1.2.1-3 · 判据升级（问题 1 修复）：
-                //   ① 阈值 8→4（压低量变小也能捕捉）
-                //   ② 直接探测权限胶囊可见性（ERPrivacyCapsuleVisible），可见即视为在场
-                //   ③ 补偿量优先用「实测压低量」（layoutWinY-baseline，开环一次读取、无累加、
-                //      layoutWinY 计算已剥离自身 ty，无反馈回路，不发散）；压低量太小(<2pt)
-                //      时退回旧常量兜底；总量夹取 [0,44]。
-                BOOL capsuleVisible = ERPrivacyCapsuleVisible(ERAllApplicationWindows());
-                CGFloat drift = MAX(0.0, layoutWinY - baselineNum.doubleValue);
-                BOOL suppressed = (drift > 4.0) || capsuleVisible;
-                CGFloat compensation = 0.0;
-                if (suppressed) {
-                    if (drift > 2.0) {
-                        compensation = MIN(drift, 44.0);
-                    } else {
-                        compensation = MIN(MAX(ERLandscapePresentationActive() ? gERQABtnCompensationLandscape : gERQABtnCompensationPortrait, 0.0), 44.0);
+                // 1.2.1-10 · **几何跟随**（对标 CC18，取代基线/drift/胶囊探测整套状态机）：
+                //   锚 = 原生模块网格容器（胶囊在场时纹丝不动，见 ERFindCCGridContainerInView 注释）。
+                //   host 目标窗口 Y = 锚窗口 Y + 固定偏移（首次见面标定一次，之后冻结）。
+                //   差值仍用 transform.ty 承载（不动 frame，避免与系统布局互相覆盖）。
+                //   锚不可见（CC 收起/瞬态）→ 什么都不做，host 冻结在上帧位置。
+                UIView *anchor = nil;
+                for (UIWindow *aw in ERAllApplicationWindows()) {
+                    UIView *cand = ERFindCCGridContainerInView(aw, 0);
+                    if (cand && cand.window && CGRectIntersectsRect([cand convertRect:cand.bounds toView:nil], aw.bounds)) {
+                        anchor = cand; break;
                     }
                 }
-                CGFloat desiredTy = -compensation;
-                if (fabs(currentTy - desiredTy) > 0.5) {
-                    // 只在状态切换时写入（两个取值之间切换），写入走禁用动作 + 移除动画
-                    ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d capsule=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f drift=%.1f",
-                              (int)suppressed, (int)capsuleVisible, compensation, desiredTy,
-                              (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue, drift);
-                    ERQAMirrorAppend([NSString stringWithFormat:@"COMP 切换 suppressed=%d capsule=%d 补偿=%.1f landscape=%d layout=%.1f baseline=%.1f drift=%.1f",
-                                      (int)suppressed, (int)capsuleVisible, compensation,
-                                      (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue, drift]);
+                if (!anchor) break;                        // 锚不可见 → 冻结，不猜
+                CGFloat anchorWinY = [anchor convertRect:anchor.bounds toView:anchor.window].origin.y;
+                NSNumber *offsetNum = objc_getAssociatedObject(host, kERQAAnchorOffsetKey);
+                if (!offsetNum) {
+                    // 首次标定：host 当前布局位置（剥离历史 ty）与锚的相对距离，之后恒定不变。
+                    // 注意用 layoutWinY（剥离 ty）——若带历史补偿标定会把旧补偿永久固化进偏移。
+                    CGFloat offset = layoutWinY - anchorWinY;
+                    objc_setAssociatedObject(host, kERQAAnchorOffsetKey, @(offset), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    offsetNum = @(offset);
+                    ERQAMirrorAppend([NSString stringWithFormat:@"OFFSET-SET hostLayout=%.1f anchor=%.1f offset=%.1f", layoutWinY, anchorWinY, offset]);
+                }
+                CGFloat desiredLayoutWinY = anchorWinY + offsetNum.doubleValue;
+                CGFloat desiredTy = currentTy + (desiredLayoutWinY - layoutWinY);
+                if (fabs(desiredTy - currentTy) > 0.5) {
+                    ERQAMirrorAppend([NSString stringWithFormat:@"FOLLOW 锚Y=%.1f offset=%.1f layout=%.1f ty=%.1f→%.1f",
+                                      anchorWinY, offsetNum.doubleValue, layoutWinY, currentTy, desiredTy]);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
@@ -4350,12 +4354,11 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     hbAddButton = EREditAddModuleButtonContainer(hbWindow, 0);
                     if (hbAddButton) break;
                 }
-                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f baseline=%.1f ty=%.1f edit=%d 添加控制项=%@",
-                          (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
+                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f anchorY=%.1f offset=%.1f ty=%.1f edit=%d 添加控制项=%@",
+                          (int)hbFoundHost, hbWinY, hbAnchorY, hbBase, hbTransformTY, (int)gEditModeActive,
                           hbAddButton ? NSStringFromClass(hbAddButton.class) : @"未找到");
-                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f baseline=%.1f ty=%.1f edit=%d capsule=%d",
-                                  (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
-                                  (int)ERPrivacyCapsuleVisible(ERAllApplicationWindows())]);
+                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f anchorY=%.1f offset=%.1f ty=%.1f edit=%d",
+                                  (int)hbFoundHost, hbWinY, hbAnchorY, hbBase, hbTransformTY, (int)gEditModeActive]);
             }
             // 1.0.9-20 · **MODSIZE-PROBE**（问题 8 / 10 的数据来源）：
             // 横屏下每 2 秒打印一次「音量模块 / 亮度模块 / 编辑网格层 gridStack / 它的剪裁 mask」的窗口几何。
@@ -6320,6 +6323,7 @@ static void ERLoadPrefs(void) {
         [diag appendFormat:@"fileFallback keys=%lu fileValue=%@\n",
             (unsigned long)gERPrefsFileFallback.count, gERPrefsFileFallback[@"LoggingEnabled"]];
         [diag appendFormat:@"gERLoggingEnabled=%d\n", (int)gERLoggingEnabled];
+        [diag appendFormat:@"capsuleAtLoad=%d\n", (int)ERPrivacyCapsuleVisible(ERAllApplicationWindows())];
         [diag appendFormat:@"access LogsDir W=%d Documents W=%d\n",
             (int)(access("/var/mobile/Library/Logs/EchoReborn", W_OK) == 0),
             (int)(access("/var/mobile/Documents", W_OK) == 0)];
