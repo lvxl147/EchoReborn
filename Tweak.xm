@@ -14402,7 +14402,7 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
             if (frames.count > 8) frames = [frames subarrayWithRange:NSMakeRange(0, 8)];
             NSString *line = [NSString stringWithFormat:
                 @"[BAND] ver=1.2.1-19 %@ alpha %.2f->%.2f hidden=%d stack=%@",
-                NSStringFromClass(self.class), before, alpha, (int)self.hidden,
+                NSStringFromClass([self class]), before, alpha, (int)[self isHidden],
                 [frames componentsJoinedByString:@" << "]];
             ERLogInfo(@"%@", line);
             ERMirrorDiagLine(line);
@@ -14451,7 +14451,7 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
                            pocket ? pocket.alpha : -1.0, pocket ? (int)pocket.hidden : -1,
                            kids,
                            (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
-                           (int)gERExpandedModuleOpen, (int)gEREditModeActive,
+                           (int)gERExpandedModuleOpen, (int)gEditModeActive,
                            (unsigned long)gERControlCenterPresentationState];
     static NSString *lastSignature = nil;
     if (![signature isEqualToString:lastSignature]) {
