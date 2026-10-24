@@ -542,3 +542,11 @@
 - 效果：LoggingEnabled 即刻生效 → echoreborn.log（Documents 备用路径）开始落盘
   → QABTN-COMP 的 capsule=/drift= 实测数据到手 → 胶囊下移问题精修
 - 版本 1.2.1-5 / 1002105
+
+## 1.2.1-6（2026-10-24 傍晚）—— 日志落盘决定性诊断
+- 1.2.1-5 装机后日志仍未出现（root 域手动写 LoggingEnabled=True + killall cfprefsd + respring 也不行）
+- 推论已无法远程验证（设备无 ps/lsof，SSH 间歇超时）→ 改为让 tweak 自曝：
+  ERLoadPrefs 尾部无条件写 /var/mobile/Documents/er_diag.txt（folderlog 同款已验证可写通道），
+  内容：CF 读值/文件兜底读值/flag 终值/两路径 W_OK/三位置实写探针结果
+- 一版拿到全部答案，er_diag.txt 出现即读
+- 版本 1.2.1-6 / 1002106
