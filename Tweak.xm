@@ -14304,7 +14304,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (staleFlagsSince <= 0.0) staleFlagsSince = now;
         if (now - staleFlagsSince > 1.0) {
             NSString *staleLine = [NSString stringWithFormat:
-                @"[FADE] ver=1.2.1-19 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
+                @"[FADE] ver=1.2.1-20 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
                 (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince];
             ERLogInfo(@"%@", staleLine);
             ERMirrorDiagLine(staleLine);
@@ -14325,7 +14325,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     static CGFloat lastFadeTarget = -1.0;
     if (fabs(target - lastFadeTarget) > 0.001) {
         NSString *fadeLine = [NSString stringWithFormat:
-            @"[FADE] ver=1.2.1-19 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
+            @"[FADE] ver=1.2.1-20 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
             target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
             gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen];
         ERLogInfo(@"%@", fadeLine);
@@ -14400,10 +14400,36 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
         if (toZero || toVisible) {
             NSArray<NSString *> *frames = [NSThread callStackSymbols];
             if (frames.count > 8) frames = [frames subarrayWithRange:NSMakeRange(0, 8)];
+            NSString *stack = [frames componentsJoinedByString:@" << "];
+            // 1.2.1-20 · bug 1 修复。1.2.1-19 的 [BAND] 栈帧实锤：把状态带
+            // alpha 打零的是 ControlCenterUI 自己的 UIView 动画（淡出 + 完成块
+            // 淡回，hide 时长 = 动画时长 1.5-3.2s），且在「无模块展开」的常态下
+            // 发生（用户：竖屏 CC 不收起点「锁定」模块 → 状态带消失 2-3s）。
+            // 合法隐藏场景不抢（模块展开中 / 展开收尾中 / 翻页擦刷 / 编辑态 /
+            // CC 收起中 / CC 已收起）；其余一律当场顶回 1 —— 随之设置的淡出
+            // 动画变成 1→1 空操作，状态带不再可见地消失。
+            BOOL legitimate = !gERControlCenterPresented || gERExpandedModuleOpen ||
+                gERExpandedModuleClosingActive || gEditModeActive ||
+                gERPagerScrubbingActive || gERPagerTransitionActive ||
+                gERControlCenterPresentationState == 3;
+            if (toZero && !legitimate) {
+                static CFTimeInterval gERBandFixLastLog = 0.0;
+                CFTimeInterval now = CACurrentMediaTime();
+                if (now - gERBandFixLastLog > 5.0) {
+                    gERBandFixLastLog = now;
+                    NSString *line = [NSString stringWithFormat:
+                        @"[BANDFIX] ver=1.2.1-20 %@ spurious hide forced 0->1 stack=%@",
+                        NSStringFromClass([self class]), stack];
+                    ERLogInfo(@"%@", line);
+                    ERMirrorDiagLine(line);
+                }
+                ((void (*)(id, SEL, CGFloat))original)(self, sel, 1.0);
+                return;
+            }
             NSString *line = [NSString stringWithFormat:
-                @"[BAND] ver=1.2.1-19 %@ alpha %.2f->%.2f hidden=%d stack=%@",
+                @"[BAND] ver=1.2.1-20 %@ alpha %.2f->%.2f hidden=%d legit=%d stack=%@",
                 NSStringFromClass([self class]), before, alpha, (int)[self isHidden],
-                [frames componentsJoinedByString:@" << "]];
+                (int)legitimate, stack];
             ERLogInfo(@"%@", line);
             ERMirrorDiagLine(line);
         }
@@ -14456,7 +14482,7 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     static NSString *lastSignature = nil;
     if (![signature isEqualToString:lastSignature]) {
         lastSignature = signature;
-        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-19 %@", signature];
+        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-20 %@", signature];
         ERLogInfo(@"%@", pocketLine);
         // 1.2.1-18：进专用镜像环（文件通道不落盘 + 短会话不刷盘的双保险）。
         ERMirrorDiagLine(pocketLine);
