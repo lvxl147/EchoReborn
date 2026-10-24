@@ -5841,30 +5841,64 @@ static BOOL ERRectArraysNearlyEqual(NSArray<NSValue *> *a, NSArray<NSValue *> *b
 
 @end
 
+// 1.2.1-5 · **偏好用户域断链兜底**（重大，解释了一批「设置了不生效」悬案）：
+// 设置面板跑在 mobile 用户的 Settings 里，写的 plist 在
+// /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist；
+// 而 SpringBoard 以 **root** 运行，CFPreferencesGetAppBooleanValue 按当前用户
+// （root）找 /var/root/Library/Preferences/ 下的同名文件——不存在 → valid=false
+// → 直接走代码 fallback。后果：所有「默认 YES」的开关碰巧正常（fallback 掩盖
+// 断链），所有「默认 NO」的开关（如 LoggingEnabled）**从来没有生效过**。
+// 兜底 = CFPreferences 读不到时，直接解析 mobile 域 plist 文件（绕过 cfprefsd）。
+// 文件在 ERLoadPrefs 时解析一次缓存（~1.6MB，respring 一次可接受）。
+static NSDictionary *gERPrefsFileFallback = nil;
+
+static void ERLoadPrefsFileFallback(void) {
+    @autoreleasepool {
+        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist"];
+        if (d) gERPrefsFileFallback = d;
+    }
+}
+
+static id ERPrefsFileValue(NSString *key) {
+    if (!gERPrefsFileFallback || !key.length) return nil;
+    id v = gERPrefsFileFallback[key];
+    return v;
+}
+
 static BOOL ERPreferenceBool(NSString *key, BOOL fallback) {
     Boolean valid = false;
     Boolean value = CFPreferencesGetAppBooleanValue((__bridge CFStringRef)key, kERPrefsDomain, &valid);
-    return valid ? (BOOL)value : fallback;
+    if (valid) return (BOOL)value;
+    id fileValue = ERPrefsFileValue(key);
+    if ([fileValue isKindOfClass:[NSNumber class]]) return [fileValue boolValue];
+    if ([fileValue isKindOfClass:[NSString class]]) return [fileValue boolValue];
+    return fallback;
 }
 
 static NSString *ERPreferenceString(NSString *key, NSString *fallback) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key, kERPrefsDomain);
-    if (!value) return fallback;
-    NSString *result = [(__bridge_transfer NSString *)value copy];
-    return result.length ? result : fallback;
+    if (value) {
+        NSString *result = [(__bridge_transfer NSString *)value copy];
+        return result.length ? result : fallback;
+    }
+    id fileValue = ERPrefsFileValue(key);
+    if ([fileValue isKindOfClass:[NSString class]] && [(NSString *)fileValue length]) return fileValue;
+    return fallback;
 }
 
 static CGFloat ERPreferenceDouble(NSString *key, CGFloat fallback) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key, kERPrefsDomain);
-    CGFloat result = fallback;
     if (value) {
+        CGFloat result = fallback;
         if (CFGetTypeID(value) == CFNumberGetTypeID()) {
-            double number = 0.0;
-            if (CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, &number)) result = (CGFloat)number;
+            CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, &result);
         }
         CFRelease(value);
+        return result;
     }
-    return result;
+    id fileValue = ERPrefsFileValue(key);
+    if ([fileValue isKindOfClass:[NSNumber class]]) return [fileValue doubleValue];
+    return fallback;
 }
 
 // 1.0.5：读偏好的统一入口。
@@ -6198,6 +6232,8 @@ static void ERLoadPrefs(void) {
     // switch off keeps the lines recorded up to that moment.
     ERLogFlush();
     CFPreferencesAppSynchronize(kERPrefsDomain);
+    // 1.2.1-5 · 先解析 mobile 域 plist 文件做兜底缓存（用户域断链，见 ERPreferenceBool）
+    ERLoadPrefsFileFallback();
     gEnabled = ERPreferenceBool(@"Enabled", YES);
     gQuickAccessButtonsEnabled = ERPreferenceBool(@"QuickAccessButtonsEnabled", YES);
     gQuickAccessVerticalOffset = ERPreferenceDouble(@"QuickAccessVerticalOffset", 0.0);
