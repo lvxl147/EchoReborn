@@ -570,3 +570,10 @@
 - 1.2.1-8 实测：日志镜像通道工作正常，抓到 QACORR 心跳（host=1 hostWinY=69.2 baseline=69.2 ty=-9.0）——补偿状态机在跑（drift=9 被精确抵消），但 COMP 状态切换行被 DI-TREE（一次 38 行）冲出 60 行窗口
 - 修复①：QABTN 专用偏好镜像键 ERQAMirror（12 行环形，COMP 切换/心跳/BASELINE 事件全走它），SSH 读 mobile 域 plist 即得，永不被冲掉
 - 修复②（胶囊下移候选根因）：基线采集加胶囊门控——tweak 启动瞬间若胶囊在场，首帧 layoutWinY 已是压低态，min-ever 启发式会把压低值钉成基线 → 永远欠补偿（用户看到的"胶囊出现就下移"）。现在胶囊在场时推迟立基线，BASELINE-SET/DEFER 事件也进镜像
+
+## 1.2.1-10（1002110）· 几何跟随（对标 CC18，胶囊下移终极方案）
+- **1.2.1-9 复现实锤**：用户复现全程 capsule=0 → 类名含 PrivacyIndicator 的探测在 iOS 17 从未命中，直接判据形同虚设；且回看日志 SBSystemApertureContainerView 宽度在 166（灵动岛）/125.3（胶囊态）间切换
+- **CC18 逆向结论**：它的按钮全是原生 CC 模块体系成员（CCUIRoundButton/CCUIButtonModuleView），住在不被胶囊推挤的模块网格里，所以"永远不动"
+- **方案废掉基线/drift/胶囊探测整套状态机，改为几何跟随**：锚 = CCUIContentModuleContainerView（日志实测胶囊在场时 Y 恒定），host 目标 Y = 锚窗口 Y + 固定偏移（首次见面用剥离 ty 的布局 Y 标定一次，之后冻结）；差值仍用 transform.ty 承载；锚不可见时冻结不猜
+- 心跳改记 anchorY/offset；OFFSET-SET / FOLLOW 事件进 ERQAMirror
+- 用户已确认方案（成功率评估 85-90%，失败模式温和：锚丢失=按钮静止）
