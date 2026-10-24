@@ -4182,11 +4182,6 @@ static BOOL ERLandscapePresentationActive(void);   // 同上：前向声明
 static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root);   // 前向声明
 static NSString *ERModuleIdentifier(UIViewController *controller);                        // 前向声明
 static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
-static const void *kERQAAnchorOffsetKey = &kERQAAnchorOffsetKey;   // 1.2.1-10 · 几何跟随的锚偏移
-static const void *kERQARefPortraitKey = &kERQARefPortraitKey;     // 1.2.1-11 · 竖屏冻结目标 Y（窗口绝对坐标）
-static const void *kERQARefLandscapeKey = &kERQARefLandscapeKey;   // 1.2.1-11 · 横屏冻结目标 Y
-// 1.2.1-14 注：-13 的 capsule 双 REF 键已废弃——compact 探针在 CC 打开时恒真（灵动岛让位收紧），
-// 双 REF 选错分支且 REF 被动画瞬态污染（111.0 → ty 撞 60 上限）。现每方向单 REF，CC 关闭重标定。
 // 1.0.9-19 · 按钮「开环补偿」的两个独立偏移量（用户确认：横竖屏显示位置不同，必须分开）。
 // 依据：20260921-2009 日志实测 —— 正常时 hostWinY=45.7、胶囊在场时稳定在 69.2，差值 ≈ 23.5pt。
 // 开环 = 只用「是否被压低」这个状态决定偏移，位移取固定常量：
@@ -4195,119 +4190,6 @@ static const void *kERQARefLandscapeKey = &kERQARefLandscapeKey;   // 1.2.1-11 �
 static CGFloat gERQABtnCompensationLandscape = 23.5;   // 横屏：胶囊在场时的上移量
 static CGFloat gERQABtnCompensationPortrait  = 23.5;   // 竖屏：同上（初值，按实测各自微调）
 static dispatch_source_t gERQABtnCorrectionTimer = nil;
-
-// 1.2.1-3 · **权限胶囊直接探测**（问题 1 的根因补丁）：
-// 1.0.9-19 的补偿只依赖「host 布局位置被压低 > 8pt」这个间接判据。实测（用户 2026-10-24 反馈）
-// 胶囊出现时 +号/电源仍下移 —— 说明胶囊在场并不总是把 host 压低超过阈值（压低量变小 /
-// 压的是 header pocket 内部其他内容），suppressed 判据漏判。
-// 修复 = 补一条**直接判据**：在窗口树里找隐私指示胶囊视图（类名含 PrivacyIndicator），
-// 可见即视为「胶囊在场」。查找限频 0.5s + 结果缓存，10Hz 定时器无性能压力。
-static BOOL ERViewTreeHasPrivacyCapsule(UIView *root, NSInteger depth) {
-    if (!root || depth > 14) return NO;
-    if (root.hidden || root.alpha <= 0.01) return NO;
-    NSString *cls = NSStringFromClass(root.class);
-    if (cls.length && [cls rangeOfString:@"PrivacyIndicator"].location != NSNotFound) {
-        CGRect winRect = [root convertRect:root.bounds toView:nil];
-        if (!CGRectIsEmpty(winRect)) return YES;
-    }
-    for (UIView *sub in root.subviews) {
-        if (ERViewTreeHasPrivacyCapsule(sub, depth + 1)) return YES;
-    }
-    return NO;
-}
-
-static BOOL ERPrivacyCapsuleVisible(NSArray<UIWindow *> *windows) {
-    static CFTimeInterval er_pcLastProbe = 0.0;
-    static BOOL er_pcLastResult = NO;
-    CFTimeInterval now = CACurrentMediaTime();
-    if (now - er_pcLastProbe < 0.5) return er_pcLastResult;
-    er_pcLastProbe = now;
-    er_pcLastResult = NO;
-    for (UIWindow *window in windows) {
-        if (ERViewTreeHasPrivacyCapsule(window, 0)) { er_pcLastResult = YES; break; }
-    }
-    return er_pcLastResult;
-}
-
-// 1.2.1-11 · **胶囊几何探针**（类名探测在 iOS 17 失效后的替代，实证来源）：
-// 日志实测 SBSystemApertureContainerView 宽度在 166（灵动岛标准态）与 125.3（胶囊/紧凑态）
-// 之间切换。宽度落在 (100,160) 开区间 = 胶囊/紧凑态在场。类名是系统私有类，字符串精确匹配。
-static BOOL ERViewTreeHasCompactAperture(UIView *root, NSInteger depth) {
-    if (!root || depth > 14) return NO;
-    if (root.hidden || root.alpha <= 0.01) return NO;
-    if ([NSStringFromClass(root.class) isEqualToString:@"SBSystemApertureContainerView"]) {
-        CGFloat w = CGRectGetWidth(root.bounds);
-        if (w > 100.0 && w < 160.0) return YES;
-    }
-    for (UIView *sub in root.subviews) {
-        if (ERViewTreeHasCompactAperture(sub, depth + 1)) return YES;
-    }
-    return NO;
-}
-
-// 1.2.1-14 · 配套 ERViewTreeFindApertureWidth：找到可见的 SBSystemApertureContainerView 回写宽度
-static BOOL ERViewTreeFindApertureWidth(UIView *root, NSInteger depth, CGFloat *outWidth) {
-    if (!root || depth > 14) return NO;
-    if (root.hidden || root.alpha <= 0.01) return NO;
-    if ([NSStringFromClass(root.class) isEqualToString:@"SBSystemApertureContainerView"]) {
-        CGFloat w = CGRectGetWidth(root.bounds);
-        if (w > 0.0) { *outWidth = w; return YES; }
-    }
-    for (UIView *sub in root.subviews) {
-        if (ERViewTreeFindApertureWidth(sub, depth + 1, outWidth)) return YES;
-    }
-    return NO;
-}
-
-static BOOL ERCapsuleCompactPresent(void) {
-    static CFTimeInterval er_ccLastProbe = 0.0;
-    static BOOL er_ccLastResult = NO;
-    CFTimeInterval now = CACurrentMediaTime();
-    if (now - er_ccLastProbe < 0.5) return er_ccLastResult;
-    er_ccLastProbe = now;
-    er_ccLastResult = NO;
-    for (UIWindow *window in ERAllApplicationWindows()) {
-        if (ERViewTreeHasCompactAperture(window, 0)) { er_ccLastResult = YES; break; }
-    }
-    return er_ccLastResult;
-}
-
-// 1.2.1-14 · **灵动岛容器原始宽度探针**：
-// -13 实锤：控制中心打开时 SBSystemApertureContainerView 宽度恒为 125.33（灵动岛为让位 CC
-// 自动收紧成紧凑态）→ compact 布尔值恒为 1，完全丧失区分度，双 REF 选错分支、REF 被瞬态污染。
-// 改为记录原始宽度：无活动≈125、有活动（绿点/录音等）会变宽，宽度变化事件进镜像，
-// 用真实几何区分状态，不再靠布尔猜。
-static CGFloat ERApertureContainerWidth(void) {
-    static CFTimeInterval er_awLastProbe = 0.0;
-    static CGFloat er_awLastWidth = -1.0;
-    CFTimeInterval now = CACurrentMediaTime();
-    if (now - er_awLastProbe < 0.25) return er_awLastWidth;
-    er_awLastProbe = now;
-    er_awLastWidth = -1.0;
-    for (UIWindow *window in ERAllApplicationWindows()) {
-        if (ERViewTreeFindApertureWidth(window, 0, &er_awLastWidth)) break;
-    }
-    return er_awLastWidth;
-}
-
-// 1.2.1-9 · QABTN 专用偏好镜像：普通日志镜像（60 行）会被 DI-TREE 一次 38 行冲掉，
-// 补偿状态切换行必须落在一个不被冲掉的专用键里（cfprefsd 通道，SSH 可读）。
-static void ERQAMirrorAppend(NSString *line);
-
-// 1.2.1-10 · 几何跟随的锚视图查找：原生模块网格容器 CCUIContentModuleContainerView。
-// 日志实测（2026-10-24）：胶囊在场时该容器窗口 Y 纹丝不动（2531/902 恒定）——
-// CC18 的按钮"永远不动"正因为它住在原生模块体系里。把 host 绑到这个锚上，
-// 按钮与网格的相对位置成为几何恒等式，胶囊推挤被天然免疫。
-static UIView *ERFindCCGridContainerInView(UIView *root, NSInteger depth) {
-    if (!root || depth > 16) return nil;
-    NSString *cls = NSStringFromClass(root.class);
-    if ([cls isEqualToString:@"CCUIContentModuleContainerView"]) return root;
-    for (UIView *sub in root.subviews) {
-        UIView *found = ERFindCCGridContainerInView(sub, depth + 1);
-        if (found) return found;
-    }
-    return nil;
-}
 
 // 把快捷按钮 host 的窗口 Y 钉在「安装时的基线」上：胶囊出现/消失引起的任何漂移，
 // 都用 host.transform 反向抵消（不动约束体系，不会被 Auto Layout 覆盖）。
@@ -4353,18 +4235,16 @@ static void ERStartQuickAccessPositionCorrection(void) {
             if (hbDue) gERQACorrHeartbeat = hbNow;
             BOOL hbFoundHost = NO;
             CGFloat hbWinY = -1.0, hbBase = -1.0, hbTransformTY = 0.0;
-                        for (UIWindow *window in ERAllApplicationWindows()) {
+            for (UIWindow *window in ERAllApplicationWindows()) {
                 UIView *host = [window viewWithTag:181000];
                 if (!host || !host.window) continue;
                 if (hbDue) {
                     hbFoundHost = YES;
                     hbWinY = [host.superview convertPoint:host.frame.origin toView:window].y;
+                    NSNumber *hbBaseNum = objc_getAssociatedObject(host, kERQAHostBaselineWinYKey);
+                    hbBase = hbBaseNum ? hbBaseNum.doubleValue : -1.0;
                     // 1.0.9-17 · 同时记录 transform.ty：校正若写入失败（被系统重置），这里会一直是 0。
                     hbTransformTY = host.transform.ty;
-                    // 1.2.1-14 · 心跳 REF 读取改回单 REF（capsule 键废弃）
-                    void *hbRefKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
-                    NSNumber *hbRef = objc_getAssociatedObject(host, hbRefKey);
-                    hbBase = hbRef ? hbRef.doubleValue : -1.0;
                 }
                 // 1.0.9-19 · **开环状态机**（用户确认方案）：
                 //   状态判据：读一次「布局位置」（= 最终位置 − 当前 ty，剥离自身补偿，避免自我反馈）
@@ -4373,52 +4253,23 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 CGFloat finalWinY = [host.superview convertPoint:host.frame.origin toView:window].y;
                 CGFloat currentTy = host.transform.ty;
                 CGFloat layoutWinY = finalWinY - currentTy;
-                // 1.2.1-14 · **-13 双 REF 实锤失败，回退单 REF + 重标定**：
-                //   -13 镜像实录：compact 恒为 1（CC 打开时灵动岛自动收紧成 125.33 紧凑态让位，
-                //     与绿点无关）→ 双 REF 选错分支；且 REF=111.0 是 CC 动画中途瞬态，骗过
-                //     300ms 稳定门 → desiredTy=85 撞 60 上限，等于自己把按钮推下 60pt。
-                //   现在：① 每方向单 REF；② CC 关闭即清除 REF，下次打开重新标定（胶囊中途
-                //   出现/消失由 PIN 实时补偿，不需要两个 REF）；③ 稳定门 3 帧→10 帧（≈1s）；
-                //   ④ 灵动岛宽度变化事件进镜像，用真实几何观察状态而非布尔猜测。
-                //   注意：清除必须放在 layoutWinY<=1 离屏判断**之前**——CC 关闭时 host 会
-                //   离屏（layoutWinY≤1 直接 break），晚一步清就永远带着上次的 REF。
-                static BOOL sQARefCleared = NO;
-                if (!gERControlCenterPresented) {
-                    if (!sQARefCleared) {
-                        objc_setAssociatedObject(host, (void *)kERQARefPortraitKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                        objc_setAssociatedObject(host, (void *)kERQARefLandscapeKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                        sQARefCleared = YES;
-                        ERQAMirrorAppend(@"REF-CLEAR（CC 关闭，下次打开重标定）");
-                    }
-                    break;
-                }
-                sQARefCleared = NO;
                 if (layoutWinY <= 1.0) break;              // 控制中心尚未稳定，不判断
-                void *refKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
-                NSNumber *refNum = objc_getAssociatedObject(host, refKey);
-                if (!refNum) {
-                    // 1.2.1-14 · 标定稳定性门加强：连续 10 帧（≈1s）布局几乎相同才允许标定。
-                    // -11/-13 教训：CC 开场/关闭动画会在某帧暂停，300ms 门太短，把瞬态
-                    // （layout=95 / 111）当成稳态 → ty 冲上限把按钮推下 60pt。1s 门配合
-                    // 「CC 关闭即重标定」，基本排除动画瞬态。
-                    static CGFloat sPrev1 = -999, sPrev2 = -999;
-                    static NSInteger sStableCount = 0;
-                    BOOL frameStable = (fabs(layoutWinY - sPrev1) < 0.5) && (fabs(sPrev1 - sPrev2) < 0.5);
-                    sPrev2 = sPrev1; sPrev1 = layoutWinY;
-                    sStableCount = frameStable ? sStableCount + 1 : 0;
-                    if (sStableCount < 10) break;
-                    sStableCount = 0;
-                    objc_setAssociatedObject(host, refKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    refNum = @(layoutWinY);
-                    ERQAMirrorAppend([NSString stringWithFormat:@"REF-SET %@ layout=%.1f apertureW=%.1f host=%@ super=%@（10 帧≈1s 稳定后）",
-                                      ERLandscapePresentationActive() ? @"landscape" : @"portrait",
-                                      layoutWinY, ERApertureContainerWidth(),
-                                      NSStringFromClass(host.class), NSStringFromClass(host.superview.class)]);
+                NSNumber *baselineNum = objc_getAssociatedObject(host, kERQAHostBaselineWinYKey);
+                if (!baselineNum || layoutWinY < baselineNum.doubleValue) {
+                    // 基线 = 未被压低时的布局位置（取见过的最小值）
+                    objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    baselineNum = @(layoutWinY);
                 }
-                CGFloat desiredTy = MAX(-60.0, MIN(60.0, refNum.doubleValue - layoutWinY));
-                if (fabs(desiredTy - currentTy) > 0.5) {
-                    ERQAMirrorAppend([NSString stringWithFormat:@"PIN layout=%.1f ref=%.1f ty=%.1f→%.1f apertureW=%.1f",
-                                      layoutWinY, refNum.doubleValue, currentTy, desiredTy, ERApertureContainerWidth()]);
+                BOOL suppressed = (layoutWinY > baselineNum.doubleValue + 8.0);   // 被压低（胶囊在场等）
+                CGFloat compensation = suppressed
+                    ? (ERLandscapePresentationActive() ? gERQABtnCompensationLandscape : gERQABtnCompensationPortrait)
+                    : 0.0;
+                CGFloat desiredTy = -compensation;
+                if (fabs(currentTy - desiredTy) > 0.5) {
+                    // 只在状态切换时写入（两个取值之间切换），写入走禁用动作 + 移除动画
+                    ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f",
+                              (int)suppressed, compensation, desiredTy,
+                              (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
@@ -4433,21 +4284,9 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     hbAddButton = EREditAddModuleButtonContainer(hbWindow, 0);
                     if (hbAddButton) break;
                 }
-                // 1.2.1-14 · 灵动岛宽度变化事件：>5pt 跳变记一行 STATE，用来把「权限胶囊出现」
-                // 与 layout 位移在时间轴上对齐（-13 已证 compact 布尔值无区分度）
-                static CGFloat sLastApertureW = -1.0;
-                CGFloat awNow = ERApertureContainerWidth();
-                if ((awNow > 0.0 || sLastApertureW > 0.0) && fabs(awNow - sLastApertureW) > 5.0) {
-                    ERQAMirrorAppend([NSString stringWithFormat:@"STATE apertureW %.1f→%.1f", sLastApertureW, awNow]);
-                    sLastApertureW = awNow;
-                }
-                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f ref=%.1f ty=%.1f edit=%d compact=%d apertureW=%.1f 添加控制项=%@",
+                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f baseline=%.1f ty=%.1f edit=%d 添加控制项=%@",
                           (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
-                          (int)ERCapsuleCompactPresent(), ERApertureContainerWidth(),
                           hbAddButton ? NSStringFromClass(hbAddButton.class) : @"未找到");
-                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f layout=%.1f ref=%.1f ty=%.1f edit=%d apertureW=%.1f",
-                                  (int)hbFoundHost, hbWinY, hbWinY - hbTransformTY, hbBase, hbTransformTY,
-                                  (int)gEditModeActive, ERApertureContainerWidth()]);
             }
             // 1.0.9-20 · **MODSIZE-PROBE**（问题 8 / 10 的数据来源）：
             // 横屏下每 2 秒打印一次「音量模块 / 亮度模块 / 编辑网格层 gridStack / 它的剪裁 mask」的窗口几何。
@@ -5956,64 +5795,30 @@ static BOOL ERRectArraysNearlyEqual(NSArray<NSValue *> *a, NSArray<NSValue *> *b
 
 @end
 
-// 1.2.1-5 · **偏好用户域断链兜底**（重大，解释了一批「设置了不生效」悬案）：
-// 设置面板跑在 mobile 用户的 Settings 里，写的 plist 在
-// /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist；
-// 而 SpringBoard 以 **root** 运行，CFPreferencesGetAppBooleanValue 按当前用户
-// （root）找 /var/root/Library/Preferences/ 下的同名文件——不存在 → valid=false
-// → 直接走代码 fallback。后果：所有「默认 YES」的开关碰巧正常（fallback 掩盖
-// 断链），所有「默认 NO」的开关（如 LoggingEnabled）**从来没有生效过**。
-// 兜底 = CFPreferences 读不到时，直接解析 mobile 域 plist 文件（绕过 cfprefsd）。
-// 文件在 ERLoadPrefs 时解析一次缓存（~1.6MB，respring 一次可接受）。
-static NSDictionary *gERPrefsFileFallback = nil;
-
-static void ERLoadPrefsFileFallback(void) {
-    @autoreleasepool {
-        NSDictionary *d = [NSDictionary dictionaryWithContentsOfFile:@"/var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist"];
-        if (d) gERPrefsFileFallback = d;
-    }
-}
-
-static id ERPrefsFileValue(NSString *key) {
-    if (!gERPrefsFileFallback || !key.length) return nil;
-    id v = gERPrefsFileFallback[key];
-    return v;
-}
-
 static BOOL ERPreferenceBool(NSString *key, BOOL fallback) {
     Boolean valid = false;
     Boolean value = CFPreferencesGetAppBooleanValue((__bridge CFStringRef)key, kERPrefsDomain, &valid);
-    if (valid) return (BOOL)value;
-    id fileValue = ERPrefsFileValue(key);
-    if ([fileValue isKindOfClass:[NSNumber class]]) return [fileValue boolValue];
-    if ([fileValue isKindOfClass:[NSString class]]) return [fileValue boolValue];
-    return fallback;
+    return valid ? (BOOL)value : fallback;
 }
 
 static NSString *ERPreferenceString(NSString *key, NSString *fallback) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key, kERPrefsDomain);
-    if (value) {
-        NSString *result = [(__bridge_transfer NSString *)value copy];
-        return result.length ? result : fallback;
-    }
-    id fileValue = ERPrefsFileValue(key);
-    if ([fileValue isKindOfClass:[NSString class]] && [(NSString *)fileValue length]) return fileValue;
-    return fallback;
+    if (!value) return fallback;
+    NSString *result = [(__bridge_transfer NSString *)value copy];
+    return result.length ? result : fallback;
 }
 
 static CGFloat ERPreferenceDouble(NSString *key, CGFloat fallback) {
     CFPropertyListRef value = CFPreferencesCopyAppValue((__bridge CFStringRef)key, kERPrefsDomain);
+    CGFloat result = fallback;
     if (value) {
-        CGFloat result = fallback;
         if (CFGetTypeID(value) == CFNumberGetTypeID()) {
-            CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, &result);
+            double number = 0.0;
+            if (CFNumberGetValue((CFNumberRef)value, kCFNumberDoubleType, &number)) result = (CGFloat)number;
         }
         CFRelease(value);
-        return result;
     }
-    id fileValue = ERPrefsFileValue(key);
-    if ([fileValue isKindOfClass:[NSNumber class]]) return [fileValue doubleValue];
-    return fallback;
+    return result;
 }
 
 // 1.0.5：读偏好的统一入口。
@@ -6119,12 +5924,7 @@ static NSUInteger gERLogFlushCounter = 0;
 static BOOL gERLogDirectoryReady = NO;
 
 static NSString *ERLogPath(void) {
-    // 1.2.1-4 · 主路径文件不存在而 Documents 备用存在时返回备用（配合写失败自动切换）
-    NSString *primary = [kERLogDirectory stringByAppendingPathComponent:kERLogFileName];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:primary]) return primary;
-    NSString *fallback = [@"/var/mobile/Documents" stringByAppendingPathComponent:kERLogFileName];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:fallback]) return fallback;
-    return primary;
+    return [kERLogDirectory stringByAppendingPathComponent:kERLogFileName];
 }
 
 static void ERLogEnsureDirectory(void) {
@@ -6180,40 +5980,8 @@ static void ERLogFallbackToConsole(NSArray<NSString *> *lines, BOOL primaryFaile
     }
 }
 
-// 1.2.1-9 · QABTN 专用偏好镜像的实现（声明在 ERPrivacyCapsuleVisible 附近）：
-// 保留最近 12 行，写 CFPreferences 键 ERQAMirror（cfprefsd 通道，SSH 可读）。
-static void ERQAMirrorAppend(NSString *line) {
-    @try {
-        if (!line.length) return;
-        NSString *existing = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("ERQAMirror"), kERPrefsDomain);
-        NSMutableArray<NSString *> *all = [NSMutableArray array];
-        if (existing.length) [all addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
-        [all addObject:[NSString stringWithFormat:@"%@ %@", [NSDate date], line]];
-        while (all.count > 24) [all removeObjectAtIndex:0];   // 1.2.1-14 · 12→24：REF-SET/PIN 事件不被 5s 心跳冲出视野
-        CFPreferencesSetAppValue(CFSTR("ERQAMirror"), (__bridge CFPropertyListRef)[all componentsJoinedByString:@"\n"], kERPrefsDomain);
-        CFPreferencesAppSynchronize(kERPrefsDomain);
-    } @catch (__unused NSException *qaMirrorIgnored) {}
-}
-
 static void ERLogAppendLines(NSArray<NSString *> *lines) {
     if (!lines.count) return;
-    // 1.2.1-8 · **cfprefsd 日志镜像**（文件通道的最终替代）：
-    // 1.2.1-7 诊断实锤——SpringBoard 的文件写入"进程内成功但不落盘"
-    // （er_probe 探针 fileExistsAtPath=YES，几分钟后全盘 find 无一存在），
-    // 而 CFPreferences 键 ERDiagText 经 cfprefsd 真实持久化且 SSH 可读。
-    // 因此把日志尾部镜像进偏好键 ERLogMirror（60 行 / 12KB 环形），SSH 读
-    // /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist 即得。
-    @try {
-        NSString *existing = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("ERLogMirror"), kERPrefsDomain);
-        NSMutableArray<NSString *> *all = [NSMutableArray array];
-        if (existing.length) [all addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
-        [all addObjectsFromArray:lines];
-        while (all.count > 60) [all removeObjectAtIndex:0];
-        NSString *joined = [all componentsJoinedByString:@"\n"];
-        if (joined.length > 12000) joined = [joined substringFromIndex:joined.length - 12000];
-        CFPreferencesSetAppValue(CFSTR("ERLogMirror"), (__bridge CFPropertyListRef)joined, kERPrefsDomain);
-        CFPreferencesAppSynchronize(kERPrefsDomain);
-    } @catch (__unused NSException *mirrorIgnored) {}
     ERLogEnsureDirectory();
     NSString *path = ERLogPath();
     BOOL failed = NO;
@@ -6233,29 +6001,6 @@ static void ERLogAppendLines(NSArray<NSString *> *lines) {
             failed = YES;
         } @finally {
             @try { [handle closeFile]; } @catch (__unused NSException *ignored) {}
-        }
-    }
-    // 1.2.1-4 · **备用落盘路径**（日志永久丢失问题的根治）：
-    // 实测（2026-10-24）SpringBoard 对 /var/mobile/Library/Logs/EchoReborn 写入失败
-    // （目录只能由 root 预建，且即便预建后仍可能被沙盒拒绝）→ 日志从未落盘过，
-    // 历史上靠 folderlog（/var/mobile/Documents，已验证 SpringBoard 可写）绕过。
-    // 这里在主路径失败时自动切到 Documents 备用文件，导出按钮也检查备用路径。
-    if (failed) {
-        NSString *fallbackPath = [@"/var/mobile/Documents" stringByAppendingPathComponent:kERLogFileName];
-        NSFileHandle *fb = [NSFileHandle fileHandleForWritingAtPath:fallbackPath];
-        if (!fb) {
-            [@"" writeToFile:fallbackPath atomically:NO encoding:NSUTF8StringEncoding error:nil];
-            fb = [NSFileHandle fileHandleForWritingAtPath:fallbackPath];
-        }
-        if (fb) {
-            @try {
-                [fb seekToEndOfFile];
-                NSString *chunk = [[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"];
-                [fb writeData:[chunk dataUsingEncoding:NSUTF8StringEncoding]];
-            } @catch (__unused NSException *ignored) {
-            } @finally {
-                @try { [fb closeFile]; } @catch (__unused NSException *ignored2) {}
-            }
         }
     }
     ERLogFallbackToConsole(lines, failed);
@@ -6379,8 +6124,6 @@ static void ERLoadPrefs(void) {
     // switch off keeps the lines recorded up to that moment.
     ERLogFlush();
     CFPreferencesAppSynchronize(kERPrefsDomain);
-    // 1.2.1-5 · 先解析 mobile 域 plist 文件做兜底缓存（用户域断链，见 ERPreferenceBool）
-    ERLoadPrefsFileFallback();
     gEnabled = ERPreferenceBool(@"Enabled", YES);
     gQuickAccessButtonsEnabled = ERPreferenceBool(@"QuickAccessButtonsEnabled", YES);
     gQuickAccessVerticalOffset = ERPreferenceDouble(@"QuickAccessVerticalOffset", 0.0);
@@ -6397,50 +6140,6 @@ static void ERLoadPrefs(void) {
     gVolumeControlEnabled = ERPreferenceBool(@"VolumeControlEnabled", YES);
     gBrightnessControlEnabled = ERPreferenceBool(@"BrightnessControlEnabled", YES);
     gERLoggingEnabled = ERPreferenceBool(@"LoggingEnabled", NO);
-    // 1.2.1-6 · **决定性诊断**（无条件写，不依赖日志开关）：echoreborn.log 两条路径
-    // 都从未出现文件，为一步拿到进程内真相，把关键状态直接写
-    // /var/mobile/Documents/er_diag.txt（folderlog 同款通道，已验证 SpringBoard 可写）：
-    //   ① CFPreferences 与文件兜底各自读到的 LoggingEnabled
-    //   ② 两个日志路径的写权限实测（access W_OK + 实写探针）
-    //   ③ plist 文件兜底缓存的规模
-    @try {
-        NSMutableString *diag = [NSMutableString string];
-        [diag appendFormat:@"time=%@\npid=%d\n", [NSDate date], getpid()];
-        Boolean cfValid = false;
-        Boolean cfVal = CFPreferencesGetAppBooleanValue(CFSTR("LoggingEnabled"), kERPrefsDomain, &cfValid);
-        [diag appendFormat:@"CF LoggingEnabled valid=%d value=%d\n", (int)cfValid, (int)cfVal];
-        [diag appendFormat:@"fileFallback keys=%lu fileValue=%@\n",
-            (unsigned long)gERPrefsFileFallback.count, gERPrefsFileFallback[@"LoggingEnabled"]];
-        [diag appendFormat:@"gERLoggingEnabled=%d\n", (int)gERLoggingEnabled];
-        [diag appendFormat:@"capsuleAtLoad=%d\n", (int)ERPrivacyCapsuleVisible(ERAllApplicationWindows())];
-        [diag appendFormat:@"access LogsDir W=%d Documents W=%d\n",
-            (int)(access("/var/mobile/Library/Logs/EchoReborn", W_OK) == 0),
-            (int)(access("/var/mobile/Documents", W_OK) == 0)];
-        // 实写探针：三个候选位置各写一个探针文件，谁出现 = 谁真的可写
-        NSArray<NSString *> *probePaths = @[
-            @"/var/mobile/Library/Logs/EchoReborn/er_probe.txt",
-            @"/var/mobile/Documents/er_probe.txt",
-            @"/var/root/Library/Preferences/er_probe_sb.txt",
-        ];
-        for (NSString *pp in probePaths) {
-            NSError *err = nil;
-            [@"probe" writeToFile:pp atomically:YES encoding:NSUTF8StringEncoding error:&err];
-            [diag appendFormat:@"probe %@ ok=%d err=%@\n", pp, [[NSFileManager defaultManager] fileExistsAtPath:pp] ? 1 : 0, err.localizedDescription ?: @"-"];
-        }
-        [diag writeToFile:@"/var/mobile/Documents/er_diag.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        // 1.2.1-7 · 实测发现 SpringBoard 沙盒拦截所有 writeToFile/fopen（Documents/Accessibility/
-        // 探针全部静默失败），改走 **cfprefsd 通道**：tweak 的 ModuleGridOrigins 能跨 respring
-        // 持久化，证明这条通道必然通。诊断全文写入 root 域偏好键 ERDiagText，SSH 用 root 读。
-        CFPreferencesSetAppValue(CFSTR("ERDiagText"), (__bridge CFPropertyListRef)diag, kERPrefsDomain);
-        CFPreferencesAppSynchronize(kERPrefsDomain);
-        // 多路径补写（谁成功算谁）：/var/root 是 SpringBoard（root）的家目录，
-        // 沙盒大概率放行；/var/tmp 是 world-writable 粘滞目录。
-        for (NSString *pp in @[@"/var/root/er_diag.txt",
-                               @"/var/tmp/er_diag.txt",
-                               @"/var/root/Library/Preferences/er_diag.txt"]) {
-            [diag writeToFile:pp atomically:YES encoding:NSUTF8StringEncoding error:nil];
-        }
-    } @catch (__unused NSException *exception) {}
     gERLandscapeLayoutEnabled = ERPreferenceBool(@"LandscapeLayout.Enabled", NO);
     // 1.0.7-23：横屏账本每次重载都重读一遍 —— 设置页的「恢复横屏布局」删掉
     // COSMICLandscapeOrigins 后，不需要注销就能立刻回到折行布局。
@@ -9426,7 +9125,7 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
     if (gen && gen.unsignedIntegerValue == gERModuleListGeneration) {
         NSArray<UIViewController *> *hit = [gERModuleListCache objectForKey:key];
         if (hit) {
-            // 1.2.1-4 · **活性校验**（翻页点消失回归的修复）：
+            // 1.2.1-15 · 活性校验（自 1.2.1-4 移植，翻页点消失回归的修复）：
             // 失效点只覆盖编辑路径的 7 个变化点，CC 重开 / provider 重建等
             // 非编辑路径改了模块集合却没失效 → 命中陈旧缓存（视图已 detach）→
             // normalizePagedLayoutForOverlay 拿到缩水列表 → gERPageCount 被算成 1
@@ -14366,12 +14065,11 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
 - (void)normalizePagedLayoutForOverlay:(UIViewController *)overlay {
     if (!overlay) return;
     [self syncOwnedDuplicateModulesForOverlay:overlay];
-    NSArray<UIViewController *> *modules = ERCollectModuleControllers(overlay);
-    // 1.2.1-4 · 双重防御（翻页点消失回归）：本函数是低频路径（rebuild/resettle 才跑），
-    // 收集结果必须新鲜——入口强制失效；若仍拿到的列表明显缩水（<2 个但原生 rect 已登记多个），
-    // 再失效重试一次。
+    // 1.2.1-15 · 双重防御（自 1.2.1-4 移植，翻页点消失回归）：本函数是低频路径
+    // （rebuild/resettle 才跑），收集结果必须新鲜——入口强制失效；若仍拿到的列表
+    // 明显缩水（<2 个但原生 rect 已登记多个），再失效重试一次。
     ERInvalidateModuleListCache();
-    modules = ERCollectModuleControllers(overlay);
+    NSArray<UIViewController *> *modules = ERCollectModuleControllers(overlay);
     if (modules.count < 2 && gERNativeLayoutRects.count >= 2) {
         ERInvalidateModuleListCache();
         modules = ERCollectModuleControllers(overlay);
@@ -22675,8 +22373,8 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (identifier.length && !gERBaseLayoutSizes[identifier]) gERBaseLayoutSizes[identifier] = [NSValue value:&size withObjCType:@encode(CCUILayoutSize)];
     NSArray<NSNumber *> *custom = gERCustomSizes[identifier];
     if (custom.count >= 2) size = (CCUILayoutSize){custom[0].unsignedIntegerValue, custom[1].unsignedIntegerValue};
-    // 1.2.1-4 · 问题 2 修复：横屏下音量/亮度被拉成 1×3。
-    // 原生布局引擎在横屏态会把 slider 类模块给到 3 行高（代码里 1.0.9-2x 时代就有
+    // 1.2.1-15 · 问题 2 修复（自 1.2.1-4 移植）：横屏下音量/亮度被拉成 1×3。
+    // 原生布局引擎在横屏态会把 slider 类模块给到 3 行高（1.0.9-2x 时代就有
     // 「拖拽时 1×3 强改回 2」的补丁佐证）；折行逻辑只改 origin 不改 size，3 行高
     // 直接体现在最终布局上。这里对无自定义尺寸的 slider 类模块在横屏态钳制 1×2；
     // 用户显式自定义过尺寸的（gERCustomSizes 命中）完全尊重用户。
@@ -22707,7 +22405,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (customOrigin.count >= 2) rect.origin = (CCUILayoutPoint){customOrigin[0].unsignedIntegerValue, customOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[identifier];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
-        // 1.2.1-4 · 问题 2 同源钳制（与 moduleLayoutSizeForContentModuleContext: 一致）：
+        // 1.2.1-15 · 问题 2 同源钳制（自 1.2.1-4 移植，与 moduleLayoutSizeForContentModuleContext: 一致）：
         // 横屏下 slider 类模块无自定义尺寸时高度钳到 2 行，杜绝 1×3。
         if (gEnabled && ERLandscapePresentationActive() && customSize.count < 2 && rect.size.height > 2) {
             BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
@@ -35140,7 +34838,7 @@ static void ERBootLog(NSString *tag) {
         NSString *line = [NSString stringWithFormat:@"[%@] BOOT %@ proc=%@\n",
                           [NSDate date], tag,
                           NSProcessInfo.processInfo.processName ?: @"?"];
-        // 1.2.1-7 · 目录历史上不存在 → fopen 从未成功过（BOOT 日志悬案根因）。先建目录。
+        // 1.2.1-15 · 目录历史上不存在 → fopen 从未成功过（BOOT 日志悬案根因）。先建目录。
         [[NSFileManager defaultManager] createDirectoryAtPath:@"/var/mobile/Library/Accessibility"
                                   withIntermediateDirectories:YES attributes:nil error:nil];
         FILE *f = fopen("/var/mobile/Library/Accessibility/echoreborn-boot.log", "a");
