@@ -550,3 +550,10 @@
   内容：CF 读值/文件兜底读值/flag 终值/两路径 W_OK/三位置实写探针结果
 - 一版拿到全部答案，er_diag.txt 出现即读
 - 版本 1.2.1-6 / 1002106
+
+## 1.2.1-7（1002107）· 诊断通道改版：cfprefsd 通道
+- **1.2.1-6 实测结论（重大）**：装机后用户确认 CC 功能全部正常 → ctor 在跑、ERLoadPrefs 在跑，但 er_diag.txt 依然不出现 → **SpringBoard 沙盒拦截一切 writeToFile/fopen**（Documents、Accessibility、三个探针全静默失败）。同时解开了"BOOT 日志零输出"悬案：/var/mobile/Library/Accessibility 目录不存在 + fopen 被拦，ERBootLog 从未成功过。
+- **通道佐证**：tweak 的 ModuleGridOrigins 经 CFPreferencesSetAppValue 写 root 域偏好且跨 respring 持久化（用户自定义布局一直有效）→ cfprefsd 写盘通道必然通。
+- 修复：诊断全文写入 CFPreferences 键 `ERDiagText`（root 域 plist，SSH root 可读）；另补写 /var/root/er_diag.txt、/var/tmp/er_diag.txt、/var/root/Library/Preferences/er_diag.txt 三路径兜底。
+- ERBootLog 补 createDirectoryAtPath（Accessibility 目录历史上不存在）。
+- 新增用户反馈（待修）：编辑模式下 32 个圆钮有些对不齐。
