@@ -6280,6 +6280,18 @@ static void ERLoadPrefs(void) {
             [diag appendFormat:@"probe %@ ok=%d err=%@\n", pp, [[NSFileManager defaultManager] fileExistsAtPath:pp] ? 1 : 0, err.localizedDescription ?: @"-"];
         }
         [diag writeToFile:@"/var/mobile/Documents/er_diag.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        // 1.2.1-7 · 实测发现 SpringBoard 沙盒拦截所有 writeToFile/fopen（Documents/Accessibility/
+        // 探针全部静默失败），改走 **cfprefsd 通道**：tweak 的 ModuleGridOrigins 能跨 respring
+        // 持久化，证明这条通道必然通。诊断全文写入 root 域偏好键 ERDiagText，SSH 用 root 读。
+        CFPreferencesSetAppValue(CFSTR("ERDiagText"), (__bridge CFPropertyListRef)diag, kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+        // 多路径补写（谁成功算谁）：/var/root 是 SpringBoard（root）的家目录，
+        // 沙盒大概率放行；/var/tmp 是 world-writable 粘滞目录。
+        for (NSString *pp in @[@"/var/root/er_diag.txt",
+                               @"/var/tmp/er_diag.txt",
+                               @"/var/root/Library/Preferences/er_diag.txt"]) {
+            [diag writeToFile:pp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        }
     } @catch (__unused NSException *exception) {}
     gERLandscapeLayoutEnabled = ERPreferenceBool(@"LandscapeLayout.Enabled", NO);
     // 1.0.7-23：横屏账本每次重载都重读一遍 —— 设置页的「恢复横屏布局」删掉
@@ -34980,6 +34992,9 @@ static void ERBootLog(NSString *tag) {
         NSString *line = [NSString stringWithFormat:@"[%@] BOOT %@ proc=%@\n",
                           [NSDate date], tag,
                           NSProcessInfo.processInfo.processName ?: @"?"];
+        // 1.2.1-7 · 目录历史上不存在 → fopen 从未成功过（BOOT 日志悬案根因）。先建目录。
+        [[NSFileManager defaultManager] createDirectoryAtPath:@"/var/mobile/Library/Accessibility"
+                                  withIntermediateDirectories:YES attributes:nil error:nil];
         FILE *f = fopen("/var/mobile/Library/Accessibility/echoreborn-boot.log", "a");
         if (!f) f = fopen("/rootfs/var/mobile/Library/Accessibility/echoreborn-boot.log", "a");
         if (f) {
