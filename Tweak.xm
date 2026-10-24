@@ -4344,7 +4344,7 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 //   跟随任何原生视图都会被带着走。CC18 式"永不动"的唯一几何解释 =
                 //   **窗口绝对坐标恒定**。目标 = 每方向冻结常量 Y（首次见面标定，胶囊紧凑态在场
                 //   时推迟），系统推多少 ty 反向抵消多少，夹取 [-60,60] 防失控。
-                NSString *refKey = ERLandscapePresentationActive() ? kERQARefLandscapeKey : kERQARefPortraitKey;
+                void *refKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
                 NSNumber *refNum = objc_getAssociatedObject(host, refKey);
                 if (!refNum) {
                     if (ERCapsuleCompactPresent()) {
