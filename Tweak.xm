@@ -6067,6 +6067,23 @@ static void ERLogFallbackToConsole(NSArray<NSString *> *lines, BOOL primaryFaile
 
 static void ERLogAppendLines(NSArray<NSString *> *lines) {
     if (!lines.count) return;
+    // 1.2.1-8 · **cfprefsd 日志镜像**（文件通道的最终替代）：
+    // 1.2.1-7 诊断实锤——SpringBoard 的文件写入"进程内成功但不落盘"
+    // （er_probe 探针 fileExistsAtPath=YES，几分钟后全盘 find 无一存在），
+    // 而 CFPreferences 键 ERDiagText 经 cfprefsd 真实持久化且 SSH 可读。
+    // 因此把日志尾部镜像进偏好键 ERLogMirror（60 行 / 12KB 环形），SSH 读
+    // /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist 即得。
+    @try {
+        NSString *existing = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("ERLogMirror"), kERPrefsDomain);
+        NSMutableArray<NSString *> *all = [NSMutableArray array];
+        if (existing.length) [all addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
+        [all addObjectsFromArray:lines];
+        while (all.count > 60) [all removeObjectAtIndex:0];
+        NSString *joined = [all componentsJoinedByString:@"\n"];
+        if (joined.length > 12000) joined = [joined substringFromIndex:joined.length - 12000];
+        CFPreferencesSetAppValue(CFSTR("ERLogMirror"), (__bridge CFPropertyListRef)joined, kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+    } @catch (__unused NSException *mirrorIgnored) {}
     ERLogEnsureDirectory();
     NSString *path = ERLogPath();
     BOOL failed = NO;
