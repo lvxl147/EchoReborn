@@ -632,3 +632,19 @@
 - **bug 1（竖屏点不收起 CC 的模块 → 红框状态区消失 2-3 秒，静态考古未实锤，诊断+稳健化同修）**：首选嫌疑 = top fade（frame (0,0,宽,max(112,safeArea+76)) 正好盖住 HeaderPocket 状态带）被残留翻页标志以 alpha 1.0 点亮。修复：① bug 3 的第 3/4 条先拆公共温床（已完成）；② `willOpenExpandedModule:`/`didCloseExpandedModule:` 强制熄 fade（presentationAlpha:0.0）+ 清 gERPagerTransitionActive/ScrubbingActive；③ 新增诊断三件套 —— updateTopFadeForOverlay: 逐变日志 `[FADE] target=/active/scrub/transition/tr/expanded` + HeaderPocket 看门狗（CC 呈现时 0.5s 独立采样 fade/pocket/子视图 alpha·hidden，仅签名变化落 `[POCKET]` 日志，代数票根防多链、收起自断）+ 复用 PAGEGEO/PAGESETTLE 探针。装机复现后回传 [FADE]/[POCKET] 日志，若写入点不在这两处，按日志出 -18 定点清除
 - 参照系：cc18_dylib.extracted 字符串考古实锤 CC18 = 原生 UIPageControl（即点即翻）/ 真 overlayScrollView 末页占位页 + 回弹 / spring 落位，②③④ 目标行为即「原生 scrollview 分页感」
 - 方案文档：PLAN_1.2.1-17.md（根因带行号、改法、风险、批次）。风险项：bug 2 边界手势（装机后专项验证末页慢拖回弹 + 首页下拉阻尼 + 末页底部快速上拂收起 CC 三条既有行为）
+
+## 1.2.1-18（1002118）· cfprefsd 日志镜像通道恢复（bug 1 诊断数据救援）
+- **背景实锤链**：1.2.1-7 发现 SpringBoard 文件写入「进程内成功但不落盘」（roothide 虚拟化）→ 1.2.1-8 建立 CFPreferences 镜像键 `ERLogMirror`（60 行/12KB 环）并经 SSH 从 mobile 域 plist 读出验证可用 → 1.2.1-16 回退 1.2.0-97 基底时把镜像通道一并还原掉 → 1.2.1-17 装机后用户复现 bug 1，诊断数据全丢
+- **1.2.1-17 复现失败实机复盘（2026-10-25 凌晨）**：
+  - 复现后 SSH 实锤：`/var/mobile/Library/Logs/EchoReborn/` 目录在盘（03:05 创建）但 `echoreborn.log` 不存在；plist 里昨日 23:06 的 `ERDiagText` 探针记录显示直接写 `er_probe.txt` 返回 `ok=1`（进程内成功）——该文件同样不在磁盘上。「进程内成功但不落盘」二次实锤；目录创建能落盘、文件内容不落盘
+  - 短会话丢失实锤：`ERLogRecord` 每 8 条才刷盘（kERLogFlushInterval=8），复现会话通常 < 8 条，缓冲区只活在 SpringBoard 内存里
+  - unified log 通道不可用：设备无 `log` 二进制（/usr/bin/log 不存在，sudo PATH 亦无）；NSLog 回落只在写文件真失败时触发，而本次写入「成功」故无 NSLog
+  - CFPreferences 通道可用性实锤：`Diag.ctor` = 2026-10-24 19:19:11 +0000（= 03:19:11 CST，respring 后插件构造时间）经 SSH 从 plist 读出，新鲜有效；plist 跨重启保留昨日镜像键（ERLogMirror 尾 60 行 23:43、ERQAMirror、ERDiagText）
+  - 设备时间线：03:01 userspace respring 装机 1.2.1-17 → 03:16 前后用户竖屏点「锁定」模块复现 bug 1 → 03:19:11 再度 userspace respring（kern.boottime 10-23 18:04 内核未动，backboardd/SpringBoard PID 联动变为 32092/32094），复现数据随内存缓冲区丢失。respring 触发方待用户确认（手动 or 自动）
+- **本版修复**：恢复双环 cfprefsd 镜像（`ERMirrorRingUpdate` 通用实现，按行入环保持行数语义）：
+  - `ERLogMirror`：全部日志尾 60 行（12KB 上限），`ERLogRecord` 逐行镜像（不再等 8 条刷盘），短会话不再丢
+  - `ERPocketMirror`：仅 `[FADE]`/`[POCKET]` 尾 16 行（4KB 上限），诊断时序永远在手（1.2.1-9 教训：通用 60 行窗口会被批量日志（一次 38 行）冲出，专用环保证 bug 1 的诊断时序）
+  - 已知权衡：plist 域已达 ~2MB（ShortcutCatalog 带 1.6MB 图标 PNG），逐行同步 = 每行一次 cfprefsd 全域重写；实测复现会话行数 20-100 量级可接受，若出现写放大问题下一版合并写
+  - 读取方式：SSH 下载 `/var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist` 后 plistlib 解析（该设备 plutil -p/-extract 对大 plist 报 keypath 错，下载解析最稳）
+- 诊断站点接入（1.2.1-17 已建，本版接入镜像）：[FADE] stale 清理 / [FADE] target 逐变 / [POCKET] 看门狗签名变化，版本串 ver=1.2.1-18
+- 装机后复现流程：竖屏 → 拉开 CC 不收起 → 点「锁定」等模块 → SSH 拉 plist 的 ERPocketMirror + ERLogMirror → 定位状态带被谁打零
