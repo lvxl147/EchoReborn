@@ -571,6 +571,8 @@ static const void *kERPagerVisualBlurFilterKey = &kERPagerVisualBlurFilterKey;
 static const void *kERExpansionPageGeometrySyncKey = &kERExpansionPageGeometrySyncKey;
 static const void *kERExpansionCollectionLayerPositionKey = &kERExpansionCollectionLayerPositionKey;
 static const void *kERExpansionGeometryHoldTokenKey = &kERExpansionGeometryHoldTokenKey;
+// 1.2.1-17 · bug 1 诊断：HeaderPocket 看门狗链的「代数」票根（防多条链并存）。
+static const void *kERHeaderPocketWatchdogKey = &kERHeaderPocketWatchdogKey;
 
 typedef struct CCUILayoutSize { NSUInteger width; NSUInteger height; } CCUILayoutSize;
 typedef struct CCUILayoutPoint { NSUInteger x; NSUInteger y; } CCUILayoutPoint;
@@ -14228,13 +14230,126 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         fade = [overlay.view viewWithTag:kERTopFadeTag];
     }
     if (!fade) return;
+    // 1.2.1-17 · bug 3（第 4 条）/ bug 1（第 1 条）：pager 标志 staleness
+    // 看门狗。setCurrentPage:animated: 旧版不清理 gERPagerTransitionActive、
+    // settle 被打断时标志也会残留；残留期间本方法会被 incidental 呈现回调以
+    // alpha=1.0 点亮，而 fade 的 frame (0,0,宽,max(112,safeArea+76)) 正好
+    // 盖住顶部状态带（用户红框区）—— bug 1「状态区消失 2-3 秒」首选嫌疑。
+    // 看门狗：标志为真但超过 1s 无任何手势推进（跟手位移 / 圆点拖拽）即视为
+    // 残留，连标志一起清。合法窗口（tap 0.22s slide、settle ≤0.42s +
+    // 0.42s snap）均小于 1s，不会误伤；跟手悬停（位移保持）与圆点长按
+    // （dragging 标志）都算「推进中」，不触发。
+    UIView *indicatorHost = [overlay.view viewWithTag:kERPageIndicatorHostTag];
+    BOOL indicatorDragging = indicatorHost ? [objc_getAssociatedObject(indicatorHost, kERPageIndicatorDraggingKey) boolValue] : NO;
+    BOOL gestureInFlight = fabs(gERPagerInteractiveTranslation) > 0.5 || indicatorDragging;
+    BOOL flagsRaw = gERPagerScrubbingActive || gERPagerTransitionActive;
+    static CFTimeInterval staleFlagsSince = 0.0;
+    if (!gERExpandedModuleOpen && flagsRaw && !gestureInFlight) {
+        CFTimeInterval now = CACurrentMediaTime();
+        if (staleFlagsSince <= 0.0) staleFlagsSince = now;
+        if (now - staleFlagsSince > 1.0) {
+            ERLogInfo(@"[FADE] ver=1.2.1-17 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
+                      (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince);
+            gERPagerScrubbingActive = NO;
+            gERPagerTransitionActive = NO;
+            staleFlagsSince = 0.0;
+        }
+    } else {
+        staleFlagsSince = 0.0;
+    }
     BOOL active = !gERExpandedModuleOpen &&
         (gERPagerScrubbingActive || gERPagerTransitionActive || fabs(gERPagerInteractiveTranslation) > 0.5);
     CGFloat target = active ? MIN(1.0, MAX(0.0, alpha)) : 0.0;
+    // 1.2.1-17 · bug 1 诊断：fade 点亮/熄灭逐变记录（含标志位），装机后
+    // 据此确认「状态区消失」是否由 fade 覆盖引起、由哪个标志点亮。
+    static CGFloat lastFadeTarget = -1.0;
+    if (fabs(target - lastFadeTarget) > 0.001) {
+        ERLogInfo(@"[FADE] ver=1.2.1-17 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
+                  target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
+                  gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen);
+        lastFadeTarget = target;
+    }
     fade.hidden = target <= 0.001;
     fade.alpha = target;
     CGFloat height = MAX(112.0, overlay.view.safeAreaInsets.top + 76.0);
     fade.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(overlay.view.bounds), height);
+}
+
+// 1.2.1-17 · bug 1 诊断：HeaderPocket 状态带看门狗（0.5s 周期独立采样）。
+//
+// 用户报「竖屏点不收起 CC 的模块时，红框状态区（双卡信号 / 电量）消失 2-3 秒」。
+// 红框区 = CCUIHeaderPocketView 内的原生状态带。静态考古列过三类嫌疑（top fade
+// 覆盖 / pocket alpha 被 scrub 路径打零 / 展开过渡窗残留），都没拿到实锤 ——
+// updateTopFadeForOverlay: 里的 [FADE] 逐变日志只在该方法被调用时才有输出，
+// 属于「写入方视角」；本看门狗是「被写方视角」：每 0.5s 独立采样 fade 视图、
+// pocket 本体、pocket 各直接子视图的 alpha/hidden，仅在**签名变化**时落一行，
+// 复现即可从时序上定位「谁把它打零、持续多久、由谁恢复」。
+//
+// 生命周期：CC 呈现回调（didChangePresentationState，state != 0）启动，
+// 每轮代数 +1（旧链下一 tick 自断，保证同时只有一条链）；收起
+// （gERControlCenterPresented == NO）或 overlay 析构时链自然终止。
+static NSUInteger gERHeaderPocketWatchdogGeneration = 0;
+
+static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
+    if (!overlay.view) return;
+    UIView *fade = [overlay.view viewWithTag:kERTopFadeTag];
+    // pocket 只在 overlay 视图树里找一层 BFS（命中即停），不遍历全树。
+    UIView *pocket = nil;
+    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:overlay.view];
+    while (queue.count) {
+        UIView *candidate = queue.firstObject;
+        [queue removeObjectAtIndex:0];
+        if ([NSStringFromClass(candidate.class) isEqualToString:@"CCUIHeaderPocketView"]) {
+            pocket = candidate;
+            break;
+        }
+        [queue addObjectsFromArray:candidate.subviews];
+    }
+    NSMutableString *kids = [NSMutableString string];
+    if (pocket) {
+        for (UIView *child in pocket.subviews) {
+            NSString *name = NSStringFromClass(child.class);
+            // 类名压缩：去 CCUI 前缀，取前 12 字符，日志行才不会爆。
+            NSRange prefix = [name rangeOfString:@"CCUI"];
+            if (prefix.location == 0) name = [name substringFromIndex:4];
+            if (name.length > 12) name = [name substringToIndex:12];
+            if (kids.length) [kids appendString:@" "];
+            [kids appendFormat:@"%@:%.2f/%d", name, child.alpha, (int)child.hidden];
+        }
+    }
+    NSString *signature = [NSString stringWithFormat:@"fade=%.2f/%d pocket=%.2f/%d kids=[%@]",
+                           fade ? fade.alpha : -1.0, fade ? (int)fade.hidden : -1,
+                           pocket ? pocket.alpha : -1.0, pocket ? (int)pocket.hidden : -1,
+                           kids];
+    static NSString *lastSignature = nil;
+    if (![signature isEqualToString:lastSignature]) {
+        lastSignature = signature;
+        ERLogInfo(@"[POCKET] ver=1.2.1-17 %@", signature);
+    }
+}
+
+static void ERScheduleHeaderPocketWatchdog(UIViewController *overlay, NSUInteger generation) {
+    __weak UIViewController *weakOverlay = overlay;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIViewController *strongOverlay = weakOverlay;
+        if (!strongOverlay) return;   // overlay 已析构，链自然终止
+        NSNumber *ticket = objc_getAssociatedObject(strongOverlay, kERHeaderPocketWatchdogKey);
+        if (!ticket || ticket.unsignedIntegerValue != generation) return;   // 已被新一轮取代
+        if (!gERControlCenterPresented || !gEnabled) {
+            // 收起：清票根，链终止。下一次呈现会拿新代数重启。
+            objc_setAssociatedObject(strongOverlay, kERHeaderPocketWatchdogKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            return;
+        }
+        ERHeaderPocketWatchdogSample(strongOverlay);
+        ERScheduleHeaderPocketWatchdog(strongOverlay, generation);
+    });
+}
+
+static void ERStartHeaderPocketWatchdog(UIViewController *overlay) {
+    if (!overlay) return;
+    NSUInteger generation = ++gERHeaderPocketWatchdogGeneration;
+    objc_setAssociatedObject(overlay, kERHeaderPocketWatchdogKey, @(generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    ERScheduleHeaderPocketWatchdog(overlay, generation);
 }
 
 - (void)updateOwnedDuplicateHostForOverlay:(UIViewController *)overlay presentationAlpha:(CGFloat)alpha {
@@ -14963,6 +15078,24 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     //
     // 拖动期间所有写入都是 setDisableActions:YES，模型值本身就等于屏幕上的位置，
     // 所以这里直接取模型值既准确又不需要等下一帧提交。
+    // 1.2.1-17 · bug 3（第 1 条）：settle 起点与屏幕对齐。
+    // 1.0.7-4 把起点从呈现值改为模型值，理由是"跟手写入都禁了动作、模型=屏幕"；
+    // 但 1.0.7-3 实机日志恰是 presSub=-4.3 ≠ sub=-75.3 —— 松手瞬间呈现层
+    // 滞后模型（快速拖动时渲染延迟 / 跟手写入未全禁动作）。此时以模型作起点，
+    // 显式动画第一帧会把画面跳到模型位（"向上一下"）再滑向目标，正是用户报的
+    // 落位弹跳。修法：先比对呈现层与模型，不一致就 removeAllAnimations +
+    // 禁动作把模型对齐到呈现值（屏幕位），再以模型为起点补间。
+    CALayer *settlePresentation = (CALayer *)collectionLayer.presentationLayer;
+    if (settlePresentation &&
+        fabs(settlePresentation.sublayerTransform.m42 - collectionLayer.sublayerTransform.m42) > 1.0) {
+        [collectionLayer removeAllAnimations];
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        CATransform3D alignedTransform = collectionLayer.sublayerTransform;
+        alignedTransform.m42 = settlePresentation.sublayerTransform.m42;
+        collectionLayer.sublayerTransform = alignedTransform;
+        [CATransaction commit];
+    }
     CATransform3D fromSub = collectionLayer.sublayerTransform;
 
     if (modelChanges) modelChanges();
@@ -15029,6 +15162,20 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     gERPagerInteractiveTranslation = 0.0;
     [self updatePageIndicatorsForOverlay:overlay];
     [self applyPageTransformToOverlay:overlay animated:animated];
+    // 1.2.1-17 · bug 3（第 3 条）：animated 分支补 completion 清理。
+    // 旧实现置 gERPagerTransitionActive=YES 后没有任何路径把它清回 NO ——
+    // 残留期间 ERInteractivePagingGeometryActive() 恒真、incidental 呈现回调
+    // 会插入 applyPageTransform / 点亮 top fade（bug 1 同源温床）。用与
+    // applyPageTransformToOverlay:animated: 同款的 token 机制：slide 时长
+    // （0.22s，见那里的 duration）后清标志；token 被后续动画替换则作废。
+    if (animated) {
+        id transitionToken = objc_getAssociatedObject(overlay, kERPageAnimationTokenKey);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (objc_getAssociatedObject(overlay, kERPageAnimationTokenKey) != transitionToken) return;
+            if (!gERPagerScrubbingActive) gERPagerTransitionActive = NO;
+            [self updateTopFadeForOverlay:overlay presentationAlpha:0.0];
+        });
+    }
     if (gPagingEnabled && gERControlCenterPresented && gERControlCenterPresentationState == 2) {
         for (NSNumber *delay in @[@0.0, @0.12, @0.42]) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -15063,11 +15210,14 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     NSNumber *page = objc_getAssociatedObject(sender, @selector(pageIndicatorTapped:));
     if (!gPagingEnabled || !overlay || !page || gERExpandedModuleOpen || gERPagerTransitionActive) return;
     if (gEditModeActive) return;
+    // 1.2.1-17 · bug 4 修复：touch-down 不再进入 scrub 态。
+    // 旧实现在按下瞬间就 beginInteractivePageTransition —— heldScale 0.26s
+    // 入场缩放 + indicator 切 scrub 大间距（用户看到的"放大"）+ 松手再 0.30s
+    // settle，合计 ~0.5s 才跳页。CC18 用原生 UIPageControl：按下即翻。
+    // 现在 touch-down 只做夹紧重assert；纯点击走 pageIndicatorTapped: 的
+    // setCurrentPage:animated:YES（0.22s 即翻）；真拖拽仍由 pageIndicatorPanned:
+    // 的 Began 分支进入 scrub，交互不变。
     ERReassertNativeScrollClampForOverlay(overlay);
-    [self beginInteractivePageTransitionForOverlay:overlay startPage:gERCurrentPage];
-    [self updateInteractivePageTransitionForOverlay:overlay
-                                           progress:(CGFloat)page.unsignedIntegerValue
-                                             touchY:CGRectGetMidY(sender.frame)];
 }
 
 - (void)beginInteractivePageTransitionForOverlay:(UIViewController *)overlay startPage:(NSUInteger)startPage {
@@ -15825,8 +15975,13 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         [self updatePagedModuleVisibilityForOverlay:overlay showAdjacent:YES];
         UIScrollView *nativeScrollView = ERNativeScrollViewForOverlay(overlay);
         NSValue *nativeBaseline = EREnsureNativeScrollBaseline(overlay);
+        // 1.2.1-17 · bug 2 修复：全树 clamp 无条件执行。旧实现仅当
+        // nativeScrollView && nativeBaseline 双满足才钳，漏钳的 scrollview
+        // 保留 bounces=YES；末页上拖被 gestureRecognizerShouldBegin: 拒绝后，
+        // 手势落给这些漏钳的原生 scrollview，rubber-band 给出约 2 排行程且
+        // 减速后可停留（用户报的"上翻 2 排 + 悬停"）。
+        ERClampNativeScrollViewForOverlay(overlay);
         if (nativeScrollView && nativeBaseline) {
-            ERClampNativeScrollViewForOverlay(overlay);
             objc_setAssociatedObject(gesture, kERPagerNativeScrollViewKey, nativeScrollView, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
             objc_setAssociatedObject(gesture, kERPagerNativeOffsetKey, nativeBaseline, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         }
@@ -15849,7 +16004,29 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     }
     NSUInteger startPage = [objc_getAssociatedObject(gesture, kERPagerStartPageKey) unsignedIntegerValue];
     CGPoint translation = [gesture translationInView:overlay.view];
-    if ((startPage == 0 && translation.y > 0.0) || (startPage + 1 >= gERPageCount && translation.y < 0.0)) translation.y *= 0.24;
+    // 1.2.1-17 · bug 2 修复：边界阻尼从「线性 0.24」重写为衰减橡皮筋。
+    // 旧实现两个缺陷：① 线性 0.24 —— 拖一整页 span 漏 24%（≈2 排），松手前
+    // 一直"悬停"在过冲位；② 只按 startPage 判定边界 —— 从内页一路拖到末页
+    // 时越过边界不衰减，可整页过冲。
+    // 新实现按「实时页位」判定边界，越界行程走衰减曲线，渐近上限 0.5 * span
+    // （用户说的"半个圆"）：越拖越沉，超过半页即强阻；松手由 Ended 分支的
+    // overshoot bezier 回弹（target 恒为 startPage）。
+    if (translation.y != 0.0 && gERPageCount > 0) {
+        CGFloat span = MAX(ERVisualPageSpan(), 1.0);
+        CGFloat rawPage = (CGFloat)startPage - translation.y / span; // 拖上 = 页位增大
+        CGFloat maxPage = (CGFloat)gERPageCount - 1.0;
+        if (rawPage > maxPage) {
+            // 越过末页边界：允许行程 = 到末页的距离，越界部分橡皮筋化
+            CGFloat over = (rawPage - maxPage) * span;
+            CGFloat excursion = span * 0.5 * (1.0 - 1.0 / (1.0 + over / span));
+            translation.y = -((maxPage - (CGFloat)startPage) * span + excursion);
+        } else if (rawPage < 0.0) {
+            // 越过首页边界（同理）
+            CGFloat over = -rawPage * span;
+            CGFloat excursion = span * 0.5 * (1.0 - 1.0 / (1.0 + over / span));
+            translation.y = (CGFloat)startPage * span + excursion;
+        }
+    }
     if (gesture.state == UIGestureRecognizerStateChanged) {
         gERCurrentPage = startPage;
         gERPagerInteractiveTranslation = translation.y;
@@ -15886,6 +16063,12 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             CGFloat velocityFactor = MIN(1.0, releaseVelocity / 1800.0);
             NSTimeInterval duration = MIN(0.42, MAX(0.24, 0.22 + distanceFactor * 0.20 - velocityFactor * 0.10));
             CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            // 1.2.1-17 · bug 2：边界回弹（delta==0 且跟手有位移）换带回弹的
+            // bezier（cubic-bezier(0.34,1.42,0.64,1.0) 轻微过冲后归位），
+            // 对齐 CC18 spring 落位观感；正常翻页仍用 EaseInEaseOut。
+            if (delta == 0 && fabs(gERPagerInteractiveTranslation) > 0.5) {
+                settleCurve = [CAMediaTimingFunction functionWithControlPoints:0.34 :1.42 :0.64 :1.0];
+            }
             [self animatePageSettleForOverlay:overlay duration:duration timingFunction:settleCurve modelChanges:^{
                 gERCurrentPage = (NSUInteger)target;
                 gERPagerInteractiveTranslation = 0.0;
@@ -15936,10 +16119,24 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             NSValue *settleOffsetValue = nativeOffsetValue;
             CGPoint settleOffset = nativeOffset;
             CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
+            // 1.2.1-17 · bug 2：边界回弹（delta==0 且跟手有位移）换带回弹的
+            // bezier（cubic-bezier(0.34,1.42,0.64,1.0) 轻微过冲后归位），
+            // 对齐 CC18 spring 落位观感；正常翻页仍用 EaseInEaseOut。
+            if (delta == 0 && fabs(gERPagerInteractiveTranslation) > 0.5) {
+                settleCurve = [CAMediaTimingFunction functionWithControlPoints:0.34 :1.42 :0.64 :1.0];
+            }
             [self animatePageSettleForOverlay:overlay duration:duration timingFunction:settleCurve modelChanges:^{
                 gERCurrentPage = (NSUInteger)target;
                 gERPagerInteractiveTranslation = 0.0;
                 [self applyPageTransformToOverlay:overlay animated:NO];
+                // 1.2.1-17 · bug 3（第 2 条）：原生 offset 回写移入落位第一帧。
+                // 旧实现放在 completion —— 页面视觉到达之后才 setContentOffset，
+                // 内容被二次挪动，读作"向上一下然后落下"。与页面跳转同帧回写，
+                // completion 不再碰原生偏移（16025 的 snap 窗口仍保留兜底）。
+                if (settleScrollView && settleOffsetValue) {
+                    ERClampNativeScrollViewForOverlay(overlay);
+                    [settleScrollView setContentOffset:settleOffset animated:NO];
+                }
                 // 1.0.7-2（第 2 条）：磁贴可见性与页面跳转**同帧**收敛。
                 // 拖动时为了跟手是「两页都可见」，落位这一帧必须收回到「只显示目标页」；
                 // 以前要等 settle 动画结束才做，目标页磁贴在最后一帧才冒出来 ——
@@ -15952,10 +16149,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                 [self updatePagedModuleVisibilityForOverlay:overlay showAdjacent:NO];
                 [self updatePageIndicatorsForOverlay:overlay];
                 [self updateTopFadeForOverlay:overlay presentationAlpha:0.0];
-                if (settleScrollView && settleOffsetValue) {
-                    ERClampNativeScrollViewForOverlay(overlay);
-                    [settleScrollView setContentOffset:settleOffset animated:NO];
-                }
             }];
         }
         // The private scroll view can receive a final deferred offset write
@@ -16816,7 +17009,11 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
         // At the bottom of the pager, preserve iOS 16's native upward Control
         // Center dismissal instead of trapping the user in a rubber band — but
         // never while a drag is in flight, or the held module dumps out of edit.
-        if (!gERDragInProgress && gERCurrentPage + 1 >= gERPageCount && velocity.y < 0.0) return NO;
+        // 1.2.1-17 · bug 2 修复：旧逻辑「末页向上扫一律拒绝」把慢拖也漏给了
+        // 原生 scrollview（见 pagePanned: Began 的 clamp 注释）。现在只有真正的
+        // 快速上拂（velocity.y < -400，原生收起手势的速度特征）才放行；
+        // 慢拖进 pager，由 pagePanned: 的衰减橡皮筋 + overshoot 回弹接走。
+        if (!gERDragInProgress && gERCurrentPage + 1 >= gERPageCount && velocity.y < -400.0) return NO;
         return fabs(velocity.y) > fabs(velocity.x) * 1.12;
     }
     return YES;
@@ -24741,6 +24938,11 @@ static void ERInstallModuleTapFeedback(UIView *host) {
     if ([controller isKindOfClass:[UIViewController class]]) overlay = ERFindOverlayController((UIViewController *)controller);
     if (!overlay) overlay = gOverlayControllers.allObjects.firstObject;
     if (overlay) {
+        // 1.2.1-17 · bug 1 诊断：呈现即启动 HeaderPocket 状态带看门狗
+        // （0.5s 采样 fade/pocket/子视图 alpha·hidden，仅变化落日志）。
+        // 每次呈现回调代数 +1，旧链下一 tick 自断，保证同时只有一条链；
+        // 收起（state 0 → gERControlCenterPresented=NO）时链自然终止。
+        if (state != 0) ERStartHeaderPocketWatchdog(overlay);
         if (state != 0) {
             if (gPagingEnabled && !gERPresentationPanGesture) {
                 [[EchoRebornCoordinator shared] beginPresentationPanDiscoveryForOverlay:overlay controller:self];
@@ -26281,6 +26483,15 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     if (gEditModeActive) [coordinator dismissEditingImmediately];
     if (expandedController) [coordinator applyResizedPresentationToModule:expandedController];
     [coordinator setQuickAccessButtonsHidden:YES forOverlay:overlay animated:YES];
+    // 1.2.1-17 · bug 1（第 2 条）：展开前强制熄灭 top fade 并清翻页标志。
+    // fade 的 frame (0,0,宽,max(112,safeArea+76)) 正好盖住 HeaderPocket 里的
+    // 状态带（用户红框区）；残留的 gERPagerTransitionActive/ScrubbingActive
+    // 会让 incidental 呈现回调（significantPresentationProgressChange 等）在
+    // 展开期间把 fade 以 alpha 1.0 点亮 → 状态区消失 2-3 秒。展开态本就不该
+    // 有翻页标志，这里显式收敛，不依赖看门狗的事后清理（看门狗兜底 >1s）。
+    gERPagerScrubbingActive = NO;
+    gERPagerTransitionActive = NO;
+    [coordinator updateTopFadeForOverlay:overlay presentationAlpha:0.0];
     %orig;
     if (openingConnectivity) {
         __weak UIViewController *weakOverlay = overlay;
@@ -26353,7 +26564,14 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
         if (!revealActive) pageIndicators.alpha = pageIndicators.hidden ? 0.0 : 1.0;
     }
     [coordinator setQuickAccessButtonsHidden:(gEditModeActive || !gERControlCenterPresented) forOverlay:overlay animated:!ERExpandedChromeRevealActive()];
-    [coordinator updateTopFadeForOverlay:overlay presentationAlpha:gERControlCenterPresented ? 1.0 : 0.0];
+    // 1.2.1-17 · bug 1（第 2 条）：折叠收尾强制熄 fade + 清翻页标志。
+    // 旧代码在 CC 仍呈现时以 alpha=1.0 调本方法；此刻 gERExpandedModuleOpen
+    // 刚置 NO，若翻页标志残留（与 bug 3-C 同源：setCurrentPage:animated: 旧版
+    // 无 completion 清理），fade 会被点亮盖住状态带，直到某次 settle completion
+    // 才熄 —— 正是用户看到的 2-3 秒消失。折叠后没有翻页活动，直接归零。
+    gERPagerScrubbingActive = NO;
+    gERPagerTransitionActive = NO;
+    [coordinator updateTopFadeForOverlay:overlay presentationAlpha:0.0];
     [coordinator animateOwnedDuplicateHostForOverlay:overlay presented:gERControlCenterPresented];
     for (UIViewController *candidate in ERCollectModuleControllers(overlay)) {
         [coordinator applyRefinedLookToModule:candidate];
