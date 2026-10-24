@@ -5970,7 +5970,12 @@ static NSUInteger gERLogFlushCounter = 0;
 static BOOL gERLogDirectoryReady = NO;
 
 static NSString *ERLogPath(void) {
-    return [kERLogDirectory stringByAppendingPathComponent:kERLogFileName];
+    // 1.2.1-4 · 主路径文件不存在而 Documents 备用存在时返回备用（配合写失败自动切换）
+    NSString *primary = [kERLogDirectory stringByAppendingPathComponent:kERLogFileName];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:primary]) return primary;
+    NSString *fallback = [@"/var/mobile/Documents" stringByAppendingPathComponent:kERLogFileName];
+    if ([[NSFileManager defaultManager] fileExistsAtPath:fallback]) return fallback;
+    return primary;
 }
 
 static void ERLogEnsureDirectory(void) {
@@ -6047,6 +6052,29 @@ static void ERLogAppendLines(NSArray<NSString *> *lines) {
             failed = YES;
         } @finally {
             @try { [handle closeFile]; } @catch (__unused NSException *ignored) {}
+        }
+    }
+    // 1.2.1-4 · **备用落盘路径**（日志永久丢失问题的根治）：
+    // 实测（2026-10-24）SpringBoard 对 /var/mobile/Library/Logs/EchoReborn 写入失败
+    // （目录只能由 root 预建，且即便预建后仍可能被沙盒拒绝）→ 日志从未落盘过，
+    // 历史上靠 folderlog（/var/mobile/Documents，已验证 SpringBoard 可写）绕过。
+    // 这里在主路径失败时自动切到 Documents 备用文件，导出按钮也检查备用路径。
+    if (failed) {
+        NSString *fallbackPath = [@"/var/mobile/Documents" stringByAppendingPathComponent:kERLogFileName];
+        NSFileHandle *fb = [NSFileHandle fileHandleForWritingAtPath:fallbackPath];
+        if (!fb) {
+            [@"" writeToFile:fallbackPath atomically:NO encoding:NSUTF8StringEncoding error:nil];
+            fb = [NSFileHandle fileHandleForWritingAtPath:fallbackPath];
+        }
+        if (fb) {
+            @try {
+                [fb seekToEndOfFile];
+                NSString *chunk = [[lines componentsJoinedByString:@"\n"] stringByAppendingString:@"\n"];
+                [fb writeData:[chunk dataUsingEncoding:NSUTF8StringEncoding]];
+            } @catch (__unused NSException *ignored) {
+            } @finally {
+                @try { [fb closeFile]; } @catch (__unused NSException *ignored2) {}
+            }
         }
     }
     ERLogFallbackToConsole(lines, failed);
@@ -9170,7 +9198,21 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
     NSNumber *gen = [gERModuleListCacheGen objectForKey:key];
     if (gen && gen.unsignedIntegerValue == gERModuleListGeneration) {
         NSArray<UIViewController *> *hit = [gERModuleListCache objectForKey:key];
-        if (hit) return hit;
+        if (hit) {
+            // 1.2.1-4 · **活性校验**（翻页点消失回归的修复）：
+            // 失效点只覆盖编辑路径的 7 个变化点，CC 重开 / provider 重建等
+            // 非编辑路径改了模块集合却没失效 → 命中陈旧缓存（视图已 detach）→
+            // normalizePagedLayoutForOverlay 拿到缩水列表 → gERPageCount 被算成 1
+            // → 翻页点整体隐藏。命中后抽查每个 controller 的 view 是否仍在视图树：
+            // 任一 detach 即视为过期，丢弃缓存重收集。
+            BOOL stale = NO;
+            for (UIViewController *module in hit) {
+                if (!module || !module.view.superview) { stale = YES; break; }
+            }
+            if (!stale) return hit;
+            [gERModuleListCache removeObjectForKey:key];
+            [gERModuleListCacheGen removeObjectForKey:key];
+        }
     }
     NSMutableArray *result = [NSMutableArray array];
     NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
@@ -14098,6 +14140,15 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     if (!overlay) return;
     [self syncOwnedDuplicateModulesForOverlay:overlay];
     NSArray<UIViewController *> *modules = ERCollectModuleControllers(overlay);
+    // 1.2.1-4 · 双重防御（翻页点消失回归）：本函数是低频路径（rebuild/resettle 才跑），
+    // 收集结果必须新鲜——入口强制失效；若仍拿到的列表明显缩水（<2 个但原生 rect 已登记多个），
+    // 再失效重试一次。
+    ERInvalidateModuleListCache();
+    modules = ERCollectModuleControllers(overlay);
+    if (modules.count < 2 && gERNativeLayoutRects.count >= 2) {
+        ERInvalidateModuleListCache();
+        modules = ERCollectModuleControllers(overlay);
+    }
     if (!modules.count) return;
 
     NSMutableDictionary<NSString *, UIViewController *> *moduleByIdentifier = [NSMutableDictionary dictionary];
@@ -22397,6 +22448,19 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (identifier.length && !gERBaseLayoutSizes[identifier]) gERBaseLayoutSizes[identifier] = [NSValue value:&size withObjCType:@encode(CCUILayoutSize)];
     NSArray<NSNumber *> *custom = gERCustomSizes[identifier];
     if (custom.count >= 2) size = (CCUILayoutSize){custom[0].unsignedIntegerValue, custom[1].unsignedIntegerValue};
+    // 1.2.1-4 · 问题 2 修复：横屏下音量/亮度被拉成 1×3。
+    // 原生布局引擎在横屏态会把 slider 类模块给到 3 行高（代码里 1.0.9-2x 时代就有
+    // 「拖拽时 1×3 强改回 2」的补丁佐证）；折行逻辑只改 origin 不改 size，3 行高
+    // 直接体现在最终布局上。这里对无自定义尺寸的 slider 类模块在横屏态钳制 1×2；
+    // 用户显式自定义过尺寸的（gERCustomSizes 命中）完全尊重用户。
+    if (gEnabled && ERLandscapePresentationActive() && custom.count < 2 && identifier.length) {
+        BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
+                           || [identifier containsString:@"controlcenter.audio"]
+                           || [identifier isEqualToString:@"com.apple.mediaremote.controlcenter.audio"]
+                           || [identifier isEqualToString:@"displaymodule"]
+                           || [identifier isEqualToString:@"com.apple.control-center.DisplayModule"];
+        if (isSliderModule && size.height > 2) size.height = 2;
+    }
     return size;
 }
 
@@ -22416,6 +22480,15 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (customOrigin.count >= 2) rect.origin = (CCUILayoutPoint){customOrigin[0].unsignedIntegerValue, customOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[identifier];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
+        // 1.2.1-4 · 问题 2 同源钳制（与 moduleLayoutSizeForContentModuleContext: 一致）：
+        // 横屏下 slider 类模块无自定义尺寸时高度钳到 2 行，杜绝 1×3。
+        if (gEnabled && ERLandscapePresentationActive() && customSize.count < 2 && rect.size.height > 2) {
+            BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
+                               || [identifier containsString:@"controlcenter.audio"]
+                               || [identifier isEqualToString:@"displaymodule"]
+                               || [identifier isEqualToString:@"com.apple.control-center.DisplayModule"];
+            if (isSliderModule) rect.size.height = 2;
+        }
         if (gEnabled) {
             // page / localRow 必须在本行改写 origin.y 之前算：此刻
             // rect.origin.y 仍是配置空间里的「page*8 + localRow」。
