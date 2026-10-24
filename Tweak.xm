@@ -4347,13 +4347,21 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 void *refKey = ERLandscapePresentationActive() ? (void *)kERQARefLandscapeKey : (void *)kERQARefPortraitKey;
                 NSNumber *refNum = objc_getAssociatedObject(host, refKey);
                 if (!refNum) {
+                    // 1.2.1-12 · 标定稳定性门：REF 必须在布局**静止**时采集。1.2.1-11 实测教训——
+                    // 100ms 定时器在 CC 开场动画途中把瞬态值（layout=95）标成 REF，随后 layout
+                    // 落到真实值，ty 一路加到 60 上限把按钮推下 60pt。现在要求连续 3 帧布局
+                    // 几乎相同（300ms 静止）才允许标定。
+                    static CGFloat sPrev1 = -999, sPrev2 = -999;
+                    BOOL stable = (fabs(layoutWinY - sPrev1) < 0.5) && (fabs(sPrev1 - sPrev2) < 0.5);
+                    sPrev2 = sPrev1; sPrev1 = layoutWinY;
+                    if (!stable) break;
                     if (ERCapsuleCompactPresent()) {
                         ERQAMirrorAppend([NSString stringWithFormat:@"REF-DEFER layout=%.1f（胶囊紧凑态在场，不标定）", layoutWinY]);
                         break;
                     }
                     objc_setAssociatedObject(host, refKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     refNum = @(layoutWinY);
-                    ERQAMirrorAppend([NSString stringWithFormat:@"REF-SET %@ layout=%.1f",
+                    ERQAMirrorAppend([NSString stringWithFormat:@"REF-SET %@ layout=%.1f（3 帧稳定后）",
                                       ERLandscapePresentationActive() ? @"landscape" : @"portrait", layoutWinY]);
                 }
                 CGFloat desiredTy = MAX(-60.0, MIN(60.0, refNum.doubleValue - layoutWinY));
