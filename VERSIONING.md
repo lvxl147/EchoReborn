@@ -662,3 +662,9 @@
   - ERPocketMirror 环扩到 24 行 / 6KB（[BAND] 栈行 ~400B/条，16 行装不下一轮完整复现）
   - 版本串 ver=1.2.1-19
 - 装机后复现流程不变：竖屏 → CC 不收起 → 点模块 → SSH 拉 ERPocketMirror，读 [BAND] 栈顶帧定位写入方
+
+## 1.2.1-20（1002120）· bug 1 修复：伪隐藏当场顶回（[BAND] 栈帧实锤写入方是 iOS 自己）
+- **1.2.1-19 装机实锤（2026-10-25 04:46-04:47）**：[BAND] 运行时栈帧指名写入方 —— **ControlCenterUI（iOS 自己）**，路径为 UIView 动画：淡出动画块里 `setAlpha:0`，完成块里 `setAlpha:1` 恢复（栈帧 7 = `__UIVIEW_IS_EXECUTING_ANIMATION_COMPLETION_BLOCK__`）；hide 时长 1.5-3.2s = 该动画时长。抓到两条触发路径：动画路径（CCUI+84284→142680→151520→151964→UIKit 动画机制→154640→90280）与 dispatch_async 路径（libdispatch→162424→135148→53844→142028）。发生条件：竖屏 CC 不收起、点模块（含切换类的「锁定」）、**无模块展开态**（st=exp0 pres2 scrub0）——伪隐藏
+- **本版修复**：`setAlpha:` swizzle 里对伪隐藏当场顶回 —— 合法隐藏场景不抢（模块展开中 / 展开收尾中 / 翻页擦刷 scrub·transition / 编辑态 / CC 收起中 state==3 / CC 已收起），其余（CC 呈现中且无展开无擦刷）一律 `original(setAlpha:, 1.0)` 并 return：iOS 随之设置的淡出动画变成 1→1 空操作，完成块的淡回也无害，状态带不再可见地消失。修复落 `[BANDFIX]` 日志（5s 限一条，带栈）；合法Transition 仍落 `[BAND]`（带 legit 标志）
+- 保留观测：swizzle / [BAND] / [POCKET] 状态上下文全部保留，若修复后仍有异常（如 [BANDFIX] 高频 = 隐藏成环）可继续定位
+- 装机验证流程：竖屏 → CC 不收起 → 点「锁定」等模块 → 确认状态带不消失 → SSH 拉 ERPocketMirror 看 [BANDFIX] 命中次数
