@@ -21863,7 +21863,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         NSValue *lastInsets = objc_getAssociatedObject(addControl, kERAddControlLastInsetsKey);
         UIEdgeInsets insets = overlay.view.safeAreaInsets;
         BOOL changed = !lastBounds || !CGRectEqualToRect(lastBounds.CGRectValue, overlay.view.bounds)
-                       || !lastInsets || !UIEdgeInsetsEqualToEdgeInsets(lastInsets.CGRectValue, insets);
+                       || !lastInsets || !UIEdgeInsetsEqualToEdgeInsets(lastInsets.UIEdgeInsetsValue, insets);
         if (changed) {
             [addControl sizeToFit];
             CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
