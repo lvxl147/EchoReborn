@@ -4183,6 +4183,8 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
 static NSString *ERModuleIdentifier(UIViewController *controller);                        // 前向声明
 static const void *kERQAHostBaselineWinYKey = &kERQAHostBaselineWinYKey;
 static const void *kERQAAnchorOffsetKey = &kERQAAnchorOffsetKey;   // 1.2.1-10 · 几何跟随的锚偏移
+static const void *kERQARefPortraitKey = &kERQARefPortraitKey;     // 1.2.1-11 · 竖屏冻结目标 Y（窗口绝对坐标）
+static const void *kERQARefLandscapeKey = &kERQARefLandscapeKey;   // 1.2.1-11 · 横屏冻结目标 Y
 // 1.0.9-19 · 按钮「开环补偿」的两个独立偏移量（用户确认：横竖屏显示位置不同，必须分开）。
 // 依据：20260921-2009 日志实测 —— 正常时 hostWinY=45.7、胶囊在场时稳定在 69.2，差值 ≈ 23.5pt。
 // 开环 = 只用「是否被压低」这个状态决定偏移，位移取固定常量：
@@ -4223,6 +4225,35 @@ static BOOL ERPrivacyCapsuleVisible(NSArray<UIWindow *> *windows) {
         if (ERViewTreeHasPrivacyCapsule(window, 0)) { er_pcLastResult = YES; break; }
     }
     return er_pcLastResult;
+}
+
+// 1.2.1-11 · **胶囊几何探针**（类名探测在 iOS 17 失效后的替代，实证来源）：
+// 日志实测 SBSystemApertureContainerView 宽度在 166（灵动岛标准态）与 125.3（胶囊/紧凑态）
+// 之间切换。宽度落在 (100,160) 开区间 = 胶囊/紧凑态在场。类名是系统私有类，字符串精确匹配。
+static BOOL ERViewTreeHasCompactAperture(UIView *root, NSInteger depth) {
+    if (!root || depth > 14) return NO;
+    if (root.hidden || root.alpha <= 0.01) return NO;
+    if ([NSStringFromClass(root.class) isEqualToString:@"SBSystemApertureContainerView"]) {
+        CGFloat w = CGRectGetWidth(root.bounds);
+        if (w > 100.0 && w < 160.0) return YES;
+    }
+    for (UIView *sub in root.subviews) {
+        if (ERViewTreeHasCompactAperture(sub, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+static BOOL ERCapsuleCompactPresent(void) {
+    static CFTimeInterval er_ccLastProbe = 0.0;
+    static BOOL er_ccLastResult = NO;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - er_ccLastProbe < 0.5) return er_ccLastResult;
+    er_ccLastProbe = now;
+    er_ccLastResult = NO;
+    for (UIWindow *window in ERAllApplicationWindows()) {
+        if (ERViewTreeHasCompactAperture(window, 0)) { er_ccLastResult = YES; break; }
+    }
+    return er_ccLastResult;
 }
 
 // 1.2.1-9 · QABTN 专用偏好镜像：普通日志镜像（60 行）会被 DI-TREE 一次 38 行冲掉，
@@ -4288,8 +4319,7 @@ static void ERStartQuickAccessPositionCorrection(void) {
             if (hbDue) gERQACorrHeartbeat = hbNow;
             BOOL hbFoundHost = NO;
             CGFloat hbWinY = -1.0, hbBase = -1.0, hbTransformTY = 0.0;
-            CGFloat hbAnchorY = -1.0;
-            for (UIWindow *window in ERAllApplicationWindows()) {
+                        for (UIWindow *window in ERAllApplicationWindows()) {
                 UIView *host = [window viewWithTag:181000];
                 if (!host || !host.window) continue;
                 if (hbDue) {
@@ -4297,12 +4327,9 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     hbWinY = [host.superview convertPoint:host.frame.origin toView:window].y;
                     // 1.0.9-17 · 同时记录 transform.ty：校正若写入失败（被系统重置），这里会一直是 0。
                     hbTransformTY = host.transform.ty;
-                    UIView *hbAnchor = ERFindCCGridContainerInView(window, 0);
-                    if (hbAnchor && hbAnchor.window) {
-                        hbAnchorY = [hbAnchor convertRect:hbAnchor.bounds toView:hbAnchor.window].origin.y;
-                        NSNumber *hbOff = objc_getAssociatedObject(host, kERQAAnchorOffsetKey);
-                        hbBase = hbOff ? hbOff.doubleValue : -1.0;   // 心跳里 hbBase 字段复用为 offset
-                    }
+                    // 1.2.1-11 · 心跳字段语义更新：hbBase 复用为当前方向的冻结目标 REF
+                    NSNumber *hbRef = objc_getAssociatedObject(host, ERLandscapePresentationActive() ? kERQARefLandscapeKey : kERQARefPortraitKey);
+                    hbBase = hbRef ? hbRef.doubleValue : -1.0;
                 }
                 // 1.0.9-19 · **开环状态机**（用户确认方案）：
                 //   状态判据：读一次「布局位置」（= 最终位置 − 当前 ty，剥离自身补偿，避免自我反馈）
@@ -4312,34 +4339,27 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 CGFloat currentTy = host.transform.ty;
                 CGFloat layoutWinY = finalWinY - currentTy;
                 if (layoutWinY <= 1.0) break;              // 控制中心尚未稳定，不判断
-                // 1.2.1-10 · **几何跟随**（对标 CC18，取代基线/drift/胶囊探测整套状态机）：
-                //   锚 = 原生模块网格容器（胶囊在场时纹丝不动，见 ERFindCCGridContainerInView 注释）。
-                //   host 目标窗口 Y = 锚窗口 Y + 固定偏移（首次见面标定一次，之后冻结）。
-                //   差值仍用 transform.ty 承载（不动 frame，避免与系统布局互相覆盖）。
-                //   锚不可见（CC 收起/瞬态）→ 什么都不做，host 冻结在上帧位置。
-                UIView *anchor = nil;
-                for (UIWindow *aw in ERAllApplicationWindows()) {
-                    UIView *cand = ERFindCCGridContainerInView(aw, 0);
-                    if (cand && cand.window && CGRectIntersectsRect([cand convertRect:cand.bounds toView:nil], aw.bounds)) {
-                        anchor = cand; break;
+                // 1.2.1-11 · **绝对钉死**（1.2.1-10 跟随锚的实证修正）：
+                //   复现数据（12:52:30→35）证明胶囊出现时 CC 面板整体下移（锚容器 +25.8pt），
+                //   跟随任何原生视图都会被带着走。CC18 式"永不动"的唯一几何解释 =
+                //   **窗口绝对坐标恒定**。目标 = 每方向冻结常量 Y（首次见面标定，胶囊紧凑态在场
+                //   时推迟），系统推多少 ty 反向抵消多少，夹取 [-60,60] 防失控。
+                NSString *refKey = ERLandscapePresentationActive() ? kERQARefLandscapeKey : kERQARefPortraitKey;
+                NSNumber *refNum = objc_getAssociatedObject(host, refKey);
+                if (!refNum) {
+                    if (ERCapsuleCompactPresent()) {
+                        ERQAMirrorAppend([NSString stringWithFormat:@"REF-DEFER layout=%.1f（胶囊紧凑态在场，不标定）", layoutWinY]);
+                        break;
                     }
+                    objc_setAssociatedObject(host, refKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                    refNum = @(layoutWinY);
+                    ERQAMirrorAppend([NSString stringWithFormat:@"REF-SET %@ layout=%.1f",
+                                      ERLandscapePresentationActive() ? @"landscape" : @"portrait", layoutWinY]);
                 }
-                if (!anchor) break;                        // 锚不可见 → 冻结，不猜
-                CGFloat anchorWinY = [anchor convertRect:anchor.bounds toView:anchor.window].origin.y;
-                NSNumber *offsetNum = objc_getAssociatedObject(host, kERQAAnchorOffsetKey);
-                if (!offsetNum) {
-                    // 首次标定：host 当前布局位置（剥离历史 ty）与锚的相对距离，之后恒定不变。
-                    // 注意用 layoutWinY（剥离 ty）——若带历史补偿标定会把旧补偿永久固化进偏移。
-                    CGFloat offset = layoutWinY - anchorWinY;
-                    objc_setAssociatedObject(host, kERQAAnchorOffsetKey, @(offset), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-                    offsetNum = @(offset);
-                    ERQAMirrorAppend([NSString stringWithFormat:@"OFFSET-SET hostLayout=%.1f anchor=%.1f offset=%.1f", layoutWinY, anchorWinY, offset]);
-                }
-                CGFloat desiredLayoutWinY = anchorWinY + offsetNum.doubleValue;
-                CGFloat desiredTy = currentTy + (desiredLayoutWinY - layoutWinY);
+                CGFloat desiredTy = MAX(-60.0, MIN(60.0, refNum.doubleValue - layoutWinY));
                 if (fabs(desiredTy - currentTy) > 0.5) {
-                    ERQAMirrorAppend([NSString stringWithFormat:@"FOLLOW 锚Y=%.1f offset=%.1f layout=%.1f ty=%.1f→%.1f",
-                                      anchorWinY, offsetNum.doubleValue, layoutWinY, currentTy, desiredTy]);
+                    ERQAMirrorAppend([NSString stringWithFormat:@"PIN layout=%.1f ref=%.1f ty=%.1f→%.1f",
+                                      layoutWinY, refNum.doubleValue, currentTy, desiredTy]);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
@@ -4354,11 +4374,13 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     hbAddButton = EREditAddModuleButtonContainer(hbWindow, 0);
                     if (hbAddButton) break;
                 }
-                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f anchorY=%.1f offset=%.1f ty=%.1f edit=%d 添加控制项=%@",
-                          (int)hbFoundHost, hbWinY, hbAnchorY, hbBase, hbTransformTY, (int)gEditModeActive,
+                ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f ref=%.1f ty=%.1f edit=%d compact=%d 添加控制项=%@",
+                          (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
+                          (int)ERCapsuleCompactPresent(),
                           hbAddButton ? NSStringFromClass(hbAddButton.class) : @"未找到");
-                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f anchorY=%.1f offset=%.1f ty=%.1f edit=%d",
-                                  (int)hbFoundHost, hbWinY, hbAnchorY, hbBase, hbTransformTY, (int)gEditModeActive]);
+                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f ref=%.1f ty=%.1f edit=%d compact=%d",
+                                  (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
+                                  (int)ERCapsuleCompactPresent()]);
             }
             // 1.0.9-20 · **MODSIZE-PROBE**（问题 8 / 10 的数据来源）：
             // 横屏下每 2 秒打印一次「音量模块 / 亮度模块 / 编辑网格层 gridStack / 它的剪裁 mask」的窗口几何。
