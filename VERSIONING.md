@@ -687,3 +687,22 @@
   2. **卡死状态带恢复**：看门狗采样发现状态带 alpha 卡 0 且手指已离屏、翻页闲置、无展开/编辑 → 0.2s 淡回 1 并清残留动画（iOS 的「完成块恢复」永不来时的兜底）。落 `[BANDRESTORE]`
   3. **PAGESETTLE 接诊断环**：落位 from/to/dur 同时进 ERPocketMirror（24 行低流量环），保证 bug 3 时序数据不再被通用环挤出
 - 装机验证：① 长按拖动翻页点 → 2 秒内自动恢复、不用 respring；② 末页超长上滑松手回弹；③ 竖屏点模块状态带不消失；④ 翻页几次后拉 ERPocketMirror 看 PAGESETTLE/PAGERRECOVER/BANDRESTORE次数
+
+## 1.2.1-23（1002123）· 不变量自愈（不动中间过程，只校终态）+ 高容量追踪 + bug 3 去过冲
+- **1.2.1-22 装机复测实锤（用户 06:36 会话 plist，06:43 拉回）**：用户报「所有问题依旧」。三条一手数据同时到手：
+  1. 恢复机制**一次都没跑** —— `[PAGERRECOVER]` / `[BANDRESTORE]` / `[BANDFIX]` **零条**（环里只有 PAGESETTLE 与 `[BAND]`）
+  2. **窗口太窄（算得出来）**：闲置门 1.5s + tick 0.5s = 最坏 2s 才动手，而实测三次 PAGESETTLE 只隔 0.7s（06:36:53.953 / 54.636 / 55.337），自愈根本轮不到；随后 06:36:56.235 / .575 状态带被打零且再无恢复行
+  3. **诊断环被自己的日志吃光**：ERPocketMirror 19 行里 7 条 `[BAND]` 就是 5.6KB（每条 ~800B 调用栈），刚顶到 6KB 上限；ERLogMirror 60 行被 `DI-PILL` 单次窗口扫描占满。两条环都拿不到想看的证据 —— 这才是连着两轮「复现了但猜不出原因」的真正原因
+- **思路调整：不再追「哪条结束事件丢了」，改成校一组必须恒真的不变量**。丢事件是系统手势抢占造成的，追不完；只要**最终状态**不对就整盒重建，与中间断了哪条链路无关：
+  - A 标志：无手势、无自有动画时 scrub/transition 必须为 NO
+  - B 位移：`sublayerTransform.m42` 必须 = `base - page*span`，且 `interactiveTranslation == 0`（**bug 2 悬停**）
+  - C 可见性：当前页模块 `layer.opacity` 必须为 1（**bug 4 能点看不见**）
+  - D 亮度：`collection.alpha` 必须回到基准值（heldAlphaFactor 卡住时整页灰着）
+  - E 状态带：无展开/编辑/拖动时 pocket 子带 alpha 必须为 1（**bug 1 消失**）
+- **本版改动**：
+  1. **不变量自愈** `-erReconcilePagerForOverlay:forced:`（单一出口，走 `finishInteractivePageTransitionForOverlay:` 这条本来就写好的收敛路径；`forced` 时连标志位与 dragging 票根一起作废，因为它们本身可能就是卡死源头，不能拿来当判据）。看门狗 tick 0.5s→0.25s，闲置门 1.5s→0.45s —— 自愈延迟从最坏 2.0s 降到 **0.7s**。落 `RECON f=/fl=/disp=/vis=/dim=/pg=/tr=/m42=` 短行
+  2. **呈现即自检**：`ERStartHeaderPocketWatchdog` 在呈现落定后 0.45s 强制自检一次。上一轮会话丢干净的手势链留下的 opacity=0 / 悬停位移 / 状态带 alpha 0 **跨会话存活**，这条保证下次打开控制中心必定自愈 —— 用户不再需要用注销来恢复
+  3. **日志通道重建**：新增 `ERPagerTrace`（160 行 / 16KB，只装翻页生命周期短行）与 `ERBandTrace`（8 行 / 5KB，`[BAND]` 专用）；`[BAND]` 调用栈从 8 帧压到 3 帧并剥掉 UUID/偏移（单条 800B→~260B）；`ERLogMirror` 补过滤 `DI-PILL`
+  4. **翻页生命周期全追**：`TD / TAP / IPAN / IPAN-CH / SPAN / SPAN-CH / BEGIN / FIN / SETP / PAGESETTLE / RECON` 全部入 ERPagerTrace 同一时间轴（Changed 是 60Hz，照单全收会重演 DI-PILL 事故，故 Changed 节流 0.30s）
+  5. **bug 3（弹跳动画）定点去过冲**：`updateInteractivePageTransitionForOverlay:` 里每次跨页给每个模块播的 pop 动画原为 keyframe `0.90 → 1.025 → 1.0`，那个 **1.025 是故意写进去的过冲**，正是用户说的「弹一下」；改为单调 `0.92 → 1.0` 纯淡入（grid 侧同改）。另 `finishInteractive` 的 settle 曲线 EaseInEaseOut → **EaseOut**（in 段的「先慢半拍再冲」配上 0.30s 就是最初 bug 3 描述的「停滞一下再落下」）
+- 装机验证：① 长按拖动翻页点后松手 → 0.7s 内模块自己回来（**不用注销**）；② 末页超长上滑松手即回弹不悬停；③ 翻页跨页时不再有「弹一下」；④ 任意问题复现后立刻 SSH 拉 plist，看 `ERPagerTrace` 的 RECON 行与 `ERBandTrace` 的 `[BAND]` 行
