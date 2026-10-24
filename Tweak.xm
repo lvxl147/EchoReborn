@@ -4224,6 +4224,10 @@ static BOOL ERPrivacyCapsuleVisible(NSArray<UIWindow *> *windows) {
     return er_pcLastResult;
 }
 
+// 1.2.1-9 · QABTN 专用偏好镜像：普通日志镜像（60 行）会被 DI-TREE 一次 38 行冲掉，
+// 补偿状态切换行必须落在一个不被冲掉的专用键里（cfprefsd 通道，SSH 可读）。
+static void ERQAMirrorAppend(NSString *line);
+
 // 把快捷按钮 host 的窗口 Y 钉在「安装时的基线」上：胶囊出现/消失引起的任何漂移，
 // 都用 host.transform 反向抵消（不动约束体系，不会被 Auto Layout 覆盖）。
 // 1.0.9-15 · 在视图树里按文本找系统编辑态的「添加控制项」按钮（返回它的按钮容器）。
@@ -4288,7 +4292,20 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 CGFloat layoutWinY = finalWinY - currentTy;
                 if (layoutWinY <= 1.0) break;              // 控制中心尚未稳定，不判断
                 NSNumber *baselineNum = objc_getAssociatedObject(host, kERQAHostBaselineWinYKey);
-                if (!baselineNum || layoutWinY < baselineNum.doubleValue) {
+                // 1.2.1-9 · 基线采集加胶囊门控：若 tweak 启动时胶囊恰好在场，首帧 layoutWinY
+                // 已是"被压低态"，min-ever 启发式会把压低值钉成基线 → 永远欠补偿。
+                // 胶囊在场时绝不立首个基线（推迟到胶囊消失的那一帧）；已有基线时保留 min-ever。
+                BOOL baselineWasMissing = (baselineNum == nil);
+                if (baselineWasMissing) {
+                    BOOL capsuleNow = ERPrivacyCapsuleVisible(ERAllApplicationWindows());
+                    if (!capsuleNow) {
+                        objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                        baselineNum = @(layoutWinY);
+                        ERQAMirrorAppend([NSString stringWithFormat:@"BASELINE-SET %.1f", layoutWinY]);
+                    } else {
+                        ERQAMirrorAppend([NSString stringWithFormat:@"BASELINE-DEFER layout=%.1f（胶囊在场，不立基线）", layoutWinY]);
+                    }
+                } else if (layoutWinY < baselineNum.doubleValue) {
                     // 基线 = 未被压低时的布局位置（取见过的最小值）
                     objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     baselineNum = @(layoutWinY);
@@ -4316,6 +4333,9 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d capsule=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f drift=%.1f",
                               (int)suppressed, (int)capsuleVisible, compensation, desiredTy,
                               (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue, drift);
+                    ERQAMirrorAppend([NSString stringWithFormat:@"COMP 切换 suppressed=%d capsule=%d 补偿=%.1f landscape=%d layout=%.1f baseline=%.1f drift=%.1f",
+                                      (int)suppressed, (int)capsuleVisible, compensation,
+                                      (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue, drift]);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
@@ -4333,6 +4353,9 @@ static void ERStartQuickAccessPositionCorrection(void) {
                 ERLogInfo(@"QACORR 心跳 host=%d hostWinY=%.1f baseline=%.1f ty=%.1f edit=%d 添加控制项=%@",
                           (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
                           hbAddButton ? NSStringFromClass(hbAddButton.class) : @"未找到");
+                ERQAMirrorAppend([NSString stringWithFormat:@"心跳 host=%d winY=%.1f baseline=%.1f ty=%.1f edit=%d capsule=%d",
+                                  (int)hbFoundHost, hbWinY, hbBase, hbTransformTY, (int)gEditModeActive,
+                                  (int)ERPrivacyCapsuleVisible(ERAllApplicationWindows())]);
             }
             // 1.0.9-20 · **MODSIZE-PROBE**（问题 8 / 10 的数据来源）：
             // 横屏下每 2 秒打印一次「音量模块 / 亮度模块 / 编辑网格层 gridStack / 它的剪裁 mask」的窗口几何。
@@ -6063,6 +6086,21 @@ static void ERLogFallbackToConsole(NSArray<NSString *> *lines, BOOL primaryFaile
         // %@ not %s: the lines are already Unicode and this is not a hot path.
         NSLog(@"[EchoReborn] %@", line);
     }
+}
+
+// 1.2.1-9 · QABTN 专用偏好镜像的实现（声明在 ERPrivacyCapsuleVisible 附近）：
+// 保留最近 12 行，写 CFPreferences 键 ERQAMirror（cfprefsd 通道，SSH 可读）。
+static void ERQAMirrorAppend(NSString *line) {
+    @try {
+        if (!line.length) return;
+        NSString *existing = (__bridge_transfer NSString *)CFPreferencesCopyAppValue(CFSTR("ERQAMirror"), kERPrefsDomain);
+        NSMutableArray<NSString *> *all = [NSMutableArray array];
+        if (existing.length) [all addObjectsFromArray:[existing componentsSeparatedByString:@"\n"]];
+        [all addObject:[NSString stringWithFormat:@"%@ %@", [NSDate date], line]];
+        while (all.count > 12) [all removeObjectAtIndex:0];
+        CFPreferencesSetAppValue(CFSTR("ERQAMirror"), (__bridge CFPropertyListRef)[all componentsJoinedByString:@"\n"], kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+    } @catch (__unused NSException *qaMirrorIgnored) {}
 }
 
 static void ERLogAppendLines(NSArray<NSString *> *lines) {
