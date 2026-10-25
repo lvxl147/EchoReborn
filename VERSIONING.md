@@ -756,3 +756,10 @@
   2. **回写条件化**：ERClamp 里对 CCUIModuleCollectionView / FCUIActivityListView 的归零写改为**差值 >0.5 才写**，并落 `SNAPZ cls= d=` 追踪行（若仍有漂移，直接给出类名与漂移量）。
 - 滑动/点按正常路径零改动（用户红线）；scrub 动态完整保留（-24 原样）。
 - 验证：翻页落位后应无任何「弹一下」；SSH 拉 plist 看 `NATIVE-PIN on/off` 的 offset 值（on 与 off 应一致 ≈0，证明无漂移）与 `SNAPZ` 是否出现（出现即仍有漂移源，数据直接指名）。
+
+## 1.2.1-29（1002129）· bug 3 根修第二轮：漂移层定位修正（外层主滚动）
+- **1.2.1-28 复测（用户）**：跳动仍在。追踪环关键证据：**`SNAPZ` 零条** —— 内层 `CCUIModuleCollectionView` 在整场复测中漂移从未超过 0.5pt（1.2.1-28 的内层 pin + 条件写生效），**但跳动存在** ⇒ 8pt 修正不来自内层集合，1.2.1-28 钉错了层。
+- **修正定位**：这段代码有两层原生滚动 —— 内层 CCUIModuleCollectionView（-28 已钉）与**外层主滚动容器**（`ERNativeScrollViewForOverlay` 返回的那个）。漂移发生在外层：拖拽期间 applyPageTransform 因 transitionActive 跳过基线恢复（15176 行），外层 offset 被手指带偏；落位后 snap 窗口 `@[@0.0,@0.08,@0.24,@0.42]` 里**无条件**的 `[nativeScrollView setContentOffset:nativeOffset]`（16720-16723 行）一次性修正 ≈8pt —— 时序与录屏（落位静止 ~0.2s 后单帧跳）吻合。
+- **修复（1.2.1-29）**：新增 `ERPinMainNativeScrollLight` —— 在 pagePanned Changed（拖拽每帧）把外层 offset 贴回基线（差值 >0.25 才写、CATransaction 禁隐式动画、落 `MAIN-PIN d=x/y` 追踪行）。漂移被摊进跟手过程（每帧 <1pt 不可见），snap 写自动变成 no-op，「停住后弹一下」消失。
+- 内层 pin（-28）保留：两层都钉死，拖拽期间两个原生滚动都不可能漂移。
+- 验证：落位后无弹跳；`MAIN-PIN` 行的 d 值 = 每次实际修正量（若持续出现大值，说明漂移源在别处，数据继续指路）。
