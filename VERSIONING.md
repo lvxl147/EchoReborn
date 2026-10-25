@@ -770,3 +770,9 @@
 - 修复（方案 A，对齐 CC18 全屏接管）：删除两处翻页分支的底部让位（shouldBegin + shouldReceiveTouch）；收起 CC 仍两条路：末页快速上拂让位（velocity<-400）+ 主屏指示条系统手势。编辑模式的两处底部护栏（dismiss pan / 模块拖拽）有意保留。
 - 代价（如实）：底部区域慢速上滑不再直接收起 CC，而是页面回弹——与 iOS 18 CC 行为一致。
 - 验证：下半部分滑动 = 与上半一致弹回；末页快速上拂 = 收起 CC；主屏指示条上滑 = 收起 CC。
+
+## 1.2.1-33（1002133）· bug 2 根修第二轮：悬停真凶 = 斜率拒绝让位 + 原生滚动可滚
+- 1.2.1-32 复测悬停仍在。probe 决定性数据：落位动画正常结束后，外层滚动 offset 从 -139 被拖到 +83（+222pt inset 行程）并停住 = 悬停本体；且内层集合查找 cc=-9999 = ERNativePagerCollectionViewForOverlay 永远 nil（要求 UICollectionView，运行时类不是）→ 内层钳制全空转。
+- 真凶链条：shouldBegin 的斜率判定（垂直>水平×1.12 才接）把斜向滑动让给原生滚动 → 拖动+减速停住 → 悬停。-32 撤销的只是「底部位置让位」，斜率让位仍在。
+- 修复（釜底抽薪，对齐 CC18「滚动由我们全权接管」）：① shouldBegin 删除斜率拒绝（滑动无条件归我们，斜滑=原地回弹）；② 主滚动 scrollEnabled=NO 常驻；③ 内层查找放宽为 UIScrollView + CCUIModuleCollectionView 常驻禁滚。末页快速上拂让位（收起 CC）保留。
+- 教训：probe 的 modY/cc 占位值 -9999 是「查找失败」信号，第一版就该追查而不是留默认。
