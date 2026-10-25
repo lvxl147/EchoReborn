@@ -794,3 +794,9 @@
 - 用户在 -35 上复现（长按+上下拖动）。probe 决定性链（00:35:36-42）：IPAN Began→CH×9→Ended→FIN tgt=3（scrub 全程正常）→ 3.7s 后 WATCHDOG-STOP pres=0 state=0 ovlA=1.00（系统宣布收起而面板 alpha=1）= scrub 尾态被 CCUI 收起手势解读 → 收起动画卡住 → 内容移出（看不见）而面板在（能点击）。
 - 根因：圆点 scrub 路径从未压制收起 pan（pagePanned Began 有压制、圆点没有——-24 血统的遗漏）。
 - 修复：抽公共函数 ERSuppressOverlayPans/ERRestoreSuppressedPans；pagePanned Began 改用公共函数（行为不变）；圆点 scrub Began 压制、Ended/结束态优先块恢复。
+
+## 1.2.1-38（1002138）· bug 4 自愈层：容器消失态当场恢复
+- -37 复测仍消失。60 条 CCVIS 实锤消失态：collection 与其父层 alpha/opacity 双 0（colA=0.00 colOp=0.00 hider=UIView a=0.00），而模块自身全部正常（mods=11/33 可见）——消失的是「分页内容容器」，被某次写入打成透明后无恢复路径。
+- 修复：看门狗 ERDumpInvisibilityScene 升级为自愈——检测到容器消失态（colVanished/ovlVanished/模块全不可见）时当场把 collection 与「首个模块→overlay 祖先链」的 alpha/opacity/hidden 拉回 1.0（禁隐式动画），随后 applyPageTransform + 可见性重申，落 CCVIS-HEAL 行（n=恢复层数、hider=被恢复的层名——为后续修根写入者留证）。
+- 效果：即使触发，内容 0.25s（一个看门狗 tick）内自动回来，不再卡死到注销。
+- 坑：版本号连锁替换会改掉历史注释里的版本标，锚点匹配要用当前文本。
