@@ -785,3 +785,7 @@
 ## 1.2.1-35（1002135）· bug 4 取证 v2（修复取证盲区）
 - 1.2.1-34 复测 CCVIS 零条 —— 取证器自身有盲区：ERDumpInvisibilityScene 开头 gEditModeActive 跳过，若消失态=编辑模式误入则采样器自己跳过了它。
 - v2：① 编辑态不再跳过；② 加测面板本体 ovlHid/ovlA；③ 看门狗链终止留痕 WATCHDOG-STOP（pres/state/ovlA）——面板还在但系统认为已收起=状态失步的直接证据。
+
+## 1.2.1-36（1002136）· bug 4 取证 v3（祖先链点名）
+- 关键观察：-35 装好后用户两次开关 CC（00:30:56/00:31:27 两条 WATCHDOG-STOP，正常关闭）全程无翻页/圆点手势事件 = 本次复现是「纯长按不拖动」，长按本身即触发消失，进一步坐实 CCUI 长按手势方向。CCVIS 零条 = 消失时模块 opacity/hidden/alpha 全正常 → 消失在祖先层。
+- v3：触发面放宽（模块全不可见 OR collection 消失 OR 面板透明 任一命中）+ **祖先链排查**（从首个模块向上爬，点名第一个 hidden/alpha<0.05/opacity<0.05 的祖先类名 hider= 字段）。
