@@ -789,3 +789,8 @@
 ## 1.2.1-36（1002136）· bug 4 取证 v3（祖先链点名）
 - 关键观察：-35 装好后用户两次开关 CC（00:30:56/00:31:27 两条 WATCHDOG-STOP，正常关闭）全程无翻页/圆点手势事件 = 本次复现是「纯长按不拖动」，长按本身即触发消失，进一步坐实 CCUI 长按手势方向。CCVIS 零条 = 消失时模块 opacity/hidden/alpha 全正常 → 消失在祖先层。
 - v3：触发面放宽（模块全不可见 OR collection 消失 OR 面板透明 任一命中）+ **祖先链排查**（从首个模块向上爬，点名第一个 hidden/alpha<0.05/opacity<0.05 的祖先类名 hider= 字段）。
+
+## 1.2.1-37（1002137）· bug 4 根修：scrub 期间压制收起手势
+- 用户在 -35 上复现（长按+上下拖动）。probe 决定性链（00:35:36-42）：IPAN Began→CH×9→Ended→FIN tgt=3（scrub 全程正常）→ 3.7s 后 WATCHDOG-STOP pres=0 state=0 ovlA=1.00（系统宣布收起而面板 alpha=1）= scrub 尾态被 CCUI 收起手势解读 → 收起动画卡住 → 内容移出（看不见）而面板在（能点击）。
+- 根因：圆点 scrub 路径从未压制收起 pan（pagePanned Began 有压制、圆点没有——-24 血统的遗漏）。
+- 修复：抽公共函数 ERSuppressOverlayPans/ERRestoreSuppressedPans；pagePanned Began 改用公共函数（行为不变）；圆点 scrub Began 压制、Ended/结束态优先块恢复。
