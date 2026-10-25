@@ -715,3 +715,19 @@
 - **④ 防线（收起即清场）**：`didChangePresentationState` 在 state 3/0 时立刻清空翻页交互残留（scrub/transition 标志、跟手位移、dragging 票根、手势弱引用），落 `DISM-CLEAN` 追踪行。防止长按拖拽中途 CC 被收起时，脏状态跨收起存活到下一轮呈现（呈现后强制自检仍是第二道）
 - 追踪数据侧写：本轮 `[BANDRESTORE]` 两次命中（14:33:50.167 / 14:34:15.595），bug 1 的自愈链路确认在干活；`RECON` 零命中 = 本轮没有发生真正的卡死（悬停是设计内的跟随位移，不是状态卡死）
 - 装机验证：① 翻页跨页/末页回弹不再有「弹一下」；② 末页/首页长滑，页面最多悬出 ~125pt，松手 0.24-0.42s 平滑归位；③ 长按翻页点拖拽后 CC 收起再打开，内容完整可见
+
+## 1.2.1-25（1002125）· 分页引擎对齐 CC18（C18PageScrollView 架构迁移）
+- **架构裁决（用户）**：不再打补丁，对齐 CC18 底层实现。参考材料 = 用户提供的 `cc18_blob.bin`（/Library/ControlCenter18 payload，二进制解析出主 dylib ControlCenter18.dylib 2.26MB 并提取）。ObjC 元数据实锤 CC18 三件套：**C18PageScrollView（UIScrollView 子类）+ C18PageView + C18PageControl**，落位走 `scrollViewWillEndDragging:withVelocity:targetContentOffset:` + `animateWithSpringDuration:bounce:`，收起仲裁走 `_dismissalPanGestureRecognizerShouldBegin:` / `_scrollViewCanAcceptDownwardsPan` 状态门控。dayanch96/CC18 仓库只有圆角 hook，与分页无关（已排除）。
+- **本版迁移内容**：
+  1. **新增 `ERPagerScrollView`**（UIScrollView 子类，tag kERPagerEngineTag，插在 collection 之上）：引擎铺满 overlay。触摸路由 hitTest —— 命中控件/原生滚动/带手势视图一律放行（模块交互优先，对齐 iOS18「翻页手势只属于背景与圆点」），纯背景归引擎；安全方向的失败（放行出错最坏只是这里翻不了页，不伤模块交互）。
+  2. **物理全部原生**：rubber band（bounces + alwaysBounceVertical）、减速、`targetContentOffset` 落位（round(预测位) + 速度偏置，对齐 CC18 _targetPage）。**bug 2 悬停 / bug 3 弹跳在架构上消失** —— 不存在自造橡皮筋曲线与自造 settle 动画了。
+  3. **渲染镜像**：`scrollViewDidScroll` 把 offset 镜像进现有渲染链：`gERCurrentPage = round(offset/span)`、`translation = page*span - offset` ⇒ 视觉位置恒等于 `-offset.y`（页号翻转时 translation 跳变但视觉连续）；镜像写入包 CATransaction disableActions（避免 0.25s 隐式补间导致跟手发糊）。
+  4. **收起仲裁（bug 4 根治）**：引擎拖拽 / 圆点 scrub 期间**窗口级压制**全部非我方 pan（此前只压 overlay 子树，CCUI 收起 pan 在子树外漏压 —— 长按圆点被系统收走就是这个洞）；松手/收尾立即恢复。另保留「末页快速上拂让位」：引擎 pan 在末页且 vy<-400 时 decline，同一触摸走祖先上的收起 pan（1.2.1-17 既有行为 + CC18 仲裁语义）。
+  5. **圆点 scrub 重写**（CC18 `_preciseTouchedPage` 语义）：触点 → ERPageProgressForScrubY → 引擎 offset 直接驱动；**heldScale 0.70 收缩 / jello / 粘滞滞后全部退役**（用户报的「放大」「弹跳」来源）；跨页 haptic + indicators 保留。
+  6. **点圆点跳页**：`ERPagerEngineJumpToPage` —— 视觉连续地把 offset 动画到目标页（`setContentOffset:animated:` 原生曲线，自造 0.22s CABasicAnimation 退役）。
+  7. **pop 动画整块删除**（updateInteractivePageTransition 的 changedPage 分支）——「弹跳」最后残留源。
+  8. **状态一致性**：`updatePageIndicatorsForOverlay` 开头 = 引擎对账汇聚点（所有翻页收尾都经过）；看门狗每 tick 对账；DISM-CLEAN 增加引擎 offset 同步；scrub/拖拽/动画期间对账不回写（守卫防视觉打架）。
+  9. 旧 `pagePanned` 休眠：引擎在位时 Began 即转投（SPAN-ENGBAIL），保留作模块表面 require-to-fail 链的兜底；其完成路径经 updatePageIndicators 汇聚点自动对账。
+  10. 追踪行新增：`ENG-INSTALL / ENG-BEG / ENG-END / ENG-JUMP / ENG-YIELD-DISMISS / SPAN-ENGBAIL / SCRUB-BEG / SCRUB-END`。
+- **明确不做（如实说明）**：模块内容不迁入滚动视图（CCUI 原生层级不能动，重写宿主层是另一个量级）；引擎是「物理引擎」而非「容器」——CC18 的内容随 offset 走，这里由镜像链等价实现。
+- 装机验证：① 背景滑动翻页 → 原生手感（rubber band 回弹、无弹跳、无悬停）；② 末页快速上拂 → CC 收起；③ 长按圆点拖拽 → 不再被收起，松手原生动画落位；④ 点圆点 → 原生动画跳页；⑤ 模块点按/滑条/长按编辑不受影响。
