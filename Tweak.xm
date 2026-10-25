@@ -128,11 +128,11 @@ static void ERLogMessage(NSString *level, NSString *format, ...);
 // SSH 读 /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist 即得。
 static void ERMirrorLogLine(NSString *line);
 static void ERMirrorDiagLine(NSString *line);
-static void ERMirrorBandLineIn(NSString *line);     // 1.2.1-28 · [BAND] 独立环（定义在本组下方）
-static void ERMirrorTraceLineIn(NSString *line);    // 1.2.1-28 · 翻页专用环
+static void ERMirrorBandLineIn(NSString *line);     // 1.2.1-29 · [BAND] 独立环（定义在本组下方）
+static void ERMirrorTraceLineIn(NSString *line);    // 1.2.1-29 · 翻页专用环
 static NSString *ERLogTimestamp(void);   // 1.2.1-18 · 镜像行补时间戳用（定义在下方）
-static NSString *ERCompactStack(NSUInteger maxFrames);   // 1.2.1-28 · 压栈短格式
-// 1.2.1-28 · 翻页生命周期专用环（见下方 ERPagerTrace 定义：ERPagerTrace 键，160 行/16KB）。
+static NSString *ERCompactStack(NSUInteger maxFrames);   // 1.2.1-29 · 压栈短格式
+// 1.2.1-29 · 翻页生命周期专用环（见下方 ERPagerTrace 定义：ERPagerTrace 键，160 行/16KB）。
 // 因为 14600 行附近的看门狗 C 函数要调用它，必须先声明。
 static void ERPagerTrace(NSString *line);
 
@@ -4879,7 +4879,7 @@ static void ERClampNativeScrollViewForOverlay(UIViewController *overlay) {
                 internal.showsHorizontalScrollIndicator = NO;
                 internal.scrollIndicatorInsets = UIEdgeInsetsZero;
                 if ([className isEqualToString:@"FCUIActivityListView"]) internal.scrollEnabled = NO;
-                // 1.2.1-28 · 归零写条件化：无条件写会让落位后的 8pt 残差漂移
+                // 1.2.1-29 · 归零写条件化：无条件写会让落位后的 8pt 残差漂移
                 // 一次性修正（用户视频取证：停住后单帧跳 ≈8pt）。差值足够大才写，
                 // 并落取证行 —— 若 PIN 后仍有漂移，这里直接给出漂移量。
                 if (fabs(internal.contentOffset.x) > 0.5 || fabs(internal.contentOffset.y) > 0.5) {
@@ -4928,7 +4928,7 @@ static void ERReassertNativeScrollClampForOverlay(UIViewController *overlay) {
     }
 }
 
-// 1.2.1-28 · bug 3（停住后弹一下）源头防漂移。视频逐帧取证：落位静止后
+// 1.2.1-29 · bug 3（停住后弹一下）源头防漂移。视频逐帧取证：落位静止后
 // 单帧跳变 ≈8pt（= kERRestingModuleOffset），时序 = snap 窗口（0.42s）的
 // 无条件归零写。漂移源头 = 拖拽期间 CCUIModuleCollectionView 的
 // contentOffset 可以被手指带偏（clamp 只在 Began/Ended/snap 跑，拖拽中
@@ -4963,6 +4963,27 @@ static void ERPinNativePagerScroll(UIViewController *overlay, BOOL pinned) {
         pager.scrollEnabled = YES;
         ERPagerTrace([NSString stringWithFormat:@"NATIVE-PIN off off=%.1f",
                       pager.contentOffset.y]);
+    }
+}
+// 1.2.1-29b · 外层主滚动容器的逐帧贴基线（bug 3 真正源头）。SNAPZ 零命中证明
+// 内层集合没有漂移 —— 漂移在外层主滚动（ERNativeScrollViewForOverlay）：拖拽
+// 期间无钳制可被手指带偏，落位后 snap 窗口 setContentOffset(baseline) 一次性
+// 修正 8pt = 用户看到的「停住后弹一下」。这里在拖拽的每一帧把 offset 贴回
+// 基线 —— 漂移被摊进跟手过程（每帧 <1pt，不可见），snap 写自动变成 no-op。
+static void ERPinMainNativeScrollLight(UIViewController *overlay) {
+    UIScrollView *sv = ERNativeScrollViewForOverlay(overlay);
+    if (!sv) return;
+    NSValue *baseline = objc_getAssociatedObject(overlay, kERNativeScrollBaselineKey);
+    if (!baseline) return;
+    CGPoint target = baseline.CGPointValue;
+    CGPoint cur = sv.contentOffset;
+    if (fabs(cur.x - target.x) > 0.25 || fabs(cur.y - target.y) > 0.25) {
+        [CATransaction begin];
+        [CATransaction setDisableActions:YES];
+        [sv setContentOffset:target animated:NO];
+        [CATransaction commit];
+        ERPagerTrace([NSString stringWithFormat:@"MAIN-PIN d=%.1f/%.1f",
+                      cur.x - target.x, cur.y - target.y]);
     }
 }
 
@@ -6106,7 +6127,7 @@ static void ERMirrorLogLine(NSString *line) {
     // 几十条，会把 60 行环整个冲爆 —— 实测 PAGESETTLE/PAGEGEO/[PAGER] 等真正
     // 的事件行全被挤出去（bug 3 拿不到落位数据的直接原因）。这两类只进文件
     // 通道，不进镜像环。
-    // 1.2.1-28 · 再补 DI-PILL。实测（用户 06:36 会话 plist）通用环 60 行被
+    // 1.2.1-29 · 再补 DI-PILL。实测（用户 06:36 会话 plist）通用环 60 行被
     // DI-PILL 单次 38+ 行的窗口扫描整段占满，PAGESETTLE/[PAGER]/[FADE] 一条
     // 都没留下 —— 这才是「复现了但拿不到数据」的真正原因。
     if ([line containsString:@"DI-GEO"] || [line containsString:@"DI-TREE"] ||
@@ -6119,7 +6140,7 @@ static void ERMirrorDiagLine(NSString *line) {
     NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
     // 1.2.1-19 · 环扩到 24 行 / 6KB：[BAND] 栈行（~400B/条）与 [POCKET]
     // 时间线同环，16 行装不下一轮完整复现（4 次点击 = 8 条 [BAND] + 8-12 条 [POCKET]）。
-    // 1.2.1-28 · [BAND] 挪出本环（见 ERMirrorBandLine）：1.2.1-28 实测诊断环
+    // 1.2.1-29 · [BAND] 挪出本环（见 ERMirrorBandLine）：1.2.1-29 实测诊断环
     // 19 行里 7 条 [BAND] 就吃掉 5.6KB（每条约 800B 调用栈），把 PAGESETTLE /
     // [POCKET] / [PAGERRECOVER] 全挤出去，等于「有 bug 没证据」。本环回到纯
     // 经济建设：24 行 / 6KB 只装短行。
@@ -6130,7 +6151,7 @@ static void ERMirrorDiagLine(NSString *line) {
     ERMirrorRingUpdate(@"ERPocketMirror", stamped, 24, 6000);
 }
 
-// 1.2.1-28 · 三条专用环，互不挤占。
+// 1.2.1-29 · 三条专用环，互不挤占。
 //
 //   ERPagerTrace —— 翻页生命周期短行（ gesture/settle/visibility/reconcile ），
 //                   160 行 / 16KB。所有判定不变量的数据都在这里，且不会被任何
@@ -6186,9 +6207,9 @@ static NSString *ERLogTimestamp(void) {
     return [formatter stringFromDate:[NSDate date]];
 }
 
-// 1.2.1-28 · 翻页生命周期专用环。
+// 1.2.1-29 · 翻页生命周期专用环。
 //
-// 为什么需要独立一条：1.2.1-28 的实测教训是「有 bug、没证据」—— 诊断环被
+// 为什么需要独立一条：1.2.1-29 的实测教训是「有 bug、没证据」—— 诊断环被
 // [BAND] 调用栈占满（19 行里 7 条就到 6KB 上限），通用环被 DI-PILL 单次窗口
 // 扫描占满（60 行全是 DI-PILL），结果对不起在手的是 0 条 [PAGERRECOVER] /
 // [BANDRESTORE] / [BANDFIX] —— 无法判定「修复没触发」还是「已修好又被覆盖」。
@@ -12791,7 +12812,7 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
 - (void)beginInteractivePageTransitionForOverlay:(UIViewController *)overlay startPage:(NSUInteger)startPage;
 - (void)updateInteractivePageTransitionForOverlay:(UIViewController *)overlay progress:(CGFloat)progress touchY:(CGFloat)touchY;
 - (void)finishInteractivePageTransitionForOverlay:(UIViewController *)overlay targetPage:(NSUInteger)targetPage;
-// 1.2.1-28 · 翻页不变量自愈（由 14570 行附近的看门狗 C 函数回调，须前置声明）
+// 1.2.1-29 · 翻页不变量自愈（由 14570 行附近的看门狗 C 函数回调，须前置声明）
 - (void)erReconcilePagerForOverlay:(UIViewController *)overlay forced:(BOOL)forced;
 - (void)trackControlCenterPresentationGesture:(UIPanGestureRecognizer *)gesture overlay:(UIViewController *)overlay controller:(id)controller;
 - (void)presentationPanDisplayLinkFired:(CADisplayLink *)displayLink;
@@ -14441,7 +14462,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         if (staleFlagsSince <= 0.0) staleFlagsSince = now;
         if (now - staleFlagsSince > 1.0) {
             NSString *staleLine = [NSString stringWithFormat:
-                @"[FADE] ver=1.2.1-28 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
+                @"[FADE] ver=1.2.1-29 cleared stale pager flags scrub=%d transition=%d after=%.2fs",
                 (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince];
             ERLogInfo(@"%@", staleLine);
             ERMirrorDiagLine(staleLine);
@@ -14462,7 +14483,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     static CGFloat lastFadeTarget = -1.0;
     if (fabs(target - lastFadeTarget) > 0.001) {
         NSString *fadeLine = [NSString stringWithFormat:
-            @"[FADE] ver=1.2.1-28 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
+            @"[FADE] ver=1.2.1-29 target=%.2f active=%d scrub=%d transition=%d tr=%.1f expanded=%d",
             target, (int)active, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
             gERPagerInteractiveTranslation, (int)gERExpandedModuleOpen];
         ERLogInfo(@"%@", fadeLine);
@@ -14535,8 +14556,8 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
         BOOL toZero = before > 0.001 && alpha <= 0.001;
         BOOL toVisible = before <= 0.001 && alpha > 0.001;
         if (toZero || toVisible) {
-            // 1.2.1-28 · 栈从 8 帧压到 3 帧、UUID 与偏移尾巴全部剥掉（见
-            // ERCompactStack）。1.2.1-28 实测 7 条 [BAND] 就吃掉诊断环 5.6KB，
+            // 1.2.1-29 · 栈从 8 帧压到 3 帧、UUID 与偏移尾巴全部剥掉（见
+            // ERCompactStack）。1.2.1-29 实测 7 条 [BAND] 就吃掉诊断环 5.6KB，
             // PAGESETTLE/[PAGERRECOVER] 全被挤出；现在单条 <=300B 且进独立环。
             NSString *stack = ERCompactStack(3);
             // 1.2.1-20 · bug 1 修复。1.2.1-19 的 [BAND] 栈帧实锤：把状态带
@@ -14556,7 +14577,7 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
                 if (now - gERBandFixLastLog > 5.0) {
                     gERBandFixLastLog = now;
                     NSString *line = [NSString stringWithFormat:
-                        @"[BANDFIX] ver=1.2.1-28 %@ forced 0->1 st=%@",
+                        @"[BANDFIX] ver=1.2.1-29 %@ forced 0->1 st=%@",
                         NSStringFromClass([self class]), stack];
                     ERLogInfo(@"%@", line);
                     ERMirrorDiagLine(line);
@@ -14586,7 +14607,7 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
 //   · 模块 layer.opacity=0 —— 不挡触摸，用户看到「能点击但看不见」，需 respring；
 //   · gERPagerInteractiveTranslation 残留 —— 页面悬停在过冲位（末页拖过长）。
 //
-// 1.2.1-28 · 重写判定基准（不信标志位）——但**装机实测仍未触发**：用户 06:36
+// 1.2.1-29 · 重写判定基准（不信标志位）——但**装机实测仍未触发**：用户 06:36
 // 会话的 plist 里 [PAGERRECOVER]/[BANDRESTORE]/[BANDFIX] **零条**，只有
 // PAGESETTLE 与 [BAND]。两条落地结论：
 //   · 闲置门 1.5s + tick 0.5s = 最坏 2s 才动手，而 PAGESETTLE 之间只隔 0.7s
@@ -14594,7 +14615,7 @@ static void ERSwizzleBandAlphaTraceOnce(Class cls) {
 //   · 更要命的是 [BAND] 调用栈把诊断环塞满（19 行里 7 条就顶到 6KB 上限），
 //     PAGESETTLE/[PAGERRECOVER] 被挤出去，等于「有 bug 没证据」。
 //
-// 1.2.1-28 · **不换出口，换思路：从「卡死后抢救」改成「不变量自愈」。**
+// 1.2.1-29 · **不换出口，换思路：从「卡死后抢救」改成「不变量自愈」。**
 // 不再去猜「哪条结束事件丢了」，而是每 tick 校验一组**必须恒真**的不变量，
 // 任一条为假就整盒重建（走 finishInteractive 这条本来就写好的收敛路径）：
 //   A 标志   —— 无手势、无自有动画时 scrub/transition 必须为 NO
@@ -14623,7 +14644,7 @@ static BOOL ERPagerIdleStale(void) {
         gERPagerLastActivityTime = CACurrentMediaTime();
         return NO;
     }
-    // 1.2.1-28 · 1.5s → 0.45s。1.2.1-28 实锤窗口太窄（settle 间隔 0.7s，
+    // 1.2.1-29 · 1.5s → 0.45s。1.2.1-29 实锤窗口太窄（settle 间隔 0.7s，
     // tick 0.5s + 闲置 1.5s 根本轮不到），而正常落位路径最长 0.30s settle +
     // 0.22s setCurrentPage —— 0.45s 足够放行它们，又能在用户察觉前收干净。
     return (CACurrentMediaTime() - gERPagerLastActivityTime) > 0.45;
@@ -14644,7 +14665,7 @@ static void ERReconcilePagerIfNeeded(UIViewController *overlay, BOOL forced) {
 
 static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     if (!overlay.view) return;
-    // 1.2.1-28 · 不变量自愈（每 tick 校验；内部有 0.45s 闲置门 + 手指存活门）
+    // 1.2.1-29 · 不变量自愈（每 tick 校验；内部有 0.45s 闲置门 + 手指存活门）
     ERReconcilePagerIfNeeded(overlay, NO);
     UIView *fade = [overlay.view viewWithTag:kERTopFadeTag];
     // pocket 只在 overlay 视图树里找一层 BFS（命中即停），不遍历全树。
@@ -14668,11 +14689,11 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
             if ([name hasPrefix:@"CCUISensorAttribution"] || [name isEqualToString:@"CCUIStatusBar"]) {
                 ERSwizzleBandAlphaTraceOnce(child.class);
             }
-            // 1.2.1-28 · 卡死状态带恢复。实锤（用户 06:05 会话）：iOS 的伪隐藏
+            // 1.2.1-29 · 卡死状态带恢复。实锤（用户 06:05 会话）：iOS 的伪隐藏
             // 动画「完成块恢复」在翻页结束事件丢失时永不来 —— 状态带永久停在
             // alpha 0（用户看到 bug 1「依旧」）。手指已离屏 + 翻页闲置 1.5s+ +
             // 无展开/编辑/拖动时，把状态带点回 1 并清残留动画。
-            // 1.2.1-28 · 补呈现态判据（1.2.1-28 现场实锤 14:34:15）：iOS 开始
+            // 1.2.1-29 · 补呈现态判据（1.2.1-29 现场实锤 14:34:15）：iOS 开始
             // 收起 CC（状态带淡出）0.25s 后本逻辑把状态带强行点亮，0.09s 后
             // iOS 又打回去 —— **在收起动画期间和系统打架**。只有 pres==2（完全
             // 呈现）才允许恢复；收起中（3）/已收起（0）一律放行系统。
@@ -14686,7 +14707,7 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
                     child.alpha = 1.0;
                 } completion:nil];
                 NSString *bandLine = [NSString stringWithFormat:
-                    @"[BANDRESTORE] ver=1.2.1-28 %@ alpha 0->1 (stuck)", NSStringFromClass(child.class)];
+                    @"[BANDRESTORE] ver=1.2.1-29 %@ alpha 0->1 (stuck)", NSStringFromClass(child.class)];
                 ERLogInfo(@"%@", bandLine);
                 ERMirrorDiagLine(bandLine);
             }
@@ -14710,7 +14731,7 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
     static NSString *lastSignature = nil;
     if (![signature isEqualToString:lastSignature]) {
         lastSignature = signature;
-        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-28 %@", signature];
+        NSString *pocketLine = [NSString stringWithFormat:@"[POCKET] ver=1.2.1-29 %@", signature];
         ERLogInfo(@"%@", pocketLine);
         // 1.2.1-18：进专用镜像环（文件通道不落盘 + 短会话不刷盘的双保险）。
         ERMirrorDiagLine(pocketLine);
@@ -14719,8 +14740,8 @@ static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
 
 static void ERScheduleHeaderPocketWatchdog(UIViewController *overlay, NSUInteger generation) {
     __weak UIViewController *weakOverlay = overlay;
-    // 1.2.1-28 · tick 0.5s → 0.25s。自愈延迟 = tick + 闲置门 = 0.25 + 0.45
-    // = 最坏 0.7s（1.2.1-28 是 2.0s，用户已经在 0.7s 内感知到「依旧」）。
+    // 1.2.1-29 · tick 0.5s → 0.25s。自愈延迟 = tick + 闲置门 = 0.25 + 0.45
+    // = 最坏 0.7s（1.2.1-29 是 2.0s，用户已经在 0.7s 内感知到「依旧」）。
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         UIViewController *strongOverlay = weakOverlay;
         if (!strongOverlay) return;   // overlay 已析构，链自然终止
@@ -14741,7 +14762,7 @@ static void ERStartHeaderPocketWatchdog(UIViewController *overlay) {
     NSUInteger generation = ++gERHeaderPocketWatchdogGeneration;
     objc_setAssociatedObject(overlay, kERHeaderPocketWatchdogKey, @(generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     ERScheduleHeaderPocketWatchdog(overlay, generation);
-    // 1.2.1-28 · **呈现即自检**：上一轮会话丢干净的手势链会把手状态（模块
+    // 1.2.1-29 · **呈现即自检**：上一轮会话丢干净的手势链会把手状态（模块
     // layer.opacity=0、悬停位移、状态带 alpha 0）跨会话带到下一次打开 —— 这
     // 正是用户「需要注销才能显示」的形态。这里在呈现落定（state 2）后强制
     // 自检一次（不等闲置门），任何残留都在用户看见之前被拉回。
@@ -15513,12 +15534,12 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     slide.duration = duration;
     slide.timingFunction = curve;
     [collectionLayer addAnimation:slide forKey:@"EchoRebornPageSettleSublayerTransform"];
-    NSString *settleLine = [NSString stringWithFormat:@"PAGESETTLE ver=1.2.1-28 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration];
+    NSString *settleLine = [NSString stringWithFormat:@"PAGESETTLE ver=1.2.1-29 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration];
     ERLogInfo(@"%@", settleLine);
-    // 1.2.1-28 · 落位数据同时进诊断专用环：通用环 60 行仍可能被其他事件挤出，
+    // 1.2.1-29 · 落位数据同时进诊断专用环：通用环 60 行仍可能被其他事件挤出，
     // 诊断环（24 行、低流量）保证 bug 3 的 from/to/dur 时序一定在手。
     ERMirrorDiagLine(settleLine);
-    // 1.2.1-28 · 再进翻页专用环（160 行），与手势/自愈同一时间轴排布，
+    // 1.2.1-29 · 再进翻页专用环（160 行），与手势/自愈同一时间轴排布，
     // bug 3 的「落位弹跳」要看 SETTLE 与前后手势事件的距离才能定性。
     ERPagerTrace(settleLine);
     ERStartPageSettleProbe(collectionLayer);
@@ -15554,7 +15575,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)setCurrentPage:(NSUInteger)page forOverlay:(UIViewController *)overlay animated:(BOOL)animated {
     if (!overlay || !gERPageCount) return;
-    ERMarkPagerActivity();   // 1.2.1-28 · 点按翻页也刷新活动
+    ERMarkPagerActivity();   // 1.2.1-29 · 点按翻页也刷新活动
     ERPagerTrace([NSString stringWithFormat:@"SETP p=%lu cur=%lu anim=%d peg=%d",
                   (unsigned long)page, (unsigned long)gERCurrentPage, (int)animated, (int)gPagingEnabled]);
     if (!gPagingEnabled) {
@@ -15651,7 +15672,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     }
     ERPagerTrace([NSString stringWithFormat:@"BEGIN sp=%lu scrub=%d",
                   (unsigned long)startPage, (int)gERPagerScrubbingActive]);
-    ERMarkPagerActivity();   // 1.2.1-28 · 卡死恢复的活动基准
+    ERMarkPagerActivity();   // 1.2.1-29 · 卡死恢复的活动基准
     gERPagerTransitionActive = YES;
     gERPagerInteractiveStartPage = MIN(startPage, gERPageCount - 1);
     gERPagerInteractiveProgress = gERPagerInteractiveStartPage;
@@ -15711,7 +15732,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)updateInteractivePageTransitionForOverlay:(UIViewController *)overlay progress:(CGFloat)progress touchY:(CGFloat)touchY {
     if (!overlay || !gERPagerTransitionActive) return;
-    ERMarkPagerActivity();   // 1.2.1-28 · 拖拽推进即活跃（长按不动不刷，靠手指存活门兜住）
+    ERMarkPagerActivity();   // 1.2.1-29 · 拖拽推进即活跃（长按不动不刷，靠手指存活门兜住）
     ERClampNativeScrollViewForOverlay(overlay);
     CGFloat maxProgress = (CGFloat)gERPageCount - 1.0;
     CGFloat clamped = MIN(maxProgress, MAX(0.0, progress));
@@ -15830,7 +15851,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         // deliberately bounded to transform + opacity.
         EREditGridView *grid = gEditModeActive ? [self editGridForPage:candidate overlay:overlay] : nil;
         if (grid) {
-            // 1.2.1-28 · bug 3（用户持续反馈「有弹跳动画」）：原 keyframe 是
+            // 1.2.1-29 · bug 3（用户持续反馈「有弹跳动画」）：原 keyframe 是
             // 0.90 → **1.025** → 1.0 —— 那个 1.025 是**故意写进去的过冲**，
             // 每次跨页都对每个模块播一遍，读感就是「弹一下」。用户要的不是更
             // 强的手感，而是不要过冲，这里改成单调 0.92 → 1.0 的纯淡入。
@@ -15858,7 +15879,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
             if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
             if (ERPageForRect(rect) != candidate) continue;
-            // 1.2.1-28 · bug 3：同上，模块侧的 0.90 → 1.025 → 1.0 过冲去掉，
+            // 1.2.1-29 · bug 3：同上，模块侧的 0.90 → 1.025 → 1.0 过冲去掉，
             // 改成单调 0.92 → 1.0。跨页不再有「弹一下」。
             [module.view.layer removeAnimationForKey:@"EchoRebornPagerPopScale"];
             [module.view.layer removeAnimationForKey:@"EchoRebornPagerPopFade"];
@@ -15916,7 +15937,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)finishInteractivePageTransitionForOverlay:(UIViewController *)overlay targetPage:(NSUInteger)targetPage {
     if (!overlay) return;
-    ERMarkPagerActivity();   // 1.2.1-28 · 收尾也刷新活动（settle 进行中不算闲置）
+    ERMarkPagerActivity();   // 1.2.1-29 · 收尾也刷新活动（settle 进行中不算闲置）
     ERPagerTrace([NSString stringWithFormat:@"FIN tgt=%lu pg=%lu scrub=%d tr=%d itrans=%.1f",
                   (unsigned long)targetPage, (unsigned long)gERCurrentPage,
                   (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
@@ -15950,7 +15971,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     }
     [self animatePageSettleForOverlay:overlay
                             duration:0.30
-                      // 1.2.1-28 · bug 3（落位弹跳）：EaseInEaseOut 的 in 段是
+                      // 1.2.1-29 · bug 3（落位弹跳）：EaseInEaseOut 的 in 段是
                       // 「先慢半拍再冲出去」，配上 0.30s 时长读感就是「停顿一下
                       // 再落下」。改成 EaseOut —— 松手即刻起步、末段自然减速，
                       // 与 iOS 原生 scrollView 落位曲线一致。
@@ -15975,7 +15996,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         }
         gERPagerScrubbingActive = NO;
         gERPagerTransitionActive = NO;
-        ERPinNativePagerScroll(overlay, NO);   // 1.2.1-28 · scrub/TAP 收尾同步恢复
+        ERPinNativePagerScroll(overlay, NO);   // 1.2.1-29 · scrub/TAP 收尾同步恢复
         objc_setAssociatedObject(collection.view, kERScrubCollectionBoundsKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(collection.view, kERScrubCollectionPositionKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         ERReassertNativeScrollClampForOverlay(overlay);
@@ -16001,7 +16022,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     }];
 }
 
-// 1.2.1-28 · 翻页不变量自愈（-erReconcilePagerForOverlay:forced:）。
+// 1.2.1-29 · 翻页不变量自愈（-erReconcilePagerForOverlay:forced:）。
 //
 // 判定表见 14528 行附近的注释。要点：**不看中间过程，只看终态** —— 系统手势
 // 抢占、长按丢 Ended、动画被中途打断，无论哪条链路断，只要断完之后终态不对，
@@ -16090,8 +16111,8 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     // —— 死掉的 scrub 永走完不成收尾：模块停在 layer.opacity=0（不挡触摸，
     // 用户看到「能点击但看不见」，需 respring 恢复）。这里用 Began 时存下的
     // overlay 票根补走 finishInteractivePageTransitionForOverlay:。
-    // 1.2.1-28 · 翻页点手势生命周期追踪。Changed 是 60Hz 的，一律入环会把
-    // 160 行专用环瞬间冲爆（1.2.1-28 的 DI-PILL 教训），这里只取边界态；
+    // 1.2.1-29 · 翻页点手势生命周期追踪。Changed 是 60Hz 的，一律入环会把
+    // 160 行专用环瞬间冲爆（1.2.1-29 的 DI-PILL 教训），这里只取边界态；
     // 长按不动的场景由 Began/Ended 两端 + nt(numberOfTouches) 足够定性。
     if (host && gesture.state != UIGestureRecognizerStateChanged) {
         ERPagerTrace([NSString stringWithFormat:@"IPAN s=%ld y=%.0f nt=%lu fl=%d/%d itr=%.1f cur=%lu",
@@ -16123,7 +16144,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         objc_setAssociatedObject(gesture, kERPagerStartPageKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(gesture, kERPagerOverlayKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(host, kERPageIndicatorDraggingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        gERPagerActiveGesture = nil;   // 1.2.1-28 · 结束态优先块也视为放手
+        gERPagerActiveGesture = nil;   // 1.2.1-29 · 结束态优先块也视为放手
         ERLogInfo(@"[PAGER] indicator end-priority finish overlay=%d start=%lu target=%lu state=%ld",
                   (int)(finishOverlay != nil), (unsigned long)startPage,
                   (unsigned long)targetPage, (long)gesture.state);
@@ -16140,7 +16161,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         objc_setAssociatedObject(gesture, kERPagerStartPageKey, @(gERCurrentPage), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         // 1.2.1-21 · overlay 票根：结束态补走收尾时用（见方法开头结束态优先块）
         objc_setAssociatedObject(gesture, kERPagerOverlayKey, overlay, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        gERPagerActiveGesture = gesture;   // 1.2.1-28 · 手指存活判定用
+        gERPagerActiveGesture = gesture;   // 1.2.1-29 · 手指存活判定用
         [self beginInteractivePageTransitionForOverlay:overlay startPage:gERCurrentPage];
         location = [gesture locationInView:host];
         progress = ERPageProgressForScrubY(location.y, kERPageIndicatorScrubStep, gERPageCount);
@@ -16545,8 +16566,8 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                       (unsigned long)gERPageCount, (int)gERExpandedModuleOpen, (int)gERDragInProgress]);
         return;
     }
-    ERMarkPagerActivity();   // 1.2.1-28 · 翻页事件即活跃
-    // 1.2.1-28 · 页面滑动手势生命周期（同上，Changed 节流 0.30s）
+    ERMarkPagerActivity();   // 1.2.1-29 · 翻页事件即活跃
+    // 1.2.1-29 · 页面滑动手势生命周期（同上，Changed 节流 0.30s）
     if (gesture.state != UIGestureRecognizerStateChanged) {
         ERPagerTrace([NSString stringWithFormat:@"SPAN s=%ld nt=%lu ty=%.0f vx=%.0f/vy=%.0f cur=%lu",
                       (long)gesture.state, (unsigned long)gesture.numberOfTouches,
@@ -16566,9 +16587,9 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         }
     }
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        gERPagerActiveGesture = gesture;   // 1.2.1-28 · 手指存活判定用
+        gERPagerActiveGesture = gesture;   // 1.2.1-29 · 手指存活判定用
         gERPagerTransitionActive = YES;
-        // 1.2.1-28 · bug 3 源头防漂移：拖拽期间禁用原生集合滚动（offset 漂移
+        // 1.2.1-29 · bug 3 源头防漂移：拖拽期间禁用原生集合滚动（offset 漂移
         // 是「停住后弹 8pt」的根因，结束后由 snap 窗口一次性修正被视觉感知）。
         ERPinNativePagerScroll(overlay, YES);
         if (gEditModeActive) [self setEditControlsSuppressedForPaging:YES overlay:overlay animated:YES];
@@ -16620,7 +16641,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         CGFloat span = MAX(ERVisualPageSpan(), 1.0);
         CGFloat rawPage = (CGFloat)startPage - translation.y / span; // 拖上 = 页位增大
         CGFloat maxPage = (CGFloat)gERPageCount - 1.0;
-        // 1.2.1-28 · bug 2（用户四轮反馈「滑过长依旧悬停」）：原渐近上限是
+        // 1.2.1-29 · bug 2（用户四轮反馈「滑过长依旧悬停」）：原渐近上限是
         // 0.5*span = 484pt —— 拖得越长页面悬出越多（实测一次长拖悬出 300pt+），
         // 手指按住期间就一直停在那里，读感就是「悬停」。收紧：越界行程（over）
         // 超过 0.35*span 后不再继续拉伸，视觉位移上限收敛到
@@ -16642,13 +16663,17 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     if (gesture.state == UIGestureRecognizerStateChanged) {
         gERCurrentPage = startPage;
         gERPagerInteractiveTranslation = translation.y;
+        // 1.2.1-29b · bug 3 根修：外层主滚动逐帧贴基线。拖拽期间它的 offset 被
+        // 手指带偏（applyPageTransform 在 transitionActive 时跳过基线恢复），
+        // 落位后 snap 窗口一次修正 = 「停住后弹 8pt」。逐帧贴回 = 漂移摊进跟手。
+        ERPinMainNativeScrollLight(overlay);
         [self applyPageTransformToOverlay:overlay animated:NO];
         [self updateTopFadeForOverlay:overlay presentationAlpha:1.0];
         if (gEditModeActive) [self updateEditControlFramesForOverlay:overlay];
         return;
     }
     if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
-        gERPagerActiveGesture = nil;   // 1.2.1-28 · 结束即放手（事件丢了也会有触摸归零兜底）
+        gERPagerActiveGesture = nil;   // 1.2.1-29 · 结束即放手（事件丢了也会有触摸归零兜底）
         CGPoint velocity = [gesture velocityInView:overlay.view];
         NSInteger target = (NSInteger)startPage;
         if (gesture.state == UIGestureRecognizerStateEnded) {
@@ -16676,10 +16701,10 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             CGFloat velocityFactor = MIN(1.0, releaseVelocity / 1800.0);
             NSTimeInterval duration = MIN(0.42, MAX(0.24, 0.22 + distanceFactor * 0.20 - velocityFactor * 0.10));
             CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-            // 1.2.1-28 · bug 3 根因实锤（用户四轮反馈「有弹跳动画」）：这里原是
+            // 1.2.1-29 · bug 3 根因实锤（用户四轮反馈「有弹跳动画」）：这里原是
             // cubic-bezier(0.34, 1.42, 0.64, 1.0) —— 第二控制点 y=1.42，动画值
             // **冲过终点再回来**，正是「弹一下」。任何 delta==0 的收尾（末页回弹、
-            // 小幅滑动）都会命中。1.2.1-28 删掉的 pop 1.025 过冲不是真凶，这条才是。
+            // 小幅滑动）都会命中。1.2.1-29 删掉的 pop 1.025 过冲不是真凶，这条才是。
             // 一律 EaseOut：起步即走、末段自然减速、绝不过冲。
             settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             [self animatePageSettleForOverlay:overlay duration:duration timingFunction:settleCurve modelChanges:^{
@@ -16694,7 +16719,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                 [self updateTopFadeForOverlay:overlay presentationAlpha:1.0];
             } completion:^{
                 gERPagerTransitionActive = NO;
-                ERPinNativePagerScroll(overlay, NO);   // 1.2.1-28 · 拖拽结束，恢复原生集合滚动
+                ERPinNativePagerScroll(overlay, NO);   // 1.2.1-29 · 拖拽结束，恢复原生集合滚动
                 [self applyPageTransformToOverlay:overlay animated:NO];
                 [self updatePagedModuleVisibilityForOverlay:overlay showAdjacent:NO];
                 [self updatePageIndicatorsForOverlay:overlay];
@@ -16733,7 +16758,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             NSValue *settleOffsetValue = nativeOffsetValue;
             CGPoint settleOffset = nativeOffset;
             CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
-            // 1.2.1-28 · bug 3 同修（编辑态分支）：同上，去过冲贝塞尔。
+            // 1.2.1-29 · bug 3 同修（编辑态分支）：同上，去过冲贝塞尔。
             settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             [self animatePageSettleForOverlay:overlay duration:duration timingFunction:settleCurve modelChanges:^{
                 gERCurrentPage = (NSUInteger)target;
@@ -16755,7 +16780,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                 [self updateTopFadeForOverlay:overlay presentationAlpha:1.0];
             } completion:^{
                 gERPagerTransitionActive = NO;
-                ERPinNativePagerScroll(overlay, NO);   // 1.2.1-28 · 拖拽结束，恢复原生集合滚动
+                ERPinNativePagerScroll(overlay, NO);   // 1.2.1-29 · 拖拽结束，恢复原生集合滚动
                 [self applyPageTransformToOverlay:overlay animated:NO];
                 [self updatePagedModuleVisibilityForOverlay:overlay showAdjacent:NO];
                 [self updatePageIndicatorsForOverlay:overlay];
@@ -25496,8 +25521,8 @@ static void ERInstallModuleTapFeedback(UIView *host) {
     }
     NSUInteger chromeGeneration = ++gERPresentationChromeGeneration;
     gERControlCenterPresentationState = state;
-    // 1.2.1-28 · bug 4（长按翻页点后 CC 整体消失）防线：收起中（3）/已收起（0）
-    // 时立刻清空翻页交互残留。1.2.1-28 现场实锤：长按翻页点拖拽结束后 0.5s 内
+    // 1.2.1-29 · bug 4（长按翻页点后 CC 整体消失）防线：收起中（3）/已收起（0）
+    // 时立刻清空翻页交互残留。1.2.1-29 现场实锤：长按翻页点拖拽结束后 0.5s 内
     // CC 进入收起（pres3），若 scrub 标志 / 跟手位移 / dragging 票根跨收起存活，
     // 下一轮呈现就会带着脏状态起步（磁贴 opacity 0 / 页面位移残留 / chrome 隐藏）。
     // 呈现后的强制自检（ERStartHeaderPocketWatchdog）是第二道，这里是第一道。
@@ -25515,7 +25540,7 @@ static void ERInstallModuleTapFeedback(UIView *host) {
         gERPagerInteractiveBeganTime = 0.0;
         UIViewController *dismissOverlay = ERFindOverlayController([controller isKindOfClass:[UIViewController class]] ? (UIViewController *)controller : gOverlayControllers.allObjects.firstObject);
         if (!dismissOverlay) dismissOverlay = gOverlayControllers.allObjects.firstObject;
-        if (dismissOverlay) ERPinNativePagerScroll(dismissOverlay, NO);   // 1.2.1-28 · 收起清场同步恢复
+        if (dismissOverlay) ERPinNativePagerScroll(dismissOverlay, NO);   // 1.2.1-29 · 收起清场同步恢复
         UIView *indicatorHost = dismissOverlay ? [dismissOverlay.view viewWithTag:kERPageIndicatorHostTag] : nil;
         if (indicatorHost) objc_setAssociatedObject(indicatorHost, kERPageIndicatorDraggingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
