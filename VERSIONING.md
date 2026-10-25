@@ -738,3 +738,11 @@
 - **修复**：① 引擎 tag 挪到未占用段 **181090**；② `ERPagerScrollViewForOverlay` 加 `isKindOfClass:[ERPagerScrollView class]` 类型防御 —— 撞号的最坏后果降级为「引擎缺失」，绝不崩 SpringBoard。
 - **崩溃自报告（永久升级）**：`NSSetUncaughtExceptionHandler` → 未捕获异常的名字/原因/EchoReborn 栈帧写入 cfprefsd 镜像新键 `ERCrashMirror`（20 行/8KB，handler 在 abort 前跑、通道已被 1.2.1-18 验证）。以后崩溃不再依赖 .ips 猜选择子，SSH 拉 plist 即得。
 - 验证：下拉 CC 不再崩溃；SSH 拉 plist 应见 `ENG-INSTALL`（引擎正常安装）与 `ERCrashMirror` 为空。
+
+## 1.2.1-27（1002127）· 双引擎互踩根除（shouldBegin 闸口）+ scrub 动态恢复
+- **1.2.1-26 用户四项反馈（2026-10-25 17:30 会话追踪环）**：① 悬停依旧；② 弹跳依旧；③ CC 消失有变化——但**长按翻页点的动态效果被误删**（用户明确：只该修 CC 消失，不该动 scrub 手感）；④ 新问题：第二页滑不过第三页。
+- **追踪环实锤（根因）**：`SPAN-ENGBAIL` 后 `SPAN-CH`/`PAGESETTLE` 仍然成串出现 —— 1.2.1-25 的「引擎接管」只在 pagePanned 的 Began 分支 return，但**手势已经识别，Changed/Ended 事件继续涌进旧物理**，新旧两套引擎交替拖动同一页面：旧橡皮筋/旧 settle 的悬停弹跳全部回归（①②），混合写入的位移残留导致第二页到第三页的落位错乱（④），强制自愈还要收拾残局（17:30:58 RECON f=1 disp=1 拉回 57pt）。
+- **修复 1（双引擎根除）**：引擎接管从「Began 后逃逸」改为 **`gestureRecognizerShouldBegin:` 直接拒绝**（协调器手势代理，pager 分支加 `ERPagerEngineAvailable` 门）——手势整体不启动，触摸完全归引擎 pan；pagePanned 仅作引擎不可用时的兜底路径。1.2.1-25 的 Began-bail 块删除。
+- **修复 2（scrub 动态恢复，用户裁决）**：长按圆点 scrub 恢复 1.2.1-24 的原链路（beginInteractive → updateInteractive → finishInteractive，heldScale 收缩/粘滞/jello 全部回归）；**bug 4 的修复只保留「窗口级压制」**（拖拽期间收起 pan 被压住、松手恢复）这一件事。引擎 offset 由 finish 的 completion → updatePageIndicators → 引擎对账归位，不参与 scrub 驱动。TAP during scrub 同步回到 update+finish 链。
+- 保留：引擎背景翻页（原生物理）、ENG-JUMP 点按跳页、ENG-YIELD-DISMISS 末页上拂让位、崩溃自报告（ERCrashMirror）。
+- 验证：① 背景滑动 = 原生引擎物理（无悬停无弹跳、四页全部可达）；② 长按圆点 = 原动态手感 + 不再被收起；③ 点圆点 = 原生动画跳页。
