@@ -746,3 +746,13 @@
 - **修复 2（scrub 动态恢复，用户裁决）**：长按圆点 scrub 恢复 1.2.1-24 的原链路（beginInteractive → updateInteractive → finishInteractive，heldScale 收缩/粘滞/jello 全部回归）；**bug 4 的修复只保留「窗口级压制」**（拖拽期间收起 pan 被压住、松手恢复）这一件事。引擎 offset 由 finish 的 completion → updatePageIndicators → 引擎对账归位，不参与 scrub 驱动。TAP during scrub 同步回到 update+finish 链。
 - 保留：引擎背景翻页（原生物理）、ENG-JUMP 点按跳页、ENG-YIELD-DISMISS 末页上拂让位、崩溃自报告（ERCrashMirror）。
 - 验证：① 背景滑动 = 原生引擎物理（无悬停无弹跳、四页全部可达）；② 长按圆点 = 原动态手感 + 不再被收起；③ 点圆点 = 原生动画跳页。
+
+## 1.2.1-28（1002128）· bug 3 根修（停住后弹 8pt）：源头防漂移 + 回写条件化（基底 = 1.2.1-24）
+- **流程变更（用户裁决）**：回退 1.2.1-24 基线，逐 bug 修。1.2.1-25/26/27 的引擎迁移整线作废（双引擎互踩引入跳动与新问题）；工作区源码从 GitHub -24 commit（020a35bd6838）精确恢复。
+- **用户录屏逐帧取证（509 帧）**：落位动画结束后**静止约 0.2s，单帧离散跳变 ≈8pt**（视频位移 118→114，缩放折算 7.8pt）——不是动画过冲（过冲是多帧曲线），是某次延迟写入把内容挪了 8pt。8pt 与 `kERRestingModuleOffset = -8.0` 精确吻合。
+- **根因链（代码级）**：拖拽期间 `ERRestoreNativeScrollBaseline` 因 transitionActive 被跳过 → 原生 `CCUIModuleCollectionView` 的 contentOffset 可被手指带偏（clamp 只在 Began/Ended/snap 窗口跑）→ 落位后 snap 窗口（0/0.08/0.24/0.42s）里 4882 行的**无条件归零写**一次性修正漂移 → 视觉上「停住后弹一下」。
+- **修复（两层）**：
+  1. **源头防漂移**：新增 `ERPinNativePagerScroll` —— 滑动 Began 时把原生集合 `scrollEnabled = NO`（拖拽期间 offset 不可能漂移）；四处收尾（pagePanned 编辑/非编辑 completion、finishInteractive completion、DISM-CLEAN）恢复 `scrollEnabled = YES`。落 `NATIVE-PIN on/off` 追踪行（带当时 offset，直接验证漂移量）。
+  2. **回写条件化**：ERClamp 里对 CCUIModuleCollectionView / FCUIActivityListView 的归零写改为**差值 >0.5 才写**，并落 `SNAPZ cls= d=` 追踪行（若仍有漂移，直接给出类名与漂移量）。
+- 滑动/点按正常路径零改动（用户红线）；scrub 动态完整保留（-24 原样）。
+- 验证：翻页落位后应无任何「弹一下」；SSH 拉 plist 看 `NATIVE-PIN on/off` 的 offset 值（on 与 off 应一致 ≈0，证明无漂移）与 `SNAPZ` 是否出现（出现即仍有漂移源，数据直接指名）。
