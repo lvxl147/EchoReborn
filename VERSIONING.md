@@ -781,3 +781,7 @@
 - 用户录屏 + 追踪环关键排除：复现时刻追踪环里**没有任何我方事件**（无 IPAN/SCRUB/FIN/RECON）——scrub 链路无辜；自愈不变量 C（模块 opacity）未触发=模块 layer.opacity 未变；视频显示磁贴网格+圆点全消失、仅媒体模块红心可见（媒体不在分页集合）——消失的是「分页内容层」而 CC 本体在（能点击）。
 - 头号嫌疑：长按圆点触发 CCUI 自己的长按手势=进入编辑模式（iOS 17 系统行为），CCUI 藏正常内容视图而编辑视图未出现。CC18 圆点是自绘 C18PageControl 长按不触发 CCUI 手势=无此问题。
 - 本版：看门狗新增 ERDumpInvisibilityScene——异常态（可见模块=0 且非编辑态）每 tick 落 CCVIS 行（editMode/col 状态/grid/dots/scrub 全量），复现一次直接指名消失的层。探针暂停（防洪水）。
+
+## 1.2.1-35（1002135）· bug 4 取证 v2（修复取证盲区）
+- 1.2.1-34 复测 CCVIS 零条 —— 取证器自身有盲区：ERDumpInvisibilityScene 开头 gEditModeActive 跳过，若消失态=编辑模式误入则采样器自己跳过了它。
+- v2：① 编辑态不再跳过；② 加测面板本体 ovlHid/ovlA；③ 看门狗链终止留痕 WATCHDOG-STOP（pres/state/ovlA）——面板还在但系统认为已收起=状态失步的直接证据。
