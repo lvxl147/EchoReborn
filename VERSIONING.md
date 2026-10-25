@@ -731,3 +731,10 @@
   10. 追踪行新增：`ENG-INSTALL / ENG-BEG / ENG-END / ENG-JUMP / ENG-YIELD-DISMISS / SPAN-ENGBAIL / SCRUB-BEG / SCRUB-END`。
 - **明确不做（如实说明）**：模块内容不迁入滚动视图（CCUI 原生层级不能动，重写宿主层是另一个量级）；引擎是「物理引擎」而非「容器」——CC18 的内容随 offset 走，这里由镜像链等价实现。
 - 装机验证：① 背景滑动翻页 → 原生手感（rubber band 回弹、无弹跳、无悬停）；② 末页快速上拂 → CC 收起；③ 长按圆点拖拽 → 不再被收起，松手原生动画落位；④ 点圆点 → 原生动画跳页；⑤ 模块点按/滑条/长按编辑不受影响。
+
+## 1.2.1-26（1002126）· 撞号崩溃热修 + 崩溃自报告
+- **用户崩溃日志实锤（SpringBoard-2026-10-25-162801.ips）**：下拉 CC 即 SIGABRT，`NSInvalidArgumentException` —— `-[UIButton <sel>]: unrecognized selector`，调用链 = CADisplayLink → 我方 6 帧 → forwarding。consecutiveCrashCount=4，CC 完全不可用。
+- **根因（代码级实锤，1 分钟定位后复盘）**：1.2.1-25 新增的 `kERPagerEngineTag = 181033` **与既有常量 `kERConnectivityExpandButtonTag = 181033`（连接模块展开按钮，UIButton）撞号**。`viewWithTag:` 递归全树查找，引擎对账（updatePageIndicators 汇聚点 / duplicate host 布局链）先命中展开按钮 → 强转 ERPagerScrollView → 调 `erSyncContent` → 崩。receiver=UIButton、下拉 CC 必崩（连接模块必然布局）、display link 链全吻合。
+- **修复**：① 引擎 tag 挪到未占用段 **181090**；② `ERPagerScrollViewForOverlay` 加 `isKindOfClass:[ERPagerScrollView class]` 类型防御 —— 撞号的最坏后果降级为「引擎缺失」，绝不崩 SpringBoard。
+- **崩溃自报告（永久升级）**：`NSSetUncaughtExceptionHandler` → 未捕获异常的名字/原因/EchoReborn 栈帧写入 cfprefsd 镜像新键 `ERCrashMirror`（20 行/8KB，handler 在 abort 前跑、通道已被 1.2.1-18 验证）。以后崩溃不再依赖 .ips 猜选择子，SSH 拉 plist 即得。
+- 验证：下拉 CC 不再崩溃；SSH 拉 plist 应见 `ENG-INSTALL`（引擎正常安装）与 `ERCrashMirror` 为空。
