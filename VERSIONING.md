@@ -800,3 +800,7 @@
 - 修复：看门狗 ERDumpInvisibilityScene 升级为自愈——检测到容器消失态（colVanished/ovlVanished/模块全不可见）时当场把 collection 与「首个模块→overlay 祖先链」的 alpha/opacity/hidden 拉回 1.0（禁隐式动画），随后 applyPageTransform + 可见性重申，落 CCVIS-HEAL 行（n=恢复层数、hider=被恢复的层名——为后续修根写入者留证）。
 - 效果：即使触发，内容 0.25s（一个看门狗 tick）内自动回来，不再卡死到注销。
 - 坑：版本号连锁替换会改掉历史注释里的版本标，锚点匹配要用当前文本。
+
+## 1.2.1-39（1002139）· bug A 修复（末页下滑收起）+ bug B 取证（残影几何）
+- bug A（末页下滑收起）：追踪环实锤下滑被我们的翻页正常接住（PAGESETTLE 到页 2）但 1.4s 后 CC 仍被收起 = 双识别：我们的 pan 与 CCUI 收起 pan（挂在 presentation 容器=overlay 子树之外，子树压制够不到）同时识别同一次触摸。修复：ERSuppressOverlayPans 压制范围升级为整个 CC 窗口；末页快速上拂让位不受影响（那条路 shouldBegin 返 NO，无压制需求）。
+- bug B（收起残影=CC 背板+圆点在而磁贴无）：残影窗口 CCVIS 零条=模块 opacity 全正常，疑为位置偏移（收起/再呈现布局把模块挪出屏）。CCVIS 触发面放宽：首模块呈现位置 vs 模型位置偏差>80pt 也算消失态，新增 posD/nat 几何字段。
