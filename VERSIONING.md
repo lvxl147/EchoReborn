@@ -892,3 +892,7 @@
 ## 1.2.1-61（1002161）· 缓落封口战：CALayer addAnimation 拦截
 - 总根源：ANIMCHAIN 几何重读——子树 d=305-880 而 collection d=0+keys 非空 = collection 的 bounds.origin **显式动画**（CCUI 每轮布局 addAnimation 手动挂回，-54/-57 清了重挂、-58/-59 绕过 setter、-60 关卡只管隐式）。
 - 修复：MSHookMessageEx 全局 swizzle -[CALayer addAnimation:forKey:]——抑制窗口内目标 layer 的 delegate 是 CCUIModuleCollectionView 的动画一律丢弃；独立 dispatch_once 注册（绕过主 %ctor 不执行的坑）。四条动画创建路径全堵：隐式（-60）/animated: 变体（-58）/无标志变体（-59）/显式（本版）。
+
+## 1.2.1-62（1002162）· AA 观察模式：addAnimation 逐笔点名
+- -61 的 delegate 过滤误伤：落位动画（EchoRebornPageSettleSublayerTransform）挂在 collection 的 layer 上（delegate=collection）被丢弃=翻页动画消失，已回退 -60。且缓落动画幸存=其宿主 layer 的 delegate 不是 collection——宿主身份需重新点名。
+- -62：addAnimation hook 改为纯记录——抑制窗口内 CC 家族 layer 的每笔动画（layer 类/delegate 类/keyPath/forKey/duration，限 40 笔）落 ERLogInfo（AA-WATCH 行），翻页动画不受影响。
