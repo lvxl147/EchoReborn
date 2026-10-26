@@ -25895,7 +25895,7 @@ static void ERInstallModuleTapFeedback(UIView *host) {
                         if (multiDump.length < 700) {
                             NSMutableArray<NSString *> *parts = [NSMutableArray array];
                             for (NSUInteger k = 0; k + 1 < members.count; k += 2) {
-                                [parts appendFormat:@"i%lu/a%.1f", (unsigned long)members[k].integerValue, members[k + 1].integerValue / 10.0];
+                                [parts addObject:[NSString stringWithFormat:@"i%lu/a%.1f", (unsigned long)members[k].integerValue, members[k + 1].integerValue / 10.0]];
                             }
                             [multiDump appendFormat:@"{%@}", [parts componentsJoinedByString:@","]];
                         }
