@@ -876,3 +876,7 @@
 ## 1.2.1-57（1002157）· 缓落真凶根修：collection 层动画清除
 - ANIMCHAIN 实锤动画载体 = CCUIModuleCollectionView 自己的 layer（d=0 但 animationKeys 非空，子树整体被平移 305-880pt）。-54 清模块层没够到它。-55 snap 判等无关（动画非 snap 触发）。
 - 修复：滑动路径 + scrub/TAP 路径的落位 completion 对 collection.layer 及其 superview 链 removeAllAnimations——contentOffset/bounds 瞬间跳终值，磁贴瞬间到位。
+
+## 1.2.1-58（1002158）· 缓落终版：滚动抑制窗口
+- 机制闭环：现有 %hook layoutSubviews 的零位锚（offset≠0 即拉回 0）与 CCUI 的动画滚动（contentOffset.y -880→0）互相拉扯 = 缓落合成轨迹。
+- 修复：%hook 内新增 setContentOffset:animated: 覆写——落位后 1.5s 抑制窗口内强制 animated:NO（CCUI 滚动瞬间到位，无拉扯）；两个落位 completion 设 gERDroopSuppressUntil。
