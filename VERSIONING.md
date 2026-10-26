@@ -855,3 +855,9 @@
 - 用户视频逐帧定量：滑到第 3 页落位后 0.3-0.4s 顶部三排以减速曲线下坠约 100pt = CCUI 布局重算的隐式动画（模块 frame 从旧布局位置缓缓落到新位置）。页 4/5 经圆点再滑正常 = 布局已稳定无 frame 差异。
 - 修复：三处落位 completion（滑动编辑态/滑动非编辑态/scrub+TAP+自愈）整体包 performWithoutAnimation——布局 frame 变化立即生效，缓落物理性消失。
 - 教训：文件里存在两份滑动 completion（编辑态/非编辑态），尾部结构不同（一个 prepareGrid 结尾一个 updateTopFade 结尾），包裹必须逐个核对块尾。
+
+## 1.2.1-51（1002151）· 幽灵清理终版：判据 = view.alpha
+- -50 复测缓落仍在 + MODLIST n=51（还在涨）+ MODULE-DEDUPE 零条 = 47/51 个模块 identifier 全是唯一字符串，身份去重永远咬合不了。
+- MODLIST 给出唯一可靠判据：幽灵 view.alpha=0.0（CCUI 替换后写 0），活模块 view.alpha=1.0。
+- 修复：state==2 按 view.alpha<0.01 物理移除幽灵（removeFromParentViewController），MODULE-PHANTOM-REMOVE n/kept/total 追踪。模块数回归真实→页数稳定→第 3 页布局不再因幽灵重排→缓落触发源消失。
+- 复盘：-45/-46/-47 三轮身份去重全错在判据——正确判据（alpha）从第一条 MODLIST 就可见。
