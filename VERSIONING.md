@@ -819,3 +819,7 @@
 ## 1.2.1-42（1002142）· 遮挡检测 v2
 - 12:44:32.754 首次命中 occ=UIView（tr=1 滑动中）= 模型/呈现坐标错位误报 + 0.25s 采样错过收起瞬态。
 - v2：hitTest 改用呈现层位置；tr=1 不判遮挡；命中者落完整父链（点名 UIView 挂在谁下面）。
+
+## 1.2.1-43（1002143）· 残影根修：zPosition 跨层级压制
+- -42 取证抓到覆盖者：CCUIS-OCCLUDE by=UIButton<ERQuickAccessHostView<CCUIHeaderPocketView（CC 顶部状态/快捷区容器）。收起/再呈现后 pocket 布局错乱压住磁贴；磁贴容器与 pocket 非兄弟视图，bringSubviewToFront 无效（OCCLUDE 反复触发实证）。另有 hider UIView 每 0.25s 被反复写 0（写入者在持续作恶）与模块累积 33→45（overlay 泄漏）待后续。
+- 修复：heal 改用 layer.zPosition（跨父级生效）——磁贴容器 z=pocket.zPosition+10、圆点 host +11，一击把内容提到 pocket 之上；OCCLUDE 行加 pocketFrame 取证。
