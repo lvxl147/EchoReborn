@@ -17015,6 +17015,39 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             for (UIGestureRecognizer *suppressed in suppressedGestures) suppressed.enabled = YES;
             ERLogInfo(@"[PAGER] flip start=%lu target=%ld translation=%.1f velocity=%.1f span=%.1f",
                        (unsigned long)startPage, (long)target, translation.y, velocity.y, ERVisualPageSpan());
+            // 1.2.1-60 · 抑制窗口设在落位启动点（不依赖 completion——数据显示
+            // completion 可能不触发，探针因此零条）；覆盖 settle 0.3s + 缓落
+            // 窗口 0.5s，留余量到 1.8s。探针同步搬到这里保证数据必达。
+            gERDroopSuppressUntil = CACurrentMediaTime() + 1.8;
+            if (target >= 2) {
+                NSArray<NSNumber *> *droopDelays = @[@0.45, @0.9, @1.4];
+                for (NSNumber *d in droopDelays) {
+                    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                        UIViewController *ov = overlay;
+                        if (!ov || !ov.view.window) return;
+                        UIScrollView *svD = ERNativeScrollViewForOverlay(ov);
+                        UIViewController *colPD = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
+                        CGFloat colWinYD = -9999.0, m0D = -9999.0, m1D = -9999.0;
+                        if (colPD && colPD.view) {
+                            CALayer *colPresD = colPD.view.layer.presentationLayer;
+                            if (colPresD) colWinYD = [colPresD convertRect:colPD.view.bounds toLayer:nil].origin.y;
+                            NSMutableArray<NSNumber *> *wyD = [NSMutableArray array];
+                            for (UIViewController *mD in ERCollectModuleControllers(ov)) {
+                                if (!mD.view || mD.view.layer.opacity < 0.5) continue;
+                                CALayer *mpD = mD.view.layer.presentationLayer;
+                                if (!mpD) continue;
+                                [wyD addObject:@([mpD convertRect:mD.view.bounds toLayer:nil].origin.y)];
+                            }
+                            [wyD sortUsingSelector:@selector(compare:)];
+                            if (wyD.count > 0) m0D = wyD[0].doubleValue;
+                            if (wyD.count > 1) m1D = wyD[1].doubleValue;
+                        }
+                        ERPagerTrace([NSString stringWithFormat:@"DROOP t=%.2f colWinY=%.1f m0=%.1f m1=%.1f nat=%.1f",
+                                      d.doubleValue, colWinYD, m0D, m1D,
+                                      svD ? svD.contentOffset.y : -9999.0]);
+                    });
+                }
+            }
             // Velocity-aware settle (mirrors the edit-mode branch above). The old
             // path used a fixed-duration curve via setCurrentPage:, so a fast
             // flick to the last page crawled the final stretch into place — the
@@ -23570,6 +23603,18 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     id result = %orig;
     @try { ERApplyCompactGridSpacingToLayoutOptions([(id)result valueForKey:@"layoutOptions"]); } @catch (__unused NSException *exception) {}
     return result;
+}
+
+// 1.2.1-60 · **动画关卡否决（终版）**：CA 的隐式动画必经 actionForLayer:
+// forKey: 查询——返回 NSNull = 该属性变化立即生效、动画根本不创建。
+// 抑制窗口内否决 bounds/position：无论 CCUI 走哪条写入路径（setContentOffset
+// 两个变体、setBounds、布局驱动），布局修正都单帧跳变，缓落从源头消失。
+- (id<CAAction>)actionForLayer:(CALayer *)layer forKey:(NSString *)event {
+    if (CACurrentMediaTime() < gERDroopSuppressUntil &&
+        ([event isEqualToString:@"bounds"] || [event isEqualToString:@"position"])) {
+        return (id<CAAction>)NSNull.null;
+    }
+    return %orig;
 }
 
 // 1.2.1-60 · 抑制窗口内的动画滚动强制瞬时：终态与 CCUI 意图一致，
