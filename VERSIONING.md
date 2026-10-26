@@ -861,3 +861,8 @@
 - MODLIST 给出唯一可靠判据：幽灵 view.alpha=0.0（CCUI 替换后写 0），活模块 view.alpha=1.0。
 - 修复：state==2 按 view.alpha<0.01 物理移除幽灵（removeFromParentViewController），MODULE-PHANTOM-REMOVE n/kept/total 追踪。模块数回归真实→页数稳定→第 3 页布局不再因幽灵重排→缓落触发源消失。
 - 复盘：-45/-46/-47 三轮身份去重全错在判据——正确判据（alpha）从第一条 MODLIST 就可见。
+
+## 1.2.1-52（1002152）· 世代差分采集（纯数据不动删除）
+- -51 alpha 判据灾难：view.alpha=0 = 非当前页活模块的正常状态，alpha 清理删掉第 2+ 页活模块，已回退 -50。
+- 新判据：控制器包裹底层 module 对象（valueForKey:@module），新旧世代控制器共享同一底层对象 = 跨世代分组键（identifier 唯一但底层对象相同）。
+- 1.2.1-52：state==2 落 GEN-MAP（total/groups/multi + 多成员组的 index/alpha 分布），纯采集不动删除。
