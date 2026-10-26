@@ -17057,11 +17057,26 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                         UIViewController *ov = overlay;
                         if (!ov || !ov.view.window) return;
-                        NSArray<UIViewController *> *ms = ERCollectModuleControllers(ov);
+                        // 1.2.1-53b · 只采样当前页的顶部 3 模块（树序前 3 个是第 1 页
+                        // 的模块，与缓落无关——首测采错对象全程静止）。
+                        NSMutableArray<NSDictionary *> *pageMods = [NSMutableArray array];
+                        for (UIViewController *m in ERCollectModuleControllers(ov)) {
+                            if (!m.view) continue;
+                            NSString *identifier = ERModuleIdentifier(m);
+                            NSValue *nativeValue = identifier.length ? gERNativeLayoutRects[identifier] : nil;
+                            if (!nativeValue) continue;
+                            CCUILayoutRect rect = {};
+                            [nativeValue getValue:&rect];
+                            if (ERPageForRect(rect) != gERCurrentPage) continue;
+                            CALayer *pl = m.view.layer.presentationLayer;
+                            [pageMods addObject:@{@"y": @(pl ? pl.position.y : -9999.0), @"oy": @(rect.origin.y)}];
+                        }
+                        [pageMods sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+                            return [@([a[@"oy"] floatValue]) compare:@([b[@"oy"] floatValue])];
+                        }];
                         NSMutableString *ys = [NSMutableString string];
-                        for (NSUInteger k = 0; k < ms.count && k < 3; k++) {
-                            CALayer *pl = ms[k].view.layer.presentationLayer;
-                            [ys appendFormat:@" y%lu=%.1f", (unsigned long)k, pl ? pl.position.y : -9999.0];
+                        for (NSUInteger k = 0; k < pageMods.count && k < 3; k++) {
+                            [ys appendFormat:@" y%lu=%.1f", (unsigned long)k, [pageMods[k][@"y"] floatValue]];
                         }
                         UIScrollView *sv = ERNativeScrollViewForOverlay(ov);
                         UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
