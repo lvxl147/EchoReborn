@@ -4159,15 +4159,23 @@ static CGFloat gERDroopSuppressUntil = 0.0;
 // （-54/-57 无效）。唯一封口点 = addAnimation 本身：抑制窗口内，目标是
 // CCUIModuleCollectionView 的 layer 的动画一律丢弃，bounds 写入瞬间生效。
 static void (*gEROrigCALayerAddAnimation)(CALayer *, SEL, CAAnimation *, id);
+static NSInteger gERAAHookLogCount = 0;
 static void ERCALayerAddAnimationHook(CALayer *self, SEL _cmd, CAAnimation *anim, id key) {
-    if (CACurrentMediaTime() < gERDroopSuppressUntil) {
-        id del = self.delegate;
-        static Class ccCollClass = nil;
-        static dispatch_once_t onceAC;
-        dispatch_once(&onceAC, ^{ ccCollClass = NSClassFromString(@"CCUIModuleCollectionView"); });
-        if (ccCollClass && del && [del isKindOfClass:ccCollClass]) {
-            return;   // 1.2.1-61 · 丢弃：模块集合 layer 在抑制窗口内不接受任何动画
-        }
+    // 1.2.1-62 · **记录模式（-61 的丢弃误伤落位动画后退化为观察）**：抑制
+    // 窗口内，凡挂到 CC 家族 layer 的动画逐笔点名——layer 类、delegate 类、
+    // keyPath、forKey。缓落动画的真实宿主一次复现即现形。
+    if (CACurrentMediaTime() < gERDroopSuppressUntil && gERAAHookLogCount < 40) {
+        @try {
+            NSString *cls = NSStringFromClass(self.class);
+            NSString *dcls = self.delegate ? NSStringFromClass(self.delegate.class) : @"nil";
+            NSString *kp = [anim respondsToSelector:@selector(keyPath)] ? ([(CABasicAnimation *)anim keyPath] ?: @"nil") : @"nil";
+            if ([cls hasPrefix:@"CC"] || [cls hasPrefix:@"UI"] || [cls isEqualToString:@"CALayer"]) {
+                gERAAHookLogCount++;
+                ERLogInfo([NSString stringWithFormat:@"AA-WATCH #%ld layer=%@ del=%@ keyPath=%@ forKey=%@ dur=%.2f",
+                           (long)gERAAHookLogCount, cls, dcls, kp, key ?: @"nil",
+                           anim.duration]);
+            }
+        } @catch (__unused NSException *e) {}
     }
     gEROrigCALayerAddAnimation(self, _cmd, anim, key);
 }
