@@ -4149,6 +4149,10 @@ static CFTimeInterval gEREditExitConsumedUntil = 0;
 static CFTimeInterval gERExpandedChromeRevealUntil = 0;
 static NSUInteger gERCurrentPage = 0;
 static NSUInteger gERPageCount = 1;
+// 1.2.1-58 · 缓落抑制窗口：落位后 1.5s 内，CCUI 对模块集合的动画滚动
+// 强制转瞬时（setContentOffset:animated: 覆写）—— 动画拉扯与零位锚的
+// 合成轨迹就是缓落（ANIMCHAIN/DROOP 双实锤）。
+static CGFloat gERDroopSuppressUntil = 0.0;
 static NSUInteger gEROccupiedPageCount = 1;
 static CGFloat gERPagerInteractiveTranslation = 0.0;
 static NSUInteger gERPagerInteractiveStartPage = 0;
@@ -23558,11 +23562,6 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 %end
-
-// 1.2.1-58 · 缓落抑制窗口：落位后 1.5s 内，CCUI 对模块集合的动画滚动
-// 强制转瞬时（setContentOffset:animated: 覆写）—— 动画拉扯与零位锚的
-// 合成轨迹就是缓落（ANIMCHAIN/DROOP 双实锤）。
-static CGFloat gERDroopSuppressUntil = 0.0;
 
 %hook CCUIModuleCollectionView
 
