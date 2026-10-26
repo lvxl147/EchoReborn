@@ -880,3 +880,7 @@
 ## 1.2.1-58（1002158）· 缓落终版：滚动抑制窗口
 - 机制闭环：现有 %hook layoutSubviews 的零位锚（offset≠0 即拉回 0）与 CCUI 的动画滚动（contentOffset.y -880→0）互相拉扯 = 缓落合成轨迹。
 - 修复：%hook 内新增 setContentOffset:animated: 覆写——落位后 1.5s 抑制窗口内强制 animated:NO（CCUI 滚动瞬间到位，无拉扯）；两个落位 completion 设 gERDroopSuppressUntil。
+
+## 1.2.1-59（1002159）· 缓落根修：非动画 setContentOffset 入口封堵
+- -58 只拦了 animated: 变体；CCUI 在自己的动画块里调 setContentOffset:（无标志）→ bounds.origin 逐帧动画写入（ANIMCHAIN 容器 d=261 keys=- 实锤写入驱动）。
+- 修复：%hook 新增 setContentOffset:（无动画变体）覆写——窗口内 >100pt 大偏移写入忽略（零位锚持有正确位置），小偏移动作禁用事务瞬时应用。
