@@ -828,3 +828,7 @@
 - -43 复测 OCCLUDE 仍反复触发但 pocketFrame 正常（{{0,0},{430,139}} 未盖磁贴区）+ mods 33→45 累积 = 推翻 pocket 布局错乱假设，真因 = **僵尸 overlay 累积**：旧 overlay 收起后 CCUI 把其容器 alpha 写 0（收起态正常行为），看门狗对着僵尸无限自愈与 CCUI 打架；用户看到的「看不见但能点击」= 僵尸 overlay 本体（还挂着圆点/手势）。
 - 修复：① 存活门——overlay 不在窗口 = 僵尸，跳过一切治疗（CCVIS-SKIP）；② 呈现完成时清尸——把不在窗口的旧 overlay 从 gOverlayControllers 移除（OVERLAY-PURGE n/left）；③ CCVIS 加 ovl=总数/在窗 字段。
 - 教训：版本号连锁替换会改历史注释锚点；锚点必须用当前文本 grep 后再写。
+
+## 1.2.1-45（1002145）· bug 4 终版根修：幽灵模块过滤（页数膨胀）
+- -44 数据证伪僵尸 overlay（ovl=1/1、PURGE=0）但抓到决定性线索：TAP p=4（第 5 个圆点）+ RECON pg=4->4 m42=-3872=4*968 = **第 5 页真实存在** + mods=45。真因 = CCUI 每次呈现往 overlay 挂新模块 childViewController，旧控制器视图被移出（window=nil）但控制器仍挂载 → 模块 33→45 跨会话累积 → 页数按幽灵模块推导膨胀到 5+ → 圆点多出空页 → 长按圆点导航到空页 = 看不见但能点击。
+- 修复：ERCollectModuleControllers 过滤——只保留 isViewLoaded && view.window != nil 的模块；幽灵计数落 COLLECT-GHOST n/kept（变化时才落）。页数/圆点/可见性回归真实。
