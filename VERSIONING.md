@@ -823,3 +823,8 @@
 ## 1.2.1-43（1002143）· 残影根修：zPosition 跨层级压制
 - -42 取证抓到覆盖者：CCUIS-OCCLUDE by=UIButton<ERQuickAccessHostView<CCUIHeaderPocketView（CC 顶部状态/快捷区容器）。收起/再呈现后 pocket 布局错乱压住磁贴；磁贴容器与 pocket 非兄弟视图，bringSubviewToFront 无效（OCCLUDE 反复触发实证）。另有 hider UIView 每 0.25s 被反复写 0（写入者在持续作恶）与模块累积 33→45（overlay 泄漏）待后续。
 - 修复：heal 改用 layer.zPosition（跨父级生效）——磁贴容器 z=pocket.zPosition+10、圆点 host +11，一击把内容提到 pocket 之上；OCCLUDE 行加 pocketFrame 取证。
+
+## 1.2.1-44（1002144）· 残影根修二：僵尸 overlay 清理
+- -43 复测 OCCLUDE 仍反复触发但 pocketFrame 正常（{{0,0},{430,139}} 未盖磁贴区）+ mods 33→45 累积 = 推翻 pocket 布局错乱假设，真因 = **僵尸 overlay 累积**：旧 overlay 收起后 CCUI 把其容器 alpha 写 0（收起态正常行为），看门狗对着僵尸无限自愈与 CCUI 打架；用户看到的「看不见但能点击」= 僵尸 overlay 本体（还挂着圆点/手势）。
+- 修复：① 存活门——overlay 不在窗口 = 僵尸，跳过一切治疗（CCVIS-SKIP）；② 呈现完成时清尸——把不在窗口的旧 overlay 从 gOverlayControllers 移除（OVERLAY-PURGE n/left）；③ CCVIS 加 ovl=总数/在窗 字段。
+- 教训：版本号连锁替换会改历史注释锚点；锚点必须用当前文本 grep 后再写。
