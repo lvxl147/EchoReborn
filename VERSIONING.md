@@ -896,3 +896,7 @@
 ## 1.2.1-62（1002162）· AA 观察模式：addAnimation 逐笔点名
 - -61 的 delegate 过滤误伤：落位动画（EchoRebornPageSettleSublayerTransform）挂在 collection 的 layer 上（delegate=collection）被丢弃=翻页动画消失，已回退 -60。且缓落动画幸存=其宿主 layer 的 delegate 不是 collection——宿主身份需重新点名。
 - -62：addAnimation hook 改为纯记录——抑制窗口内 CC 家族 layer 的每笔动画（layer 类/delegate 类/keyPath/forKey/duration，限 40 笔）落 ERLogInfo（AA-WATCH 行），翻页动画不受影响。
+
+## 1.2.1-63（1002163）· AA hook 修复：独立 constructor + ERPagerTrace 通道
+- -62 的 AA-WATCH 零条根因：① 注册在主 %ctor 上下文（本项目主 %ctor 不执行的老坑）；② ERLogInfo 走 ERLogMirror 环不可靠。另：计数器 40 笔永不重置。
+- 修复：① hook 实现移至 ERPagerTrace 定义之后 + 独立 __attribute__((constructor)) 注册；② AA-WATCH 改走 ERPagerTrace（160 行环，我方拉取通道）；③ 计数器随窗口过期懒重置。观察模式保持纯记录不丢弃。
