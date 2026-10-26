@@ -25857,16 +25857,6 @@ static void ERInstallModuleTapFeedback(UIView *host) {
                     ERPagerTrace([NSString stringWithFormat:@"MODLIST kept=%lu %@",
                                   (unsigned long)(mods.count - removed), moduleDump]);
                 }
-                NSInteger removed = 0;
-                for (UIViewController *oldModule in dupes) {
-                    [oldModule.view removeFromSuperview];
-                    [oldModule removeFromParentViewController];
-                    removed++;
-                }
-                if (removed > 0) {
-                    ERPagerTrace([NSString stringWithFormat:@"MODULE-DEDUPE removed=%ld kept=%lu",
-                                  (long)removed, (unsigned long)(mods.count - removed)]);
-                }
             } @catch (__unused NSException *e) {}
             // 1.2.1-51 · 呈现完成：显式恢复内容层透明度（收起时被淡出为 0），
             // 必须在任何自愈/可见性逻辑之前恢复，避免打架。
