@@ -864,3 +864,7 @@
 - DROOP 窗口坐标实锤：滑到第 3 页落位瞬间磁贴窗口位置差一页（m0=1061 vs 终点 160），0.5s 动画归位=缓落。colWinY 恒 139=collection 不动，磁贴相对 collection 的 frame 差一页。
 - 根因：第 3 页顶部三排模块的布局归属曾变动（挤到下一页又拉回），CCUI 布局重算以 UICollectionView cell move 动画（0.5s）归位。-50 的 performWithoutAnimation+指定键移除管不住 UICollectionView 自己的 move 动画。
 - 修复：滑动路径（非编辑态）与 scrub/TAP 路径的落位 completion 对当前页模块 removeAllAnimations 全清。编辑态分支不加（防误伤编辑动画）。
+
+## 1.2.1-55（1002155）· 缓落触发源切除：snap 补写判等跳过
+- -54 removeAllAnimations 无效 = 移动不是 CA 动画而是逐段 frame 写入。DROOP 下坠窗口（0-0.5s）与 snap 补写窗口（0/0.08/0.24/0.42s）完全重合 = 每次补写触发 CCUI scrollViewDidScroll → 内部修正内容（带动画）→ 磁贴逐段归位。
+- 修复：snap 补写前判等（contentOffset 已在目标 0.5pt 内则跳过写入）——拖拽期间 MAIN-PIN 已逐帧钉位，补写本就多余。不写=不触发=缓落源切除。
