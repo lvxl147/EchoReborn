@@ -859,3 +859,8 @@
 ## 1.2.1-53（1002153）· 缓落数据采集版（基底=-50 精确恢复）
 - 决策：-50 为新基线（-51 误删事故 + 47/51 累积为 BFS 重复计数误读，GEN-MAP 实证 12 模块稳定无累积）。源码从 -50 commit（d72f6384）整树恢复。
 - 本版只加缓落探针：滑到第 2+ 页落位后 1.2s 内采样顶部 3 模块呈现位置 + 外层滚动/collection offset/contentInset.top（DROOP 行×6），下坠的动画层直接指名。零逻辑改动。
+
+## 1.2.1-54（1002154）· 缓落根修：落位动画全清
+- DROOP 窗口坐标实锤：滑到第 3 页落位瞬间磁贴窗口位置差一页（m0=1061 vs 终点 160），0.5s 动画归位=缓落。colWinY 恒 139=collection 不动，磁贴相对 collection 的 frame 差一页。
+- 根因：第 3 页顶部三排模块的布局归属曾变动（挤到下一页又拉回），CCUI 布局重算以 UICollectionView cell move 动画（0.5s）归位。-50 的 performWithoutAnimation+指定键移除管不住 UICollectionView 自己的 move 动画。
+- 修复：滑动路径（非编辑态）与 scrub/TAP 路径的落位 completion 对当前页模块 removeAllAnimations 全清。编辑态分支不加（防误伤编辑动画）。
