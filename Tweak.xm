@@ -14891,8 +14891,7 @@ static void ERDumpInvisibilityScene(UIViewController *overlay) {
                   (int)gEditModeActive, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
                   (int)overlay.view.isHidden, overlay.view.alpha, hider,
                   posDelta, outerSV ? outerSV.contentOffset.y : -9999.0,
-                  occluder ?: @"none",
-                  (unsigned long)ovlTotal, (int)ovlInWin]);
+                  occluder ?: @"none"]);
 }
 
 static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
