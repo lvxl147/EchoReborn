@@ -17057,27 +17057,27 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                         UIViewController *ov = overlay;
                         if (!ov || !ov.view.window) return;
-                        // 1.2.1-53b · 只采样当前页的顶部 3 模块（树序前 3 个是第 1 页
-                        // 的模块，与缓落无关——首测采错对象全程静止）。
+                        // 1.2.1-53c · 只采样当前页的顶部 3 模块。判据 = 落位后的
+                        // layer.opacity（当前页=1、其他页=0，可见性系统写入，落位
+                        // 完成后恒定成立）—— 比 rect 字典/页码匹配稳健。
                         NSMutableArray<NSDictionary *> *pageMods = [NSMutableArray array];
+                        NSUInteger scanned = 0;
                         for (UIViewController *m in ERCollectModuleControllers(ov)) {
                             if (!m.view) continue;
-                            NSString *identifier = ERModuleIdentifier(m);
-                            NSValue *nativeValue = identifier.length ? gERNativeLayoutRects[identifier] : nil;
-                            if (!nativeValue) continue;
-                            CCUILayoutRect rect = {};
-                            [nativeValue getValue:&rect];
-                            if (ERPageForRect(rect) != gERCurrentPage) continue;
+                            scanned++;
+                            if (m.view.layer.opacity < 0.5) continue;
                             CALayer *pl = m.view.layer.presentationLayer;
-                            [pageMods addObject:@{@"y": @(pl ? pl.position.y : -9999.0), @"oy": @(rect.origin.y)}];
+                            [pageMods addObject:@{@"y": @(pl ? pl.position.y : -9999.0)}];
                         }
                         [pageMods sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-                            return [@([a[@"oy"] floatValue]) compare:@([b[@"oy"] floatValue])];
+                            return [@([a[@"y"] floatValue]) compare:@([b[@"y"] floatValue])];
                         }];
                         NSMutableString *ys = [NSMutableString string];
                         for (NSUInteger k = 0; k < pageMods.count && k < 3; k++) {
                             [ys appendFormat:@" y%lu=%.1f", (unsigned long)k, [pageMods[k][@"y"] floatValue]];
                         }
+                        ERPagerTrace([NSString stringWithFormat:@"DROOPSCAN scanned=%lu onpage=%lu",
+                                      (unsigned long)scanned, (unsigned long)pageMods.count]);
                         UIScrollView *sv = ERNativeScrollViewForOverlay(ov);
                         UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
                         UIScrollView *colSV = (UIScrollView *)colP.view;
