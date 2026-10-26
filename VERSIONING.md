@@ -841,3 +841,8 @@
 ## 1.2.1-47（1002147）· 去重键回退 + 模块清单转储
 - -46 MODULE-DEDUPE 零条 = ERModuleIdentifier 对幽灵模块返回空，去重键失效。
 - v2：去重键回退为「identifier 优先，空则类名」；state==2 转储 MODLIST（前 16 模块的 class/identifier 长度/hidden/alpha）——看清幽灵的形态。
+
+## 1.2.1-48（1002148）· 残影根修：收起瞬间隐藏我方副本层
+- 用户关键观察：控制中心面板退出后，磁贴在桌面停留 0.5-1 秒。嫌疑=我方常驻副本层（快捷指令磁贴渲染副本 duplicate host 等）——其隐藏动作挂在「同步窗口」里，收起时窗口已结束无人隐藏 = 副本比面板多活 0.5-1s。
+- 修复：DISM-CLEAN（state 3/0）第一时间隐藏 duplicate host（181052）/快捷区 host（181000）/圆点 host；collection 属面板层级随面板自然退场不动。
+- 坑：kERQuickAccessHostTag 不存在（快捷区现役 tag=181000）；indicatorHost 是 UIView 不是 UIViewController（锚点笔误）。
