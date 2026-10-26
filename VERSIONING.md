@@ -837,3 +837,7 @@
 - -45 窗口过滤失效（COLLECT-GHOST 零条）+ mods=47 + PAGESETTLE to=-4840=第 6 页 + cur=5 + pocketFrame 139→155。真相：幽灵模块视图没离开视图树（CCUI 把旧模块视图藏在原地），窗口过滤抓不到。真因=持久化 overlay + CCUI 每次呈现追加新模块控制器 → 模块 33→45→47 累积 → 页数推导 6+ → 圆点 6 个 → 导航到空页 = 看不见但能点击。
 - 修复：state==2 呈现完成时按 identifier 去重——同名模块只留最后出现的（最新在屏），旧的 removeFromParentViewController+view.removeFromSuperview 物理移除（MODULE-DEDUPE removed/kept 追踪）。
 - 教训：版本标链式替换导致锚点三次失配——大文件锚点必须先 grep 当前文本。
+
+## 1.2.1-47（1002147）· 去重键回退 + 模块清单转储
+- -46 MODULE-DEDUPE 零条 = ERModuleIdentifier 对幽灵模块返回空，去重键失效。
+- v2：去重键回退为「identifier 优先，空则类名」；state==2 转储 MODLIST（前 16 模块的 class/identifier 长度/hidden/alpha）——看清幽灵的形态。
