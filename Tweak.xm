@@ -6297,15 +6297,6 @@ static void ERCALayerAddAnimationHook(CALayer *self, SEL _cmd, CAAnimation *anim
     gEROrigCALayerAddAnimation(self, _cmd, anim, key);
 }
 
-// 1.2.1-63 · 独立 constructor 注册（主 %ctor 不执行的坑）
-__attribute__((constructor)) static void ERAddAnimationHookCtor(void) {
-    @try {
-        Class layerCls = objc_getClass("CALayer");
-        if (layerCls) {
-            MSHookMessageEx(layerCls, @selector(addAnimation:forKey:), (IMP)ERCALayerAddAnimationHook, (IMP *)&gEROrigCALayerAddAnimation);
-        }
-    } @catch (__unused NSException *e) {}
-}
 
 static void ERLogRecord(NSString *level, NSString *message) {
     if (!gERLoggingEnabled || !message.length) return;
@@ -36966,3 +36957,13 @@ static void ERInstallForensicsKit(void) {
     %orig;
 }
 %end
+
+// 1.2.1-63 · 独立 constructor 注册（主 %ctor 不执行的坑）
+__attribute__((constructor)) static void ERAddAnimationHookCtor(void) {
+    @try {
+        Class layerCls = objc_getClass("CALayer");
+        if (layerCls) {
+            MSHookMessageEx(layerCls, @selector(addAnimation:forKey:), (IMP)ERCALayerAddAnimationHook, (IMP *)&gEROrigCALayerAddAnimation);
+        }
+    } @catch (__unused NSException *e) {}
+}
