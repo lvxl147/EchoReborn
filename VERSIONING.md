@@ -872,3 +872,7 @@
 ## 1.2.1-56（1002156）· 动画源点名探针（纯采集）
 - DROOP 实锤缓落=顶部磁贴窗口 Y 1036→157 动画 0.5s（垂直 880pt 归位），colWinY/nat 恒定=collection 不动，动画在磁贴内部层级。-54 清模块层无效=动画载体是别的层。
 - v6：t=0.15-0.45 采样顶部磁贴 superview 链逐层「呈现 vs 模型」Y 差 + animationKeys + 类名——动画载体与键名直接现形。
+
+## 1.2.1-57（1002157）· 缓落真凶根修：collection 层动画清除
+- ANIMCHAIN 实锤动画载体 = CCUIModuleCollectionView 自己的 layer（d=0 但 animationKeys 非空，子树整体被平移 305-880pt）。-54 清模块层没够到它。-55 snap 判等无关（动画非 snap 触发）。
+- 修复：滑动路径 + scrub/TAP 路径的落位 completion 对 collection.layer 及其 superview 链 removeAllAnimations——contentOffset/bounds 瞬间跳终值，磁贴瞬间到位。
