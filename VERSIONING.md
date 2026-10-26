@@ -832,3 +832,8 @@
 ## 1.2.1-45（1002145）· bug 4 终版根修：幽灵模块过滤（页数膨胀）
 - -44 数据证伪僵尸 overlay（ovl=1/1、PURGE=0）但抓到决定性线索：TAP p=4（第 5 个圆点）+ RECON pg=4->4 m42=-3872=4*968 = **第 5 页真实存在** + mods=45。真因 = CCUI 每次呈现往 overlay 挂新模块 childViewController，旧控制器视图被移出（window=nil）但控制器仍挂载 → 模块 33→45 跨会话累积 → 页数按幽灵模块推导膨胀到 5+ → 圆点多出空页 → 长按圆点导航到空页 = 看不见但能点击。
 - 修复：ERCollectModuleControllers 过滤——只保留 isViewLoaded && view.window != nil 的模块；幽灵计数落 COLLECT-GHOST n/kept（变化时才落）。页数/圆点/可见性回归真实。
+
+## 1.2.1-46（1002146）· bug 4 终版根修：模块 identifier 去重
+- -45 窗口过滤失效（COLLECT-GHOST 零条）+ mods=47 + PAGESETTLE to=-4840=第 6 页 + cur=5 + pocketFrame 139→155。真相：幽灵模块视图没离开视图树（CCUI 把旧模块视图藏在原地），窗口过滤抓不到。真因=持久化 overlay + CCUI 每次呈现追加新模块控制器 → 模块 33→45→47 累积 → 页数推导 6+ → 圆点 6 个 → 导航到空页 = 看不见但能点击。
+- 修复：state==2 呈现完成时按 identifier 去重——同名模块只留最后出现的（最新在屏），旧的 removeFromParentViewController+view.removeFromSuperview 物理移除（MODULE-DEDUPE removed/kept 追踪）。
+- 教训：版本标链式替换导致锚点三次失配——大文件锚点必须先 grep 当前文本。
