@@ -888,3 +888,7 @@
 ## 1.2.1-60（1002160）· 缓落终版：actionForLayer 关卡否决
 - 前四轮失败复盘：-54 清错层/-55 拦错触发/-58 拦错变体/-59 探针挂错分支（编辑态 completion，正常滑动不经过，缓落轨迹从未采到）。
 - 终版：① %hook CCUIModuleCollectionView 加 actionForLayer:forKey:——抑制窗口内对 bounds/position 返回 NSNull（CA 隐式动画唯一必经关卡，事前否决而非事后清除，覆盖一切写入路径）；② 抑制窗口设在落位启动点（now+1.8s，不依赖 completion）；③ 探针同步搬到启动点（+0.45/0.9/1.4s）。
+
+## 1.2.1-61（1002161）· 缓落封口战：CALayer addAnimation 拦截
+- 总根源：ANIMCHAIN 几何重读——子树 d=305-880 而 collection d=0+keys 非空 = collection 的 bounds.origin **显式动画**（CCUI 每轮布局 addAnimation 手动挂回，-54/-57 清了重挂、-58/-59 绕过 setter、-60 关卡只管隐式）。
+- 修复：MSHookMessageEx 全局 swizzle -[CALayer addAnimation:forKey:]——抑制窗口内目标 layer 的 delegate 是 CCUIModuleCollectionView 的动画一律丢弃；独立 dispatch_once 注册（绕过主 %ctor 不执行的坑）。四条动画创建路径全堵：隐式（-60）/animated: 变体（-58）/无标志变体（-59）/显式（本版）。
