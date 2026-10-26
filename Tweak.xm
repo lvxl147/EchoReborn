@@ -17060,29 +17060,37 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                         // 1.2.1-53c · 只采样当前页的顶部 3 模块。判据 = 落位后的
                         // layer.opacity（当前页=1、其他页=0，可见性系统写入，落位
                         // 完成后恒定成立）—— 比 rect 字典/页码匹配稳健。
-                        NSMutableArray<NSDictionary *> *pageMods = [NSMutableArray array];
-                        NSUInteger scanned = 0;
-                        for (UIViewController *m in ERCollectModuleControllers(ov)) {
-                            if (!m.view) continue;
-                            scanned++;
-                            if (m.view.layer.opacity < 0.5) continue;
-                            CALayer *pl = m.view.layer.presentationLayer;
-                            [pageMods addObject:@{@"y": @(pl ? pl.position.y : -9999.0)}];
+                        // 1.2.1-53d · 改量窗口坐标：position.y 是父视图局部坐标，
+                        // 缓落移动的是整个内容（sublayer/scroll），局部坐标恒定
+                        // 量不到。窗口坐标 = 经呈现层转换（含全部祖先变换）的
+                        // 真实视觉位置 —— 缓落必然表现为 colWinY 漂移。
+                        UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
+                        CGFloat colWinY = -9999.0, m0WinY = -9999.0, m1WinY = -9999.0, m2WinY = -9999.0;
+                        if (colP && colP.view) {
+                            CALayer *colPres = colP.view.layer.presentationLayer;
+                            if (colPres) {
+                                CGRect colWin = [colPres convertRect:colP.view.bounds toView:nil];
+                                colWinY = colWin.origin.y;
+                            }
+                            NSMutableArray<NSNumber *> *winYs = [NSMutableArray array];
+                            for (UIViewController *m in ERCollectModuleControllers(ov)) {
+                                if (!m.view || m.view.layer.opacity < 0.5) continue;
+                                CALayer *mp = m.view.layer.presentationLayer;
+                                if (!mp) continue;
+                                CGRect mWin = [mp convertRect:m.view.bounds toView:nil];
+                                [winYs addObject:@(mWin.origin.y)];
+                            }
+                            [winYs sortUsingSelector:@selector(compare:)];
+                            if (winYs.count > 0) m0WinY = winYs[0].doubleValue;
+                            if (winYs.count > 1) m1WinY = winYs[1].doubleValue;
+                            if (winYs.count > 2) m2WinY = winYs[2].doubleValue;
                         }
-                        [pageMods sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-                            return [@([a[@"y"] floatValue]) compare:@([b[@"y"] floatValue])];
-                        }];
-                        NSMutableString *ys = [NSMutableString string];
-                        for (NSUInteger k = 0; k < pageMods.count && k < 3; k++) {
-                            [ys appendFormat:@" y%lu=%.1f", (unsigned long)k, [pageMods[k][@"y"] floatValue]];
-                        }
-                        ERPagerTrace([NSString stringWithFormat:@"DROOPSCAN scanned=%lu onpage=%lu",
-                                      (unsigned long)scanned, (unsigned long)pageMods.count]);
                         UIScrollView *sv = ERNativeScrollViewForOverlay(ov);
                         UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
                         UIScrollView *colSV = (UIScrollView *)colP.view;
-                        ERPagerTrace([NSString stringWithFormat:@"DROOP t=%.2f%@ nat=%.1f colOfs=%.1f insetTop=%.1f",
-                                      d.doubleValue, ys,
+                        UIScrollView *colSV = (UIScrollView *)colP.view;
+                        ERPagerTrace([NSString stringWithFormat:@"DROOP t=%.2f colWinY=%.1f m0=%.1f m1=%.1f m2=%.1f nat=%.1f colOfs=%.1f insetTop=%.1f",
+                                      d.doubleValue, colWinY, m0WinY, m1WinY, m2WinY,
                                       sv ? sv.contentOffset.y : -9999.0,
                                       colSV ? colSV.contentOffset.y : -9999.0,
                                       sv ? sv.contentInset.top : -9999.0]);
