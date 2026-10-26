@@ -850,3 +850,8 @@
 ## 1.2.1-49（1002149）· 残影根修终版：内容层统一淡出生命周期
 - 用户关键观察定方向：第一页亮度模块无感（系统自渲染跟随面板退场）、页码越大停留越久（内容层 opacity 恒 1 无人淡出，按模块排队的延迟清理逐页跑完）。用户裁决：0.3s 内消失即可。
 - 修复：① state 3（收起启动）collection.layer.opacity 0.2s 统一淡出（CABasicAnimation ERDismissFade，fillMode forwards）；② state 0 兜底切 0；③ state 2（呈现完成）显式恢复 opacity=1（在任何自愈前，避免打架）。
+
+## 1.2.1-50（1002150）· 缓落根修：落位 completion 禁隐式布局动画
+- 用户视频逐帧定量：滑到第 3 页落位后 0.3-0.4s 顶部三排以减速曲线下坠约 100pt = CCUI 布局重算的隐式动画（模块 frame 从旧布局位置缓缓落到新位置）。页 4/5 经圆点再滑正常 = 布局已稳定无 frame 差异。
+- 修复：三处落位 completion（滑动编辑态/滑动非编辑态/scrub+TAP+自愈）整体包 performWithoutAnimation——布局 frame 变化立即生效，缓落物理性消失。
+- 教训：文件里存在两份滑动 completion（编辑态/非编辑态），尾部结构不同（一个 prepareGrid 结尾一个 updateTopFade 结尾），包裹必须逐个核对块尾。
