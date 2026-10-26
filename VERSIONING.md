@@ -900,3 +900,7 @@
 ## 1.2.1-63（1002163）· AA hook 修复：独立 constructor + ERPagerTrace 通道
 - -62 的 AA-WATCH 零条根因：① 注册在主 %ctor 上下文（本项目主 %ctor 不执行的老坑）；② ERLogInfo 走 ERLogMirror 环不可靠；③ 计数器 40 笔永不重置。另版本号链式替换多次失配（-62 空推/-63 第一次空推），已显式对齐。
 - 修复：① hook 实现移至 ERPagerTrace 定义之后 + 独立 __attribute__((constructor)) 注册；② AA-WATCH 改走 ERPagerTrace（160 行环，拉取通道）；③ 计数器随窗口过期懒重置。观察模式保持纯记录不丢弃。
+
+## 1.2.1-64（1002164）· addAnimation hook 拆独立 .xm（绕 Logos group 结构）
+- -63 的 Logos 编译错误 non-initialized hook group: _ungrouped = Tweak.xm 内的 constructor 与 %hook group 初始化次序冲突。
+- 修复：hook 实现+constructor 拆到独立 ERAddAnimHook.xm（无 %hook 块，Logos 独立编译）；Tweak.xm 的 ERPagerTrace/gERDroopSuppressUntil 去 static 供 extern；Makefile FILES 加该文件。观察模式纯记录。
