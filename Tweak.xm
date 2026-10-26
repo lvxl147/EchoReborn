@@ -17089,7 +17089,12 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                                 if (!mp) continue;
                                 CGRect mWin = [mp convertRect:m.view.bounds toLayer:nil];
                                 [winYs addObject:@(mWin.origin.y)];
-                                if (!topModule || mWin.origin.y < ((CALayer *)[[topModule.view.layer presentationLayer] convertRect:topModule.view.bounds toLayer:nil]).origin.y) topModule = m;
+                                CGFloat curTopY = -9999.0;
+                                if (topModule) {
+                                    CALayer *tpres = topModule.view.layer.presentationLayer;
+                                    if (tpres) curTopY = [tpres convertRect:topModule.view.bounds toLayer:nil].origin.y;
+                                }
+                                if (!topModule || mWin.origin.y < curTopY) topModule = m;
                             }
                             [winYs sortUsingSelector:@selector(compare:)];
                             if (winYs.count > 0) m0WinY = winYs[0].doubleValue;
