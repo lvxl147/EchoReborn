@@ -17065,10 +17065,11 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                         }
                         UIScrollView *sv = ERNativeScrollViewForOverlay(ov);
                         UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
+                        UIScrollView *colSV = (UIScrollView *)colP.view;
                         ERPagerTrace([NSString stringWithFormat:@"DROOP t=%.2f%@ nat=%.1f colOfs=%.1f insetTop=%.1f",
                                       d.doubleValue, ys,
                                       sv ? sv.contentOffset.y : -9999.0,
-                                      colP ? colP.view.contentOffset.y : -9999.0,
+                                      colSV ? colSV.contentOffset.y : -9999.0,
                                       sv ? sv.contentInset.top : -9999.0]);
                     });
                 }
