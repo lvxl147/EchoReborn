@@ -884,3 +884,7 @@
 ## 1.2.1-59（1002159）· 缓落根修：非动画 setContentOffset 入口封堵
 - -58 只拦了 animated: 变体；CCUI 在自己的动画块里调 setContentOffset:（无标志）→ bounds.origin 逐帧动画写入（ANIMCHAIN 容器 d=261 keys=- 实锤写入驱动）。
 - 修复：%hook 新增 setContentOffset:（无动画变体）覆写——窗口内 >100pt 大偏移写入忽略（零位锚持有正确位置），小偏移动作禁用事务瞬时应用。
+
+## 1.2.1-60（1002160）· 缓落终版：actionForLayer 关卡否决
+- 前四轮失败复盘：-54 清错层/-55 拦错触发/-58 拦错变体/-59 探针挂错分支（编辑态 completion，正常滑动不经过，缓落轨迹从未采到）。
+- 终版：① %hook CCUIModuleCollectionView 加 actionForLayer:forKey:——抑制窗口内对 bounds/position 返回 NSNull（CA 隐式动画唯一必经关卡，事前否决而非事后清除，覆盖一切写入路径）；② 抑制窗口设在落位启动点（now+1.8s，不依赖 completion）；③ 探针同步搬到启动点（+0.45/0.9/1.4s）。
