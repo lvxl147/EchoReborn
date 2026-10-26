@@ -846,3 +846,7 @@
 - 用户关键观察：控制中心面板退出后，磁贴在桌面停留 0.5-1 秒。嫌疑=我方常驻副本层（快捷指令磁贴渲染副本 duplicate host 等）——其隐藏动作挂在「同步窗口」里，收起时窗口已结束无人隐藏 = 副本比面板多活 0.5-1s。
 - 修复：DISM-CLEAN（state 3/0）第一时间隐藏 duplicate host（181052）/快捷区 host（181000）/圆点 host；collection 属面板层级随面板自然退场不动。
 - 坑：kERQuickAccessHostTag 不存在（快捷区现役 tag=181000）；indicatorHost 是 UIView 不是 UIViewController（锚点笔误）。
+
+## 1.2.1-49（1002149）· 残影根修终版：内容层统一淡出生命周期
+- 用户关键观察定方向：第一页亮度模块无感（系统自渲染跟随面板退场）、页码越大停留越久（内容层 opacity 恒 1 无人淡出，按模块排队的延迟清理逐页跑完）。用户裁决：0.3s 内消失即可。
+- 修复：① state 3（收起启动）collection.layer.opacity 0.2s 统一淡出（CABasicAnimation ERDismissFade，fillMode forwards）；② state 0 兜底切 0；③ state 2（呈现完成）显式恢复 opacity=1（在任何自愈前，避免打架）。
