@@ -17057,19 +17057,18 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                         UIViewController *ov = overlay;
                         if (!ov || !ov.view.window) return;
-                        // 1.2.1-53c · 只采样当前页的顶部 3 模块。判据 = 落位后的
-                        // layer.opacity（当前页=1、其他页=0，可见性系统写入，落位
-                        // 完成后恒定成立）—— 比 rect 字典/页码匹配稳健。
-                        // 1.2.1-53d · 改量窗口坐标：position.y 是父视图局部坐标，
-                        // 缓落移动的是整个内容（sublayer/scroll），局部坐标恒定
-                        // 量不到。窗口坐标 = 经呈现层转换（含全部祖先变换）的
-                        // 真实视觉位置 —— 缓落必然表现为 colWinY 漂移。
+                        // 1.2.1-53d · 窗口坐标测量：position.y 是父视图局部坐标，
+                        // 缓落移动的是整个内容（sublayer/scroll），局部坐标恒定。
+                        // 窗口坐标 = 呈现层 convertRect:toLayer:nil（含全部祖先
+                        // 变换的真实视觉位置），缓落必然表现为 colWinY 漂移。
+                        UIScrollView *sv = ERNativeScrollViewForOverlay(ov);
                         UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
+                        UIScrollView *colSV = colP ? (UIScrollView *)colP.view : nil;
                         CGFloat colWinY = -9999.0, m0WinY = -9999.0, m1WinY = -9999.0, m2WinY = -9999.0;
                         if (colP && colP.view) {
                             CALayer *colPres = colP.view.layer.presentationLayer;
                             if (colPres) {
-                                CGRect colWin = [colPres convertRect:colP.view.bounds toView:nil];
+                                CGRect colWin = [colPres convertRect:colP.view.bounds toLayer:nil];
                                 colWinY = colWin.origin.y;
                             }
                             NSMutableArray<NSNumber *> *winYs = [NSMutableArray array];
@@ -17077,7 +17076,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                                 if (!m.view || m.view.layer.opacity < 0.5) continue;
                                 CALayer *mp = m.view.layer.presentationLayer;
                                 if (!mp) continue;
-                                CGRect mWin = [mp convertRect:m.view.bounds toView:nil];
+                                CGRect mWin = [mp convertRect:m.view.bounds toLayer:nil];
                                 [winYs addObject:@(mWin.origin.y)];
                             }
                             [winYs sortUsingSelector:@selector(compare:)];
@@ -17085,10 +17084,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                             if (winYs.count > 1) m1WinY = winYs[1].doubleValue;
                             if (winYs.count > 2) m2WinY = winYs[2].doubleValue;
                         }
-                        UIScrollView *sv = ERNativeScrollViewForOverlay(ov);
-                        UIViewController *colP = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), ov);
-                        UIScrollView *colSV = (UIScrollView *)colP.view;
-                        UIScrollView *colSV = (UIScrollView *)colP.view;
                         ERPagerTrace([NSString stringWithFormat:@"DROOP t=%.2f colWinY=%.1f m0=%.1f m1=%.1f m2=%.1f nat=%.1f colOfs=%.1f insetTop=%.1f",
                                       d.doubleValue, colWinY, m0WinY, m1WinY, m2WinY,
                                       sv ? sv.contentOffset.y : -9999.0,
