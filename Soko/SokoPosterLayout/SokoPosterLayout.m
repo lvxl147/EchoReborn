@@ -120,10 +120,18 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 	if (CGRectIsNull(row) || CGRectIsNull(stockRow)) return frame;
 
-	frame.origin.y += CGRectGetMinY(row) - CGRectGetMinY(stockRow);
+	// 1.2.1-102 · **边框不跟随的真凶：这里二次位移了。**
+	//   放开 SokoTrace 的 32 码上限后第一次真正拿到 60~63（此前"恒为 0"是假阴性）：
+	//     60=212 61=221 62=221 → reticle.y == row.minY - 9
+	//     60=719 61=728 62=221 → reticle.y == row.minY - 9
+	//   **系统自己就是按我们改过的行算虚线框的**（reticle.y 恒等于 row.minY-9）。
+	//   再叠加 (row - stockRow) 就成了二次位移：
+	//     偏移=顶部(-507) 时 delta=0，侥幸正确（这就是"滑到上面边框正常"）；
+	//     偏移=底部(0)    时 delta=+507 → 719+507=1226 → 飞出屏幕
+	//     —— 正是用户说的"滑动到下面，直接变为不显示"。
+	//   所以这里什么都不做，直接把系统算好的 frame 原样返回。
 	SokoTrace(63, (long)llround(frame.origin.y));
 	return frame;
-
 }
 
 + (CGRect)editingRowFrame {

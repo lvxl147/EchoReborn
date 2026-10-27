@@ -1093,3 +1093,22 @@
 - 新增 POSTER-SHAPE / POSTER-PATH-SHAPE：把 configuration 与 _path 对象自身（含父类）
   的属性逐个读一遍落盘，用于找一个真正唯一的键（PRSServerPosterPath 上多半有 UUID）。
 - 提交来源区分：17=setComplicationLayout:、19=UIApplication sendAction、20=UIButton 标题。
+
+## 1.2.1-102（1002202）· 边框跟随修好 + 壁纸键换正解 + 方法表落盘
+**边框（虚线 reticle）——真凶是二次位移，已修**：
+- 放开 SokoTrace 32 码上限后，60~63 第一次真正有数据（此前"iOS 17.2.1 不调用
+  complicationRowElementEditingReticleFrameWithBoundingRect:"是**假阴性**）：
+  `60=212 61=221 62=221`、`60=719 61=728 62=221` —— reticle.y **恒等于 row.minY - 9**，
+  即系统自己就是按**我们改过的行**算虚线框的。
+- 于是 `frame.y += row - stockRow` 是二次位移：偏移=顶部时 delta=0 侥幸正确
+  （"滑到上面边框正常"）；偏移=底部时 delta=+507 → 719+507=1226 → 飞出屏幕
+  （"滑动到下面边框直接不显示"）。
+- 修复：reticleFrameByAdjustingFrame 不再叠加位移，原样返回系统算好的 frame。
+**壁纸键换正解**：POSTER-PATH-SHAPE 显示 PRSServerPosterPath 上有
+`stablePersistenceIdentifier` / `identityPathComponent` / `serverIdentity`，
+改用它们（不含 /95-0 这类版本号后缀，跨编辑稳定），description 只作兜底。
+**完成/取消**：code 17 实锤 setComplicationLayout: 就是提交通道（10 次：5×-507、5×0），
+但同一次会话里它还被调用了 13 次（code 18）→ 它不是"完成"判据，取消同样会走到。
+关键字探针 40~51 一次都没命中 → 方法名里没有 done/cancel 这类词。
+新增 METHODS 落盘：把 PREditingSceneViewController / PREditor /
+PREditorRootViewController 的完整方法表打印出来，下一版直接挑真正的收尾方法。

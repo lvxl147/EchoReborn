@@ -79,6 +79,19 @@ static NSString *SokoPosterKeyForConfiguration(id configuration) {
 	id pathObject = nil;
 	@try { pathObject = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
 
+	// 1.2.1-102 · POSTER-PATH-SHAPE 给出的正解：PRSServerPosterPath 上有
+	//   `stablePersistenceIdentifier`（名字就是"稳定持久标识"，不含版本号后缀），
+	//   其次是 `identityPathComponent`。两者都比 description 干净且跨编辑稳定。
+	for (NSString *keyName in @[@"stablePersistenceIdentifier", @"identityPathComponent", @"serverIdentity"]) {
+		if (![pathObject respondsToSelector:NSSelectorFromString(keyName)]) continue;
+		id value = nil;
+		@try { value = [pathObject valueForKey:keyName]; } @catch (__unused NSException *e) {}
+		if ([value isKindOfClass:[NSString class]] && [value length]) { key = value; break; }
+		if ([value isKindOfClass:[NSURL class]]) { key = [(NSURL *)value path]; break; }
+	}
+
+	if (key.length) return key;
+
 	if ([pathObject isKindOfClass:[NSString class]]) {
 		key = [pathObject lastPathComponent];
 	} else if ([pathObject isKindOfClass:[NSURL class]]) {
@@ -824,9 +837,38 @@ static void SokoInitPoster(void) {
 // 1.2.1-91 · 只读探针：找出编辑器里"完成/取消"到底调用哪个方法。
 // 只给零参/单参方法装钩子（避免变参 IMP 崩溃），命中即发一个独立码（40 起），
 // 然后再原样转调原实现，不改变任何行为。
+// 1.2.1-102 · 把目标类的全部方法名落盘。
+// 为什么需要：按关键字猜 done/cancel 猜了四版（40~51 一次都没命中），
+// 说明方法名里根本没有这些词。直接把方法表打出来，一眼就能看到真正的收尾方法。
+static void SokoDumpSelectors(Class cls) {
+	if (!cls) return;
+
+	unsigned int count = 0;
+	Method *methods = class_copyMethodList(cls, &count);
+	NSMutableString *buffer = [NSMutableString stringWithFormat:@"METHODS %@ n=%u", NSStringFromClass(cls), count];
+	for (unsigned int i = 0; i < count; i++) {
+		[buffer appendFormat:@" %@", NSStringFromSelector(method_getName(methods[i]))];
+		if (buffer.length > 220) {
+			SokoFileLog(@"%@", buffer);
+			buffer = [NSMutableString string];
+		}
+	}
+	if (buffer.length) SokoFileLog(@"%@", buffer);
+	if (methods) free(methods);
+}
+
 static void SokoProbeEditorButtons(void) {
 	Class cls = NSClassFromString(@"PREditingSceneViewController");
 	if (!cls) return;
+
+	// 1.2.1-102 · 方法表整体落盘（只做一次）
+	static BOOL dumped = NO;
+	if (!dumped) {
+		dumped = YES;
+		SokoDumpSelectors(cls);
+		SokoDumpSelectors(NSClassFromString(@"PREditor"));
+		SokoDumpSelectors(NSClassFromString(@"PREditorRootViewController"));
+	}
 
 	NSArray<NSString *> *keywords = @[@"done", @"cancel", @"save", @"apply", @"discard", @"commit", @"finish"];
 	unsigned int count = 0;
