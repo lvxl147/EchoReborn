@@ -7,6 +7,7 @@ static NSString *const kSokoRowOffsetCodingKey = @"ERSokoRowOffset";
 
 static const void *kSokoBottomLayoutKey = &kSokoBottomLayoutKey;
 static const void *kSokoRowOffsetKey = &kSokoRowOffsetKey;
+static NSNumber *gSokoPendingRowOffset;
 
 // 1.2.1-68 · marker 改名：原来是 moe.waru.soko.default-layout，与真·Soko 包抢同一
 // 个文件（两台都装时谁先删谁赢）。换成 EchoReborn 自己的域。
@@ -37,6 +38,10 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 
 + (NSNumber *)rowOffsetForComplicationLayout:(id)layout {
 	return layout ? objc_getAssociatedObject(layout, kSokoRowOffsetKey) : nil;
+}
+
++ (void)setPendingRowOffset:(NSNumber *)offset {
+	gSokoPendingRowOffset = offset;
 }
 
 + (void)setRowOffset:(NSNumber *)offset forComplicationLayout:(id)layout {
@@ -74,7 +79,7 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 		[coder encodeBool:YES forKey:kSokoBottomLayoutCodingKey];
 	}
 
-	NSNumber *offset = [self rowOffsetForComplicationLayout:layout];
+	NSNumber *offset = [self rowOffsetForComplicationLayout:layout] ?: gSokoPendingRowOffset;
 	if (offset && [coder respondsToSelector:@selector(encodeDouble:forKey:)]) {
 		[coder encodeDouble:offset.doubleValue forKey:kSokoRowOffsetCodingKey];
 		ERSokoLog(@"SOKO-ENC-OFFSET proc=%@ v=%.1f",

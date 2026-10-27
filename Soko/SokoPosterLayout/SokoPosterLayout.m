@@ -145,6 +145,8 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 + (void)setEditingRowOffset:(CGFloat)offset {
 	gEditingRowOffset = offset;
+	// 1.2.1-98 · 同步给模型层作为"待提交值"：系统保存壁纸编码时若 layout 上没有值，用它兜底
+	[SokoPosterModel setPendingRowOffset:isnan(offset) ? nil : @(offset)];
 }
 
 + (CGFloat)editingRowOffset {
