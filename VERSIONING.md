@@ -900,3 +900,7 @@
 - 现象：长按进入编辑态后无法上下拖动切换组件位置。
 - 新增 Soko/SokoFileLog（独立文件 /var/mobile/Library/Logs/EchoReborn/soko.log，256KB 截断，按进程名打前缀）—— 不用 ERLogMirror 是因为它是 60 行环，SpringBoard 的 CC 心跳会把 PosterBoard 的判定行冲掉。
 - 探针：CTOR（进程归属/bundleId）、CAP（model/dock/poster/liquidAss）、INITPOSTER（支持判定 + 选中了哪组 widget 配置与加号手势钩子）、CONTAINER/EDITOR（登记与角色）、SWIPE-INSTALL/SKIP（手势装在哪一层）、SWIPE-TOUCH、SWIPE-BEGIN（逐条记录 canSwipe/presented/inset/dodging/dismissing/portrait/起手时长/方向/起手点是否落在 editingRowFrame±24 带内）、SWIPE-END（位移/速度/阈值）、ROW（editingRowFrame 与 inset/usesBottomEditingRow 的真值）。
+
+## 1.2.1-70（1002170）· 诊断通道改 cfprefsd 键（文件写不进）
+- 1.2.1-69 实锤：iOS 17.2.1 + rootless 下 SpringBoard 写 /var/mobile/Library/Logs/EchoReborn 被沙箱挡（目录能建、echoreborn.log 0 字节），Soko 文件日志同样写不进去。
+- 改为写 CFPreferences 独立键 com.strive.echoreborn.preferences / ERSokoMirror（120 行 / 20KB 环），不与 ERLogMirror 的 60 行环抢行；SSH 拉 plist 的 ERSokoMirror 即可读全部判定行。
