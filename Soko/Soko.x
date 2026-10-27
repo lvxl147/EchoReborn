@@ -1,4 +1,5 @@
 #import "Soko.h"
+#import "SokoPreferences.h"
 
 static BOOL gActivePosterUsesBottomLayout;
 static __weak CSCoverSheetViewController *gCoverSheetViewController;
@@ -90,6 +91,15 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	%orig;
 
 	[[SokoDockCoordinator coordinatorForCoverSheetView:self] coverSheetViewDidLayout];
+
+	// 1.2.1-67 · 旧设置项：快捷操作横向缩进（开关关 → 复位到系统原位）
+	@try {
+		CSQuickActionsView *qa = self.quickActionsView;
+		if (qa) {
+			CGFloat tx = SokoPrefQuickActionsEnabled() ? SokoPrefQuickActionsIndent() : 0.0;
+			qa.transform = CGAffineTransformMakeTranslation(tx, 0.0);
+		}
+	} @catch (__unused NSException *e67) {}
 }
 
 - (void)_layoutDateView {
