@@ -493,6 +493,15 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 %hook PRPosterConfiguredProperties
 
 - (void)setComplicationLayout:(id)layout {
+	// 1.2.1-78 · 这里只在"完成"路径被调用（取消不会走）。把编辑会话里的偏移落盘：
+	// 海报进程写不了偏好，发通知让 SpringBoard 写，并清空会话值回到发布值。
+	CGFloat editingOffset = [SokoPosterLayout editingRowOffset];
+	if (!isnan(editingOffset)) {
+		SokoEditorRequestRowOffset(editingOffset);
+		[SokoPosterLayout setEditingRowOffset:NAN];
+		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
+	}
+
 	if (layout) {
 		NSNumber *editorValue = [SokoPosterLayout bottomLayoutValueForDismissingEditor];
 		if (editorValue) {

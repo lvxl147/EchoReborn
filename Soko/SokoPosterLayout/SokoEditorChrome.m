@@ -44,19 +44,24 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 }
 
 + (void)updateReticleForEditorRootViewController:(PREditorRootViewController *)controller {
+	// 1.2.1-78 · 先让系统按它自己的行位置重算（它会覆盖我们的 frame 修正），
+	// 再用 transform 叠一次位移 —— 这是上游的兜底路径，系统重算也压不掉。
 	if ([controller respondsToSelector:@selector(updateReticleViewFrames)]) {
 		if (controller.isViewLoaded) [controller updateReticleViewFrames];
-		return;
 	}
 
 	UIView *reticle = [controller respondsToSelector:@selector(graphicComplicationsReticleView)] ? controller.graphicComplicationsReticleView : nil;
-	NSNumber *base = objc_getAssociatedObject(controller, kSokoReticleBaseMinYKey);
-	if (!reticle || !base) return;
+	UIView *root = controller.viewIfLoaded;
+	if (!reticle || !root) return;
 
-	CGRect target = [NSClassFromString(@"CSProminentLayoutController") frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
-	if (CGRectIsNull(target)) return;
+	CGFloat stock = [SokoPosterLayout stockEditingRowMinY];
+	CGFloat offset = [SokoPosterLayout effectiveRowOffset];
+	CGFloat inset = SokoDockGeometryBottomInset();
+	CGFloat height = CGRectGetHeight(reticle.bounds);
+	if (isnan(stock) || isnan(offset) || isnan(inset) || height < 1.0) return;
 
-	reticle.transform = CGAffineTransformMakeTranslation(0.0, CGRectGetMinY(target) - base.doubleValue);
+	CGFloat target = CGRectGetMaxY(root.bounds) - inset - height + offset;
+	reticle.transform = CGAffineTransformMakeTranslation(0.0, target - stock);
 }
 
 + (NSLayoutConstraint *)stockPageControlConstraintForEditorRootViewController:(PREditorRootViewController *)controller {

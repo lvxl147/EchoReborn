@@ -943,3 +943,10 @@
 - 边框不跟随根因：frameByAdjustingFrame 里对 `variant == kSokoReticleVariant(3)` 直接 return，而 17.2.1 的编辑虚线框正是走 variant 3 算帧 → 组件滑走、框留在原位。现改为 variant 3 与组件行走同一套定位公式。
 - 滑动后 0.2~0.3s 才动的根因：重排走 0.45s 弹簧动画（且要等跨进程 offset 发布回来）。改为编辑态/几何更新一律 relayoutAnimated:NO 立即重排，动画分支时长压到 0.18s。
 - 变体纠正：15 Pro Max 是 RootHide（/var/jb -> /、有 libroothide.dylib、dpkg 架构 iphoneos-arm64e），之前误装 rootless 包（iphoneos-arm64）才需要 --force-architecture；已改用 CI 的 roothide 产物，dpkg -i 无需强制参数。
+
+## 1.2.1-78（1002178）· 按原版语义重做编辑期：本地会话 + 完成才生效 + 震动 + 边框 transform 兜底
+- 编辑期不再跨进程：进入编辑时把当前生效偏移取进会话（SokoPosterLayout editingRowOffset），滑动只改会话值；取消退出会自动回落到发布值。
+- 保存语义对齐原版：只有 setComplicationLayout:（"完成"路径）才把会话值落盘（发通知由 SpringBoard 写 soko_widgetOffset）；"取消"不写、不生效。
+- 震动：滑动生效时 Light 轻震（与原版一致）。
+- 跟手：编辑期全程本地、无跨进程等待，重排改回 0.3s 弹簧（原版手感）。
+- 虚线框：先让系统 updateReticleViewFrames 重算（它会覆盖 frame 修正），再按「目标 y − 系统原位 y」叠加 transform.ty 兜底。

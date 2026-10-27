@@ -11,6 +11,8 @@ static NSHashTable<PREditingSceneViewController *> *gEditingSceneViewControllers
 
 static __thread BOOL gComputingStockLayout;
 static BOOL gIgnoringGraphicComplications;
+// 1.2.1-78 · 编辑会话内的偏移（NAN = 跟随 SpringBoard 发布值）
+static CGFloat gEditingRowOffset = NAN;
 
 static __weak PREditingSceneViewController *gDodgingEditingSceneViewController;
 static BOOL gCoveredByHostModalPresentation;
@@ -91,7 +93,7 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	// 1.2.1-76 · 统一模型：行 y = 底部基准行 + 生效偏移。
 	//   偏移来自 SpringBoard 发布的通道（0 = 底部；-T = 顶部；中间值 = 任意位置），
 	//   编辑态与非编辑态用同一套，因此"滑块 -200 → 进入自定义也在 -200"成立。
-	CGFloat offset = SokoRowOffsetIsSet() ? SokoRowOffsetValue() : SokoTopOffsetValue();
+	CGFloat offset = [self effectiveRowOffset];
 	if (isnan(offset)) return frame;
 
 	frame.origin.y = CGRectGetMaxY(boundingRect) - inset - CGRectGetHeight(frame) + offset;
@@ -105,7 +107,7 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	// 原实现：frame.origin.y += (row.minY - stockRow.minY)；实测系统两套行框在
 	// 17.2.1 上相同 → 差值恒 0 → 组件滑走了、虚线框留在原地。
 	CGFloat inset = SokoDockGeometryBottomInset();
-	CGFloat offset = SokoRowOffsetIsSet() ? SokoRowOffsetValue() : SokoTopOffsetValue();
+	CGFloat offset = [self effectiveRowOffset];
 	if (isnan(inset) || isnan(offset) || !SokoIsPortrait(boundingRect)) return frame;
 
 	frame.origin.y = CGRectGetMaxY(boundingRect) - inset - CGRectGetHeight(frame) + offset;
@@ -131,6 +133,29 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	return frame;
 }
 
++ (void)setEditingRowOffset:(CGFloat)offset {
+	gEditingRowOffset = offset;
+}
+
++ (CGFloat)editingRowOffset {
+	return gEditingRowOffset;
+}
+
++ (CGFloat)effectiveRowOffset {
+	// 只有存在活动编辑会话时才算"编辑中"；取消退出后会话被清空，自动回落到发布值。
+	BOOL hasSession = gEditingSceneViewControllers.allObjects.count > 0;
+	if (hasSession && !isnan(gEditingRowOffset)) return gEditingRowOffset;
+	return SokoRowOffsetIsSet() ? SokoRowOffsetValue() : SokoTopOffsetValue();
+}
+
++ (CGFloat)stockEditingRowMinY {
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	gComputingStockLayout = YES;
+	CGRect frame = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	gComputingStockLayout = NO;
+	return CGRectIsNull(frame) ? NAN : CGRectGetMinY(frame);
+}
+
 + (void)registerComplicationContainerViewController:(UIViewController *)controller {
 	gComplicationContainerViewControllers = SokoRegister(gComplicationContainerViewControllers, controller);
 }
@@ -145,6 +170,9 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 + (BOOL)registerEditingSceneViewController:(PREditingSceneViewController *)controller {
 	if (![self editingSceneViewControllerEditsLockScreen:controller]) return NO;
 
+	// 1.2.1-78 · 进编辑就把"当前生效值"取进会话；之后滑动只改会话值，
+	// 不再跨进程写偏好（原版语义：点完成才生效）。
+	gEditingRowOffset = [self effectiveRowOffset];
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);
 	SokoEditorPublishUsesBottomLayout([self editingSceneViewControllerUsesBottomLayout:controller]);
 	[self relayoutAnimated:NO];
@@ -293,8 +321,8 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	}
 
 	UIViewAnimationOptions options = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
-	// 1.2.1-77 · 0.45s 的弹簧在编辑态被感知为"停顿一下才动"，压到 0.18s 且用 ease-out
-	[UIView animateWithDuration:0.18 delay:0.0 options:options animations:layout completion:nil];
+	// 1.2.1-78 · 编辑期全程本地、没有跨进程等待，0.3s 弹簧即为原版手感
+	[UIView animateWithDuration:0.3 delay:0.0 usingSpringWithDamping:1.0 initialSpringVelocity:0.0 options:options animations:layout completion:nil];
 }
 
 @end

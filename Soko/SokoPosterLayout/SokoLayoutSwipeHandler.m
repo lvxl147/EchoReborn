@@ -175,9 +175,11 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	SokoTrace(15, (long)(toTop ? 1 : 0));
 	SokoFileLog(@"SWIPE-APPLY target=%.1f (top=%d)", target, (int)toTop);
 
-	// 1.2.1-76 · 不再改壁纸布尔值，改为请求一个具体坐标；SpringBoard 收到后写偏好并重排。
-	SokoEditorRequestRowOffset(target);
-	[SokoPosterLayout relayoutAnimated:NO];
+	// 1.2.1-78 · 编辑期只改会话值：不写偏好、不跨进程（原版语义：点"完成"才生效）。
+	// 震动与原版一致：Light 轻震。
+	[SokoPosterLayout setEditingRowOffset:target];
+	[[[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight] impactOccurred];
+	[SokoPosterLayout relayoutAnimated:YES];
 
 	// 1.2.1-76 · 滑动结果（目标/当前）
 	ERSokoLog(@"SOKO-SWIPE target=%.1f current=%.1f proc=%@",

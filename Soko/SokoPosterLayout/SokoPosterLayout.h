@@ -23,6 +23,11 @@
 
 + (BOOL)canSwipeEditingSceneViewController:(PREditingSceneViewController *)controller;
 + (BOOL)usesBottomEditingRow;
+// 1.2.1-78 · 编辑会话内的行偏移（编辑期只改这个，不写偏好；点"完成"才落盘）
++ (void)setEditingRowOffset:(CGFloat)offset;
++ (CGFloat)editingRowOffset;                 // 无会话时为 NAN
++ (CGFloat)effectiveRowOffset;               // 编辑期取会话值，否则取发布值
++ (CGFloat)stockEditingRowMinY;              // 系统原位行（不含我们的调整）
 // 1.2.1-69 · 手势门禁日志要读它（实现本来就在 .m 里，只是没在头文件声明）
 + (BOOL)editingSceneViewControllerIsDismissing:(PREditingSceneViewController *)controller;
 
