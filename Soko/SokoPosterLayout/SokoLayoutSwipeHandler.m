@@ -159,7 +159,10 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	CGFloat dy = translation.y;
 	CGFloat vy = velocity.y;
 	CGFloat topOffset = SokoTopOffsetValue();
-	CGFloat current = SokoRowOffsetIsSet() ? SokoRowOffsetValue() : topOffset;
+	// 1.2.1-82 · 当前值优先取编辑会话里的值（跨进程发布值可能滞后一帧，
+	// 之前会误判成"目标与当前相同"从而直接 return —— 表现为滑动完全没反应）
+	CGFloat current = [SokoPosterLayout editingRowOffset];
+	if (isnan(current)) current = [SokoPosterLayout effectiveRowOffset];
 	SokoFileLog(@"SWIPE-END dy=%.1f vy=%.1f current=%.1f top=%.1f", dy, vy, current, topOffset);
 	if (isnan(topOffset)) return;
 

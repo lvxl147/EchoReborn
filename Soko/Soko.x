@@ -519,6 +519,8 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	CGFloat editingOffset = [SokoPosterLayout editingRowOffset];
 	if (layout && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
+		// 立刻让 SpringBoard 应用（归档读取要等下一次壁纸配置回调，界面会慢一拍）
+		SokoEditorRequestRowOffset(editingOffset);
 		[SokoPosterLayout setEditingRowOffset:NAN];
 		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
 	}
@@ -741,6 +743,8 @@ static void SokoInitPoster(void) {
 		// 组件行要等锁屏重新布局才动，表现就是"数值变了画面没变"）。
 		SokoPreferencesSetChangeHandler(^{
 			SokoDockCoordinator *coordinator = SokoCoordinator();
+			// 1.2.1-82 · 改值后重算"是否接管"（原来 enabled 只随壁纸切换更新）
+			[coordinator setEnabled:SokoPrefWidgetsEnabled() && SokoPrefWidgetOffsetIsSet()];
 			[coordinator refresh];
 			UIView *coverSheetView = gCoverSheetViewController.viewIfLoaded;
 			[coverSheetView setNeedsLayout];
@@ -757,6 +761,11 @@ static void SokoInitPoster(void) {
 				NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
 				[defaults setDouble:value forKey:@"soko_widgetOffset"];
 				[defaults synchronize];
+				// 1.2.1-82 · 立即生效：把该值设为当前壁纸的生效偏移并接管
+				[SokoDockCoordinator setActiveRowOffset:@(value)];
+				SokoDockCoordinator *coordinator = SokoCoordinator();
+				[coordinator setEnabled:YES];
+				[coordinator refresh];
 				notify_post("com.strive.echoreborn/ReloadPrefs");
 				SokoFileLog(@"EDITOR-SETOFFSET %.1f", value);
 			});

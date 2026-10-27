@@ -131,7 +131,15 @@ static NSNumber *gActiveRowOffset;
 }
 
 - (BOOL)shouldHostDock {
-	if (!self.enabled) return NO;
+	// 1.2.1-82 · 只要"组件位置"开关开着、且用户设过偏移（或该壁纸归档里有偏移），
+	// 就接管 —— 之前只看 self.enabled，而它只在壁纸切换时更新，滑块改值后不重算，
+	// 表现就是"滑块拖了没反应"。
+	if (!SokoPrefWidgetsEnabled()) return NO;
+	if (SokoPrefWidgetOffsetIsSet() || gActiveRowOffset != nil) {
+		// 继续走下面的描述符检查
+	} else if (!self.enabled) {
+		return NO;
+	}
 
 	UIViewController *complications = self.coverSheetViewController.complicationContainerViewController;
 	if ([complications respondsToSelector:@selector(widgetDescriptors)]) {
@@ -276,6 +284,18 @@ static NSNumber *gActiveRowOffset;
 	if (!offsetIsSet) effectiveOffset = topOffset;
 
 	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
+
+	{
+		static CFTimeInterval lastPub = 0.0;
+		CFTimeInterval now = CACurrentMediaTime();
+		if (now - lastPub > 1.0) {
+			lastPub = now;
+			SokoFileLog(@"PUB top=%.1f eff=%.1f set=%d prefs=%.1f archive=%@",
+			            topOffset, effectiveOffset, (int)offsetIsSet,
+			            SokoPrefWidgetOffset(),
+			            gActiveRowOffset ? gActiveRowOffset : @"nil");
+		}
+	}
 }
 
 - (void)publishDockGeometry {
