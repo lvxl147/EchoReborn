@@ -164,7 +164,8 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 	CGFloat delta = targetTop - CGRectGetMinY(stock);
 	if (fabs(delta) < 0.5) return 0;
 
-	UIView *container = controller.complicationContainerViewControllers.firstObject.viewIfLoaded;
+	id firstContainer = controller.complicationContainerViewControllers.firstObject;
+	UIView *container = [firstContainer isKindOfClass:[UIViewController class]] ? ((UIViewController *)firstContainer).viewIfLoaded : nil;
 
 	CGFloat stockCenterY = CGRectGetMidY(stock);
 	CGFloat rowW = CGRectGetWidth(stock);
