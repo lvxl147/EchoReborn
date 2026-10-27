@@ -80,7 +80,10 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 }
 
 + (CGRect)frameByAdjustingFrame:(CGRect)frame forElement:(unsigned long long)element boundingRect:(CGRect)boundingRect variant:(unsigned long long)variant layoutController:(CSProminentLayoutController *)layoutController {
-	if (element != kSokoComplicationRowElement || variant == kSokoReticleVariant || gComputingStockLayout) return frame;
+	// 1.2.1-77 · 允许编辑态虚线框（variant 3）走同一套定位 —— 17.2.1 上边框是
+	// 通过 _frameForElement:...variant:3 算出来的，之前在这里被早退，所以组件滑走了
+	// 边框留在原位。
+	if (element != kSokoComplicationRowElement || gComputingStockLayout) return frame;
 
 	CGFloat inset = SokoDockGeometryBottomInset();
 	if (isnan(inset) || CGRectIsNull(frame) || CGRectGetHeight(frame) <= 0.0 || !SokoIsPortrait(boundingRect)) return frame;
@@ -290,7 +293,8 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	}
 
 	UIViewAnimationOptions options = UIViewAnimationOptionBeginFromCurrentState | UIViewAnimationOptionAllowUserInteraction;
-	[UIView animateWithDuration:0.45 delay:0.0 usingSpringWithDamping:1.0 initialSpringVelocity:0.0 options:options animations:layout completion:nil];
+	// 1.2.1-77 · 0.45s 的弹簧在编辑态被感知为"停顿一下才动"，压到 0.18s 且用 ease-out
+	[UIView animateWithDuration:0.18 delay:0.0 options:options animations:layout completion:nil];
 }
 
 @end

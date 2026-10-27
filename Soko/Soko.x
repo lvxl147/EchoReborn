@@ -592,7 +592,8 @@ static void SokoInitLiquidAssPoster(void) {
 	%init(SokoLiquidAssPoster);
 
 	SokoDockGeometryObserve(^{
-		[SokoPosterLayout relayoutAnimated:YES];
+		// 1.2.1-77 · 几何通道更新（含编辑器滑动回写）立即重排，不再用 0.45s 动画
+		[SokoPosterLayout relayoutAnimated:NO];
 	});
 }
 
@@ -631,7 +632,8 @@ static void SokoInitPoster(void) {
 	}
 
 	SokoDockGeometryObserve(^{
-		[SokoPosterLayout relayoutAnimated:YES];
+		// 1.2.1-77 · 几何通道更新（含编辑器滑动回写）立即重排，不再用 0.45s 动画
+		[SokoPosterLayout relayoutAnimated:NO];
 	});
 
 	_dyld_register_func_for_add_image(SokoImageAdded);

@@ -177,7 +177,7 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 
 	// 1.2.1-76 · 不再改壁纸布尔值，改为请求一个具体坐标；SpringBoard 收到后写偏好并重排。
 	SokoEditorRequestRowOffset(target);
-	[SokoPosterLayout relayoutAnimated:YES];
+	[SokoPosterLayout relayoutAnimated:NO];
 
 	// 1.2.1-76 · 滑动结果（目标/当前）
 	ERSokoLog(@"SOKO-SWIPE target=%.1f current=%.1f proc=%@",

@@ -938,3 +938,8 @@
 - 编辑态虚线框改为直接钉到同一公式，不再用「系统行框差值」平移（17.2.1 上两套行框相同、差值恒 0，导致边框不跟随）。
 - 上滑 = 请求 topOffset(-518)，下滑 = 请求 0；PosterBoard 无法写偏好，改由 SokoEditorRequestRowOffset 发通知，SpringBoard 落盘 soko_widgetOffset 并广播 ReloadPrefs，设置页数值随编辑同步。
 - 只要用户显式设置过偏移，即使该壁纸布尔为"顶部"，dock 也接管渲染。
+
+## 1.2.1-77（1002177）· 编辑态虚线框跟随 + 滑动跟手
+- 边框不跟随根因：frameByAdjustingFrame 里对 `variant == kSokoReticleVariant(3)` 直接 return，而 17.2.1 的编辑虚线框正是走 variant 3 算帧 → 组件滑走、框留在原位。现改为 variant 3 与组件行走同一套定位公式。
+- 滑动后 0.2~0.3s 才动的根因：重排走 0.45s 弹簧动画（且要等跨进程 offset 发布回来）。改为编辑态/几何更新一律 relayoutAnimated:NO 立即重排，动画分支时长压到 0.18s。
+- 变体纠正：15 Pro Max 是 RootHide（/var/jb -> /、有 libroothide.dylib、dpkg 架构 iphoneos-arm64e），之前误装 rootless 包（iphoneos-arm64）才需要 --force-architecture；已改用 CI 的 roothide 产物，dpkg -i 无需强制参数。
