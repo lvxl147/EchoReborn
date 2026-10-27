@@ -914,3 +914,9 @@
 - 目标：把"顶部/底部"两档换算成滑块同一套单位（pt），确认实际行程。
 - CALIB 行：screen 尺寸 / safeAreaBottom / stockY（系统原位行 = 顶部态行，SpringBoard 未装 _frameForElement: hook，取到的是系统原值）/ bottomY（底部态行，含当前 offset）/ delta = stockY - bottomY。
 - 判读：delta 就是"从底部走到顶部"需要写进 soko_widgetOffset 的量（当前滑块只有 -120~120，明显不够）。
+
+## 1.2.1-73（1002173）· 滑块行程 -400~+120、默认/重置归 0、重置即时生效、海报进程报到探针
+- 滑块：soko_widgetOffset 范围 -120~+120 → **-400~+120**，默认 -18 → **0**；soko_notificationOffset 默认 60 → **0**（范围不变）。
+- 重置无效根因修复：SokoPreferences 原为"键存在才覆盖"，设置页重置只删 key → 缓存保留旧值，画面不变、必须拖一下滑块才生效。改为**键不存在即回落默认 0**，并新增 SokoPreferencesSetChangeHandler —— 变更/重置后 SpringBoard 立即 refresh + setNeedsLayout 重算组件行。
+- 海报进程报到：PosterBoard/PosterKit/MercuryPoster 侧写不进宿主偏好域（实测其自身域也没有文件），改为 %ctor 里 notify_post 一条报到通知，SpringBoard 侧监听并落盘 `POSTER-HELLO <name>`，用于确认编辑器进程是否真的加载了本 dylib。
+- CALIB 几何标定行（只读）：stockY（系统原位=顶部）/ bottomY（底部）/ delta，用于把两档换算成滑块同一单位。

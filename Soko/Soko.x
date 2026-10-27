@@ -2,6 +2,16 @@
 #import "SokoPreferences.h"
 #import "SokoLog.h"
 #import "SokoFileLog.h"
+#import <notify.h>
+
+// 1.2.1-73 · 海报进程（PosterBoard / PosterKit / MercuryPoster）写不进宿主偏好域，
+// 也没有可写的日志目录，所以用一条 Darwin 通知"报到"，由 SpringBoard 侧落盘 ——
+// 这是判断"我们的 dylib 到底有没有注入到编辑器进程"的唯一可靠信号。
+static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
+	if ([bundleIdentifier isEqualToString:@"com.apple.PosterBoard"]) return @"com.strive.echoreborn.soko.hello.posterboard";
+	if ([bundleIdentifier isEqualToString:@"com.apple.PosterKit"]) return @"com.strive.echoreborn.soko.hello.posterkit";
+	return @"com.strive.echoreborn.soko.hello.mercuryposter";
+}
 
 static BOOL gActivePosterUsesBottomLayout;
 static __weak CSCoverSheetViewController *gCoverSheetViewController;
@@ -645,6 +655,16 @@ static void SokoInitPoster(void) {
 		          bundleIdentifier, (int)modelSupported, (int)dockSupported);
 		SokoFileLog(@"CAP springboard model=%d dock=%d", (int)modelSupported, (int)dockSupported);
 
+		// 1.2.1-73 · 海报进程报到监听：收到即证明那个进程加载并执行了本 dylib。
+		for (NSString *name in @[@"com.strive.echoreborn.soko.hello.posterboard",
+		                         @"com.strive.echoreborn.soko.hello.posterkit",
+		                         @"com.strive.echoreborn.soko.hello.mercuryposter"]) {
+			int token = NOTIFY_TOKEN_INVALID;
+			notify_register_dispatch(name.UTF8String, &token, dispatch_get_main_queue(), ^(int t) {
+				SokoFileLog(@"POSTER-HELLO %@", name);
+			});
+		}
+
 		// 1.2.1-71 · 在 SpringBoard 里预演 PosterBoard 的 SokoPosterLayout isSupported：
 		// 用的是同一批私有类，哪一条不满足就直接点名（PosterBoard 侧写不进日志时，
 		// 这一行就是唯一判据）。
@@ -662,6 +682,20 @@ static void SokoInitPoster(void) {
 		}
 
 		if (dockSupported) SokoInitDock();
+
+		// 1.2.1-73 · 设置页改值/重置后立即重排组件行（此前只重排通知列表，
+		// 组件行要等锁屏重新布局才动，表现就是"数值变了画面没变"）。
+		SokoPreferencesSetChangeHandler(^{
+			SokoDockCoordinator *coordinator = SokoCoordinator();
+			[coordinator refresh];
+			UIView *coverSheetView = gCoverSheetViewController.viewIfLoaded;
+			[coverSheetView setNeedsLayout];
+		});
+		return;
+	}
+
+	// 海报进程：报到 + 记录能力判定
+	notify_post(SokoHelloNameForBundleIdentifier(bundleIdentifier).UTF8String);
 		return;
 	}
 
