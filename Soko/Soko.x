@@ -13,6 +13,32 @@ static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
 	return @"com.strive.echoreborn.soko.hello.mercuryposter";
 }
 
+// 1.2.1-94 · 每张壁纸独立保存：
+//   键取 PRSPosterConfiguration 的 _path 末段（无则退回 provider 描述），
+//   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
+static NSString *gActivePosterKey = nil;
+
+static NSString *SokoPosterKeyForConfiguration(id configuration) {
+	NSString *path = nil;
+	@try { path = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
+	if (![path isKindOfClass:[NSString class]] || !path.length) {
+		id provider = nil;
+		@try { provider = [configuration valueForKey:@"provider"]; } @catch (__unused NSException *e) {}
+		NSString *described = [provider description];
+		path = [described stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+	}
+	if (![path isKindOfClass:[NSString class]] || !path.length) return nil;
+	NSString *key = [path lastPathComponent];
+	return key.length ? key : nil;
+}
+
+static NSMutableDictionary *SokoPosterOffsetMap(void) {
+	NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+	NSDictionary *stored = [defaults dictionaryForKey:@"soko_offsets_by_poster"];
+	return stored ? [stored mutableCopy] : [NSMutableDictionary dictionary];
+}
+
+
 static BOOL gActivePosterUsesBottomLayout;
 static __weak CSCoverSheetViewController *gCoverSheetViewController;
 
@@ -741,31 +767,6 @@ static void SokoProbeEditorButtons(void) {
 	if (methods) free(methods);
 }
 
-
-// 1.2.1-94 · 每张壁纸独立保存：
-//   键取 PRSPosterConfiguration 的 _path 末段（无则退回 provider 描述），
-//   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
-static NSString *gActivePosterKey = nil;
-
-static NSString *SokoPosterKeyForConfiguration(id configuration) {
-	NSString *path = nil;
-	@try { path = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
-	if (![path isKindOfClass:[NSString class]] || !path.length) {
-		id provider = nil;
-		@try { provider = [configuration valueForKey:@"provider"]; } @catch (__unused NSException *e) {}
-		NSString *described = [provider description];
-		path = [described stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
-	}
-	if (![path isKindOfClass:[NSString class]] || !path.length) return nil;
-	NSString *key = [path lastPathComponent];
-	return key.length ? key : nil;
-}
-
-static NSMutableDictionary *SokoPosterOffsetMap(void) {
-	NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
-	NSDictionary *stored = [defaults dictionaryForKey:@"soko_offsets_by_poster"];
-	return stored ? [stored mutableCopy] : [NSMutableDictionary dictionary];
-}
 
 %ctor {
 	NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
