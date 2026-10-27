@@ -1,5 +1,5 @@
 #import "SokoQuickActions.h"
-#import "SokoPreferences.h"
+#import "../SokoPreferences.h"
 
 static BOOL SokoButtonCenterYInQuickActionsView(CSQuickActionsView *quickActions, CGFloat *centerY) {
 	UIView *button = nil;
