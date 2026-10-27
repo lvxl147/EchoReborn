@@ -160,7 +160,12 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 		[stack removeLastObject];
 
 		NSString *name = NSStringFromClass([view class]);
-		if ([name rangeOfString:@"eticle" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+		// 1.2.1-84 · 类名可能是 PREditingReticleView / PREditingReticleViewContainer 等，
+		// 也可能叫 Outline/Selection/Dashed，放宽匹配；命中数由 TRACE 17 回报。
+		BOOL looksLikeReticle = [name rangeOfString:@"eticle" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+		                        [name rangeOfString:@"Outline" options:NSCaseInsensitiveSearch].location != NSNotFound ||
+		                        [name rangeOfString:@"Dashed" options:NSCaseInsensitiveSearch].location != NSNotFound;
+		if (looksLikeReticle) {
 			CGRect inRoot = [view.superview convertRect:view.bounds toView:root];
 			CGFloat targetY = CGRectGetMaxY(root.bounds) - inset - CGRectGetHeight(inRoot) + offset;
 			CGRect frame = view.frame;
