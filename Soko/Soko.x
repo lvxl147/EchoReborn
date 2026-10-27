@@ -531,8 +531,8 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	SokoTrace(28, isnan(editingOffset) ? -1 : (long)llround(editingOffset));   // 28 = setComplicationLayout 触发
 	if (layout && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
-		// 1.2.1-88 · 这里只写归档，不写偏好。取消时系统不会保存这份 layout，
-		// 因此偏好保持不变；点完成时才由 SpringBoard 在下次读到归档后镜像回滑块。
+		// 1.2.1-89 · 恢复写偏好：滑块数值必须跟随编辑结果。
+		SokoEditorRequestRowOffset(editingOffset);
 		[SokoPosterLayout setEditingRowOffset:NAN];
 		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
 	}

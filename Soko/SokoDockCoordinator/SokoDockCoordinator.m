@@ -287,11 +287,13 @@ static CGFloat gCachedSystemRowY = NAN;
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView2] - rowHeight;
 	CGFloat topOffset = CGRectGetMinY(stockRow) - bottomRowY + kSokoTopEndpointCorrection;
 
-	BOOL offsetIsSet = SokoPrefWidgetOffsetIsSet();
+	// 1.2.1-89 · 总开关关闭时：视为"未设置"，位置回到系统默认（顶部）
+	BOOL enabled = SokoPrefWidgetsEnabled();
+	BOOL offsetIsSet = enabled && SokoPrefWidgetOffsetIsSet();
 	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : topOffset;
 
 	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
-	SokoDockPublishWidgetsEnabled(SokoPrefWidgetsEnabled());
+	SokoDockPublishWidgetsEnabled(enabled);
 
 	{
 		static CFTimeInterval lastPub = 0.0;
@@ -332,7 +334,7 @@ static CGFloat gCachedSystemRowY = NAN;
 	[self publishRowOffsetsIfPossible];
 
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row);
-	BOOL offsetIsSet = SokoPrefWidgetOffsetIsSet();
+	BOOL offsetIsSet = SokoPrefWidgetsEnabled() && SokoPrefWidgetOffsetIsSet();
 	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : SokoTopOffsetValue();
 	if (isnan(effectiveOffset)) effectiveOffset = 0.0;
 

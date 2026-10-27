@@ -1001,3 +1001,8 @@
 - 开关：新增 SokoWidgetsEnabled 通道，SpringBoard 每次发布带上"调整组件位置"状态；编辑器在 gestureRecognizerShouldBegin/handleSwipe 里直接拒绝，关闭后上下滑完全不响应。
 - 取消逻辑：setComplicationLayout 实测触发 44 次（含取消路径），不能当"保存"信号。改为：该钩子只把偏移写进 layout 归档，**不写偏好**；取消时系统不保存 layout → 偏好不变。
 - 归档→滑块镜像改为"仅镜像变化值"（新键 soko_mirroredOffset 记基线），避免重启后被旧归档值覆盖滑块。
+
+## 1.2.1-89（1002189）· 关闭开关回到系统默认 + 完成写回滑块 + 边框探针带码
+- 关闭"调整组件位置"：发布'set=0'且 effective=顶部端点，组件回系统默认位置（此前仍按 0 渲染在底部）。
+- 完成写回滑块：恢复 SokoEditorRequestRowOffset（上一版去掉后滑块数值不再跟随）。
+- 边框探针：forceReticles 每个提前返回都带码（17=-1 inset无效 / -2 offset无效 / -3 行框为空 / -4 delta过小），命中数仍为正数，保证每轮都能拿到数据。

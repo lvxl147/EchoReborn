@@ -151,18 +151,19 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 
 	CGFloat inset = SokoDockGeometryBottomInset();
 	CGFloat offset = [SokoPosterLayout effectiveRowOffset];
-	if (isnan(inset) || isnan(offset)) return 0;
+	if (isnan(inset)) { SokoTrace(17, -1); return 0; }
+	if (isnan(offset)) { SokoTrace(17, -2); return 0; }
 
 	// 1.2.1-87 · 改为"几何匹配"：类名扫不到（前 6 层都是通用容器），因此按
 	// 「尺寸≈组件行 + 纵向位置≈系统行位置」来找那个虚线框，然后整体平移 delta。
 	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
 	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
-	if (CGRectIsNull(stock)) return 0;
+	if (CGRectIsNull(stock)) { SokoTrace(17, -3); return 0; }
 
 	CGRect bounds = root.bounds;
 	CGFloat targetTop = CGRectGetMaxY(bounds) - inset - CGRectGetHeight(stock) + offset;
 	CGFloat delta = targetTop - CGRectGetMinY(stock);
-	if (fabs(delta) < 0.5) return 0;
+	if (fabs(delta) < 0.5) { SokoTrace(17, -4); return 0; }
 
 	id firstContainer = controller.complicationContainerViewControllers.firstObject;
 	UIView *container = [firstContainer isKindOfClass:[UIViewController class]] ? ((UIViewController *)firstContainer).viewIfLoaded : nil;
