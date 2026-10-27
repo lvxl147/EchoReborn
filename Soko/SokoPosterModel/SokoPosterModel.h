@@ -1,7 +1,8 @@
 #import <Foundation/Foundation.h>
 #import <objc/runtime.h>
-#import <roothide.h>
 
+// 1.2.1-68 · jbroot() 由 SokoPrivate.h 统一提供（roothide 有 <roothide.h>，
+// rootless 走恒等兜底），这里不再直接 import，否则 rootless 构建直接失败。
 #import "../SokoRuntime/SokoPrivate.h"
 
 @interface SokoPosterModel : NSObject

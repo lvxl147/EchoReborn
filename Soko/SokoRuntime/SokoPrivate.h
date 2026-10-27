@@ -1,5 +1,16 @@
 #import <UIKit/UIKit.h>
 
+// 1.2.1-68 · jailbreak root resolution（与 Tweak.xm 顶部同款）
+//   roothide 把包装在随机根下并暴露 jbroot()；rootless 固定 /var/jb 前缀，
+//   这里直接恒等返回。jbroot() 在 roothide 里是函数不是宏，只能用
+//   __has_include 探测，不能用 #ifndef。
+#if __has_include(<roothide.h>)
+#import <roothide.h>
+#else
+static inline NSString *Soko_jbrootPath(NSString *path) { return path; }
+#define jbroot(p) Soko_jbrootPath(p)
+#endif
+
 @class CSCombinedListViewController;
 @class CSMainPageContentViewController;
 @class CSProminentDisplayViewController;

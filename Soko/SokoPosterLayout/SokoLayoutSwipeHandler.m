@@ -1,4 +1,5 @@
 #import "SokoLayoutSwipeHandler.h"
+#import "../SokoLog.h"
 
 static const CGFloat kSokoLayoutSwipeDistance = 30.0;
 static const CGFloat kSokoLayoutSwipeVelocity = 300.0;
@@ -88,6 +89,11 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	if (distance < kSokoLayoutSwipeDistance && velocity < kSokoLayoutSwipeVelocity) return;
 
 	[SokoPosterLayout setUsesBottomLayout:!bottom forEditingSceneViewController:controller];
+
+	// 1.2.1-68 · 判据 #5/#6：滑动是否被识别、最终状态是什么
+	ERSokoLog(@"SOKO-SWIPE before=%d after=%d distance=%.1f velocity=%.1f proc=%@",
+	          (int)bottom, (int)!bottom, distance, velocity,
+	          NSProcessInfo.processInfo.processName);
 }
 
 @end

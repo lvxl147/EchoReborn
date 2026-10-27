@@ -1,5 +1,6 @@
 #import "SokoDockCoordinator.h"
 #import "../SokoPreferences.h"
+#import "../SokoLog.h"
 
 NSString *const SokoProminentDisplayVibrancyDidChangeNotification = @"SokoProminentDisplayVibrancyDidChangeNotification";
 NSString *const SokoProminentDisplayContentAlphaDidChangeNotification = @"SokoProminentDisplayContentAlphaDidChangeNotification";
@@ -281,6 +282,23 @@ static __weak SokoDockCoordinator *gActiveCoordinator;
 	UIView *content = [self contentView];
 	if (complicationsView.superview == content && !CGRectEqualToRect(complicationsView.frame, content.bounds)) {
 		complicationsView.frame = content.bounds;
+	}
+
+	// 1.2.1-68 · 几何取证：值变化立即打印，否则 2s 一条。判据 #4 就是拿
+	// botY 与 QA-APPLY 的按钮原始中心比（差应 ≈ kSokoDockBottomToButtonCenter 45）。
+	{
+		static CFTimeInterval lastLogTime = 0.0;
+		static CGRect lastRow = CGRectNull;
+		CFTimeInterval now = CACurrentMediaTime();
+		if (now - lastLogTime > 2.0 || !CGRectEqualToRect(lastRow, row)) {
+			lastLogTime = now;
+			lastRow = row;
+			CGFloat buttonCenterY = 0.0;
+			BOOL buttonHit = SokoQuickActionButtonCenterY(coverSheetView, &buttonCenterY);
+			ERSokoLog(@"SOKO-DOCK botY=%.1f topY=%.1f h=%.1f off=%.1f btnHit=%d btnCenterY=%.1f",
+			          self.dockBottomY, self.dockTopY, CGRectGetHeight(row),
+			          SokoPrefWidgetOffset(), (int)buttonHit, buttonCenterY);
+		}
 	}
 }
 

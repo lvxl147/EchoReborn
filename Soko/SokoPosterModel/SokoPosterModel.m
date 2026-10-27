@@ -1,11 +1,14 @@
 #import "SokoPosterModel.h"
+#import "../SokoLog.h"
 
 static NSString *const kSokoBottomLayoutCodingKey = @"SokoComplicationsUseBottomLayout";
 
 static const void *kSokoBottomLayoutKey = &kSokoBottomLayoutKey;
 
+// 1.2.1-68 · marker 改名：原来是 moe.waru.soko.default-layout，与真·Soko 包抢同一
+// 个文件（两台都装时谁先删谁赢）。换成 EchoReborn 自己的域。
 static NSString *SokoPendingDefaultLayoutPath(void) {
-	return jbroot(@"/var/mobile/Library/Preferences/moe.waru.soko.default-layout");
+	return jbroot(@"/var/mobile/Library/Preferences/com.strive.echoreborn.default-layout");
 }
 
 @implementation SokoPosterModel
@@ -50,13 +53,23 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 + (void)encodeComplicationLayout:(id)layout withCoder:(id)coder {
 	if (![self complicationLayoutUsesBottomLayout:layout] || ![coder respondsToSelector:@selector(encodeBool:forKey:)]) return;
 
+	// 1.2.1-68 · 落盘判据：这一行出现在哪个进程，就说明那个进程的 filter 生效了
+	// （只在"底部布局"被写进归档时打印，不会刷屏）。
+	ERSokoLog(@"SOKO-ENC proc=%@ cls=%@ key=%@",
+	          NSProcessInfo.processInfo.processName,
+	          NSStringFromClass([layout class]), kSokoBottomLayoutCodingKey);
+
 	[coder encodeBool:YES forKey:kSokoBottomLayoutCodingKey];
 }
 
 + (void)decodeComplicationLayout:(id)layout withCoder:(id)coder {
 	if (!layout || ![coder respondsToSelector:@selector(decodeBoolForKey:)]) return;
 
-	if ([coder decodeBoolForKey:kSokoBottomLayoutCodingKey]) [self setBottomLayoutValue:@YES forComplicationLayout:layout];
+	if ([coder decodeBoolForKey:kSokoBottomLayoutCodingKey]) {
+		[self setBottomLayoutValue:@YES forComplicationLayout:layout];
+		ERSokoLog(@"SOKO-DEC proc=%@ cls=%@ bottom=1",
+		          NSProcessInfo.processInfo.processName, NSStringFromClass([layout class]));
+	}
 }
 
 + (void)copyBottomLayoutFromComplicationLayout:(id)source toComplicationLayout:(id)copy {

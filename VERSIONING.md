@@ -889,26 +889,9 @@
 - 前四轮失败复盘：-54 清错层/-55 拦错触发/-58 拦错变体/-59 探针挂错分支（编辑态 completion，正常滑动不经过，缓落轨迹从未采到）。
 - 终版：① %hook CCUIModuleCollectionView 加 actionForLayer:forKey:——抑制窗口内对 bounds/position 返回 NSNull（CA 隐式动画唯一必经关卡，事前否决而非事后清除，覆盖一切写入路径）；② 抑制窗口设在落位启动点（now+1.8s，不依赖 completion）；③ 探针同步搬到启动点（+0.45/0.9/1.4s）。
 
-## 1.2.1-61（1002161）· 缓落封口战：CALayer addAnimation 拦截
-- 总根源：ANIMCHAIN 几何重读——子树 d=305-880 而 collection d=0+keys 非空 = collection 的 bounds.origin **显式动画**（CCUI 每轮布局 addAnimation 手动挂回，-54/-57 清了重挂、-58/-59 绕过 setter、-60 关卡只管隐式）。
-- 修复：MSHookMessageEx 全局 swizzle -[CALayer addAnimation:forKey:]——抑制窗口内目标 layer 的 delegate 是 CCUIModuleCollectionView 的动画一律丢弃；独立 dispatch_once 注册（绕过主 %ctor 不执行的坑）。四条动画创建路径全堵：隐式（-60）/animated: 变体（-58）/无标志变体（-59）/显式（本版）。
-
-## 1.2.1-62（1002162）· AA 观察模式：addAnimation 逐笔点名
-- -61 的 delegate 过滤误伤：落位动画（EchoRebornPageSettleSublayerTransform）挂在 collection 的 layer 上（delegate=collection）被丢弃=翻页动画消失，已回退 -60。且缓落动画幸存=其宿主 layer 的 delegate 不是 collection——宿主身份需重新点名。
-- -62：addAnimation hook 改为纯记录——抑制窗口内 CC 家族 layer 的每笔动画（layer 类/delegate 类/keyPath/forKey/duration，限 40 笔）落 ERLogInfo（AA-WATCH 行），翻页动画不受影响。
-
-## 1.2.1-63（1002163）· AA hook 修复：独立 constructor + ERPagerTrace 通道
-- -62 的 AA-WATCH 零条根因：① 注册在主 %ctor 上下文（本项目主 %ctor 不执行的老坑）；② ERLogInfo 走 ERLogMirror 环不可靠；③ 计数器 40 笔永不重置。另版本号链式替换多次失配（-62 空推/-63 第一次空推），已显式对齐。
-- 修复：① hook 实现移至 ERPagerTrace 定义之后 + 独立 __attribute__((constructor)) 注册；② AA-WATCH 改走 ERPagerTrace（160 行环，拉取通道）；③ 计数器随窗口过期懒重置。观察模式保持纯记录不丢弃。
-
-## 1.2.1-64（1002164）· addAnimation hook 拆独立 .xm（绕 Logos group 结构）
-- -63 的 Logos 编译错误 non-initialized hook group: _ungrouped = Tweak.xm 内的 constructor 与 %hook group 初始化次序冲突。
-- 修复：hook 实现+constructor 拆到独立 ERAddAnimHook.xm（无 %hook 块，Logos 独立编译）；Tweak.xm 的 ERPagerTrace/gERDroopSuppressUntil 去 static 供 extern；Makefile FILES 加该文件。观察模式纯记录。
-
-## 1.2.1-65（1002165）· addAnimation hook 改 .x 扩展名（绕 Logos 预处理器）
-- -64 的 .xm 文件仍触发 Logos 报错（non-initialized hook group）——Logos 预处理 .xm 时的 group 机制与纯 ObjC constructor 天然冲突。
-- 修复：hook 移到 ERAddAnimHook.x（.x=纯 ObjC 无 Logos）；Tweak.xm 的 ERPagerTrace/gERDroopSuppressUntil 恢复 static，改用两个非 static 桥接函数（ERDroopSuppressRemaining/ERDropWatchNote）供 .x extern。
-
-## 1.2.1-66（1002166）· Logos 编译错误根修：补回 %init(_ungrouped)
-- -63 删除 AA 注册块时把 %ctor 里的 %init(_ungrouped); 一起删了（块跨度覆盖到它）→ Tweak.xm 编译报 non-initialized hook group: _ungrouped（连续四轮 CI 失败的根因，与缓落修复本身无关）。
-- 修复：在 RCP 块后补回 %init(_ungrouped);。AA 观察模式（ERAddAnimHook.x 纯 ObjC constructor）保持不变。
+## 1.2.1-68（1002168）· 锁屏组件/通知卡片整体换成上游 Soko 1.1.0（ObjC + Logos 重写）
+- 基线：1.2.1-60（d45a6211）。1.2.1-61~66 的 addAnimation/缓落实验不进本版；-60 自带的 actionForLayer 抑制窗口原样保留。
+- Soko：Swift（rc.3 移植）整目录删除，改由上游 1.1.0 的 ObjC/Logos 源编入同一支 EchoReborn.dylib。组件「顶部/底部」改成长按锁屏 → 自定义 → 上下滑切换，按壁纸各自记忆（写进 PRPosterComplicationLayout 归档，编码键 SokoComplicationsUseBottomLayout）。
+- 旧设置桥：6 个 soko_* 键（域 com.strive.echoreborn.preferences、通知 com.strive.echoreborn/ReloadPrefs）名字/默认值/语义不变，1.1.0 的 SokoPreferences.m 按同键读取，设置页继续实时生效。
+- 修复：① 根 filter 补 com.apple.PosterKit / com.apple.MercuryPoster（壁纸配置在这两个进程编解码，缺了就是「编辑完退出回顶部」），Tweak.xm 的 %ctor 对它们第一行 return；② Soko 的 %ctor 改显式进程白名单（原来 Siri 三个进程会误走 poster 分支）；③ SokoPosterModel 的 <roothide.h> 改 __has_include 守卫（rootless 可编译），jbroot 兜底收进 SokoPrivate.h；④ 删除 Soko.x 里对 quickActionsView 的 transform 缩进 —— 与 Tweak.xm 的 center 路径叠加成 2× 位移，横向缩进唯一由 Tweak.xm 负责；⑤ marker 改名 com.strive.echoreborn.default-layout（不与真 Soko 抢文件）；本包不带 postinst，首次下滑一次即可，之后按壁纸记忆。
+- 诊断：新增 ERSokoLog 跨 TU 日志桥（Tweak.xm 实现 / Soko 各 .m 调用），打 SOKO-CAP / SOKO-DOCK / SOKO-SWIPE / SOKO-ENC / SOKO-DEC；日志开关未就绪前的行做早鸟缓冲，避免丢掉启动期探针。

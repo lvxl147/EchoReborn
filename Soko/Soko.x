@@ -1,5 +1,6 @@
 #import "Soko.h"
 #import "SokoPreferences.h"
+#import "SokoLog.h"
 
 static BOOL gActivePosterUsesBottomLayout;
 static __weak CSCoverSheetViewController *gCoverSheetViewController;
@@ -92,14 +93,10 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 	[[SokoDockCoordinator coordinatorForCoverSheetView:self] coverSheetViewDidLayout];
 
-	// 1.2.1-67 · 旧设置项：快捷操作横向缩进（开关关 → 复位到系统原位）
-	@try {
-		CSQuickActionsView *qa = self.quickActionsView;
-		if (qa) {
-			CGFloat tx = SokoPrefQuickActionsEnabled() ? SokoPrefQuickActionsIndent() : 0.0;
-			qa.transform = CGAffineTransformMakeTranslation(tx, 0.0);
-		}
-	} @catch (__unused NSException *e67) {}
+	// 1.2.1-68 · 这里原本还有一段 qa.transform = translate(indent, 0) 的横向缩进。
+	// 它和 Tweak.xm 的 ERQuickActionsApplyButton（改 center，1.0.9-170/172/173 三轮
+	// 现场日志实证 transform 会被 CSQuickActionsView 的布局吞掉）叠加 = 双倍位移。
+	// 横向缩进唯一实现放在 Tweak.xm，本文件不再插手。
 }
 
 - (void)_layoutDateView {
@@ -603,11 +600,32 @@ static void SokoInitPoster(void) {
 }
 
 %ctor {
-	if ([SokoPosterModel isSupported]) %init(SokoPosterModel);
+	NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
+	BOOL isSpringBoard = [bundleIdentifier isEqualToString:@"com.apple.springboard"];
 
-	if ([NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
-		SokoInitDock();
-	} else {
-		SokoInitPoster();
+	// 1.2.1-68 · 显式进程白名单。上游是「不是 springboard 就当 poster」，于是
+	// EchoReborn filter 里的 SiriViewService / siri.SystemUI / SiriUI 也会走
+	// SokoInitPoster（那里会注册 dyld 回调、装编辑态钩子）。改成白名单后，
+	// 无关进程连 SokoPosterModel 都不注入。
+	BOOL isPosterHost = [bundleIdentifier isEqualToString:@"com.apple.PosterBoard"] ||
+	                    [bundleIdentifier isEqualToString:@"com.apple.PosterKit"] ||
+	                    [bundleIdentifier isEqualToString:@"com.apple.MercuryPoster"];
+	if (!isSpringBoard && !isPosterHost) return;
+
+	BOOL modelSupported = [SokoPosterModel isSupported];
+	if (modelSupported) %init(SokoPosterModel);
+
+	if (isSpringBoard) {
+		// 1.2.1-68 · 首装探针：dock=0 就是「本机不支持底部 dock」，别去猜布局算错。
+		BOOL dockSupported = [SokoDockCoordinator isSupported];
+		ERSokoLog(@"SOKO-CAP proc=%@ model=%d dock=%d poster=0",
+		          bundleIdentifier, (int)modelSupported, (int)dockSupported);
+		if (dockSupported) SokoInitDock();
+		return;
 	}
+
+	BOOL posterSupported = [SokoPosterLayout isSupported];
+	ERSokoLog(@"SOKO-CAP proc=%@ model=%d dock=0 poster=%d",
+	          bundleIdentifier, (int)modelSupported, (int)posterSupported);
+	if (posterSupported) SokoInitPoster();
 }
