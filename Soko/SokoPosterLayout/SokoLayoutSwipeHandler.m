@@ -74,6 +74,9 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 }
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
+	// 1.2.1-88 · "调整组件位置"关闭时整段禁用滑动
+	if (!SokoWidgetsEnabledValue()) return NO;
+
 	PREditingSceneViewController *controller = [self editor];
 	CGFloat inset = SokoDockGeometryBottomInset();
 	UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)gestureRecognizer;
@@ -147,6 +150,7 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 
 - (void)handleSwipe:(UIPanGestureRecognizer *)pan {
 	if (pan.state != UIGestureRecognizerStateEnded) return;
+	if (!SokoWidgetsEnabledValue()) return;
 
 	PREditingSceneViewController *controller = [self editor];
 	if (![SokoPosterLayout canSwipeEditingSceneViewController:controller]) {

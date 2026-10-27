@@ -996,3 +996,8 @@
 ## 1.2.1-87（1002187）· 虚线框改几何匹配 + 完成/取消判定位
 - 虚线框：类名扫描显示前 6 层都是通用容器（...PresentationView / _UISceneLayerHostContainer...），改按几何匹配 —— 尺寸≈组件行(364x76)、纵向中心≈系统行中心(±10pt) 的视图整体平移 delta；TRACE 17 回报命中数。
 - 完成/取消判定：code 28 = setComplicationLayout 触发（并带上会话值），code 29 = 编辑场景 viewWillDisappear（带会话值）。用这两条确认"取消"到底会不会走 28。
+
+## 1.2.1-88（1002188）· 开关同步禁用编辑滑动 + 取消不再写偏好 + 归档镜像防覆盖
+- 开关：新增 SokoWidgetsEnabled 通道，SpringBoard 每次发布带上"调整组件位置"状态；编辑器在 gestureRecognizerShouldBegin/handleSwipe 里直接拒绝，关闭后上下滑完全不响应。
+- 取消逻辑：setComplicationLayout 实测触发 44 次（含取消路径），不能当"保存"信号。改为：该钩子只把偏移写进 layout 归档，**不写偏好**；取消时系统不保存 layout → 偏好不变。
+- 归档→滑块镜像改为"仅镜像变化值"（新键 soko_mirroredOffset 记基线），避免重启后被旧归档值覆盖滑块。

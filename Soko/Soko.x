@@ -148,7 +148,21 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	if (!SokoPrefWidgetsEnabled()) usesBottomLayout = NO;
 	if (SokoPrefWidgetOffsetIsSet() && SokoPrefWidgetsEnabled()) usesBottomLayout = YES;
 	if (layoutOffset) {
-		SokoFileLog(@"ARCHIVE-OFFSET v=%.1f (仅记录，不参与渲染)", layoutOffset.doubleValue);
+		// 1.2.1-88 · 归档 → 滑块镜像：只镜像"变化过的值"。
+		// 首次读到只记基线不写（否则重启后旧值会覆盖用户刚拖的滑块）。
+		NSUserDefaults *mirror = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+		id baseline = [mirror objectForKey:@"soko_mirroredOffset"];
+		double archiveValue = layoutOffset.doubleValue;
+		if (baseline == nil) {
+			[mirror setDouble:archiveValue forKey:@"soko_mirroredOffset"];
+			SokoFileLog(@"ARCHIVE-BASELINE v=%.1f", archiveValue);
+		} else if (fabs([baseline doubleValue] - archiveValue) > 0.5) {
+			[mirror setDouble:archiveValue forKey:@"soko_mirroredOffset"];
+			[mirror setDouble:archiveValue forKey:@"soko_widgetOffset"];
+			[mirror synchronize];
+			notify_post("com.strive.echoreborn/ReloadPrefs");
+			SokoFileLog(@"ARCHIVE-MIRROR v=%.1f", archiveValue);
+		}
 	}
 	dispatch_async(dispatch_get_main_queue(), ^{
 		SokoSetActivePosterUsesBottomLayout(usesBottomLayout);
@@ -517,8 +531,8 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	SokoTrace(28, isnan(editingOffset) ? -1 : (long)llround(editingOffset));   // 28 = setComplicationLayout 触发
 	if (layout && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
-		// 立刻让 SpringBoard 应用（归档读取要等下一次壁纸配置回调，界面会慢一拍）
-		SokoEditorRequestRowOffset(editingOffset);
+		// 1.2.1-88 · 这里只写归档，不写偏好。取消时系统不会保存这份 layout，
+		// 因此偏好保持不变；点完成时才由 SpringBoard 在下次读到归档后镜像回滑块。
 		[SokoPosterLayout setEditingRowOffset:NAN];
 		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
 	}

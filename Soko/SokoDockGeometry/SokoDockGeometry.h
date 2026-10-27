@@ -39,6 +39,9 @@ FOUNDATION_EXPORT void SokoDockPublishRowOffsets(CGFloat rowOffset, CGFloat topO
 FOUNDATION_EXPORT CGFloat SokoRowOffsetValue(void);
 FOUNDATION_EXPORT CGFloat SokoTopOffsetValue(void);
 FOUNDATION_EXPORT BOOL SokoRowOffsetIsSet(void);
+// 1.2.1-88 · "调整组件位置"总开关（编辑器据此禁用上下滑）
+FOUNDATION_EXPORT void SokoDockPublishWidgetsEnabled(BOOL enabled);
+FOUNDATION_EXPORT BOOL SokoWidgetsEnabledValue(void);
 FOUNDATION_EXPORT void SokoEditorRequestRowOffset(CGFloat offset);
 // SpringBoard 侧读取编辑器最后一次请求的值（NAN 表示没有）
 FOUNDATION_EXPORT CGFloat SokoRowOffsetRequestValue(void);

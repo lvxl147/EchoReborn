@@ -291,6 +291,7 @@ static CGFloat gCachedSystemRowY = NAN;
 	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : topOffset;
 
 	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
+	SokoDockPublishWidgetsEnabled(SokoPrefWidgetsEnabled());
 
 	{
 		static CFTimeInterval lastPub = 0.0;

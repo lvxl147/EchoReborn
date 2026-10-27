@@ -8,6 +8,7 @@ NSString *const SokoRowOffsetDidChangeNotification = @"moe.waru.soko.dock.rowoff
 NSString *const SokoTopOffsetDidChangeNotification = @"moe.waru.soko.dock.topoffset";
 NSString *const SokoRowOffsetIsSetDidChangeNotification = @"moe.waru.soko.dock.rowset";
 NSString *const SokoSetRowOffsetRequestNotification = @"com.strive.echoreborn.soko.setrowoffset";
+NSString *const SokoWidgetsEnabledDidChangeNotification = @"com.strive.echoreborn.soko.widgetsenabled";
 
 static const double kSokoInsetScale = 64.0;
 
@@ -15,6 +16,7 @@ static CGFloat gBottomInset = NAN;
 static CGFloat gRowOffset = NAN;
 static CGFloat gTopOffset = NAN;
 static BOOL gRowOffsetIsSet;
+static BOOL gWidgetsEnabled = YES;
 static BOOL gActiveBottom;
 static BOOL gEditorBottom;
 static BOOL gDodging;
@@ -96,6 +98,7 @@ void SokoDockGeometryReload(void) {
 	gRowOffset = SokoDecodeSigned(SokoReadState(SokoRowOffsetDidChangeNotification));
 	gTopOffset = SokoDecodeSigned(SokoReadState(SokoTopOffsetDidChangeNotification));
 	gRowOffsetIsSet = SokoReadState(SokoRowOffsetIsSetDidChangeNotification) != 0;
+	gWidgetsEnabled = SokoReadState(SokoWidgetsEnabledDidChangeNotification) != 0;
 	gLoaded = YES;
 }
 
@@ -117,6 +120,7 @@ void SokoDockGeometryObserve(void (^handler)(void)) {
 		SokoRowOffsetDidChangeNotification,
 		SokoTopOffsetDidChangeNotification,
 		SokoRowOffsetIsSetDidChangeNotification,
+		SokoWidgetsEnabledDidChangeNotification,
 	];
 
 	CFNotificationCenterRef darwin = CFNotificationCenterGetDarwinNotifyCenter();
@@ -201,4 +205,14 @@ void SokoEditorRequestRowOffset(CGFloat offset) {
 
 CGFloat SokoRowOffsetRequestValue(void) {
 	return SokoDecodeSigned(SokoReadState(SokoSetRowOffsetRequestNotification));
+}
+
+void SokoDockPublishWidgetsEnabled(BOOL enabled) {
+	SokoLoadIfNeeded();
+	SokoPublishFlag(&gWidgetsEnabled, enabled, SokoWidgetsEnabledDidChangeNotification);
+}
+
+BOOL SokoWidgetsEnabledValue(void) {
+	SokoLoadIfNeeded();
+	return gWidgetsEnabled;
 }
