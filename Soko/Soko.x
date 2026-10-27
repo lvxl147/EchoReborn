@@ -696,8 +696,6 @@ static void SokoInitPoster(void) {
 
 	// 海报进程：报到 + 记录能力判定
 	notify_post(SokoHelloNameForBundleIdentifier(bundleIdentifier).UTF8String);
-		return;
-	}
 
 	BOOL posterSupported = [SokoPosterLayout isSupported];
 	BOOL liquidAss = SokoLiquidAssClockEnabled();
