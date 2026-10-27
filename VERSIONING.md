@@ -904,3 +904,7 @@
 ## 1.2.1-64（1002164）· addAnimation hook 拆独立 .xm（绕 Logos group 结构）
 - -63 的 Logos 编译错误 non-initialized hook group: _ungrouped = Tweak.xm 内的 constructor 与 %hook group 初始化次序冲突。
 - 修复：hook 实现+constructor 拆到独立 ERAddAnimHook.xm（无 %hook 块，Logos 独立编译）；Tweak.xm 的 ERPagerTrace/gERDroopSuppressUntil 去 static 供 extern；Makefile FILES 加该文件。观察模式纯记录。
+
+## 1.2.1-65（1002165）· addAnimation hook 改 .x 扩展名（绕 Logos 预处理器）
+- -64 的 .xm 文件仍触发 Logos 报错（non-initialized hook group）——Logos 预处理 .xm 时的 group 机制与纯 ObjC constructor 天然冲突。
+- 修复：hook 移到 ERAddAnimHook.x（.x=纯 ObjC 无 Logos）；Tweak.xm 的 ERPagerTrace/gERDroopSuppressUntil 恢复 static，改用两个非 static 桥接函数（ERDroopSuppressRemaining/ERDropWatchNote）供 .x extern。
