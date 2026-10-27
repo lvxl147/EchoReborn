@@ -179,10 +179,9 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	SokoEditorRequestRowOffset(target);
 	[SokoPosterLayout relayoutAnimated:YES];
 
-	// 1.2.1-68 · 判据 #5/#6：滑动是否被识别、最终状态是什么
-	ERSokoLog(@"SOKO-SWIPE before=%d after=%d distance=%.1f velocity=%.1f proc=%@",
-	          (int)bottom, (int)!bottom, distance, velocity,
-	          NSProcessInfo.processInfo.processName);
+	// 1.2.1-76 · 滑动结果（目标/当前）
+	ERSokoLog(@"SOKO-SWIPE target=%.1f current=%.1f proc=%@",
+	          target, current, NSProcessInfo.processInfo.processName);
 }
 
 @end
