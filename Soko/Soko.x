@@ -879,6 +879,9 @@ static void SokoProbeEditorButtons(void) {
 			            (int)nativeBottom, (int)rowFrame, (int)reticle, (int)frameRect, (int)frameVariant);
 		}
 
+		%init(SokoEditorActions);
+		SokoTrace(59, 1);   // 59=1：SpringBoard 侧已装点击钩子
+
 		if (dockSupported) SokoInitDock();
 
 		// 1.2.1-73 · 设置页改值/重置后立即重排组件行（此前只重排通知列表，
@@ -936,5 +939,6 @@ static void SokoProbeEditorButtons(void) {
 	            (int)modelSupported, (int)posterSupported, (int)liquidAss);
 	SokoProbeEditorButtons();
 	%init(SokoEditorActions);
+	SokoTrace(59, 2);   // 59=2：海报进程侧已装点击钩子
 	if (posterSupported) SokoInitPoster();
 }

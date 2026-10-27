@@ -1038,3 +1038,7 @@
 ## 1.2.1-96（1002196）· 完成/取消改用动作名判定；边框扫描挂到容器登记
 - 前两版按标题/方法名都没命中（code 50 恒 0）。改为拦 UIApplication sendAction 时直接看 SEL：55=任意点击、56=动作名含 done/save/commit/finish/apply、57=含 cancel/dismiss/discard、58 保留标题匹配；命中 done 才写值。
 - 边框扫描从"编辑器登记"改挂到"组件容器登记"（code 3 已证明必然发生），并保留 0.8s 延迟补扫。
+
+## 1.2.1-97（1002197）· 定位点击钩子装在哪一侧
+- 实测 code 55（任意点击）恒为 0，说明 sendAction 钩子没装进真正处理按钮的进程；code 3~16 正常，说明编辑器钩子在跑。
+- 改动：SokoEditorActions 组在 SpringBoard 分支也初始化；两分支各发一条 59（1=SpringBoard、2=海报进程），先确认钩子落点，再定下一步。
