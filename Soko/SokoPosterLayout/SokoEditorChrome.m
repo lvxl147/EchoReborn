@@ -177,26 +177,27 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 		for (UIView *sub in view.subviews) [stack addObject:sub];
 	}
 
-	// 1.2.1-85 · 一个都没命中时，把视图树里的类名编码回传（code 20，每 3 字节一条，
-	// -1 表示一个类名结束；上限 25 个视图），用于确定虚线框到底是哪个类。
+	// 1.2.1-86 · 一个都没命中时把类名回传。上一版所有分片共用 code 20，被系统合并成
+	// 只剩 -1；这里每个分片用不同 code（20..26），分隔符用 27，避免互相覆盖。
 	if (hits == 0) {
 		NSMutableArray<UIView *> *walk = [NSMutableArray arrayWithObject:root];
 		NSInteger emitted = 0;
-		while (walk.count && emitted < 25) {
+		while (walk.count && emitted < 6) {
 			UIView *v = walk.firstObject;
 			[walk removeObjectAtIndex:0];
 			NSString *name = NSStringFromClass([v class]);
 			const char *utf8 = name.UTF8String ?: "";
 			NSUInteger byteLen = [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
 			NSUInteger len = MIN(byteLen, (NSUInteger)21);
-			for (NSUInteger i = 0; i < len; i += 3) {
+			NSUInteger chunk = 0;
+			for (NSUInteger i = 0; i < len; i += 3, chunk++) {
 				long packed = 0;
 				for (NSUInteger j = 0; j < 3; j++) {
 					packed = (packed << 8) | (i + j < len ? (unsigned char)utf8[i + j] : 0);
 				}
-				SokoTrace(20, packed);
+				SokoTrace((int)(20 + (chunk % 7)), packed);
 			}
-			SokoTrace(20, -1);
+			SokoTrace(27, -1);
 			emitted++;
 			for (UIView *sub in v.subviews) [walk addObject:sub];
 		}

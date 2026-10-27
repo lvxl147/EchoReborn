@@ -275,24 +275,18 @@ static CGFloat gCachedSystemRowY = NAN;
 	UIView *rowSourceView = self.coverSheetViewController.complicationContainerViewController.viewIfLoaded;
 	if (!rowSourceView || !rowSourceView.superview) return;
 
-	CGRect rowRect = [rowSourceView convertRect:rowSourceView.bounds toView:coverSheetView];
-	CGFloat rowHeight = CGRectGetHeight(rowRect);
+	// 1.2.1-86 · 顶部端点只用 layoutController 的"系统原位行" + 11pt 修正。
+	// 之前用组件视图实时量，停靠后视图被搬进 dock，量到 11pt（用户实测上滑变成 11）。
+	CSCoverSheetView *coverSheetView2 = (CSCoverSheetView *)self.coverSheetViewController.viewIfLoaded;
+	CGRect bounds = coverSheetView2.bounds;
+	CGRect stockRow = [self.layoutController frameForElements:kSokoComplicationRowElement withBoundingRect:bounds];
+	CGFloat rowHeight = CGRectGetHeight(stockRow);
 	if (rowHeight < 1.0) return;
 
-	// 未停靠时量到的才是系统原位；停靠后组件视图已被搬走，不能再用它当基线。
-	if (!self.attached && rowSourceView.superview != [self contentView]) {
-		gCachedSystemRowY = CGRectGetMinY(rowRect);
-	}
-	CGFloat systemRowY = isfinite(gCachedSystemRowY) ? gCachedSystemRowY : CGRectGetMinY(rowRect);
-
-	// 1.2.1-83 · 顶部端点经验修正：系统实际渲染的组件行比这里量到的再低 11pt
-	// （用户实测 -507 才与系统默认位置一致；量到的是 -518）。
 	static const CGFloat kSokoTopEndpointCorrection = 11.0;
-	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - rowHeight;
-	CGFloat topOffset = systemRowY - bottomRowY + kSokoTopEndpointCorrection;
+	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView2] - rowHeight;
+	CGFloat topOffset = CGRectGetMinY(stockRow) - bottomRowY + kSokoTopEndpointCorrection;
 
-	// 1.2.1-83 · 唯一来源 = 设置页滑块。归档里的值不再参与渲染（它曾把滑块值覆盖成 0，
-	// 表现为"滑块拖了没反应"）。未设置滑块值时才落在顶部端点。
 	BOOL offsetIsSet = SokoPrefWidgetOffsetIsSet();
 	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : topOffset;
 
