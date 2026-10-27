@@ -135,7 +135,7 @@ static NSNumber *gActiveRowOffset;
 	// 就接管 —— 之前只看 self.enabled，而它只在壁纸切换时更新，滑块改值后不重算，
 	// 表现就是"滑块拖了没反应"。
 	if (!SokoPrefWidgetsEnabled()) return NO;
-	if (SokoPrefWidgetOffsetIsSet() || gActiveRowOffset != nil) {
+	if (SokoPrefWidgetOffsetIsSet()) {
 		// 继续走下面的描述符检查
 	} else if (!self.enabled) {
 		return NO;
@@ -276,12 +276,16 @@ static NSNumber *gActiveRowOffset;
 	CGFloat rowHeight = CGRectGetHeight(rowRect);
 	if (rowHeight < 1.0) return;
 
+	// 1.2.1-83 · 顶部端点经验修正：系统实际渲染的组件行比这里量到的再低 11pt
+	// （用户实测 -507 才与系统默认位置一致；量到的是 -518）。
+	static const CGFloat kSokoTopEndpointCorrection = 11.0;
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - rowHeight;
-	CGFloat topOffset = CGRectGetMinY(rowRect) - bottomRowY;
+	CGFloat topOffset = CGRectGetMinY(rowRect) - bottomRowY + kSokoTopEndpointCorrection;
 
-	BOOL offsetIsSet = (gActiveRowOffset != nil) || SokoPrefWidgetOffsetIsSet();
-	CGFloat effectiveOffset = gActiveRowOffset ? gActiveRowOffset.doubleValue : SokoPrefWidgetOffset();
-	if (!offsetIsSet) effectiveOffset = topOffset;
+	// 1.2.1-83 · 唯一来源 = 设置页滑块。归档里的值不再参与渲染（它曾把滑块值覆盖成 0，
+	// 表现为"滑块拖了没反应"）。未设置滑块值时才落在顶部端点。
+	BOOL offsetIsSet = SokoPrefWidgetOffsetIsSet();
+	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : topOffset;
 
 	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
 
@@ -324,9 +328,8 @@ static NSNumber *gActiveRowOffset;
 	[self publishRowOffsetsIfPossible];
 
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row);
-	BOOL offsetIsSet = (gActiveRowOffset != nil) || SokoPrefWidgetOffsetIsSet();
-	CGFloat effectiveOffset = gActiveRowOffset ? gActiveRowOffset.doubleValue : SokoPrefWidgetOffset();
-	if (!offsetIsSet) effectiveOffset = SokoTopOffsetValue();
+	BOOL offsetIsSet = SokoPrefWidgetOffsetIsSet();
+	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : SokoTopOffsetValue();
 	if (isnan(effectiveOffset)) effectiveOffset = 0.0;
 
 	row.origin.y = bottomRowY + effectiveOffset;

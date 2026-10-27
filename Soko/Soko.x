@@ -138,26 +138,17 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 			layout = [configuration pr_loadComplicationLayoutWithError:nil];
 		}
 
-		// 1.2.1-79 · 每张壁纸的行偏移（归档里的 double）优先
+		// 1.2.1-83 · 归档值只保留写入（用于将来的每壁纸记忆），不参与渲染决策：
+		// 它会覆盖设置页滑块（实测 archive=0 把 prefs=-108 顶掉，表现为滑块失效）。
 		layoutOffset = [SokoPosterModel rowOffsetForComplicationLayout:layout];
 		usesBottomLayout = [SokoPosterModel complicationLayoutUsesBottomLayout:layout];
 	}
 
-	[SokoDockCoordinator setActiveRowOffset:layoutOffset];
-	if (layoutOffset) usesBottomLayout = YES;
-
-	// 1.2.1-79 · "调整组件位置"总开关：关掉就整段不接管（之前被 isSet 判定盖过去了）
+	// 1.2.1-83 · 滑块是唯一渲染来源；"调整组件位置"关闭则整段不接管。
 	if (!SokoPrefWidgetsEnabled()) usesBottomLayout = NO;
-
-	// 归档里没有偏移但设置页设过值 → 沿用设置页的值（向后兼容旧操作方式）
-	if (!layoutOffset && SokoPrefWidgetOffsetIsSet() && SokoPrefWidgetsEnabled()) usesBottomLayout = YES;
-
-	// 把归档值镜像到设置页显示（保证"切壁纸→滑块跟随"）
+	if (SokoPrefWidgetOffsetIsSet() && SokoPrefWidgetsEnabled()) usesBottomLayout = YES;
 	if (layoutOffset) {
-		NSUserDefaults *mirror = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
-		if (fabs([mirror doubleForKey:@"soko_widgetOffset"] - layoutOffset.doubleValue) > 0.5) {
-			[mirror setDouble:layoutOffset.doubleValue forKey:@"soko_widgetOffset"];
-		}
+		SokoFileLog(@"ARCHIVE-OFFSET v=%.1f (仅记录，不参与渲染)", layoutOffset.doubleValue);
 	}
 	dispatch_async(dispatch_get_main_queue(), ^{
 		SokoSetActivePosterUsesBottomLayout(usesBottomLayout);
