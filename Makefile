@@ -45,7 +45,7 @@ TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam EchoRebornSource
 # property access walks off the object - SpringBoard dies and the device
 # respring-loops.  Everything now compiles into EchoReborn.dylib, so any leftover
 # duplicate would be a link error instead of a runtime landmine.
-EchoReborn_FILES = Tweak.xm ERAddAnimHook.x \
+EchoReborn_FILES = Tweak.xm \
                 GlassKit/LGGlassKit.x \
                 GlassKit/LGLiveBackdropView.m \
                 GlassKit/LGGlassLog.m \
@@ -56,6 +56,7 @@ EchoReborn_FILES = Tweak.xm ERAddAnimHook.x \
                 Soko/SokoPosterLayout/*.m \
                 Soko/SokoPosterModel/*.m \
                 Soko/SokoRuntime/*.m \
+                Soko/SokoPreferences.m \
                 LiquidSiri/Tweak.x \
                 LiquidSiri/SwiftUIWave/Models/SiriWave.swift \
                 LiquidSiri/SwiftUIWave/Views/SupportLine.swift \
