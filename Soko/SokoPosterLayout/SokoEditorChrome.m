@@ -45,6 +45,27 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 }
 
 + (void)updateReticleForEditorRootViewController:(PREditorRootViewController *)controller {
+	// 1.2.1-91 · 只读探针：边框到底是被隐藏还是被裁剪。
+	// 31=alpha×100 32=hidden 33=reticle.y 34=reticle.h 35=父clips 36=父y 37=父h 38=裁剪祖先数
+	{
+		UIView *probe = [controller respondsToSelector:@selector(graphicComplicationsReticleView)] ? controller.graphicComplicationsReticleView : nil;
+		if (probe) {
+			SokoTrace(31, (long)llround(probe.alpha * 100.0));
+			SokoTrace(32, probe.hidden ? 1 : 0);
+			SokoTrace(33, (long)llround(probe.frame.origin.y));
+			SokoTrace(34, (long)llround(probe.frame.size.height));
+			UIView *superview = probe.superview;
+			SokoTrace(35, (superview.clipsToBounds ? 1 : 0));
+			SokoTrace(36, (long)llround(superview.frame.origin.y));
+			SokoTrace(37, (long)llround(superview.frame.size.height));
+			NSInteger clippedAncestors = 0;
+			for (UIView *v = superview; v; v = v.superview) {
+				if (v.clipsToBounds) clippedAncestors++;
+			}
+			SokoTrace(38, clippedAncestors);
+		}
+	}
+
 	// 1.2.1-90 · 上游实现：先让系统按它自己的行框重算（它会调用我们 hook 的
 	// complicationRowElementEditingReticleFrameWithBoundingRect:），有这个方法就直接返回；
 	// 只有系统没有该方法时，才用 transform 兜底。

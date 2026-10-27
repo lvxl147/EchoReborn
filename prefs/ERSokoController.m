@@ -76,11 +76,10 @@ static NSString *const kSokoReload = @"com.strive.echoreborn/ReloadPrefs";
     NSString *key = [specifier propertyForKey:@"key"];
     if (![key length]) return;
 
-    CFStringRef domain = (__bridge CFStringRef)[self erDomainForSpecifier:specifier];
-    CFPreferencesSetAppValue((__bridge CFStringRef)key,
-                             (__bridge CFPropertyListRef)value,
-                             domain);
-    CFPreferencesAppSynchronize(domain);
+    // 1.2.1-91 · 与 tweak 侧统一用 NSUserDefaults(suiteName:)，避免两套 API 读到不同缓存
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:[self erDomainForSpecifier:specifier]];
+    [defaults setObject:value forKey:key];
+    [defaults synchronize];
 
     NSString *note = [specifier propertyForKey:@"PostNotification"];
     if ([note length]) notify_post(note.UTF8String);
@@ -99,9 +98,9 @@ static NSString *const kSokoReload = @"com.strive.echoreborn/ReloadPrefs";
 }
 
 - (void)erWriteOffset:(double)value forKey:(NSString *)key {
-    CFStringRef domain = (__bridge CFStringRef)kSokoSuite;
-    CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)@(value), domain);
-    CFPreferencesAppSynchronize(domain);
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kSokoSuite];
+    [defaults setDouble:value forKey:key];
+    [defaults synchronize];
     notify_post(kSokoReload.UTF8String);
     [self reloadSpecifiers];
 }

@@ -683,6 +683,51 @@ static void SokoInitPoster(void) {
 	_dyld_register_func_for_add_image(SokoImageAdded);
 }
 
+
+// 1.2.1-91 · 只读探针：找出编辑器里"完成/取消"到底调用哪个方法。
+// 只给零参/单参方法装钩子（避免变参 IMP 崩溃），命中即发一个独立码（40 起），
+// 然后再原样转调原实现，不改变任何行为。
+static void SokoProbeEditorButtons(void) {
+	Class cls = NSClassFromString(@"PREditingSceneViewController");
+	if (!cls) return;
+
+	NSArray<NSString *> *keywords = @[@"done", @"cancel", @"save", @"apply", @"discard", @"commit", @"finish"];
+	unsigned int count = 0;
+	Method *methods = class_copyMethodList(cls, &count);
+	int code = 40;
+
+	for (unsigned int i = 0; i < count && code < 52; i++) {
+		SEL sel = method_getName(methods[i]);
+		NSString *name = NSStringFromSelector(sel);
+		NSString *lower = name.lowercaseString;
+		BOOL match = NO;
+		for (NSString *keyword in keywords) {
+			if ([lower containsString:keyword]) { match = YES; break; }
+		}
+		if (!match) continue;
+
+		unsigned int argCount = method_getNumberOfArguments(methods[i]);
+		IMP original = method_getImplementation(methods[i]);
+		int capturedCode = code++;
+
+		if (argCount == 2) {
+			IMP replacement = imp_implementationWithBlock(^(id receiver) {
+				SokoTrace(capturedCode, 0);
+				((void (*)(id, SEL))original)(receiver, sel);
+			});
+			method_setImplementation(methods[i], replacement);
+		} else if (argCount == 3) {
+			IMP replacement = imp_implementationWithBlock(^(id receiver, uintptr_t arg) {
+				SokoTrace(capturedCode, 0);
+				((void (*)(id, SEL, uintptr_t))original)(receiver, sel, arg);
+			});
+			method_setImplementation(methods[i], replacement);
+		}
+	}
+
+	if (methods) free(methods);
+}
+
 %ctor {
 	NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
 	BOOL isSpringBoard = [bundleIdentifier isEqualToString:@"com.apple.springboard"];
@@ -720,7 +765,7 @@ static void SokoInitPoster(void) {
 		}
 
 		// 1.2.1-75 · 海报进程判定码：每条 code 一条通知名，避免连续判定被系统合并。
-		for (int code = 1; code < 32; code++) {
+		for (int code = 1; code < 52; code++) {
 			NSString *traceName = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", code];
 			int traceToken = NOTIFY_TOKEN_INVALID;
 			notify_register_dispatch(traceName.UTF8String, &traceToken, dispatch_get_main_queue(), ^(int t) {
@@ -797,5 +842,6 @@ static void SokoInitPoster(void) {
 	          bundleIdentifier, (int)modelSupported, (int)posterSupported);
 	SokoFileLog(@"CAP poster model=%d posterSupported=%d liquidAss=%d",
 	            (int)modelSupported, (int)posterSupported, (int)liquidAss);
+	SokoProbeEditorButtons();
 	if (posterSupported) SokoInitPoster();
 }
