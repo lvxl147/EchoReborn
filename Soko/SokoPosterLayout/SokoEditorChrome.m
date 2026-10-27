@@ -153,59 +153,47 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 	CGFloat offset = [SokoPosterLayout effectiveRowOffset];
 	if (isnan(inset) || isnan(offset)) return 0;
 
+	// 1.2.1-87 · 改为"几何匹配"：类名扫不到（前 6 层都是通用容器），因此按
+	// 「尺寸≈组件行 + 纵向位置≈系统行位置」来找那个虚线框，然后整体平移 delta。
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(stock)) return 0;
+
+	CGRect bounds = root.bounds;
+	CGFloat targetTop = CGRectGetMaxY(bounds) - inset - CGRectGetHeight(stock) + offset;
+	CGFloat delta = targetTop - CGRectGetMinY(stock);
+	if (fabs(delta) < 0.5) return 0;
+
+	UIView *container = controller.complicationContainerViewControllers.firstObject.viewIfLoaded;
+
+	CGFloat stockCenterY = CGRectGetMidY(stock);
+	CGFloat rowW = CGRectGetWidth(stock);
+	CGFloat rowH = CGRectGetHeight(stock);
+
 	NSInteger hits = 0;
 	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
-	while (stack.count) {
-		UIView *view = stack.lastObject;
+	NSInteger visited = 0;
+	while (stack.count && visited < 400) {
+		UIView *v = stack.lastObject;
 		[stack removeLastObject];
+		visited++;
 
-		NSString *name = NSStringFromClass([view class]);
-		// 1.2.1-84 · 类名可能是 PREditingReticleView / PREditingReticleViewContainer 等，
-		// 也可能叫 Outline/Selection/Dashed，放宽匹配；命中数由 TRACE 17 回报。
-		BOOL looksLikeReticle = [name rangeOfString:@"eticle" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-		                        [name rangeOfString:@"Outline" options:NSCaseInsensitiveSearch].location != NSNotFound ||
-		                        [name rangeOfString:@"Dashed" options:NSCaseInsensitiveSearch].location != NSNotFound;
-		if (looksLikeReticle) {
-			CGRect inRoot = [view.superview convertRect:view.bounds toView:root];
-			CGFloat targetY = CGRectGetMaxY(root.bounds) - inset - CGRectGetHeight(inRoot) + offset;
-			CGRect frame = view.frame;
-			frame.origin.y += targetY - CGRectGetMinY(inRoot);
-			view.frame = frame;
-			hits++;
-		}
-
-		for (UIView *sub in view.subviews) [stack addObject:sub];
-	}
-
-	// 1.2.1-86 · 一个都没命中时把类名回传。上一版所有分片共用 code 20，被系统合并成
-	// 只剩 -1；这里每个分片用不同 code（20..26），分隔符用 27，避免互相覆盖。
-	if (hits == 0) {
-		NSMutableArray<UIView *> *walk = [NSMutableArray arrayWithObject:root];
-		NSInteger emitted = 0;
-		while (walk.count && emitted < 6) {
-			UIView *v = walk.firstObject;
-			[walk removeObjectAtIndex:0];
-			NSString *name = NSStringFromClass([v class]);
-			const char *utf8 = name.UTF8String ?: "";
-			NSUInteger byteLen = [name lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
-			NSUInteger len = MIN(byteLen, (NSUInteger)21);
-			NSUInteger chunk = 0;
-			for (NSUInteger i = 0; i < len; i += 3, chunk++) {
-				long packed = 0;
-				for (NSUInteger j = 0; j < 3; j++) {
-					packed = (packed << 8) | (i + j < len ? (unsigned char)utf8[i + j] : 0);
-				}
-				SokoTrace((int)(20 + (chunk % 7)), packed);
+		if (v != container && v != root) {
+			CGRect inRoot = [v.superview convertRect:v.bounds toView:root];
+			BOOL sizeOK = CGRectGetWidth(inRoot) > rowW * 0.5 && CGRectGetWidth(inRoot) < rowW * 1.6 &&
+			              CGRectGetHeight(inRoot) > rowH * 0.5 && CGRectGetHeight(inRoot) < rowH * 1.8;
+			BOOL posOK = fabs(CGRectGetMidY(inRoot) - stockCenterY) < 10.0;
+			if (sizeOK && posOK && v.alpha > 0.01) {
+				v.transform = CGAffineTransformMakeTranslation(0.0, delta);
+				hits++;
 			}
-			SokoTrace(27, -1);
-			emitted++;
-			for (UIView *sub in v.subviews) [walk addObject:sub];
 		}
+
+		for (UIView *sub in v.subviews) [stack addObject:sub];
 	}
 
-	// 17=命中数、18=目标(×10)、19=行偏移
 	SokoTrace(17, hits);
-	SokoTrace(18, (long)llround((CGRectGetMaxY(root.bounds) - inset + offset) * 10.0));
+	SokoTrace(18, (long)llround(delta * 10.0));
 	SokoTrace(19, (long)llround(offset));
 	return hits;
 }

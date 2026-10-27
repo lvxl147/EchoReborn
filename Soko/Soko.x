@@ -332,6 +332,12 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	return self;
 }
 
+- (void)viewWillDisappear:(BOOL)animated {
+	%orig;
+
+	SokoTrace(29, (long)[SokoPosterLayout editingRowOffset]);   // 29 = 编辑场景消失时的会话值
+}
+
 - (void)viewDidLoad {
 	%orig;
 
@@ -508,6 +514,7 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	// 1.2.1-79 · 写进"新 layout 归档"（不是偏好）：系统保存即落盘、取消即丢弃，
 	// 天然满足原版语义，也实现"每张壁纸各自记忆"。
 	CGFloat editingOffset = [SokoPosterLayout editingRowOffset];
+	SokoTrace(28, isnan(editingOffset) ? -1 : (long)llround(editingOffset));   // 28 = setComplicationLayout 触发
 	if (layout && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
 		// 立刻让 SpringBoard 应用（归档读取要等下一次壁纸配置回调，界面会慢一拍）
