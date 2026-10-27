@@ -1,4 +1,5 @@
 #import "SokoNotificationList.h"
+#import "SokoPreferences.h"
 
 static const CGFloat kSokoListFooterPadding = 20.0;
 static const CGFloat kSokoNotificationToDockSpacing = 10.0;
@@ -135,9 +136,9 @@ static const CGFloat kSokoNotificationToDockSpacing = 10.0;
 
 	CGFloat targetY;
 	if (view == coverSheetView) {
-		targetY = footerY - offset;
+		targetY = footerY - offset + SokoPrefNotificationOffset();
 	} else {
-		targetY = [listView convertPoint:CGPointMake(0.0, footerY) fromView:coverSheetView].y;
+		targetY = [listView convertPoint:CGPointMake(0.0, footerY) fromView:coverSheetView].y + SokoPrefNotificationOffset();
 	}
 
 	self.footerCenterDistanceFromListBottom = CGRectGetMaxY(listView.bounds) - targetY;
