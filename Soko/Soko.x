@@ -18,9 +18,39 @@ static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
 //   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
 static NSString *gActivePosterKey = nil;
 
+// 1.2.1-100 · 一次性的"壁纸身份"探针：本版实测 SokoPosterKeyForConfiguration 恒返回
+// nil（日志里一条 POSTER-KEY / POSTER-SEED 都没有，而同一函数里后面的 ARCHIVE-READ
+// 却打印了 → configuration 本身不是 nil，是 _path / provider 都取不到）。
+// 这里把候选键逐个试一遍并落盘，下一版据此选一个稳定的键。
+static void SokoProbePosterIdentity(id configuration) {
+	static BOOL probed = NO;
+	if (probed || !configuration) return;
+	probed = YES;
+
+	NSMutableString *log = [NSMutableString stringWithFormat:@"POSTER-PROBE cls=%@", NSStringFromClass([configuration class])];
+	for (NSString *selName in @[@"_path", @"path", @"uuid", @"UUID", @"identifier",
+	                             @"uniqueIdentifier", @"role", @"provider", @"name",
+	                             @"displayName", @"configurationUUID", @"posterUUID", @"descriptor"]) {
+		SEL sel = NSSelectorFromString(selName);
+		if (![configuration respondsToSelector:sel]) {
+			[log appendFormat:@" | %@=N/A", selName];
+			continue;
+		}
+		id value = nil;
+		@try { value = [configuration valueForKey:selName]; } @catch (__unused NSException *e) {}
+		NSString *described = [value description] ?: @"(nil)";
+		if (described.length > 60) described = [[described substringToIndex:60] stringByAppendingString:@"…"];
+		[log appendFormat:@" | %@=%@", selName, described];
+	}
+	SokoFileLog(@"%@", log);
+}
+
 static NSString *SokoPosterKeyForConfiguration(id configuration) {
+	SokoProbePosterIdentity(configuration);
+
 	NSString *path = nil;
 	@try { path = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
+	if ([path isKindOfClass:[NSURL class]]) path = ((NSURL *)path).path;
 	if (![path isKindOfClass:[NSString class]] || !path.length) {
 		id provider = nil;
 		@try { provider = [configuration valueForKey:@"provider"]; } @catch (__unused NSException *e) {}
@@ -600,8 +630,15 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	} else {
 		// 18 = 命中但本会话没滑动（payload = 次数）。**取消如果也走这里，18 会涨**
 		//   —— 下轮据此判断要不要再找一个"仅完成"的判据。
+		//   实测这个方法在编辑期会被系统调用十几次，必须节流否则冲爆日志环。
 		static long noSessionHits = 0;
-		SokoTrace(18, ++noSessionHits);
+		static CFTimeInterval lastHitLog = 0.0;
+		noSessionHits++;
+		CFTimeInterval nowHit = CACurrentMediaTime();
+		if (nowHit - lastHitLog > 2.0) {
+			lastHitLog = nowHit;
+			SokoTrace(18, noSessionHits);
+		}
 	}
 
 	if (layout) {

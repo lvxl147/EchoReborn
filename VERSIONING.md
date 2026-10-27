@@ -1068,3 +1068,16 @@
    18=命中但没滑动，用于下轮判断"取消是否也走这个方法"）；编辑器消失 3s 后
    清会话，杜绝残留值被误提交。
 6. 日志环 120 行 → 300 行 / 48KB；视图扫描探针加 3 秒节流（否则放开上限后会冲爆环）。
+
+## 1.2.1-100（1002200）· 壁纸身份探针 + 提交节流
+- 1.2.1-99 装机实测：归档污染已消除（`ARCHIVE-READ v=-507.0 (只读，不回流)`，
+  `PUB ... prefs=0.0` 稳定，不再在 0 / -507 之间跳）；`setComplicationLayout:`
+  确实可达（code 18 连续命中十几次）。
+- 但 **SokoPosterKeyForConfiguration 恒返回 nil**：整轮日志一条 POSTER-KEY /
+  POSTER-SEED / POSTER-RESTORE 都没有，而同一函数后面的 ARCHIVE-READ 有输出
+  → configuration 非 nil，是 `_path` 与 `provider` 都取不到（iOS 17.2.1 上
+  PRSPosterConfiguration 的键名变了，或 _path 是 NSURL）。
+- 新增一次性探针 POSTER-PROBE：把 _path / path / uuid / identifier / role /
+  provider / name / displayName / configurationUUID / posterUUID / descriptor
+  逐个试一遍并落盘（截断 60 字符），据此选一个稳定的壁纸键。
+- code 18 加 2 秒节流（原实现一次编辑会话写十几条，会冲爆 300 行环）。
