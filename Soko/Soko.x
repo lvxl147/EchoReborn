@@ -699,7 +699,7 @@ static void SokoInitPoster(void) {
 		}
 
 		// 1.2.1-75 · 海报进程判定码：每条 code 一条通知名，避免连续判定被系统合并。
-		for (int code = 1; code < 20; code++) {
+		for (int code = 1; code < 32; code++) {
 			NSString *traceName = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", code];
 			int traceToken = NOTIFY_TOKEN_INVALID;
 			notify_register_dispatch(traceName.UTF8String, &traceToken, dispatch_get_main_queue(), ^(int t) {

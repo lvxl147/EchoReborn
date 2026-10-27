@@ -173,9 +173,9 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 	// 1.2.1-78 · 进编辑就把"当前生效值"取进会话；之后滑动只改会话值，
 	// 不再跨进程写偏好（原版语义：点完成才生效）。
-	NSNumber *initial = objc_getAssociatedObject(controller, kSokoEditorRowOffsetKey);
-	// 1.2.1-79 · 有归档值就用归档值（每张壁纸独立记忆），没有就是顶部。
-	gEditingRowOffset = initial ? initial.doubleValue : [self effectiveRowOffset];
+	// 1.2.1-85 · 不再用归档值播种：之前完成时写进归档的 0 会让每次进入都落在 0。
+	// 现在只认 SpringBoard 发布过来的"当前生效值"（= 设置页滑块）。
+	gEditingRowOffset = [self effectiveRowOffset];
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);
 	SokoEditorPublishUsesBottomLayout([self editingSceneViewControllerUsesBottomLayout:controller]);
 	[self relayoutAnimated:NO];
