@@ -832,6 +832,9 @@ static void SokoProbeEditorButtons(void) {
 	BOOL modelSupported = [SokoPosterModel isSupported];
 	if (modelSupported) %init(SokoPosterModel);
 
+	// 1.2.1-97 · 点击钩子在所有进程统一初始化（Logos 不允许同一 group 初始化两次）
+	%init(SokoEditorActions);
+
 	if (isSpringBoard) {
 		// 1.2.1-68 · 首装探针：dock=0 就是「本机不支持底部 dock」，别去猜布局算错。
 		BOOL dockSupported = [SokoDockCoordinator isSupported];
@@ -879,7 +882,6 @@ static void SokoProbeEditorButtons(void) {
 			            (int)nativeBottom, (int)rowFrame, (int)reticle, (int)frameRect, (int)frameVariant);
 		}
 
-		%init(SokoEditorActions);
 		SokoTrace(59, 1);   // 59=1：SpringBoard 侧已装点击钩子
 
 		if (dockSupported) SokoInitDock();
@@ -938,7 +940,6 @@ static void SokoProbeEditorButtons(void) {
 	SokoFileLog(@"CAP poster model=%d posterSupported=%d liquidAss=%d",
 	            (int)modelSupported, (int)posterSupported, (int)liquidAss);
 	SokoProbeEditorButtons();
-	%init(SokoEditorActions);
 	SokoTrace(59, 2);   // 59=2：海报进程侧已装点击钩子
 	if (posterSupported) SokoInitPoster();
 }
