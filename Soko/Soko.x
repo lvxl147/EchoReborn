@@ -18,6 +18,22 @@ static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
 //   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
 static NSString *gActivePosterKey = nil;
 
+// 1.2.1-103 · 去掉键尾的版本号（_98-0 / /98-0）。
+//   实测 `stablePersistenceIdentifier` 是
+//   `…_CreateAFacePhotos(EEAE4B4F-…)_PRPosterRoleLockScreen_98-0`，
+//   **每次保存壁纸版本号都会 +1**（日志里 95-0 → 96-0 → … → 99-0），
+//   于是同一张壁纸每编辑一次就换一个新键 → POSTER-SEED 而不是 POSTER-RESTORE
+//   → 表现就是"改完再进，值丢了"。这才是"每壁纸保存不正常"的最后一环。
+static NSString *SokoCanonicalPosterKey(NSString *key) {
+	static NSRegularExpression *expression;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		expression = [NSRegularExpression regularExpressionWithPattern:@"[_/][0-9]+-[0-9]+$" options:0 error:nil];
+	});
+	if (![key isKindOfClass:[NSString class]] || !key.length || !expression) return key;
+	return [expression stringByReplacingMatchesInString:key options:0 range:NSMakeRange(0, key.length) withTemplate:@""];
+}
+
 // 1.2.1-101 · **这就是"每壁纸保存从不生效"的真凶**（1.2.1-100 的 POSTER-PROBE 实锤）：
 //   `_path=<PRSServerPosterPath:0x2829e8380 com.apple.PhotosUIPrivate.P…`
 //   —— _path 根本不是 NSString，而是 PRSServerPosterPath **对象**，
@@ -107,22 +123,6 @@ static NSString *SokoPosterKeyForConfiguration(id configuration) {
 
 	if (![key isKindOfClass:[NSString class]] || !key.length) return nil;
 	return SokoCanonicalPosterKey(key);
-}
-
-// 1.2.1-103 · 去掉键尾的版本号（_98-0 / /98-0）。
-//   实测 `stablePersistenceIdentifier` 是
-//   `…_CreateAFacePhotos(EEAE4B4F-…)_PRPosterRoleLockScreen_98-0`，
-//   **每次保存壁纸版本号都会 +1**（日志里 95-0 → 96-0 → … → 99-0），
-//   于是同一张壁纸每编辑一次就换一个新键 → POSTER-SEED 而不是 POSTER-RESTORE
-//   → 表现就是"改完再进，值丢了"。这才是"每壁纸保存不正常"的最后一环。
-static NSString *SokoCanonicalPosterKey(NSString *key) {
-	static NSRegularExpression *expression;
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{
-		expression = [NSRegularExpression regularExpressionWithPattern:@"[_/][0-9]+-[0-9]+$" options:0 error:nil];
-	});
-	if (![key isKindOfClass:[NSString class]] || !key.length || !expression) return key;
-	return [expression stringByReplacingMatchesInString:key options:0 range:NSMakeRange(0, key.length) withTemplate:@""];
 }
 
 static NSMutableDictionary *SokoPosterOffsetMap(void) {
