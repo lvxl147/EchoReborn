@@ -144,4 +144,39 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 	[root layoutIfNeeded];
 }
 
+
++ (NSInteger)forceReticlesInEditingSceneViewController:(PREditingSceneViewController *)controller {
+	UIView *root = controller.viewIfLoaded;
+	if (!root) return 0;
+
+	CGFloat inset = SokoDockGeometryBottomInset();
+	CGFloat offset = [SokoPosterLayout effectiveRowOffset];
+	if (isnan(inset) || isnan(offset)) return 0;
+
+	NSInteger hits = 0;
+	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+	while (stack.count) {
+		UIView *view = stack.lastObject;
+		[stack removeLastObject];
+
+		NSString *name = NSStringFromClass([view class]);
+		if ([name rangeOfString:@"eticle" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+			CGRect inRoot = [view.superview convertRect:view.bounds toView:root];
+			CGFloat targetY = CGRectGetMaxY(root.bounds) - inset - CGRectGetHeight(inRoot) + offset;
+			CGRect frame = view.frame;
+			frame.origin.y += targetY - CGRectGetMinY(inRoot);
+			view.frame = frame;
+			hits++;
+		}
+
+		for (UIView *sub in view.subviews) [stack addObject:sub];
+	}
+
+	// 17=命中数、18=目标(×10)、19=行偏移
+	SokoTrace(17, hits);
+	SokoTrace(18, (long)llround((CGRectGetMaxY(root.bounds) - inset + offset) * 10.0));
+	SokoTrace(19, (long)llround(offset));
+	return hits;
+}
+
 @end

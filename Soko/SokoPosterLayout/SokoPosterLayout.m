@@ -320,6 +320,11 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 		}
 
 		[SokoEditorChrome update];
+
+		// 1.2.1-81 · 兜底强制 reticle 定位（系统会用自己的行框覆盖 frame/transform）
+		for (PREditingSceneViewController *scene in gEditingSceneViewControllers.allObjects) {
+			[SokoEditorChrome forceReticlesInEditingSceneViewController:scene];
+		}
 	};
 
 	if (!animated) {

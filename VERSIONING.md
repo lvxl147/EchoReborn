@@ -963,3 +963,7 @@
 - 根因：顶部/底部基准只在 layoutDock 里计算并发布，而 layoutDock 只在"组件已被 dock 接管"时执行。默认顶部态下 dock 不启用 → 顶部 offset 从未发布（NaN）→ 编辑器滑动判定的 `isnan(topOffset)` 直接 return，表现为怎么滑都没反应。
 - 修复：抽出 publishRowOffsetsIfPossible，在 publishDockGeometry（每次锁屏布局都会走）里发布；layoutDock 改为复用发布值，两套算法不再漂移。
 - 顶部基线仍取"系统真实摆放的组件行"（≈ -507），滑块下限 -510。
+
+## 1.2.1-81（1002181）· 编辑态虚线框强制跟随（兜底）
+- 1.2.1-80 的 TRACE 已证明滑动恢复：code 7（触摸）/16（editingRowFrame=728）/8（接受）连续出现。
+- 边框仍不跟随：系统 updateReticleViewFrames 与我们的 frame/transform 都被随后复位。改为在每次重排后遍历编辑场景视图树，按类名匹配 reticle 视图并直接按其父视图坐标强制定位；同时 TRACE 17=命中数 / 18=目标y×10 / 19=当前偏移。
