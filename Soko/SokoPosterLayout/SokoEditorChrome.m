@@ -11,6 +11,36 @@ static const void *kSokoDockPageControlConstraintKey = &kSokoDockPageControlCons
 
 static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 
+@interface SokoEditorButtonWatcher : NSObject
++ (instancetype)shared;
+- (void)tapped:(UIButton *)button;
+@end
+
+@implementation SokoEditorButtonWatcher
++ (instancetype)shared {
+	static SokoEditorButtonWatcher *shared = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{ shared = [SokoEditorButtonWatcher new]; });
+	return shared;
+}
+
+- (void)tapped:(UIButton *)button {
+	NSString *title = [button titleForState:UIControlStateNormal] ?: button.titleLabel.text ?: @"";
+	CGFloat offset = [SokoPosterLayout editingRowOffset];
+
+	BOOL isDone = [@[@"完成", @"Done", @"Save", @"保存"] containsObject:title];
+	BOOL isCancel = [@[@"取消", @"Cancel"] containsObject:title];
+
+	SokoTrace(50, isDone ? 1 : (isCancel ? 2 : 0));
+
+	if (isDone && !isnan(offset)) {
+		// 只有"完成"才把编辑值交给 SpringBoard 落盘（写入当前壁纸的独立配置）
+		SokoEditorRequestRowOffset(offset);
+		SokoFileLog(@"EDITOR-DONE-OFFSET %.1f", offset);
+	}
+}
+@end
+
 @implementation SokoEditorChrome
 
 + (void)registerEditorRootViewController:(PREditorRootViewController *)controller {
@@ -216,44 +246,6 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 }
 
 
-@end
-
-#pragma mark - 1.2.1-94 完成/取消按钮监听
-
-static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
-
-@interface SokoEditorButtonWatcher : NSObject
-+ (instancetype)shared;
-- (void)tapped:(UIButton *)button;
-@end
-
-@implementation SokoEditorButtonWatcher
-+ (instancetype)shared {
-	static SokoEditorButtonWatcher *shared = nil;
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{ shared = [SokoEditorButtonWatcher new]; });
-	return shared;
-}
-
-- (void)tapped:(UIButton *)button {
-	NSString *title = [button titleForState:UIControlStateNormal] ?: button.titleLabel.text ?: @"";
-	CGFloat offset = [SokoPosterLayout editingRowOffset];
-
-	BOOL isDone = [@[@"完成", @"Done", @"Save", @"保存"] containsObject:title];
-	BOOL isCancel = [@[@"取消", @"Cancel"] containsObject:title];
-
-	SokoTrace(50, isDone ? 1 : (isCancel ? 2 : 0));
-
-	if (isDone && !isnan(offset)) {
-		// 只有"完成"才把编辑值交给 SpringBoard 落盘（写入当前壁纸的独立配置）
-		SokoEditorRequestRowOffset(offset);
-		SokoFileLog(@"EDITOR-DONE-OFFSET %.1f", offset);
-	}
-}
-@end
-
-@implementation SokoEditorChrome (ButtonsWatcher)
-
 + (void)installEditorButtonWatchers:(PREditingSceneViewController *)controller {
 	UIView *root = controller.viewIfLoaded;
 	if (!root) return;
@@ -282,3 +274,9 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 }
 
 @end
+
+#pragma mark - 1.2.1-94 完成/取消按钮监听
+
+static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
+
+
