@@ -128,8 +128,9 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	[SokoPosterModel applyPendingDefaultLayoutToConfiguration:configuration];
 
 	BOOL usesBottomLayout;
-	if (SokoLiquidAssClockEnabled()) {
-		usesBottomLayout = configuration && SokoLiquidAssUserInfoUsesBottomLayout(SokoLiquidAssUserInfoForConfiguration(configuration));
+	NSDictionary *liquidAssInfo = SokoLiquidAssUserInfoForConfiguration(configuration);
+	if (SokoLiquidAssClockEnabled() && SokoLiquidAssUserInfoIsActive(liquidAssInfo)) {
+		usesBottomLayout = SokoLiquidAssUserInfoUsesBottomLayout(liquidAssInfo);
 	} else {
 		id layout = nil;
 		if ([configuration respondsToSelector:@selector(pr_loadComplicationLayoutWithError:)]) {
@@ -596,11 +597,10 @@ static void SokoInitPoster(void) {
 		SokoFileLog(@"INITPOSTER abort: not supported");
 		return;
 	}
-	if (SokoLiquidAssClockEnabled()) {
-		SokoFileLog(@"INITPOSTER liquidAss branch (no editor hooks)");
-		SokoInitLiquidAssPoster();
-		return;
-	}
+	// 1.2.1-75 · 删除"全局 LiquidAss 开关即整段跳过编辑器"的分支。
+	// 该分支只装几何钩子，不装编辑态 reticle / 滑动 / 壁纸状态写入 —— 只要装了
+	// LiquidAss，长按进自定义就既不在底部也拖不动。LiquidAss 的差异改为在
+	// SokoPosterLayout 里按"这张壁纸是否真的配了 LiquidAss 时钟"逐张判定。
 
 	SokoFileLog(@"INITPOSTER full (editor + model + swipe)");
 	%init(SokoPoster);
@@ -669,19 +669,17 @@ static void SokoInitPoster(void) {
 			});
 		}
 
-		// 1.2.1-74 · 海报进程的判定码：PosterBoard 写不进任何 plist，只能靠这条通道。
-		{
+		// 1.2.1-75 · 海报进程判定码：每条 code 一条通知名，避免连续判定被系统合并。
+		for (int code = 1; code < 20; code++) {
+			NSString *traceName = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", code];
 			int traceToken = NOTIFY_TOKEN_INVALID;
-			notify_register_dispatch("com.strive.echoreborn.soko.trace", &traceToken,
-			                         dispatch_get_main_queue(), ^(int t) {
+			notify_register_dispatch(traceName.UTF8String, &traceToken, dispatch_get_main_queue(), ^(int t) {
 				int checkToken = NOTIFY_TOKEN_INVALID;
 				uint64_t state = 0;
-				notify_register_check("com.strive.echoreborn.soko.trace", &checkToken);
+				notify_register_check(traceName.UTF8String, &checkToken);
 				notify_get_state(checkToken, &state);
 				notify_cancel(checkToken);
-				int code = (int)(state & kSokoTraceCodeMask);
-				long payload = (long)((state >> 8) & 0xFFFFFFFFULL) - kSokoTracePayloadOffset;
-				SokoFileLog(@"TRACE code=%d payload=%ld", code, payload);
+				SokoFileLog(@"TRACE code=%d payload=%ld", code, (long)state - kSokoTracePayloadOffset);
 			});
 		}
 

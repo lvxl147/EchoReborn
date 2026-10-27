@@ -78,27 +78,34 @@ void SokoFileLog(NSString *format, ...) {
 	}
 }
 
-// 1.2.1-74 · 海报进程 → SpringBoard 的判定位通道。
+// 1.2.1-74/75 · 海报进程 → SpringBoard 的判定位通道。
 //
 // PosterBoard / PosterKit / MercuryPoster 既写不进宿主偏好域，也写不进自己域
-// （实测连 com.apple.PosterBoard.plist 都不生成），唯一可用的跨进程通道是 Darwin
-// 通知。这里把「代码 + 一个整数」压进 notify state，SpringBoard 侧解码后落盘。
+// （实测连 com.apple.PosterBoard.plist 都不生成），唯一可用的跨进程通道是 Darwin 通知。
+//
+// 1.2.1-75 修正：原来所有判定共用一条通知名 + notify state，连续两笔会被系统合并，
+// 实测 code=1 直接丢失（只收到 code=2）。改为**每条 code 一条独立通知名**
+// （com.strive.echoreborn.soko.tr.<code>），payload 走各自 state，不再互相覆盖。
 void SokoTrace(int code, long payload) {
-	BOOL isSpringBoard = [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"];
-	if (isSpringBoard) {
+	if (code < 0 || code >= 32) return;
+
+	if ([NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
 		SokoFileLog(@"TRACE code=%d payload=%ld", code, payload);
 		return;
 	}
 
-	static int token = NOTIFY_TOKEN_INVALID;
+	static int tokens[32];
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
-		notify_register_check(kSokoTraceName.UTF8String, &token);
+		for (int i = 0; i < 32; i++) {
+			tokens[i] = NOTIFY_TOKEN_INVALID;
+			NSString *name = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", i];
+			notify_register_check(name.UTF8String, &tokens[i]);
+		}
 	});
-	if (token == NOTIFY_TOKEN_INVALID) return;
+	if (tokens[code] == NOTIFY_TOKEN_INVALID) return;
 
-	uint64_t state = ((uint64_t)(code & 0xFF)) |
-	                 ((uint64_t)(((long)(payload + kSokoTracePayloadOffset)) & 0xFFFFFFFFULL) << 8);
-	notify_set_state(token, state);
-	notify_post(kSokoTraceName.UTF8String);
+	notify_set_state(tokens[code], (uint64_t)(payload + kSokoTracePayloadOffset));
+	NSString *name = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", code];
+	notify_post(name.UTF8String);
 }

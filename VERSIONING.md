@@ -925,3 +925,9 @@
 - 1.2.1-73 实锤：PosterBoard 已注入并执行（收到 POSTER-HELLO.posterboard），但它既写不进宿主域，也写不进自己的域（com.apple.PosterBoard.plist 根本不生成）。所以判定只能走 Darwin 通知。
 - SokoTrace(code, payload)：海报进程把判定压进 notify state，SpringBoard 解码后落盘为 `TRACE code=… payload=…`。编码：低 8 位 code，高 32 位 payload+100000。
 - 码表：1 posterSupported / 2 liquidAss / 3 容器登记 / 4 编辑器登记 / 5 手势装(编辑器) / 6 手势装(容器) / 7 触摸(payload=起点y) / 8 接受(payload=行y) / 9 拒绝canSwipe(payload=位掩码:1弹层2insetNaN4dodging8dismissing16横屏) / 10 拒绝hold(ms) / 11 拒绝非纵向(vy) / 12 拒绝方向(vy) / 13 行框空 / 14 拒绝起手点出界(payload=起点y) / 15 应用(payload=切换前是否底部) / 16 editingRowFrame(payload=行y)。
+
+## 1.2.1-75（1002175）· 根修：装了 LiquidAss 就整段跳过编辑器钩子
+- 实锤（TRACE code=2 payload=1）：只要 lgHostEnabled("Clock") 为真，SokoInitPoster 就走「LiquidAss 分支」——该分支只装几何钩子，不装编辑态 reticle / 滑动 / 壁纸状态写入。所以长按进自定义既不在底部、也拖不动。
+- 修复：① 删除 SokoInitPoster 的 LiquidAss 早退分支，永远装标准编辑器钩子；② CSComplicationManager 读状态、SokoPosterLayout 选几何，都改成「这张壁纸的 userInfo 里真有 dylv.liquidass.clock.style 才算 LiquidAss」，否则走本插件自己的状态；③ 删除 frameByAdjustingFrame 里 `if (editing && liquidAss) return frame` 的编辑态早退。
+- 判定码通道修正：原来所有 code 共用一条通知名 + notify state，连续两笔被系统合并（实测 code=1 丢失只剩 code=2）。改为每条 code 一条独立通知名 com.strive.echoreborn.soko.tr.<code>。
+- 滑块下限 -400 → **-520**（实测顶部 = 底部 -518）。

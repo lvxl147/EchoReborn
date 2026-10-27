@@ -65,7 +65,15 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 	for (; cellClass && view; view = view.superview) {
 		if (![view isKindOfClass:cellClass]) continue;
-		if (SokoLiquidAssClockEnabled()) return [self liquidAssPosterCellUsesBottomLayout:view];
+		// 1.2.1-75 · 只有这张壁纸自己带 LiquidAss 时钟配置时才走它那套，
+		// 否则仍按本插件存的状态走（否则装了 LiquidAss 就永远读不到我们的值）。
+		if (SokoLiquidAssClockEnabled()) {
+			id pair = SokoIvarObject(view, "posterPair");
+			id configuration = SokoIvarObject(pair, "configuration");
+			if (SokoLiquidAssUserInfoIsActive(SokoLiquidAssUserInfoForConfiguration(configuration))) {
+				return [self liquidAssPosterCellUsesBottomLayout:view];
+			}
+		}
 
 		return layoutIvar && [SokoPosterModel complicationLayoutUsesBottomLayout:object_getIvar(view, layoutIvar)];
 	}
@@ -77,7 +85,6 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	if (element != kSokoComplicationRowElement || variant == kSokoReticleVariant || gComputingStockLayout) return frame;
 
 	BOOL editing = variant == kSokoEditingVariant;
-	if (editing && SokoLiquidAssClockEnabled()) return frame;
 
 	BOOL bottom = editing ? [self usesBottomEditingRow] : [self layoutControllerUsesBottomLayout:layoutController];
 	if (!bottom) return frame;

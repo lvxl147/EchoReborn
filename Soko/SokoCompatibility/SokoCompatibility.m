@@ -38,3 +38,8 @@ BOOL SokoLiquidAssUserInfoUsesBottomLayout(NSDictionary *userInfo) {
 	id widgetsAtTop = userInfo[kSokoLiquidAssWidgetsAtTopKey];
 	return ![widgetsAtTop isKindOfClass:[NSNumber class]] || ![widgetsAtTop boolValue];
 }
+
+BOOL SokoLiquidAssUserInfoIsActive(NSDictionary *userInfo) {
+	if (![userInfo isKindOfClass:[NSDictionary class]]) return NO;
+	return [userInfo objectForKey:kSokoLiquidAssStyleKey] != nil;
+}
