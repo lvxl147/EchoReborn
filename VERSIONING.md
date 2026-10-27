@@ -1081,3 +1081,15 @@
   provider / name / displayName / configurationUUID / posterUUID / descriptor
   逐个试一遍并落盘（截断 60 字符），据此选一个稳定的壁纸键。
 - code 18 加 2 秒节流（原实现一次编辑会话写十几条，会冲爆 300 行环）。
+
+## 1.2.1-101（1002201）· 修"每壁纸保存从不生效"的真凶：_path 不是字符串
+- 1.2.1-100 的 POSTER-PROBE 实锤：
+  `_path=<PRSServerPosterPath:0x2829e8380 com.apple.PhotosUIPrivate.P…`
+  PRSPosterConfiguration 的 `_path` 是 **PRSServerPosterPath 对象**，不是 NSString，
+  原实现 `isKindOfClass:[NSString class]` 恒 NO → 退回 provider（N/A）→ 返回 nil。
+  gActivePosterKey 整轮为 nil，soko_offsets_by_poster 一次都没写进去 ——
+  这就是"每壁纸单独保存"从 1.2.1-94 到 1.2.1-100 一直无效的真正原因。
+- 修复：_path 是对象时取其 description 并剔除 0x 内存地址后作键（同一张壁纸稳定）。
+- 新增 POSTER-SHAPE / POSTER-PATH-SHAPE：把 configuration 与 _path 对象自身（含父类）
+  的属性逐个读一遍落盘，用于找一个真正唯一的键（PRSServerPosterPath 上多半有 UUID）。
+- 提交来源区分：17=setComplicationLayout:、19=UIApplication sendAction、20=UIButton 标题。

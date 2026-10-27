@@ -38,6 +38,8 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 	if (isDone && !isnan(offset)) {
 		// 只有"完成"才把编辑值交给 SpringBoard 落盘（写入当前壁纸的独立配置）
 		SokoEditorRequestRowOffset(offset);
+		// 20 = 这条"完成"来自按标题找到的 UIButton（与 17 / 19 区分提交来源）
+		SokoTrace(20, (long)llround(offset));
 		SokoFileLog(@"EDITOR-DONE-OFFSET %.1f", offset);
 	}
 }

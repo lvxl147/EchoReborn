@@ -18,48 +18,81 @@ static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
 //   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
 static NSString *gActivePosterKey = nil;
 
-// 1.2.1-100 · 一次性的"壁纸身份"探针：本版实测 SokoPosterKeyForConfiguration 恒返回
-// nil（日志里一条 POSTER-KEY / POSTER-SEED 都没有，而同一函数里后面的 ARCHIVE-READ
-// 却打印了 → configuration 本身不是 nil，是 _path / provider 都取不到）。
-// 这里把候选键逐个试一遍并落盘，下一版据此选一个稳定的键。
-static void SokoProbePosterIdentity(id configuration) {
-	static BOOL probed = NO;
-	if (probed || !configuration) return;
-	probed = YES;
+// 1.2.1-101 · **这就是"每壁纸保存从不生效"的真凶**（1.2.1-100 的 POSTER-PROBE 实锤）：
+//   `_path=<PRSServerPosterPath:0x2829e8380 com.apple.PhotosUIPrivate.P…`
+//   —— _path 根本不是 NSString，而是 PRSServerPosterPath **对象**，
+//   于是 `isKindOfClass:[NSString class]` 恒为 NO，退回 provider（N/A），最终返回 nil。
+//   gActivePosterKey 一整轮都是 nil → soko_offsets_by_poster 永远写不进去。
+// 现在：用 _path 对象的 description，剔除 0x 内存地址后当键（同一张壁纸稳定）。
+static NSString *SokoStripAddresses(NSString *text) {
+	static NSRegularExpression *expression;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		expression = [NSRegularExpression regularExpressionWithPattern:@"0x[0-9a-fA-F]+" options:0 error:nil];
+	});
+	if (!text.length || !expression) return text;
+	return [expression stringByReplacingMatchesInString:text options:0 range:NSMakeRange(0, text.length) withTemplate:@""];
+}
 
-	NSMutableString *log = [NSMutableString stringWithFormat:@"POSTER-PROBE cls=%@", NSStringFromClass([configuration class])];
-	for (NSString *selName in @[@"_path", @"path", @"uuid", @"UUID", @"identifier",
-	                             @"uniqueIdentifier", @"role", @"provider", @"name",
-	                             @"displayName", @"configurationUUID", @"posterUUID", @"descriptor"]) {
-		SEL sel = NSSelectorFromString(selName);
-		if (![configuration respondsToSelector:sel]) {
-			[log appendFormat:@" | %@=N/A", selName];
-			continue;
+// 1.2.1-101 · 类结构探针：把对象自身（含父类）的属性逐个读一遍并落盘。
+// 用来给"壁纸身份"找一个真正稳定且唯一的键（PRSServerPosterPath 上大概率有 UUID）。
+static void SokoDumpObjectShape(id object, NSString *label, NSUInteger limit) {
+	if (!object) return;
+
+	NSMutableString *log = [NSMutableString stringWithFormat:@"%@ cls=%@",
+	                        label, NSStringFromClass([object class])];
+	NSUInteger emitted = 0;
+	for (Class cls = [object class]; cls && cls != [NSObject class] && emitted < 30; cls = [cls superclass]) {
+		unsigned int count = 0;
+		objc_property_t *properties = class_copyPropertyList(cls, &count);
+		for (unsigned int i = 0; i < count && emitted < 30; i++) {
+			const char *rawName = property_getName(properties[i]);
+			if (!rawName) continue;
+			NSString *name = @(rawName);
+			if (![object respondsToSelector:NSSelectorFromString(name)]) continue;
+
+			id value = nil;
+			@try { value = [object valueForKey:name]; } @catch (__unused NSException *e) {}
+			NSString *described = [value description] ?: @"(nil)";
+			if (described.length > limit) described = [[described substringToIndex:limit] stringByAppendingString:@"…"];
+			[log appendFormat:@" | %@=%@", name, described];
+			emitted++;
 		}
-		id value = nil;
-		@try { value = [configuration valueForKey:selName]; } @catch (__unused NSException *e) {}
-		NSString *described = [value description] ?: @"(nil)";
-		if (described.length > 60) described = [[described substringToIndex:60] stringByAppendingString:@"…"];
-		[log appendFormat:@" | %@=%@", selName, described];
+		if (properties) free(properties);
 	}
 	SokoFileLog(@"%@", log);
 }
 
 static NSString *SokoPosterKeyForConfiguration(id configuration) {
-	SokoProbePosterIdentity(configuration);
+	if (!configuration) return nil;
 
-	NSString *path = nil;
-	@try { path = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
-	if ([path isKindOfClass:[NSURL class]]) path = ((NSURL *)path).path;
-	if (![path isKindOfClass:[NSString class]] || !path.length) {
+	static BOOL probed = NO;
+	if (!probed) {
+		probed = YES;
+		SokoDumpObjectShape(configuration, @"POSTER-SHAPE", 24);
+		id pathObject = nil;
+		@try { pathObject = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
+		SokoDumpObjectShape(pathObject, @"POSTER-PATH-SHAPE", 80);
+	}
+
+	NSString *key = nil;
+	id pathObject = nil;
+	@try { pathObject = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
+
+	if ([pathObject isKindOfClass:[NSString class]]) {
+		key = [pathObject lastPathComponent];
+	} else if ([pathObject isKindOfClass:[NSURL class]]) {
+		key = [[(NSURL *)pathObject path] lastPathComponent];
+	} else if (pathObject) {
+		key = SokoStripAddresses([pathObject description] ?: @"");
+	} else {
 		id provider = nil;
 		@try { provider = [configuration valueForKey:@"provider"]; } @catch (__unused NSException *e) {}
-		NSString *described = [provider description];
-		path = [described stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+		key = SokoStripAddresses([provider description] ?: @"");
 	}
-	if (![path isKindOfClass:[NSString class]] || !path.length) return nil;
-	NSString *key = [path lastPathComponent];
-	return key.length ? key : nil;
+
+	if (![key isKindOfClass:[NSString class]] || !key.length) return nil;
+	return key;
 }
 
 static NSMutableDictionary *SokoPosterOffsetMap(void) {
@@ -864,6 +897,8 @@ static void SokoProbeEditorButtons(void) {
 	if (selDone || titleDone) {
 		SokoTrace(56, 1);
 		CGFloat offset = [SokoPosterLayout editingRowOffset];
+		// 19 = 这条"完成"来自 UIApplication sendAction（与 17 区分提交来源）
+		if (!isnan(offset)) SokoTrace(19, (long)llround(offset));
 		if (!isnan(offset)) {
 			SokoEditorRequestRowOffset(offset);
 			SokoFileLog(@"EDITOR-DONE sel=%@ title=%@ off=%.1f", selector, title, offset);
