@@ -531,8 +531,9 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	SokoTrace(28, isnan(editingOffset) ? -1 : (long)llround(editingOffset));   // 28 = setComplicationLayout 触发
 	if (layout && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
-		// 1.2.1-89 · 恢复写偏好：滑块数值必须跟随编辑结果。
-		SokoEditorRequestRowOffset(editingOffset);
+		// 1.2.1-92 · 这里只写归档，不写偏好：
+		//   "完成"→ 系统把这份 layout 存进壁纸 → SpringBoard 下次读到后镜像回滑块；
+		//   "取消"→ 系统丢弃这份 layout → 偏好不变（这才符合原版语义）。
 		[SokoPosterLayout setEditingRowOffset:NAN];
 		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
 	}
@@ -765,7 +766,7 @@ static void SokoProbeEditorButtons(void) {
 		}
 
 		// 1.2.1-75 · 海报进程判定码：每条 code 一条通知名，避免连续判定被系统合并。
-		for (int code = 1; code < 52; code++) {
+		for (int code = 1; code < 64; code++) {
 			NSString *traceName = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", code];
 			int traceToken = NOTIFY_TOKEN_INVALID;
 			notify_register_dispatch(traceName.UTF8String, &traceToken, dispatch_get_main_queue(), ^(int t) {

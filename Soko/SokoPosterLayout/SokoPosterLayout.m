@@ -111,9 +111,15 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	CGRect stockRow = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
 	gComputingStockLayout = NO;
 
+	// 1.2.1-92 · 探针：60=进入(reticle frame.y) 61=row.minY 62=stockRow.minY 63=返回值
+	SokoTrace(60, (long)llround(CGRectGetMinY(frame)));
+	SokoTrace(61, (long)llround(CGRectGetMinY(row)));
+	SokoTrace(62, (long)llround(CGRectGetMinY(stockRow)));
+
 	if (CGRectIsNull(row) || CGRectIsNull(stockRow)) return frame;
 
 	frame.origin.y += CGRectGetMinY(row) - CGRectGetMinY(stockRow);
+	SokoTrace(63, (long)llround(frame.origin.y));
 	return frame;
 
 }

@@ -1017,3 +1017,7 @@
 - 边框探针 code 31~38：alpha×100 / hidden / reticle.y / reticle.h / 父视图 clipsToBounds / 父视图 y / 父视图 h / 裁剪祖先数量。
 - 按钮探针 code 40~51：运行时枚举 PREditingSceneViewController 方法表，对名字含 done/cancel/save/apply/discard/commit/finish 的零参/单参方法装钩子，命中即发独立码后原样转调（只读，不改行为）。据此确定"完成/取消"的确切方法。
 - 设置页读写统一为 NSUserDefaults(suiteName:)，与 tweak 同一套 API，排除跨 API 缓存导致的"滑块无效"。
+
+## 1.2.1-92（1002192）· 取消不再写偏好 + 边框探针下沉到 reticle 计算内部
+- 取消/完成分离：setComplicationLayout 只写壁纸归档，不再写偏好。完成→系统落盘→SpringBoard 读归档后镜像回滑块；取消→系统丢弃归档→偏好不变。
+- 边框探针：code 60=进入时 reticle frame.y、61=编辑态行(已调整) minY、62=编辑态行(系统原值) minY、63=返回值。用于判断系统到底有没有采用我们算的边框位置。
