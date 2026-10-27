@@ -1,5 +1,5 @@
 #import "SokoDockCoordinator.h"
-#import "SokoPreferences.h"
+#import "../SokoPreferences.h"
 
 NSString *const SokoProminentDisplayVibrancyDidChangeNotification = @"SokoProminentDisplayVibrancyDidChangeNotification";
 NSString *const SokoProminentDisplayContentAlphaDidChangeNotification = @"SokoProminentDisplayContentAlphaDidChangeNotification";
