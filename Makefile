@@ -34,7 +34,7 @@ THEOS_PACKAGE_SCHEME ?= rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam
+TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam EchoRebornSource
 
 # 0.5.26: Soko and LiquidSiri are no longer separate subprojects / dylibs.
 # Shipping them as their own Soko.dylib + LiquidSiri.dylib put a SECOND copy of
@@ -45,16 +45,17 @@ TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam
 # property access walks off the object - SpringBoard dies and the device
 # respring-loops.  Everything now compiles into EchoReborn.dylib, so any leftover
 # duplicate would be a link error instead of a runtime landmine.
-EchoReborn_FILES = Tweak.xm \
+EchoReborn_FILES = Tweak.xm ERAddAnimHook.x \
                 GlassKit/LGGlassKit.x \
                 GlassKit/LGLiveBackdropView.m \
                 GlassKit/LGGlassLog.m \
-                Soko/Soko.S \
-                Soko/Soko.swift \
-                $(wildcard Soko/Hooks/*.swift) \
-                $(wildcard Soko/SokoLayout/*.swift) \
-                $(wildcard Soko/Support/*.swift) \
-                $(wildcard Soko/Shared/*/*.swift) \
+                Soko/Soko.x \
+                Soko/SokoCompatibility/*.m \
+                Soko/SokoDockCoordinator/*.m \
+                Soko/SokoDockGeometry/*.m \
+                Soko/SokoPosterLayout/*.m \
+                Soko/SokoPosterModel/*.m \
+                Soko/SokoRuntime/*.m \
                 LiquidSiri/Tweak.x \
                 LiquidSiri/SwiftUIWave/Models/SiriWave.swift \
                 LiquidSiri/SwiftUIWave/Views/SupportLine.swift \
@@ -77,8 +78,7 @@ EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage Core
 EchoReborn_PRIVATE_FRAMEWORKS = ControlCenterServices SpringBoardUIServices
 EchoReborn_CFLAGS = -fobjc-arc -Wno-nullability-completeness -Wno-deprecated-declarations \
                  -Wno-unused-variable -Wno-unused-function
-# Soko and LiquidSiri are Swift 5 sources; one -swift-version for the whole
-# instance. The generated ObjC header is now EchoReborn-Swift.h (see Tweak.x).
+# LiquidSiri remains Swift 5 (Soko 1.1.0 upstream is now pure ObjC/Logos).
 EchoReborn_SWIFTFLAGS = -swift-version 5
 
 # 0.4.0: the LiquidAss render server is vendored. This second instance hooks
@@ -108,6 +108,25 @@ EchoRebornDualCam_FRAMEWORKS = UIKit AVFoundation CoreMedia Photos CoreImage Cor
 #     fatal error: could not build module 'Photos'
 # 主 target 因为不 import Photos 所以一直没暴露这个问题。
 EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
+
+# ---------------------------------------------------------------------------
+# 1.0.9-194 · EchoRebornSource：方案 B 源头拦截 · 诊断 dylib
+#
+# v183-v193 终局定性：岛黑底/外扩来自 CallAssist 渲染进程经 CAPortalLayer
+# 跨进程直绘屏幕，SpringBoard 侧任何层属性物理上作用不到它的像素（v191
+# 混合挂稳无效），摘层直接炸 SpringBoard（v192 SIGSEGV）。消费者侧路线终结。
+#
+# 本 dylib 照抄 DualCam 的隔离模式（第四支独立 dylib，不把主 dylib 的全套
+# hook 拖进第三方进程），filter = com.apple.UIKit（所有 UIKit 进程，与上游
+# Liquidify 同款宽匹配），代码纯被动零 hook：加载时报告进程身份，非系统进程
+# 每 10s 扫近黑不透明背景层 —— 用户触发岛时哪个进程冒出黑底层，源头就是谁。
+# v195 按诊断结果在源进程清黑底（backgroundColor 清除/hook drawRect）。
+# 诊断日志：/var/mobile/Documents/EchoReborn-src.log（第三方进程对主日志目录
+# 的沙盒不保证可写，Documents mobile 组可写且 Filza 直接可取）。
+# ---------------------------------------------------------------------------
+EchoRebornSource_FILES = SourceKit/Tweak.xm
+EchoRebornSource_FRAMEWORKS = UIKit Foundation QuartzCore
+EchoRebornSource_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 
 # ---------------------------------------------------------------------------
 # 1.0.9-81 · EchoRebornUIKit：把液态玻璃渲染层注入 com.apple.UIKit（= 所有进程）
