@@ -24,6 +24,7 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	SokoLayoutSwipeHandler *handler = [self new];
 	handler.editingSceneViewController = controller;
 	[handler installOnView:controller.view];
+	SokoTrace(5, 1);
 }
 
 + (void)installOnComplicationContainerViewController:(UIViewController *)controller {
@@ -35,6 +36,7 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	SokoLayoutSwipeHandler *handler = [self new];
 	handler.complicationContainerViewController = controller;
 	[handler installOnView:controller.view];
+	SokoTrace(6, 1);
 }
 
 - (void)installOnView:(UIView *)view {
@@ -66,6 +68,7 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 		lastTouchLog = now;
 		CGPoint point = [touch locationInView:gestureRecognizer.view];
 		SokoFileLog(@"SWIPE-TOUCH view=%@ point=(%.1f,%.1f)", NSStringFromClass([gestureRecognizer.view class]), point.x, point.y);
+		SokoTrace(7, (long)point.y);
 	}
 	return YES;
 }
@@ -84,6 +87,10 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 		return NO;
 	}
 	if (![SokoPosterLayout canSwipeEditingSceneViewController:controller]) {
+		long mask = (controller.presentedViewController ? 1 : 0) | (isnan(inset) ? 2 : 0) |
+		            ([SokoPosterLayout isDodging] ? 4 : 0) | ([SokoPosterLayout editingSceneViewControllerIsDismissing:controller] ? 8 : 0) |
+		            (SokoIsPortrait(controller.view.bounds) ? 0 : 16);
+		SokoTrace(9, mask);
 		SokoFileLog(@"SWIPE-BEGIN reject=canSwipe presented=%@ inset=%d(isnan) dodging=%d dismissing=%d portrait=%d",
 		            NSStringFromClass([controller.presentedViewController class]),
 		            (int)isnan(inset), (int)[SokoPosterLayout isDodging],
@@ -94,22 +101,26 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 
 	NSTimeInterval hold = [NSProcessInfo processInfo].systemUptime - self.touchTimestamp;
 	if (hold > kSokoLayoutSwipeMaximumHold) {
+		SokoTrace(10, (long)(hold * 1000.0));
 		SokoFileLog(@"SWIPE-BEGIN reject=hold %.3fs > %.2fs", hold, kSokoLayoutSwipeMaximumHold);
 		return NO;
 	}
 
 	if (fabs(velocity.y) <= fabs(velocity.x)) {
+		SokoTrace(11, (long)velocity.y);
 		SokoFileLog(@"SWIPE-BEGIN reject=not-vertical vy=%.1f vx=%.1f", velocity.y, velocity.x);
 		return NO;
 	}
 
 	BOOL bottom = [SokoPosterLayout editingSceneViewControllerUsesBottomLayout:controller];
 	if (bottom ? velocity.y >= 0.0 : velocity.y <= 0.0) {
+		SokoTrace(12, (long)velocity.y);
 		SokoFileLog(@"SWIPE-BEGIN reject=direction bottom=%d vy=%.1f", (int)bottom, velocity.y);
 		return NO;
 	}
 
 	if (CGRectIsNull(row)) {
+		SokoTrace(13, 1);
 		SokoFileLog(@"SWIPE-BEGIN reject=row-null inset=%.1f", inset);
 		return NO;
 	}
@@ -119,12 +130,14 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	CGPoint start = SokoScreenPoint(view, CGPointMake(location.x - translation.x, location.y - translation.y));
 	CGRect band = CGRectInset(row, 0.0, -kSokoLayoutSwipeSlop);
 	if (!CGRectContainsPoint(band, start)) {
+		SokoTrace(14, (long)start.y);
 		SokoFileLog(@"SWIPE-BEGIN reject=outside-row start=(%.1f,%.1f) row=(%.1f,%.1f,%.1fx%.1f) band=(%.1f,%.1f,%.1fx%.1f)",
 		            start.x, start.y, row.origin.x, row.origin.y, row.size.width, row.size.height,
 		            band.origin.x, band.origin.y, band.size.width, band.size.height);
 		return NO;
 	}
 
+	SokoTrace(8, (long)CGRectGetMinY(row));
 	SokoFileLog(@"SWIPE-BEGIN accept bottom=%d start=(%.1f,%.1f) row=(%.1f,%.1f,%.1fx%.1f) inset=%.1f",
 	            (int)bottom, start.x, start.y, row.origin.x, row.origin.y, row.size.width, row.size.height, inset);
 	return YES;
@@ -147,6 +160,7 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 	            (int)bottom, distance, velocity, kSokoLayoutSwipeDistance, kSokoLayoutSwipeVelocity);
 	if (distance < kSokoLayoutSwipeDistance && velocity < kSokoLayoutSwipeVelocity) return;
 
+	SokoTrace(15, (long)bottom);   // payload = 切换前的状态（1=原为底部）
 	[SokoPosterLayout setUsesBottomLayout:!bottom forEditingSceneViewController:controller];
 
 	// 1.2.1-68 · 判据 #5/#6：滑动是否被识别、最终状态是什么

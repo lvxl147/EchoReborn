@@ -1,4 +1,5 @@
 #import "SokoPosterLayout.h"
+#import "../SokoLog.h"
 #import "../SokoFileLog.h"
 
 static const CGFloat kSokoBottomRowEditingOffset = 28.0;
@@ -114,6 +115,7 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	CFTimeInterval now = CACurrentMediaTime();
 	if (now - lastLog > 0.5) {
 		lastLog = now;
+		SokoTrace(16, (long)frame.origin.y);
 		SokoFileLog(@"ROW editingRowFrame=(%.1f,%.1f,%.1fx%.1f) inset=%.1f usesBottomEditingRow=%d editorBottom=%d dodging=%d",
 		            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
 		            SokoDockGeometryBottomInset(), (int)[self usesBottomEditingRow],

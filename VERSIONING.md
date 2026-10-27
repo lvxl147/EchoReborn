@@ -920,3 +920,8 @@
 - 重置无效根因修复：SokoPreferences 原为"键存在才覆盖"，设置页重置只删 key → 缓存保留旧值，画面不变、必须拖一下滑块才生效。改为**键不存在即回落默认 0**，并新增 SokoPreferencesSetChangeHandler —— 变更/重置后 SpringBoard 立即 refresh + setNeedsLayout 重算组件行。
 - 海报进程报到：PosterBoard/PosterKit/MercuryPoster 侧写不进宿主偏好域（实测其自身域也没有文件），改为 %ctor 里 notify_post 一条报到通知，SpringBoard 侧监听并落盘 `POSTER-HELLO <name>`，用于确认编辑器进程是否真的加载了本 dylib。
 - CALIB 几何标定行（只读）：stockY（系统原位=顶部）/ bottomY（底部）/ delta，用于把两档换算成滑块同一单位。
+
+## 1.2.1-74（1002174）· 海报进程判定码通道（Darwin notify）
+- 1.2.1-73 实锤：PosterBoard 已注入并执行（收到 POSTER-HELLO.posterboard），但它既写不进宿主域，也写不进自己的域（com.apple.PosterBoard.plist 根本不生成）。所以判定只能走 Darwin 通知。
+- SokoTrace(code, payload)：海报进程把判定压进 notify state，SpringBoard 解码后落盘为 `TRACE code=… payload=…`。编码：低 8 位 code，高 32 位 payload+100000。
+- 码表：1 posterSupported / 2 liquidAss / 3 容器登记 / 4 编辑器登记 / 5 手势装(编辑器) / 6 手势装(容器) / 7 触摸(payload=起点y) / 8 接受(payload=行y) / 9 拒绝canSwipe(payload=位掩码:1弹层2insetNaN4dodging8dismissing16横屏) / 10 拒绝hold(ms) / 11 拒绝非纵向(vy) / 12 拒绝方向(vy) / 13 行框空 / 14 拒绝起手点出界(payload=起点y) / 15 应用(payload=切换前是否底部) / 16 editingRowFrame(payload=行y)。

@@ -290,6 +290,8 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 	// 1.2.1-69 · 编辑态拖动链路的第一个节点：容器 VC 有没有被登记
 	SokoFileLog(@"CONTAINER viewDidLoad proc=%@", NSProcessInfo.processInfo.processName);
+	// code 3：容器 VC 登记
+	SokoTrace(3, 1);
 	[SokoPosterLayout registerComplicationContainerViewController:self];
 	[SokoLayoutSwipeHandler installOnComplicationContainerViewController:self];
 }
@@ -322,6 +324,8 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	SokoFileLog(@"EDITOR viewDidLoad registered=%d role=%@",
 	            (int)registered,
 	            [self respondsToSelector:@selector(posterRole)] ? self.posterRole : @"(none)");
+	// code 4：编辑器登记成功（1）/失败（0）；失败时 role 见 payload 无法携带，看 CAP 行
+	SokoTrace(4, (long)registered);
 	if (registered) [SokoLayoutSwipeHandler installOnEditingSceneViewController:self];
 }
 
@@ -665,6 +669,22 @@ static void SokoInitPoster(void) {
 			});
 		}
 
+		// 1.2.1-74 · 海报进程的判定码：PosterBoard 写不进任何 plist，只能靠这条通道。
+		{
+			int traceToken = NOTIFY_TOKEN_INVALID;
+			notify_register_dispatch("com.strive.echoreborn.soko.trace", &traceToken,
+			                         dispatch_get_main_queue(), ^(int t) {
+				int checkToken = NOTIFY_TOKEN_INVALID;
+				uint64_t state = 0;
+				notify_register_check("com.strive.echoreborn.soko.trace", &checkToken);
+				notify_get_state(checkToken, &state);
+				notify_cancel(checkToken);
+				int code = (int)(state & kSokoTraceCodeMask);
+				long payload = (long)((state >> 8) & 0xFFFFFFFFULL) - kSokoTracePayloadOffset;
+				SokoFileLog(@"TRACE code=%d payload=%ld", code, payload);
+			});
+		}
+
 		// 1.2.1-71 · 在 SpringBoard 里预演 PosterBoard 的 SokoPosterLayout isSupported：
 		// 用的是同一批私有类，哪一条不满足就直接点名（PosterBoard 侧写不进日志时，
 		// 这一行就是唯一判据）。
@@ -699,6 +719,9 @@ static void SokoInitPoster(void) {
 
 	BOOL posterSupported = [SokoPosterLayout isSupported];
 	BOOL liquidAss = SokoLiquidAssClockEnabled();
+	// code 1：posterSupported（0/1）；code 2：liquidAss（0/1）
+	SokoTrace(1, (long)posterSupported);
+	SokoTrace(2, (long)liquidAss);
 	ERSokoLog(@"SOKO-CAP proc=%@ model=%d dock=0 poster=%d",
 	          bundleIdentifier, (int)modelSupported, (int)posterSupported);
 	SokoFileLog(@"CAP poster model=%d posterSupported=%d liquidAss=%d",

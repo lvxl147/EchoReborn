@@ -8,11 +8,19 @@
 // Soko 侧的 C 声明链接不到。
 #import <Foundation/Foundation.h>
 
+// 1.2.1-74 · SokoTrace 的编码长度（SpringBoard 侧解码用）
+#define kSokoTraceCodeMask 0xFFULL
+#define kSokoTracePayloadOffset 100000L
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void ERSokoLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+
+// 1.2.1-74 · 海报进程（PosterBoard 等）无法写偏好域也无法写日志目录，只能发 Darwin
+// 通知；SpringBoard 侧收到后落盘。code 见各调用点注释，payload 为附加整数。
+void SokoTrace(int code, long payload);
 
 #ifdef __cplusplus
 }

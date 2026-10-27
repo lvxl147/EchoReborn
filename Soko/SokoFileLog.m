@@ -1,4 +1,6 @@
 #import "SokoFileLog.h"
+#import "SokoLog.h"
+#import <notify.h>
 
 // 1.2.1-70 · 从"直接写文件"改成 cfprefsd 键。
 //
@@ -10,6 +12,7 @@
 // 不与 ERLogMirror（60 行）抢行，SSH 拉 plist 直接读。
 static NSString *const kSokoLogSuite = @"com.strive.echoreborn.preferences";
 static NSString *const kSokoLogKey = @"ERSokoMirror";
+static NSString *const kSokoTraceName = @"com.strive.echoreborn.soko.trace";
 static const NSUInteger kSokoLogRingLines = 120;
 static const NSUInteger kSokoLogRingBytes = 20 * 1024;
 
@@ -73,4 +76,29 @@ void SokoFileLog(NSString *format, ...) {
 		}
 	} @catch (__unused NSException *exception) {
 	}
+}
+
+// 1.2.1-74 · 海报进程 → SpringBoard 的判定位通道。
+//
+// PosterBoard / PosterKit / MercuryPoster 既写不进宿主偏好域，也写不进自己域
+// （实测连 com.apple.PosterBoard.plist 都不生成），唯一可用的跨进程通道是 Darwin
+// 通知。这里把「代码 + 一个整数」压进 notify state，SpringBoard 侧解码后落盘。
+void SokoTrace(int code, long payload) {
+	BOOL isSpringBoard = [NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"];
+	if (isSpringBoard) {
+		SokoFileLog(@"TRACE code=%d payload=%ld", code, payload);
+		return;
+	}
+
+	static int token = NOTIFY_TOKEN_INVALID;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		notify_register_check(kSokoTraceName.UTF8String, &token);
+	});
+	if (token == NOTIFY_TOKEN_INVALID) return;
+
+	uint64_t state = ((uint64_t)(code & 0xFF)) |
+	                 ((uint64_t)(((long)(payload + kSokoTracePayloadOffset)) & 0xFFFFFFFFULL) << 8);
+	notify_set_state(token, state);
+	notify_post(kSokoTraceName.UTF8String);
 }
