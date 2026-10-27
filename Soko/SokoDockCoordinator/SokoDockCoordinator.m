@@ -287,12 +287,16 @@ static __weak SokoDockCoordinator *gActiveCoordinator;
 	// 1.2.1-68 · 几何取证：值变化立即打印，否则 2s 一条。判据 #4 就是拿
 	// botY 与 QA-APPLY 的按钮原始中心比（差应 ≈ kSokoDockBottomToButtonCenter 45）。
 	{
+		// CGRectNull 不是编译期常量，static 不能直接拿它初始化（CI 实锤：
+		// error: initializer element is not a compile-time constant）。用脏标记代替。
 		static CFTimeInterval lastLogTime = 0.0;
-		static CGRect lastRow = CGRectNull;
+		static CGRect lastRow;
+		static BOOL hasLastRow = NO;
 		CFTimeInterval now = CACurrentMediaTime();
-		if (now - lastLogTime > 2.0 || !CGRectEqualToRect(lastRow, row)) {
+		if (now - lastLogTime > 2.0 || !hasLastRow || !CGRectEqualToRect(lastRow, row)) {
 			lastLogTime = now;
 			lastRow = row;
+			hasLastRow = YES;
 			CGFloat buttonCenterY = 0.0;
 			BOOL buttonHit = SokoQuickActionButtonCenterY(coverSheetView, &buttonCenterY);
 			ERSokoLog(@"SOKO-DOCK botY=%.1f topY=%.1f h=%.1f off=%.1f btnHit=%d btnCenterY=%.1f",
