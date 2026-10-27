@@ -11,6 +11,8 @@ static const void *kSokoDockPageControlConstraintKey = &kSokoDockPageControlCons
 
 static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 
+static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
+
 @interface SokoEditorButtonWatcher : NSObject
 + (instancetype)shared;
 - (void)tapped:(UIButton *)button;
@@ -277,6 +279,5 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 
 #pragma mark - 1.2.1-94 完成/取消按钮监听
 
-static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 
 
