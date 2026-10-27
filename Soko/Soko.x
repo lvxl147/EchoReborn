@@ -127,6 +127,18 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	PRSPosterConfiguration *configuration = [state respondsToSelector:@selector(activeLock)] ? state.activeLock : nil;
 	[SokoPosterModel applyPendingDefaultLayoutToConfiguration:configuration];
 
+	gActivePosterKey = SokoPosterKeyForConfiguration(configuration);
+	if (gActivePosterKey) {
+		NSNumber *stored = SokoPosterOffsetMap()[gActivePosterKey];
+		if (stored) {
+			NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+			if (fabs([defaults doubleForKey:@"soko_widgetOffset"] - stored.doubleValue) > 0.5) {
+				[defaults setDouble:stored.doubleValue forKey:@"soko_widgetOffset"];
+				notify_post("com.strive.echoreborn/ReloadPrefs");
+			}
+		}
+	}
+
 	BOOL usesBottomLayout;
 	NSDictionary *liquidAssInfo = SokoLiquidAssUserInfoForConfiguration(configuration);
 	NSNumber *layoutOffset = nil;
@@ -729,6 +741,32 @@ static void SokoProbeEditorButtons(void) {
 	if (methods) free(methods);
 }
 
+
+// 1.2.1-94 · 每张壁纸独立保存：
+//   键取 PRSPosterConfiguration 的 _path 末段（无则退回 provider 描述），
+//   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
+static NSString *gActivePosterKey = nil;
+
+static NSString *SokoPosterKeyForConfiguration(id configuration) {
+	NSString *path = nil;
+	@try { path = [configuration valueForKey:@"_path"]; } @catch (__unused NSException *e) {}
+	if (![path isKindOfClass:[NSString class]] || !path.length) {
+		id provider = nil;
+		@try { provider = [configuration valueForKey:@"provider"]; } @catch (__unused NSException *e) {}
+		NSString *described = [provider description];
+		path = [described stringByReplacingOccurrencesOfString:@"/" withString:@"_"];
+	}
+	if (![path isKindOfClass:[NSString class]] || !path.length) return nil;
+	NSString *key = [path lastPathComponent];
+	return key.length ? key : nil;
+}
+
+static NSMutableDictionary *SokoPosterOffsetMap(void) {
+	NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+	NSDictionary *stored = [defaults dictionaryForKey:@"soko_offsets_by_poster"];
+	return stored ? [stored mutableCopy] : [NSMutableDictionary dictionary];
+}
+
 %ctor {
 	NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
 	BOOL isSpringBoard = [bundleIdentifier isEqualToString:@"com.apple.springboard"];
@@ -818,6 +856,13 @@ static void SokoProbeEditorButtons(void) {
 				if (isnan(value)) return;
 				NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
 				[defaults setDouble:value forKey:@"soko_widgetOffset"];
+				// 1.2.1-94 · 同时写入"当前壁纸"的独立记录
+				if (gActivePosterKey) {
+					NSMutableDictionary *map = SokoPosterOffsetMap();
+					map[gActivePosterKey] = @(value);
+					[defaults setObject:map forKey:@"soko_offsets_by_poster"];
+					SokoFileLog(@"POSTER-OFFSET %@ = %.1f", gActivePosterKey, value);
+				}
 				[defaults synchronize];
 				// 1.2.1-82 · 立即生效：把该值设为当前壁纸的生效偏移并接管
 				[SokoDockCoordinator setActiveRowOffset:@(value)];

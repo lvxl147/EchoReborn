@@ -1025,3 +1025,8 @@
 ## 1.2.1-93（1002193）· 全深度几何筛选探针（定位编辑态虚线框到底是不是 UIView）
 - 实锤：code 60~63 恒为 0 —— iOS 17.2.1 根本不调用 complicationRowElementEditingReticleFrameWithBoundingRect:，我们在此方法里返回什么都不会被采用。这也解释了原版 Swift 为何在编辑器里直接放弃移动组件。
 - 新增探针：在编辑器内全深度遍历视图树（上限 800 个视图），按「宽度≈组件行±45%、高度≈±70%、纵向中心≈系统行±16pt」筛选，最多回传 6 个类名。39=候选数量（-3 行框为空 / -4 尺寸异常）、40=类名分片（每 3 字节）、41=分隔符；每条间隔 50ms 发送，避免通知被系统合并。
+
+## 1.2.1-94（1002194）· 完成/取消按钮监听 + 每壁纸独立保存
+- 完成/取消：不再依赖 setComplicationLayout / 私有 selector。编辑器出现时遍历视图树，按标题文字（完成/Done/Save/保存、取消/Cancel）给按钮挂 addTarget；点"完成"才把会话值发出去（trace 50=1 完成 / 2 取消）。
+- 每壁纸独立保存：SpringBoard 在壁纸配置回调里记录当前壁纸键（PRSPosterConfiguration._path 末段，退回 provider），写入 prefs 字典 soko_offsets_by_poster；切壁纸时读该壁纸的值并同步到滑块。完成时同时写"当前壁纸"这一条。
+- 归档编码路线确认不可用（SOKO-ENC-OFFSET 恒为 0），已弃用。

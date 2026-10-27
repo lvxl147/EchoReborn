@@ -186,6 +186,7 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	// 现在只认 SpringBoard 发布过来的"当前生效值"（= 设置页滑块）。
 	gEditingRowOffset = [self effectiveRowOffset];
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);
+	[SokoEditorChrome installEditorButtonWatchers:controller];
 	SokoEditorPublishUsesBottomLayout([self editingSceneViewControllerUsesBottomLayout:controller]);
 	[self relayoutAnimated:NO];
 	return YES;
