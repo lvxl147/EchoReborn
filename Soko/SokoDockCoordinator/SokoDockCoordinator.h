@@ -6,10 +6,11 @@
 FOUNDATION_EXPORT NSString *const SokoProminentDisplayVibrancyDidChangeNotification;
 FOUNDATION_EXPORT NSString *const SokoProminentDisplayContentAlphaDidChangeNotification;
 
-@interface SokoDockCoordinator : NSObject
-// 1.2.1-79 · 当前壁纸归档里的行偏移（nil = 该壁纸没设置过 → 顶部）
-+ (void)setActiveRowOffset:(NSNumber *)offset; <SokoNotificationListDock>
+@interface SokoDockCoordinator : NSObject <SokoNotificationListDock>
 @property (nonatomic, readonly) SokoNotificationList *notificationList;
+
+// 1.2.1-79 · 当前壁纸归档里的行偏移（nil = 该壁纸没设置过 → 顶部）
++ (void)setActiveRowOffset:(NSNumber *)offset;
 
 + (BOOL)isSupported;
 + (instancetype)coordinatorForCoverSheetViewController:(CSCoverSheetViewController *)controller;
