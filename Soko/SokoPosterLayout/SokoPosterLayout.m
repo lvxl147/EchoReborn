@@ -83,10 +83,9 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 }
 
 + (CGRect)frameByAdjustingFrame:(CGRect)frame forElement:(unsigned long long)element boundingRect:(CGRect)boundingRect variant:(unsigned long long)variant layoutController:(CSProminentLayoutController *)layoutController {
-	// 1.2.1-77 · 允许编辑态虚线框（variant 3）走同一套定位 —— 17.2.1 上边框是
-	// 通过 _frameForElement:...variant:3 算出来的，之前在这里被早退，所以组件滑走了
-	// 边框留在原位。
-	if (element != kSokoComplicationRowElement || gComputingStockLayout) return frame;
+	// 1.2.1-90 · 回到上游：reticle 变体必须在这里早退。否则编辑器算边框时会拿到
+	// 已被我们改写的行框，chrome 里「目标 − 系统位置」恒为 0，边框原地不动（TRACE 17=-4 实锤）。
+	if (element != kSokoComplicationRowElement || variant == kSokoReticleVariant || gComputingStockLayout) return frame;
 
 	CGFloat inset = SokoDockGeometryBottomInset();
 	if (isnan(inset) || CGRectIsNull(frame) || CGRectGetHeight(frame) <= 0.0 || !SokoIsPortrait(boundingRect)) return frame;
@@ -104,15 +103,19 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 + (CGRect)reticleFrameByAdjustingFrame:(CGRect)frame layoutController:(CSProminentLayoutController *)layoutController boundingRect:(CGRect)boundingRect {
 	if (gComputingStockLayout || CGRectIsNull(frame)) return frame;
 
-	// 1.2.1-76 · 边框直接钉到"行应该出现的位置"，不再靠"系统行框差值"平移。
-	// 原实现：frame.origin.y += (row.minY - stockRow.minY)；实测系统两套行框在
-	// 17.2.1 上相同 → 差值恒 0 → 组件滑走了、虚线框留在原地。
-	CGFloat inset = SokoDockGeometryBottomInset();
-	CGFloat offset = [self effectiveRowOffset];
-	if (isnan(inset) || isnan(offset) || !SokoIsPortrait(boundingRect)) return frame;
+	// 1.2.1-90 · 上游实现：用「编辑态行(已调整) − 编辑态行(系统原值)」的差做平移。
+	// 这里的第二次调用靠 gComputingStockLayout 关掉我方调整，拿到真正的原值。
+	CGRect row = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
 
-	frame.origin.y = CGRectGetMaxY(boundingRect) - inset - CGRectGetHeight(frame) + offset;
+	gComputingStockLayout = YES;
+	CGRect stockRow = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
+	gComputingStockLayout = NO;
+
+	if (CGRectIsNull(row) || CGRectIsNull(stockRow)) return frame;
+
+	frame.origin.y += CGRectGetMinY(row) - CGRectGetMinY(stockRow);
 	return frame;
+
 }
 
 + (CGRect)editingRowFrame {
@@ -321,10 +324,6 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 		[SokoEditorChrome update];
 
-		// 1.2.1-81 · 兜底强制 reticle 定位（系统会用自己的行框覆盖 frame/transform）
-		for (PREditingSceneViewController *scene in gEditingSceneViewControllers.allObjects) {
-			[SokoEditorChrome forceReticlesInEditingSceneViewController:scene];
-		}
 	};
 
 	if (!animated) {

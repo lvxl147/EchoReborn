@@ -45,29 +45,22 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 }
 
 + (void)updateReticleForEditorRootViewController:(PREditorRootViewController *)controller {
-	// 1.2.1-78 · 先让系统按它自己的行位置重算（它会覆盖我们的 frame 修正），
-	// 再用 transform 叠一次位移 —— 这是上游的兜底路径，系统重算也压不掉。
+	// 1.2.1-90 · 上游实现：先让系统按它自己的行框重算（它会调用我们 hook 的
+	// complicationRowElementEditingReticleFrameWithBoundingRect:），有这个方法就直接返回；
+	// 只有系统没有该方法时，才用 transform 兜底。
 	if ([controller respondsToSelector:@selector(updateReticleViewFrames)]) {
 		if (controller.isViewLoaded) [controller updateReticleViewFrames];
+		return;
 	}
 
 	UIView *reticle = [controller respondsToSelector:@selector(graphicComplicationsReticleView)] ? controller.graphicComplicationsReticleView : nil;
-	UIView *root = controller.viewIfLoaded;
-	if (!reticle || !root) return;
+	NSNumber *base = objc_getAssociatedObject(controller, kSokoReticleBaseMinYKey);
+	if (!reticle || !base) return;
 
-	CGFloat stock = [SokoPosterLayout stockEditingRowMinY];
-	CGFloat offset = [SokoPosterLayout effectiveRowOffset];
-	CGFloat inset = SokoDockGeometryBottomInset();
-	CGFloat height = CGRectGetHeight(reticle.bounds);
-	if (isnan(stock) || isnan(offset) || isnan(inset) || height < 1.0) return;
+	CGRect target = [NSClassFromString(@"CSProminentLayoutController") frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(target)) return;
 
-	CGFloat target = CGRectGetMaxY(root.bounds) - inset - height + offset;
-	reticle.transform = CGAffineTransformMakeTranslation(0.0, target - stock);
-
-	// 1.2.1-79 · 诊断：17=位移(×10)、18=边框高、19=系统原位
-	SokoTrace(17, (long)llround((target - stock) * 10.0));
-	SokoTrace(18, (long)llround(height));
-	SokoTrace(19, (long)llround(stock));
+	reticle.transform = CGAffineTransformMakeTranslation(0.0, CGRectGetMinY(target) - base.doubleValue);
 }
 
 + (NSLayoutConstraint *)stockPageControlConstraintForEditorRootViewController:(PREditorRootViewController *)controller {
@@ -142,62 +135,6 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 	}
 
 	[root layoutIfNeeded];
-}
-
-
-+ (NSInteger)forceReticlesInEditingSceneViewController:(PREditingSceneViewController *)controller {
-	UIView *root = controller.viewIfLoaded;
-	if (!root) return 0;
-
-	CGFloat inset = SokoDockGeometryBottomInset();
-	CGFloat offset = [SokoPosterLayout effectiveRowOffset];
-	if (isnan(inset)) { SokoTrace(17, -1); return 0; }
-	if (isnan(offset)) { SokoTrace(17, -2); return 0; }
-
-	// 1.2.1-87 · 改为"几何匹配"：类名扫不到（前 6 层都是通用容器），因此按
-	// 「尺寸≈组件行 + 纵向位置≈系统行位置」来找那个虚线框，然后整体平移 delta。
-	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
-	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
-	if (CGRectIsNull(stock)) { SokoTrace(17, -3); return 0; }
-
-	CGRect bounds = root.bounds;
-	CGFloat targetTop = CGRectGetMaxY(bounds) - inset - CGRectGetHeight(stock) + offset;
-	CGFloat delta = targetTop - CGRectGetMinY(stock);
-	if (fabs(delta) < 0.5) { SokoTrace(17, -4); return 0; }
-
-	id firstContainer = controller.complicationContainerViewControllers.firstObject;
-	UIView *container = [firstContainer isKindOfClass:[UIViewController class]] ? ((UIViewController *)firstContainer).viewIfLoaded : nil;
-
-	CGFloat stockCenterY = CGRectGetMidY(stock);
-	CGFloat rowW = CGRectGetWidth(stock);
-	CGFloat rowH = CGRectGetHeight(stock);
-
-	NSInteger hits = 0;
-	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
-	NSInteger visited = 0;
-	while (stack.count && visited < 400) {
-		UIView *v = stack.lastObject;
-		[stack removeLastObject];
-		visited++;
-
-		if (v != container && v != root) {
-			CGRect inRoot = [v.superview convertRect:v.bounds toView:root];
-			BOOL sizeOK = CGRectGetWidth(inRoot) > rowW * 0.5 && CGRectGetWidth(inRoot) < rowW * 1.6 &&
-			              CGRectGetHeight(inRoot) > rowH * 0.5 && CGRectGetHeight(inRoot) < rowH * 1.8;
-			BOOL posOK = fabs(CGRectGetMidY(inRoot) - stockCenterY) < 10.0;
-			if (sizeOK && posOK && v.alpha > 0.01) {
-				v.transform = CGAffineTransformMakeTranslation(0.0, delta);
-				hits++;
-			}
-		}
-
-		for (UIView *sub in v.subviews) [stack addObject:sub];
-	}
-
-	SokoTrace(17, hits);
-	SokoTrace(18, (long)llround(delta * 10.0));
-	SokoTrace(19, (long)llround(offset));
-	return hits;
 }
 
 @end

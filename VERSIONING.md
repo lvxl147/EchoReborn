@@ -1006,3 +1006,9 @@
 - 关闭"调整组件位置"：发布'set=0'且 effective=顶部端点，组件回系统默认位置（此前仍按 0 渲染在底部）。
 - 完成写回滑块：恢复 SokoEditorRequestRowOffset（上一版去掉后滑块数值不再跟随）。
 - 边框探针：forceReticles 每个提前返回都带码（17=-1 inset无效 / -2 offset无效 / -3 行框为空 / -4 delta过小），命中数仍为正数，保证每轮都能拿到数据。
+
+## 1.2.1-90（1002190）· 边框问题：整段回到上游实现
+- 实锤：TRACE 17 全是 -4（delta<0.5）。根因是 1.2.1-77 删掉了 frameByAdjustingFrame 里对 reticle 变体的早退，导致编辑器算边框时拿到的"行"已被我们改写，chrome 里「目标 − 系统位置」恒为 0。
+- 恢复三处上游实现：① frameByAdjustingFrame 的 reticle 变体早退；② reticleFrameByAdjustingFrame 的"行差分"平移；③ SokoEditorChrome updateReticle 先调系统 updateReticleViewFrames 并 return（transform 仅作系统无该方法时的兜底）。
+- 删除绕路上游的 forceReticles 几何匹配、类名回传、强制平移。
+- 唯一保留的自定义：行位置仍按"底部基准 + 生效偏移"计算（连续值），其余全部上游原样。
