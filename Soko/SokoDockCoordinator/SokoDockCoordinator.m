@@ -267,7 +267,7 @@ static __weak SokoDockCoordinator *gActiveCoordinator;
 		return;
 	}
 
-	row.origin.y = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row);
+	row.origin.y = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row) + SokoPrefWidgetOffset();
 	self.dockTopY = CGRectGetMinY(row);
 	self.dockBottomY = CGRectGetMaxY(row);
 
