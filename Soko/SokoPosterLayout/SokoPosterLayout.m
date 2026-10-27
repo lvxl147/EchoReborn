@@ -168,6 +168,11 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 + (void)registerComplicationContainerViewController:(UIViewController *)controller {
 	gComplicationContainerViewControllers = SokoRegister(gComplicationContainerViewControllers, controller);
+
+	// 1.2.1-96 · 容器登记是必然发生的入口，在这里补跑一次类名扫描
+	for (PREditingSceneViewController *scene in gEditingSceneViewControllers.allObjects) {
+		[SokoEditorChrome dumpCandidateViewsInEditingSceneViewController:scene];
+	}
 }
 
 + (BOOL)editingSceneViewControllerEditsLockScreen:(PREditingSceneViewController *)controller {

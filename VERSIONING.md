@@ -1034,3 +1034,7 @@
 ## 1.2.1-95（1002195）· 完成判定改拦 UIApplication sendAction；编辑器打开后延迟扫描
 - 实测 code 50 恒为 0 → 编辑器"完成"是 UIBarButtonItem 而非 UIButton，按标题找 UIButton 全漏。改为 %hook UIApplication 的 sendAction:to:from:forEvent:，无论按钮还是 bar item 都能拿到标题：完成/Done/Save/保存 → 发 50=1 并写入当前值；取消/Cancel → 50=2，不写。
 - 编辑器登记后 0.8s 再补跑一次按钮安装与类名扫描（此前只在重排时跑，没滑动就等于没跑）。
+
+## 1.2.1-96（1002196）· 完成/取消改用动作名判定；边框扫描挂到容器登记
+- 前两版按标题/方法名都没命中（code 50 恒 0）。改为拦 UIApplication sendAction 时直接看 SEL：55=任意点击、56=动作名含 done/save/commit/finish/apply、57=含 cancel/dismiss/discard、58 保留标题匹配；命中 done 才写值。
+- 边框扫描从"编辑器登记"改挂到"组件容器登记"（code 3 已证明必然发生），并保留 0.8s 延迟补扫。

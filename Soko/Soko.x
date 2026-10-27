@@ -774,25 +774,40 @@ static void SokoProbeEditorButtons(void) {
 %group SokoEditorActions
 %hook UIApplication
 - (void)sendAction:(SEL)action to:(id)target from:(id)sender forEvent:(UIEvent *)event {
+	// 1.2.1-96 · 不再依赖标题：直接看动作名。
+	// 55=任意一次点击（证明钩子活着） 56=动作名含 done/save/commit/finish/apply
+	// 57=动作名含 cancel/dismiss/discard 58=标题匹配（保留）
+	SokoTrace(55, 1);
+
+	NSString *selector = NSStringFromSelector(action) ?: @"";
+	NSString *lower = selector.lowercaseString;
+
+	BOOL selDone = [lower containsString:@"done"] || [lower containsString:@"save"] ||
+	               [lower containsString:@"commit"] || [lower containsString:@"finish"] ||
+	               [lower containsString:@"apply"];
+	BOOL selCancel = [lower containsString:@"cancel"] || [lower containsString:@"dismiss"] ||
+	                 [lower containsString:@"discard"];
+
 	NSString *title = nil;
 	if ([sender respondsToSelector:@selector(title)]) title = [sender title];
 	if (![title isKindOfClass:[NSString class]] || !title.length) {
 		if ([sender isKindOfClass:[UIButton class]]) title = [(UIButton *)sender titleForState:UIControlStateNormal];
 	}
-	if ([title isKindOfClass:[NSString class]] && title.length) {
-		BOOL isDone = [@[@"完成", @"Done", @"Save", @"保存"] containsObject:title];
-		BOOL isCancel = [@[@"取消", @"Cancel"] containsObject:title];
-		if (isDone) {
-			CGFloat offset = [SokoPosterLayout editingRowOffset];
-			SokoTrace(50, 1);
-			if (!isnan(offset)) {
-				SokoEditorRequestRowOffset(offset);
-				SokoFileLog(@"EDITOR-DONE %.1f", offset);
-			}
-		} else if (isCancel) {
-			SokoTrace(50, 2);
+	BOOL titleDone = [title isKindOfClass:[NSString class]] && [@[@"完成", @"Done", @"保存", @"Save"] containsObject:title];
+	BOOL titleCancel = [title isKindOfClass:[NSString class]] && [@[@"取消", @"Cancel"] containsObject:title];
+
+	if (selDone || titleDone) {
+		SokoTrace(56, 1);
+		CGFloat offset = [SokoPosterLayout editingRowOffset];
+		if (!isnan(offset)) {
+			SokoEditorRequestRowOffset(offset);
+			SokoFileLog(@"EDITOR-DONE sel=%@ title=%@ off=%.1f", selector, title, offset);
 		}
+	} else if (selCancel || titleCancel) {
+		SokoTrace(57, 1);
+		SokoFileLog(@"EDITOR-CANCEL sel=%@ title=%@", selector, title);
 	}
+
 	%orig;
 }
 %end
