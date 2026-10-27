@@ -1,6 +1,7 @@
 #import "SokoDockCoordinator.h"
 #import "../SokoPreferences.h"
 #import "../SokoLog.h"
+#import "../SokoFileLog.h"
 
 NSString *const SokoProminentDisplayVibrancyDidChangeNotification = @"SokoProminentDisplayVibrancyDidChangeNotification";
 NSString *const SokoProminentDisplayContentAlphaDidChangeNotification = @"SokoProminentDisplayContentAlphaDidChangeNotification";
@@ -302,6 +303,21 @@ static __weak SokoDockCoordinator *gActiveCoordinator;
 			ERSokoLog(@"SOKO-DOCK botY=%.1f topY=%.1f h=%.1f off=%.1f btnHit=%d btnCenterY=%.1f",
 			          self.dockBottomY, self.dockTopY, CGRectGetHeight(row),
 			          SokoPrefWidgetOffset(), (int)buttonHit, buttonCenterY);
+
+			// 1.2.1-72 · 数值标定：同一个 layoutController 算出的"系统原位行"（= 组件
+			// 在顶部时的行）与"底部态行"的差值，就是滑块要跨越的行程。
+			// SpringBoard 里没有装 _frameForElement: 那个 hook（它只在海报进程），
+			// 所以这里拿到的是未被我方改写的系统原值。
+			CGRect stockRow = [self.layoutController frameForElements:kSokoComplicationRowElement withBoundingRect:bounds];
+			CGFloat stockY = CGRectGetMinY(stockRow);
+			CGFloat delta = stockY - CGRectGetMinY(row);          // 顶部相对底部的位移（负=在上方）
+			CGRect screenFrame = coverSheetView.window ? coverSheetView.window.bounds : bounds;
+			SokoFileLog(@"CALIB screen=%.0fx%.0f safeBottom=%.1f stockY=%.1f stockH=%.1f bottomY=%.1f bottomH=%.1f delta=%.1f off=%.1f",
+			            screenFrame.size.width, screenFrame.size.height,
+			            coverSheetView.safeAreaInsets.bottom,
+			            stockY, CGRectGetHeight(stockRow),
+			            CGRectGetMinY(row), CGRectGetHeight(row),
+			            delta, SokoPrefWidgetOffset());
 		}
 	}
 }

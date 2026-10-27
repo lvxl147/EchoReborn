@@ -909,3 +909,8 @@
 - 现象补充（用户）：原版 Soko 在底部态进编辑态，组件也在底部；我们这版进编辑态却回到顶部 —— 指向 PosterBoard 侧 Soko 完全没干活。
 - 双域日志：SokoFileLog 除写 com.strive.echoreborn.preferences 外，再写进程自己的 bundleId 域（PosterBoard 写不进宿主域，但一定写得进自己的域），SSH 读 com.apple.PosterBoard.plist 的 ERSokoMirror 即可。
 - SpringBoard 里预演 PosterBoard 的 isSupported 五项：nativeBottom（PRComplicationContainerViewController setWidgetsUseBottomLayout:）/ rowFrame / reticle / frameRect / frameVariant（后四项在 CSProminentLayoutController）。哪一项为 0 就是 PosterBoard 侧整段跳过的原因。
+
+## 1.2.1-72（1002172）· 数值标定版（只采集，不改行为）
+- 目标：把"顶部/底部"两档换算成滑块同一套单位（pt），确认实际行程。
+- CALIB 行：screen 尺寸 / safeAreaBottom / stockY（系统原位行 = 顶部态行，SpringBoard 未装 _frameForElement: hook，取到的是系统原值）/ bottomY（底部态行，含当前 offset）/ delta = stockY - bottomY。
+- 判读：delta 就是"从底部走到顶部"需要写进 soko_widgetOffset 的量（当前滑块只有 -120~120，明显不够）。
