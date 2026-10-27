@@ -2,6 +2,7 @@
 #import "SokoLayoutSwipeHandler.h"
 #import "../SokoLog.h"
 #import "../SokoFileLog.h"
+#import "../SokoDockGeometry/SokoDockGeometry.h"
 
 static const CGFloat kSokoLookNameToPageControlSpacing = 10.0;
 
@@ -26,6 +27,12 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 	return shared;
 }
 
+// 1.2.1-104 · 取消按钮：点了就通知 SpringBoard 回滚到"进编辑器之前的值"
+- (void)cancelTapped:(id)sender {
+	SokoTrace(26, 9999);
+	SokoEditorRequestRevert();
+}
+
 - (void)tapped:(UIButton *)button {
 	NSString *title = [button titleForState:UIControlStateNormal] ?: button.titleLabel.text ?: @"";
 	CGFloat offset = [SokoPosterLayout editingRowOffset];
@@ -47,9 +54,103 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 
 @implementation SokoEditorChrome
 
+// 1.2.1-104 · 边框：直接移动系统的虚线框视图。
+//   为什么必须这么做：60~63 的实测数据显示
+//     · complicationRowElementEditingReticleFrameWithBoundingRect: **确实被调用**；
+//     · 我们返回的 frame（63=719）正确；
+//     · 但视图树扫描（39/40 → 类名解出来是 **UIView**）在"系统原位"附近
+//       仍有一个尺寸≈组件行的 UIView —— 也就是真正的虚线框**根本没被那个
+//       返回值驱动**，它一直待在 221（系统原位）。
+//   于是：找出尺寸≈组件行、且当前仍停在"系统原位"附近的视图，
+//   用 transform 平移 (adjusted - stock)。已经跟着走的视图不动（避免二次位移）。
+static NSHashTable<UIView *> *gReticleViews;
+
++ (void)installCancelButtonWatcher:(PREditorRootViewController *)controller {
+	if (!controller || !controller.isViewLoaded) return;
+
+	for (NSString *key in @[@"cancelButton", @"_cancelButton", @"cancelBarButtonItem"]) {
+		if (![controller respondsToSelector:NSSelectorFromString(key)]) continue;
+
+		id button = nil;
+		@try { button = [controller valueForKey:key]; } @catch (__unused NSException *e) {}
+		if (![button isKindOfClass:[UIButton class]]) continue;
+		if (objc_getAssociatedObject(button, kSokoWatchedButtonKey)) continue;
+
+		objc_setAssociatedObject(button, kSokoWatchedButtonKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+		[button addTarget:[SokoEditorButtonWatcher shared]
+		           action:@selector(cancelTapped:)
+		 forControlEvents:UIControlEventTouchUpInside];
+		SokoTrace(24, 1);
+		return;
+	}
+	SokoTrace(24, 0);
+}
+
++ (void)huntReticleViewsForEditorRootViewController:(PREditorRootViewController *)controller {
+	UIView *root = controller.viewIfLoaded;
+	if (!root || !root.window) return;
+
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(stock)) return;
+
+	CGFloat w = CGRectGetWidth(stock), h = CGRectGetHeight(stock), mid = CGRectGetMidY(stock);
+	if (w < 1.0 || h < 1.0) return;
+
+	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+	NSInteger visited = 0;
+	while (stack.count && visited < 900) {
+		UIView *view = stack.lastObject;
+		[stack removeLastObject];
+		visited++;
+
+		if (view != root && view.window) {
+			CGRect rect = [view convertRect:view.bounds toView:root.window];
+			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.5 &&
+			              fabs(CGRectGetHeight(rect) - h) < h * 0.8;
+			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 40.0;
+			if (sizeOK && parkedAtStock && ![gReticleViews containsObject:view]) {
+				if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
+				[gReticleViews addObject:view];
+				SokoTrace(28, 1);
+			}
+		}
+
+		for (UIView *subview in view.subviews) [stack addObject:subview];
+	}
+}
+
++ (void)updateReticleViewsForEditorRootViewController:(PREditorRootViewController *)controller {
+	[self huntReticleViewsForEditorRootViewController:controller];
+
+	CGFloat delta = [SokoPosterLayout editingRowDelta];
+	if (isnan(delta)) return;
+
+	static CFTimeInterval lastDeltaLog = 0.0;
+	CFTimeInterval now = CACurrentMediaTime();
+	if (now - lastDeltaLog > 1.0) {
+		lastDeltaLog = now;
+		SokoTrace(26, (long)llround(delta));
+		SokoTrace(27, (long)gReticleViews.allObjects.count);
+	}
+
+	for (UIView *view in gReticleViews.allObjects) {
+		if (fabs(view.transform.ty - delta) < 0.5) continue;
+		view.transform = CGAffineTransformMakeTranslation(0.0, delta);
+	}
+}
+
 + (void)registerEditorRootViewController:(PREditorRootViewController *)controller {
 	if (!gEditorRootViewControllers) gEditorRootViewControllers = [NSHashTable weakObjectsHashTable];
 	[gEditorRootViewControllers addObject:controller];
+
+	// 1.2.1-104 · 取消按钮：PREditorRootViewController 的方法表里有 setCancelButton:
+	//   （METHODS 实锤），按 KVC 取出来；若是 UIButton 就挂 target，点了回滚。
+	__weak PREditorRootViewController *weakController = controller;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		[self installCancelButtonWatcher:weakController];
+	});
+	[self installCancelButtonWatcher:controller];
 
 	CGRect frame = [NSClassFromString(@"CSProminentLayoutController") frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
 	if (!CGRectIsNull(frame)) {
@@ -62,6 +163,8 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 + (void)update {
 	for (PREditorRootViewController *controller in gEditorRootViewControllers.allObjects) {
 		[self updateReticleForEditorRootViewController:controller];
+		// 1.2.1-104 · 真正的"让虚线框跟着走"：平移那个停在原位的 UIView
+		[self updateReticleViewsForEditorRootViewController:controller];
 		[self updateLookControlsForEditorRootViewController:controller];
 	}
 

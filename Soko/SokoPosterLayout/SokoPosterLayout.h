@@ -31,6 +31,8 @@
 //   这样"进编辑器什么都没动就退出""取消"都不可能写出任何东西。
 + (BOOL)editingRowOffsetDirty;
 + (void)clearEditingSession;
+// 1.2.1-104 · 编辑态行相对"系统原位"的位移量（虚线框要跟着挪这么多）
++ (CGFloat)editingRowDelta;
 + (CGFloat)effectiveRowOffset;               // 编辑期取会话值，否则取发布值
 + (CGFloat)stockEditingRowMinY;              // 系统原位行（不含我们的调整）
 // 1.2.1-69 · 手势门禁日志要读它（实现本来就在 .m 里，只是没在头文件声明）

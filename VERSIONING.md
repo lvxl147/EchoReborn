@@ -1133,3 +1133,22 @@ PRMutablePosterConfiguration）。
 **④ 噪声治理**：code 18 节流 30s、PUB/ROW 3s、虚线框探针 1s；日志环 500 行 / 80KB。
 （上一版 60~63 的边框数据就是被 code 18 上千条冲掉的。）
 新增 22=虚线框窗口 y、23=组件行窗口 y，用于判断边框到底有没有跟着走。
+
+## 1.2.1-104（1002204）· 恢复"完成保存" + 边框改为移动系统虚线框视图 + 取消回滚
+**① 完成保存（1.2.1-103 回归，已修）**：把提交挪到
+PRMutablePosterConfiguration storeComplicationLayout:error: 后 trace 21 **一次都没出现**
+（该类在 iOS 17.2.1 上只有 14 个方法，METHODS 列表里看不到 storeComplicationLayout:），
+"点击完成又失效了"。提交仍放回 setComplicationLayout:（1.2.1-102 用户已确认有效）。
+**② 取消不保存 —— 改用"回滚"**：滑动是立即提交的（否则编辑器里看不到移动），
+所以取消只能靠回滚。新增两条海报进程→SpringBoard 通道：
+`SokoEditorBaseline`（进编辑器时把编辑前的值存为基线，EDITOR-BASELINE）与
+`SokoEditorRevert`（点取消 → EDITOR-REVERT 回滚到基线）。取消按钮按 KVC 取
+PREditorRootViewController 的 cancelButton（方法表里有 setCancelButton: 实锤）。
+**③ 边框 —— 改为直接平移系统虚线框视图**：
+60~63 显示 complicationRowElementEditingReticleFrameWithBoundingRect: **确实被调用**、
+我们返回的 frame 也正确（63=719），但视图树扫描（39/40 解出类名 = **UIView**）在系统
+原位附近仍有尺寸≈组件行的 UIView —— 真正的虚线框**根本不受那个返回值驱动**。
+现在：找出尺寸≈组件行且仍停在"系统原位"的视图，用 transform 平移
+(adjusted - stock)；已经跟着走的视图不动（避免二次位移）。26=delta 27=命中数 28=新命中。
+**④ 壁纸键**：identityPathComponent 也带版本号（…/configurations/<UUID>**/versions/99**，
+每次保存 99→100→101），正则补上 `/versions/N`。

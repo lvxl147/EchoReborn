@@ -180,6 +180,18 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	return SokoRowOffsetIsSet() ? SokoRowOffsetValue() : SokoTopOffsetValue();
 }
 
++ (CGFloat)editingRowDelta {
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect adjusted = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant];
+
+	gComputingStockLayout = YES;
+	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant];
+	gComputingStockLayout = NO;
+
+	if (CGRectIsNull(adjusted) || CGRectIsNull(stock)) return NAN;
+	return CGRectGetMinY(adjusted) - CGRectGetMinY(stock);
+}
+
 + (CGFloat)stockEditingRowMinY {
 	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
 	gComputingStockLayout = YES;
@@ -211,6 +223,10 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	// 不再跨进程写偏好（原版语义：点完成才生效）。
 	// 1.2.1-85 · 不再用归档值播种：之前完成时写进归档的 0 会让每次进入都落在 0。
 	// 现在只认 SpringBoard 发布过来的"当前生效值"（= 设置页滑块）。
+	// 1.2.1-104 · 进编辑器先把"编辑前的值"发给 SpringBoard 存基线（取消时回滚用）。
+	//   必须在设置会话值之前取，否则取到的会是刚播种的会话值。
+	SokoEditorRequestBaseline([self effectiveRowOffset]);
+
 	gEditingRowOffset = [self effectiveRowOffset];
 	gEditingRowOffsetDirty = NO;   // 1.2.1-99 · 新会话：还没滑动过
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);

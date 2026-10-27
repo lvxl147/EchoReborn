@@ -17,18 +17,21 @@ static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
 //   键取 PRSPosterConfiguration 的 _path 末段（无则退回 provider 描述），
 //   值存在 prefs 的 soko_offsets_by_poster 字典里，切壁纸时读该壁纸自己的值。
 static NSString *gActivePosterKey = nil;
+// 1.2.1-104 · 编辑会话基线（进编辑器那一刻的生效偏移），取消时回滚到它
+static NSNumber *gEditBaselineOffset;
 
 // 1.2.1-103 · 去掉键尾的版本号（_98-0 / /98-0）。
 //   实测 `stablePersistenceIdentifier` 是
 //   `…_CreateAFacePhotos(EEAE4B4F-…)_PRPosterRoleLockScreen_98-0`，
-//   **每次保存壁纸版本号都会 +1**（日志里 95-0 → 96-0 → … → 99-0），
+//   **每次保存壁纸版本号都会 +1**（日志里 95-0 → 96-0 → … → 99-0；换成
+//   identityPathComponent 后又变成 .../versions/99 → 100 → 101），
 //   于是同一张壁纸每编辑一次就换一个新键 → POSTER-SEED 而不是 POSTER-RESTORE
 //   → 表现就是"改完再进，值丢了"。这才是"每壁纸保存不正常"的最后一环。
 static NSString *SokoCanonicalPosterKey(NSString *key) {
 	static NSRegularExpression *expression;
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
-		expression = [NSRegularExpression regularExpressionWithPattern:@"[_/][0-9]+-[0-9]+$" options:0 error:nil];
+		expression = [NSRegularExpression regularExpressionWithPattern:@"(_[0-9]+-[0-9]+|/versions/[0-9]+|/[0-9]+-[0-9]+)$" options:0 error:nil];
 	});
 	if (![key isKindOfClass:[NSString class]] || !key.length || !expression) return key;
 	return [expression stringByReplacingMatchesInString:key options:0 range:NSMakeRange(0, key.length) withTemplate:@""];
@@ -706,11 +709,14 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	// 1.2.1-99 · 提交条件：本次会话真的滑动过。没滑动（含"什么都没改就点完成"）
 	// 不写任何东西；取消时只要系统不调这个方法就天然不保存。
 	if (layout && [SokoPosterLayout editingRowOffsetDirty] && !isnan(editingOffset)) {
-		// 1.2.1-103 · 这里**只把值挂到 layout 上，不再写偏好**。
-		//   写偏好改由 PRMutablePosterConfiguration storeComplicationLayout:error: 负责
-		//   （真正的落盘入口，只有"完成"会走）。本方法一次会话被调用上千次，
-		//   取消一样会走到 —— 之前就是它导致"点取消也会保存"。
+		// 1.2.1-104 · **回到"在这里提交"**：1.2.1-103 把提交挪到
+		//   PRMutablePosterConfiguration storeComplicationLayout:error:，结果 trace 21
+		//   一次都没出现（该类在 iOS 17.2.1 上一共只有 14 个方法，列表里看不到
+		//   storeComplicationLayout:）→ "点击完成又失效了"。
+		//   所以提交仍放在这里（1.2.1-102 用户已确认有效），"取消不保存"改由
+		//   取消按钮 → EDITOR-REVERT 回滚解决。
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
+		SokoEditorRequestRowOffset(editingOffset);
 		// 17 = 命中并挂上值（payload = 值，仅作证据）
 		static CFTimeInterval lastCommitLog = 0.0;
 		CFTimeInterval nowCommit = CACurrentMediaTime();
@@ -1127,6 +1133,42 @@ static void SokoProbeEditorButtons(void) {
 				[coordinator refresh];
 				notify_post("com.strive.echoreborn/ReloadPrefs");
 				SokoFileLog(@"EDITOR-SETOFFSET %.1f", value);
+			});
+		}
+
+		// 1.2.1-104 · 编辑会话基线：进编辑器时海报进程把"编辑前的值"发过来存着，
+		//   点"取消"时用它回滚（滑动是立即提交的，回滚是唯一能还原的办法）。
+		{
+			int baselineToken = NOTIFY_TOKEN_INVALID;
+			notify_register_dispatch(SokoEditorBaselineNotification.UTF8String, &baselineToken,
+			                         dispatch_get_main_queue(), ^(int t) {
+				CGFloat value = SokoRowOffsetBaselineValue();
+				if (isnan(value)) return;
+				gEditBaselineOffset = @(value);
+				SokoFileLog(@"EDITOR-BASELINE %.1f", value);
+			});
+		}
+
+		// 1.2.1-104 · 取消 → 回滚到基线
+		{
+			int revertToken = NOTIFY_TOKEN_INVALID;
+			notify_register_dispatch(SokoEditorRevertNotification.UTF8String, &revertToken,
+			                         dispatch_get_main_queue(), ^(int t) {
+				CGFloat value = gEditBaselineOffset ? gEditBaselineOffset.doubleValue : 0.0;
+				NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+				[defaults setDouble:value forKey:@"soko_widgetOffset"];
+				if (gActivePosterKey) {
+					NSMutableDictionary *map = SokoPosterOffsetMap();
+					map[gActivePosterKey] = @(value);
+					[defaults setObject:map forKey:@"soko_offsets_by_poster"];
+				}
+				[defaults synchronize];
+				[SokoDockCoordinator setActiveRowOffset:@(value)];
+				SokoDockCoordinator *coordinator = SokoCoordinator();
+				[coordinator setEnabled:YES];
+				[coordinator refresh];
+				notify_post("com.strive.echoreborn/ReloadPrefs");
+				SokoFileLog(@"EDITOR-REVERT %.1f", value);
 			});
 		}
 		return;

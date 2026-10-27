@@ -17,6 +17,9 @@ FOUNDATION_EXPORT NSString *const SokoTopOffsetDidChangeNotification;
 FOUNDATION_EXPORT NSString *const SokoRowOffsetIsSetDidChangeNotification;
 // PosterBoard → SpringBoard：编辑器里滑动后请求写入该值（SpringBoard 落盘到偏好）
 FOUNDATION_EXPORT NSString *const SokoSetRowOffsetRequestNotification;
+// 1.2.1-104 · 编辑会话基线（进编辑器时的值）+ 取消回滚
+FOUNDATION_EXPORT NSString *const SokoEditorBaselineNotification;
+FOUNDATION_EXPORT NSString *const SokoEditorRevertNotification;
 
 static const CGFloat kSokoDockBottomToButtonCenter = 45.0;
 
@@ -43,5 +46,9 @@ FOUNDATION_EXPORT BOOL SokoRowOffsetIsSet(void);
 FOUNDATION_EXPORT void SokoDockPublishWidgetsEnabled(BOOL enabled);
 FOUNDATION_EXPORT BOOL SokoWidgetsEnabledValue(void);
 FOUNDATION_EXPORT void SokoEditorRequestRowOffset(CGFloat offset);
+// 1.2.1-104 · 进编辑器时把"编辑前的值"发给 SpringBoard 存起来；点取消就按它回滚
+void SokoEditorRequestBaseline(CGFloat offset);
+CGFloat SokoRowOffsetBaselineValue(void);
+void SokoEditorRequestRevert(void);
 // SpringBoard 侧读取编辑器最后一次请求的值（NAN 表示没有）
 FOUNDATION_EXPORT CGFloat SokoRowOffsetRequestValue(void);
