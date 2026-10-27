@@ -44,6 +44,8 @@ include $(THEOS)/makefiles/common.mk
 # property access walks off the object - SpringBoard dies and the device
 # respring-loops.  Everything now compiles into EchoReborn.dylib, so any leftover
 # duplicate would be a link error instead of a runtime landmine.
+TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam
+
 EchoReborn_FILES = Tweak.xm \
                 GlassKit/LGGlassKit.x \
                 GlassKit/LGLiveBackdropView.m \
