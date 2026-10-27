@@ -14,6 +14,8 @@ static __thread BOOL gComputingStockLayout;
 static BOOL gIgnoringGraphicComplications;
 // 1.2.1-78 · 编辑会话内的偏移（NAN = 跟随 SpringBoard 发布值）
 static CGFloat gEditingRowOffset = NAN;
+// 1.2.1-99 · 本次会话是否真的滑动过（决定"完成"时是否提交）
+static BOOL gEditingRowOffsetDirty;
 
 static __weak PREditingSceneViewController *gDodgingEditingSceneViewController;
 static BOOL gCoveredByHostModalPresentation;
@@ -144,13 +146,23 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 }
 
 + (void)setEditingRowOffset:(CGFloat)offset {
+	// 1.2.1-99 · 不再同步"待提交值"到模型层：那会让取消也把会话值漏进归档。
+	// 会话值只在"完成"时由 PRPosterConfiguredProperties setComplicationLayout: 取走。
 	gEditingRowOffset = offset;
-	// 1.2.1-98 · 同步给模型层作为"待提交值"：系统保存壁纸编码时若 layout 上没有值，用它兜底
-	[SokoPosterModel setPendingRowOffset:isnan(offset) ? nil : @(offset)];
+	if (!isnan(offset)) gEditingRowOffsetDirty = YES;
 }
 
 + (CGFloat)editingRowOffset {
 	return gEditingRowOffset;
+}
+
++ (BOOL)editingRowOffsetDirty {
+	return gEditingRowOffsetDirty;
+}
+
++ (void)clearEditingSession {
+	gEditingRowOffset = NAN;
+	gEditingRowOffsetDirty = NO;
 }
 
 + (CGFloat)effectiveRowOffset {
@@ -192,6 +204,7 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	// 1.2.1-85 · 不再用归档值播种：之前完成时写进归档的 0 会让每次进入都落在 0。
 	// 现在只认 SpringBoard 发布过来的"当前生效值"（= 设置页滑块）。
 	gEditingRowOffset = [self effectiveRowOffset];
+	gEditingRowOffsetDirty = NO;   // 1.2.1-99 · 新会话：还没滑动过
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);
 	[SokoEditorChrome installEditorButtonWatchers:controller];
 

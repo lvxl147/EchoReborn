@@ -13,8 +13,10 @@
 static NSString *const kSokoLogSuite = @"com.strive.echoreborn.preferences";
 static NSString *const kSokoLogKey = @"ERSokoMirror";
 static NSString *const kSokoTraceName = @"com.strive.echoreborn.soko.trace";
-static const NSUInteger kSokoLogRingLines = 120;
-static const NSUInteger kSokoLogRingBytes = 20 * 1024;
+// 1.2.1-99 · 环放大到 300 行 / 48KB：120 行只够存 3 秒，关键节点（进入编辑器、
+// 完成/取消）总是被刷掉，导致每轮都只能看到碎片、无法定论。
+static const NSUInteger kSokoLogRingLines = 300;
+static const NSUInteger kSokoLogRingBytes = 48 * 1024;
 
 // 1.2.1-71 · 双域写入。PosterBoard 写不了 com.strive.echoreborn.preferences（实测
 // SpringBoard 的该域可写、PosterBoard 的完全没出现），但每个进程都一定写得进
@@ -87,17 +89,21 @@ void SokoFileLog(NSString *format, ...) {
 // 实测 code=1 直接丢失（只收到 code=2）。改为**每条 code 一条独立通知名**
 // （com.strive.echoreborn.soko.tr.<code>），payload 走各自 state，不再互相覆盖。
 void SokoTrace(int code, long payload) {
-	if (code < 0 || code >= 32) return;
+	// 1.2.1-99 · **这行是十几个版本拿不到数据的根因之一**：原上限写成 32，
+	// 于是 39/40/41（视图扫描）、55/56/57（点击）、60~63（reticle 探针）全部被
+	// 静默丢弃，日志里看到的「恒为 0」「55=0」其实是假阴性。上限与 SpringBoard
+	// 侧监听循环（1..63）对齐。
+	if (code < 0 || code >= 64) return;
 
 	if ([NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.springboard"]) {
 		SokoFileLog(@"TRACE code=%d payload=%ld", code, payload);
 		return;
 	}
 
-	static int tokens[32];
+	static int tokens[64];
 	static dispatch_once_t once;
 	dispatch_once(&once, ^{
-		for (int i = 0; i < 32; i++) {
+		for (int i = 0; i < 64; i++) {
 			tokens[i] = NOTIFY_TOKEN_INVALID;
 			NSString *name = [NSString stringWithFormat:@"com.strive.echoreborn.soko.tr.%d", i];
 			notify_register_check(name.UTF8String, &tokens[i]);

@@ -7,7 +7,12 @@ static NSString *const kSokoRowOffsetCodingKey = @"ERSokoRowOffset";
 
 static const void *kSokoBottomLayoutKey = &kSokoBottomLayoutKey;
 static const void *kSokoRowOffsetKey = &kSokoRowOffsetKey;
-static NSNumber *gSokoPendingRowOffset;
+// 1.2.1-99 · gSokoPendingRowOffset 删除。它是一切的污染源：
+//   滑动 → setEditingRowOffset → pending = -507/0 → **任何一次** encodeWithCoder:
+//   （取消也会触发）都把 pending 写进归档 → SpringBoard 的 ARCHIVE-MIRROR 再把
+//   归档值回写进 soko_widgetOffset → 滑块和渲染值在 0 / -507 之间来回跳。
+//   实测 06:19 ARCHIVE-MIRROR v=-507.0 与 v=0.0 交替就是这个。
+//   现在归档只在"完成"这一条路径上写，且写完不再回流到偏好。
 
 // 1.2.1-68 · marker 改名：原来是 moe.waru.soko.default-layout，与真·Soko 包抢同一
 // 个文件（两台都装时谁先删谁赢）。换成 EchoReborn 自己的域。
@@ -38,10 +43,6 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 
 + (NSNumber *)rowOffsetForComplicationLayout:(id)layout {
 	return layout ? objc_getAssociatedObject(layout, kSokoRowOffsetKey) : nil;
-}
-
-+ (void)setPendingRowOffset:(NSNumber *)offset {
-	gSokoPendingRowOffset = offset;
 }
 
 + (void)setRowOffset:(NSNumber *)offset forComplicationLayout:(id)layout {
@@ -79,7 +80,9 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 		[coder encodeBool:YES forKey:kSokoBottomLayoutCodingKey];
 	}
 
-	NSNumber *offset = [self rowOffsetForComplicationLayout:layout] ?: gSokoPendingRowOffset;
+	// 1.2.1-99 · 只有"完成"路径显式 setRowOffset: 过的 layout 才带值，其余一律不写。
+	// 取消/快照/中途编码因此不可能把编辑会话里的临时值漏进归档。
+	NSNumber *offset = [self rowOffsetForComplicationLayout:layout];
 	if (offset && [coder respondsToSelector:@selector(encodeDouble:forKey:)]) {
 		[coder encodeDouble:offset.doubleValue forKey:kSokoRowOffsetCodingKey];
 		ERSokoLog(@"SOKO-ENC-OFFSET proc=%@ v=%.1f",

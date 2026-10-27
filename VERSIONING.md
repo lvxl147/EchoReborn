@@ -1047,3 +1047,24 @@
 - 根因：encodeComplicationLayout 第一行 `if (!complicationLayoutUsesBottomLayout) return;`，导致我们的偏移编码永远执行不到（SOKO-ENC-OFFSET 恒为 0）。
 - 修复：布尔与偏移各自独立编码。系统保存壁纸时这一趟必然执行 → 完成落盘、取消不落盘；归档本身按壁纸一份 → 每壁纸独立保存天然成立。
 - 去掉 code 28 的刷屏日志（一秒几十条，把其它探针冲掉，导致多轮数据为空）。
+
+## 1.2.1-99（1002199）· 摘掉"归档回流"，真源改为每壁纸偏好字典（解决"时好时坏"）
+根因（本轮日志实证，06:18~06:19）：
+1. **SokoTrace 的 `code >= 32 return` 上限** —— 39/40/41（视图扫描）、55/56/57（点击）、
+   60~63（reticle 探针）全部被静默丢弃。所以「60~63 恒为 0」「55=0」是**假阴性**，
+   不是系统没调用。这是十几个版本拿不到判据的直接原因。现上限与监听循环对齐到 64。
+2. **gSokoPendingRowOffset 污染归档**（1.2.1-98 引入）—— 滑动把它设成 -507/0 后，
+   **任何一次** encodeWithCoder:（取消也会触发）都写进归档；SpringBoard 的
+   ARCHIVE-MIRROR 再把归档值回写进 soko_widgetOffset。日志里
+   `ARCHIVE-MIRROR v=0.0` 与 `v=-507.0` 交替、`eff` 在 -431.7 → 0 → -507 → 0 跳，
+   就是"一会有效一会无效"。现删除 pending，归档只在"完成"这条路径上写。
+3. **删除 ARCHIVE-MIRROR 整段** —— 归档不再回流到滑块。真源唯一：
+   soko_offsets_by_poster（按壁纸键）+ soko_widgetOffset（当前壁纸的镜像）。
+4. **soko_offsets_by_poster 恒为 None** —— 唯一写它的 EDITOR-SETOFFSET 依赖
+   SokoEditorRequestRowOffset，调用点被 1 挡住从未执行；滑块改动也从不写它。
+   现补三处写入：切壁纸读回（POSTER-RESTORE）、新壁纸播种（POSTER-SEED）、
+   滑块改动回写（POSTER-SLIDER）。
+5. 完成/取消：新增 dirty 标志——只有本次会话真的滑动过才提交（17=提交值，
+   18=命中但没滑动，用于下轮判断"取消是否也走这个方法"）；编辑器消失 3s 后
+   清会话，杜绝残留值被误提交。
+6. 日志环 120 行 → 300 行 / 48KB；视图扫描探针加 3 秒节流（否则放开上限后会冲爆环）。

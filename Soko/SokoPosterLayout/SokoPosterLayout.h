@@ -27,6 +27,10 @@
 // 1.2.1-78 · 编辑会话内的行偏移（编辑期只改这个，不写偏好；点"完成"才落盘）
 + (void)setEditingRowOffset:(CGFloat)offset;
 + (CGFloat)editingRowOffset;                 // 无会话时为 NAN
+// 1.2.1-99 · 本次编辑会话里用户是否真的滑动过。只有它为 YES 时才在"完成"提交，
+//   这样"进编辑器什么都没动就退出""取消"都不可能写出任何东西。
++ (BOOL)editingRowOffsetDirty;
++ (void)clearEditingSession;
 + (CGFloat)effectiveRowOffset;               // 编辑期取会话值，否则取发布值
 + (CGFloat)stockEditingRowMinY;              // 系统原位行（不含我们的调整）
 // 1.2.1-69 · 手势门禁日志要读它（实现本来就在 .m 里，只是没在头文件声明）

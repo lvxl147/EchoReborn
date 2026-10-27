@@ -153,21 +153,39 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	PRSPosterConfiguration *configuration = [state respondsToSelector:@selector(activeLock)] ? state.activeLock : nil;
 	[SokoPosterModel applyPendingDefaultLayoutToConfiguration:configuration];
 
-	gActivePosterKey = SokoPosterKeyForConfiguration(configuration);
-	if (gActivePosterKey) {
-		NSNumber *stored = SokoPosterOffsetMap()[gActivePosterKey];
+	// 1.2.1-99 · 每壁纸独立保存（这次是真的落盘了）。
+	//   之前 soko_offsets_by_poster 恒为 None：唯一写它的地方是 EDITOR-SETOFFSET
+	//   （依赖 SokoEditorRequestRowOffset），而调用点被 SokoTrace 的 32 码上限挡住，
+	//   一次都没跑过。现在：
+	//     · 有记录 → 读出来写进 soko_widgetOffset（设置页滑块跟到这张壁纸的值）
+	//     · 无记录 → 用当前滑块值做种子（之后这张壁纸就独立记自己的）
+	NSString *posterKey = SokoPosterKeyForConfiguration(configuration);
+	if (posterKey && ![posterKey isEqualToString:gActivePosterKey]) {
+		SokoFileLog(@"POSTER-KEY %@ -> %@", gActivePosterKey ?: @"(nil)", posterKey);
+	}
+	if (posterKey) {
+		gActivePosterKey = posterKey;
+		NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+		NSMutableDictionary *map = SokoPosterOffsetMap();
+		NSNumber *stored = map[posterKey];
+		double current = [defaults doubleForKey:@"soko_widgetOffset"];
 		if (stored) {
-			NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
-			if (fabs([defaults doubleForKey:@"soko_widgetOffset"] - stored.doubleValue) > 0.5) {
+			if (fabs(current - stored.doubleValue) > 0.5) {
 				[defaults setDouble:stored.doubleValue forKey:@"soko_widgetOffset"];
+				[defaults synchronize];
 				notify_post("com.strive.echoreborn/ReloadPrefs");
+				SokoFileLog(@"POSTER-RESTORE %@ = %.1f (was %.1f)", posterKey, stored.doubleValue, current);
 			}
+		} else {
+			map[posterKey] = @(current);
+			[defaults setObject:map forKey:@"soko_offsets_by_poster"];
+			[defaults synchronize];
+			SokoFileLog(@"POSTER-SEED %@ = %.1f", posterKey, current);
 		}
 	}
 
 	BOOL usesBottomLayout;
 	NSDictionary *liquidAssInfo = SokoLiquidAssUserInfoForConfiguration(configuration);
-	NSNumber *layoutOffset = nil;
 	if (SokoLiquidAssClockEnabled() && SokoLiquidAssUserInfoIsActive(liquidAssInfo)) {
 		usesBottomLayout = SokoLiquidAssUserInfoUsesBottomLayout(liquidAssInfo);
 	} else {
@@ -176,32 +194,18 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 			layout = [configuration pr_loadComplicationLayoutWithError:nil];
 		}
 
-		// 1.2.1-83 · 归档值只保留写入（用于将来的每壁纸记忆），不参与渲染决策：
-		// 它会覆盖设置页滑块（实测 archive=0 把 prefs=-108 顶掉，表现为滑块失效）。
-		layoutOffset = [SokoPosterModel rowOffsetForComplicationLayout:layout];
+		// 1.2.1-99 · 归档值只留作证据，**不再回流到滑块**。
+		//   这条回流（ARCHIVE-MIRROR）就是"时好时坏"的元凶：归档里残留着上一次
+		//   编辑会话的 -507 / 0，每次锁屏布局都把滑块顶掉，于是 eff 在
+		//   -431.7 → 0 → -507 → 0 之间跳。真源现在是 soko_offsets_by_poster。
+		NSNumber *archiveOffset = [SokoPosterModel rowOffsetForComplicationLayout:layout];
+		if (archiveOffset) SokoFileLog(@"ARCHIVE-READ v=%.1f (只读，不回流)", archiveOffset.doubleValue);
 		usesBottomLayout = [SokoPosterModel complicationLayoutUsesBottomLayout:layout];
 	}
 
 	// 1.2.1-83 · 滑块是唯一渲染来源；"调整组件位置"关闭则整段不接管。
 	if (!SokoPrefWidgetsEnabled()) usesBottomLayout = NO;
 	if (SokoPrefWidgetOffsetIsSet() && SokoPrefWidgetsEnabled()) usesBottomLayout = YES;
-	if (layoutOffset) {
-		// 1.2.1-88 · 归档 → 滑块镜像：只镜像"变化过的值"。
-		// 首次读到只记基线不写（否则重启后旧值会覆盖用户刚拖的滑块）。
-		NSUserDefaults *mirror = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
-		id baseline = [mirror objectForKey:@"soko_mirroredOffset"];
-		double archiveValue = layoutOffset.doubleValue;
-		if (baseline == nil) {
-			[mirror setDouble:archiveValue forKey:@"soko_mirroredOffset"];
-			SokoFileLog(@"ARCHIVE-BASELINE v=%.1f", archiveValue);
-		} else if (fabs([baseline doubleValue] - archiveValue) > 0.5) {
-			[mirror setDouble:archiveValue forKey:@"soko_mirroredOffset"];
-			[mirror setDouble:archiveValue forKey:@"soko_widgetOffset"];
-			[mirror synchronize];
-			notify_post("com.strive.echoreborn/ReloadPrefs");
-			SokoFileLog(@"ARCHIVE-MIRROR v=%.1f", archiveValue);
-		}
-	}
 	dispatch_async(dispatch_get_main_queue(), ^{
 		SokoSetActivePosterUsesBottomLayout(usesBottomLayout);
 	});
@@ -390,6 +394,21 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	SokoTrace(29, (long)[SokoPosterLayout editingRowOffset]);   // 29 = 编辑场景消失时的会话值
 }
 
+- (void)viewDidDisappear:(BOOL)animated {
+	%orig;
+
+	// 1.2.1-99 · 会话收尾：编辑器完全消失 3 秒后清掉会话值，避免残留值被之后
+	// 任何一次 setComplicationLayout:（与本次编辑无关的）当成"完成"提交出去。
+	// 3 秒是因为"完成"路径的 setComplicationLayout: 可能在消失过程中稍晚才到。
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+	               dispatch_get_main_queue(), ^{
+		if ([SokoPosterLayout editingRowOffsetDirty]) {
+			SokoFileLog(@"EDITOR-SESSION-CLEAR");
+			[SokoPosterLayout clearEditingSession];
+		}
+	});
+}
+
 - (void)viewDidLoad {
 	%orig;
 
@@ -566,13 +585,23 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	// 1.2.1-79 · 写进"新 layout 归档"（不是偏好）：系统保存即落盘、取消即丢弃，
 	// 天然满足原版语义，也实现"每张壁纸各自记忆"。
 	CGFloat editingOffset = [SokoPosterLayout editingRowOffset];
-	if (layout && !isnan(editingOffset)) {
+	// 1.2.1-99 · 提交条件：本次会话真的滑动过。没滑动（含"什么都没改就点完成"）
+	// 不写任何东西；取消时只要系统不调这个方法就天然不保存。
+	if (layout && [SokoPosterLayout editingRowOffsetDirty] && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
-		// 1.2.1-92 · 这里只写归档，不写偏好：
-		//   "完成"→ 系统把这份 layout 存进壁纸 → SpringBoard 下次读到后镜像回滑块；
-		//   "取消"→ 系统丢弃这份 layout → 偏好不变（这才符合原版语义）。
-		[SokoPosterLayout setEditingRowOffset:NAN];
+		// 1.2.1-99 · 完成 = 提交。归档写一份（系统落盘），同时发通知让 SpringBoard
+		//   写 soko_widgetOffset + soko_offsets_by_poster[当前壁纸] 并立即生效。
+		//   （1.2.1-92 只写归档不写偏好 → 偏好永远不变 → "保存不了"）
+		SokoEditorRequestRowOffset(editingOffset);
+		// 17 = 完成路径命中（payload = 提交值）
+		SokoTrace(17, (long)llround(editingOffset));
+		[SokoPosterLayout clearEditingSession];
 		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
+	} else {
+		// 18 = 命中但本会话没滑动（payload = 次数）。**取消如果也走这里，18 会涨**
+		//   —— 下轮据此判断要不要再找一个"仅完成"的判据。
+		static long noSessionHits = 0;
+		SokoTrace(18, ++noSessionHits);
 	}
 
 	if (layout) {
@@ -887,14 +916,29 @@ static void SokoProbeEditorButtons(void) {
 
 		// 1.2.1-73 · 设置页改值/重置后立即重排组件行（此前只重排通知列表，
 		// 组件行要等锁屏重新布局才动，表现就是"数值变了画面没变"）。
-		SokoPreferencesSetChangeHandler(^{
-			SokoDockCoordinator *coordinator = SokoCoordinator();
-			// 1.2.1-82 · 改值后重算"是否接管"（原来 enabled 只随壁纸切换更新）
-			[coordinator setEnabled:SokoPrefWidgetsEnabled() && SokoPrefWidgetOffsetIsSet()];
-			[coordinator refresh];
-			UIView *coverSheetView = gCoverSheetViewController.viewIfLoaded;
-			[coverSheetView setNeedsLayout];
-		});
+	SokoPreferencesSetChangeHandler(^{
+		SokoDockCoordinator *coordinator = SokoCoordinator();
+		// 1.2.1-82 · 改值后重算"是否接管"（原来 enabled 只随壁纸切换更新）
+		[coordinator setEnabled:SokoPrefWidgetsEnabled() && SokoPrefWidgetOffsetIsSet()];
+		[coordinator refresh];
+		UIView *coverSheetView = gCoverSheetViewController.viewIfLoaded;
+		[coverSheetView setNeedsLayout];
+
+		// 1.2.1-99 · 滑块改动也要按壁纸记一份，否则"每壁纸独立"只对编辑器滑动成立。
+		//   只写 map 不写 pref，不会再触发一次 ReloadPrefs（无回环）。
+		if (gActivePosterKey) {
+			NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+			double value = [defaults doubleForKey:@"soko_widgetOffset"];
+			NSMutableDictionary *map = SokoPosterOffsetMap();
+			NSNumber *old = map[gActivePosterKey];
+			if (!old || fabs(old.doubleValue - value) > 0.5) {
+				map[gActivePosterKey] = @(value);
+				[defaults setObject:map forKey:@"soko_offsets_by_poster"];
+				[defaults synchronize];
+				SokoFileLog(@"POSTER-SLIDER %@ = %.1f", gActivePosterKey, value);
+			}
+		}
+	});
 
 		// 1.2.1-76 · 编辑器里上/下滑后，海报进程只能发通知（写不了偏好），
 		// 由 SpringBoard 落盘到 soko_widgetOffset，设置页随即显示同一个数值。

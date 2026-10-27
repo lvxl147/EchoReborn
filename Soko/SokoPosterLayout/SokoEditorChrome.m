@@ -194,6 +194,13 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 
 
 + (void)dumpCandidateViewsInEditingSceneViewController:(PREditingSceneViewController *)controller {
+	// 1.2.1-99 · 节流：这个方法在每次 relayoutAnimated 都被调用，放开 SokoTrace 上限后
+	// 会按 50ms 一条连续发几十条，把 300 行环瞬间冲掉。3 秒一次足够定位虚线框。
+	static CFTimeInterval lastDump = 0.0;
+	CFTimeInterval nowD = CACurrentMediaTime();
+	if (nowD - lastDump < 3.0) return;
+	lastDump = nowD;
+
 	UIView *root = controller.viewIfLoaded;
 	if (!root || !root.window) return;
 
