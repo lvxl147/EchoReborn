@@ -139,6 +139,10 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 		usesBottomLayout = [SokoPosterModel complicationLayoutUsesBottomLayout:layout];
 	}
+
+	// 1.2.1-76 · 连续模型：只要用户显式设过偏移（含 0 / 负值），组件就由 dock 接管；
+	// 未设置时才维持"该壁纸在顶部"的原行为。
+	if (SokoPrefWidgetOffsetIsSet()) usesBottomLayout = YES;
 	dispatch_async(dispatch_get_main_queue(), ^{
 		SokoSetActivePosterUsesBottomLayout(usesBottomLayout);
 	});
@@ -709,6 +713,22 @@ static void SokoInitPoster(void) {
 			UIView *coverSheetView = gCoverSheetViewController.viewIfLoaded;
 			[coverSheetView setNeedsLayout];
 		});
+
+		// 1.2.1-76 · 编辑器里上/下滑后，海报进程只能发通知（写不了偏好），
+		// 由 SpringBoard 落盘到 soko_widgetOffset，设置页随即显示同一个数值。
+		{
+			int setOffsetToken = NOTIFY_TOKEN_INVALID;
+			notify_register_dispatch(SokoSetRowOffsetRequestNotification.UTF8String, &setOffsetToken,
+			                         dispatch_get_main_queue(), ^(int t) {
+				CGFloat value = SokoRowOffsetRequestValue();
+				if (isnan(value)) return;
+				NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+				[defaults setDouble:value forKey:@"soko_widgetOffset"];
+				[defaults synchronize];
+				notify_post("com.strive.echoreborn/ReloadPrefs");
+				SokoFileLog(@"EDITOR-SETOFFSET %.1f", value);
+			});
+		}
 		return;
 	}
 

@@ -112,8 +112,10 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 		return NO;
 	}
 
+	// 1.2.1-76 · 连续模型下不再按"当前是否底部"限制方向：上滑去顶部、下滑回底部，
+	// 已在端点时下面的 handleSwipe 会算出"无变化"并直接返回。
 	BOOL bottom = [SokoPosterLayout editingSceneViewControllerUsesBottomLayout:controller];
-	if (bottom ? velocity.y >= 0.0 : velocity.y <= 0.0) {
+	if (NO) {
 		SokoTrace(12, (long)velocity.y);
 		SokoFileLog(@"SWIPE-BEGIN reject=direction bottom=%d vy=%.1f", (int)bottom, velocity.y);
 		return NO;
@@ -152,16 +154,30 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 		return;
 	}
 
-	BOOL bottom = [SokoPosterLayout editingSceneViewControllerUsesBottomLayout:controller];
-	CGFloat direction = bottom ? -1.0 : 1.0;
-	CGFloat distance = [pan translationInView:pan.view].y * direction;
-	CGFloat velocity = [pan velocityInView:pan.view].y * direction;
-	SokoFileLog(@"SWIPE-END bottom=%d distance=%.1f velocity=%.1f threshold=(%.0f/%.0f)",
-	            (int)bottom, distance, velocity, kSokoLayoutSwipeDistance, kSokoLayoutSwipeVelocity);
-	if (distance < kSokoLayoutSwipeDistance && velocity < kSokoLayoutSwipeVelocity) return;
+	CGPoint translation = [pan translationInView:pan.view];
+	CGPoint velocity = [pan velocityInView:pan.view];
+	CGFloat dy = translation.y;
+	CGFloat vy = velocity.y;
+	CGFloat topOffset = SokoTopOffsetValue();
+	CGFloat current = SokoRowOffsetIsSet() ? SokoRowOffsetValue() : topOffset;
+	SokoFileLog(@"SWIPE-END dy=%.1f vy=%.1f current=%.1f top=%.1f", dy, vy, current, topOffset);
+	if (isnan(topOffset)) return;
 
-	SokoTrace(15, (long)bottom);   // payload = 切换前的状态（1=原为底部）
-	[SokoPosterLayout setUsesBottomLayout:!bottom forEditingSceneViewController:controller];
+	// 上滑 = 顶部端点；下滑 = 底部（0）。位移/速度任一达标即生效。
+	BOOL toTop = (vy < 0.0 || dy < 0.0);
+	CGFloat magnitude = fabs(dy);
+	CGFloat speed = fabs(vy);
+	if (magnitude < kSokoLayoutSwipeDistance && speed < kSokoLayoutSwipeVelocity) return;
+
+	CGFloat target = toTop ? topOffset : 0.0;
+	if (fabs(target - current) < 0.5) return;      // 已在端点
+
+	SokoTrace(15, (long)(toTop ? 1 : 0));
+	SokoFileLog(@"SWIPE-APPLY target=%.1f (top=%d)", target, (int)toTop);
+
+	// 1.2.1-76 · 不再改壁纸布尔值，改为请求一个具体坐标；SpringBoard 收到后写偏好并重排。
+	SokoEditorRequestRowOffset(target);
+	[SokoPosterLayout relayoutAnimated:YES];
 
 	// 1.2.1-68 · 判据 #5/#6：滑动是否被识别、最终状态是什么
 	ERSokoLog(@"SOKO-SWIPE before=%d after=%d distance=%.1f velocity=%.1f proc=%@",

@@ -931,3 +931,10 @@
 - 修复：① 删除 SokoInitPoster 的 LiquidAss 早退分支，永远装标准编辑器钩子；② CSComplicationManager 读状态、SokoPosterLayout 选几何，都改成「这张壁纸的 userInfo 里真有 dylv.liquidass.clock.style 才算 LiquidAss」，否则走本插件自己的状态；③ 删除 frameByAdjustingFrame 里 `if (editing && liquidAss) return frame` 的编辑态早退。
 - 判定码通道修正：原来所有 code 共用一条通知名 + notify state，连续两笔被系统合并（实测 code=1 丢失只剩 code=2）。改为每条 code 一条独立通知名 com.strive.echoreborn.soko.tr.<code>。
 - 滑块下限 -400 → **-520**（实测顶部 = 底部 -518）。
+
+## 1.2.1-76（1002176）· 连续位置：编辑器与滑块共用同一个数值 + 边框跟随
+- 新通道 SokoDockPublishRowOffsets(rowOffset, topOffset, isSet)：SpringBoard 每次布局把「底部基准 + 生效偏移」「顶部端点(-518)」「是否显式设置过」发布给海报进程。
+- 行定位统一为 y = 底部基准行 + 生效偏移（编辑态/非编辑态同一套，去掉原来的 -28 编辑补偿），因此滑块 -200 进自定义就在 -200。
+- 编辑态虚线框改为直接钉到同一公式，不再用「系统行框差值」平移（17.2.1 上两套行框相同、差值恒 0，导致边框不跟随）。
+- 上滑 = 请求 topOffset(-518)，下滑 = 请求 0；PosterBoard 无法写偏好，改由 SokoEditorRequestRowOffset 发通知，SpringBoard 落盘 soko_widgetOffset 并广播 ReloadPrefs，设置页数值随编辑同步。
+- 只要用户显式设置过偏移，即使该壁纸布尔为"顶部"，dock 也接管渲染。

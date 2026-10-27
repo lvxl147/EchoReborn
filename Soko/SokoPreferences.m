@@ -12,6 +12,7 @@ static CGFloat gERSokoNotificationOffset = 0.0;
 static BOOL gERSokoQuickActionsEnabled = YES;
 static CGFloat gERSokoQuickActionsIndent = 0.0;
 static NSInteger gERSokoLoaded = 0;
+static BOOL gERSokoWidgetOffsetIsSet = NO;
 
 // 1.2.1-73 · 设置变更后的重排回调（SpringBoard 侧注册，用来立即重算组件行）。
 static void (^gERSokoChangeHandler)(void) = nil;
@@ -23,6 +24,7 @@ static void SokoPreferencesReload(void) {
 	// 旧实现是"键存在才覆盖"，于是设置页点重置（只删 key）后：
 	//   设置页读不到值 → 显示回落默认（0），画面却仍是旧缓存（-120）→ 要拖一下滑块才变。
 	id widgetOffset = [defaults objectForKey:@"soko_widgetOffset"];
+	gERSokoWidgetOffsetIsSet = (widgetOffset != nil);
 	gERSokoWidgetOffset = widgetOffset ? [defaults doubleForKey:@"soko_widgetOffset"] : 0.0;
 
 	id notificationOffset = [defaults objectForKey:@"soko_notificationOffset"];
@@ -72,6 +74,11 @@ CGFloat SokoPrefWidgetOffset(void) {
 	SokoPreferencesLoadIfNeeded();
 	return gERSokoWidgetsEnabled ? gERSokoWidgetOffset : 0.0;
 }
+BOOL SokoPrefWidgetOffsetIsSet(void) {
+	SokoPreferencesLoadIfNeeded();
+	return gERSokoWidgetOffsetIsSet;
+}
+
 CGFloat SokoPrefNotificationOffset(void) {
 	SokoPreferencesLoadIfNeeded();
 	return gERSokoNotificationsEnabled ? gERSokoNotificationOffset : 0.0;

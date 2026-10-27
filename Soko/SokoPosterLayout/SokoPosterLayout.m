@@ -2,8 +2,6 @@
 #import "../SokoLog.h"
 #import "../SokoFileLog.h"
 
-static const CGFloat kSokoBottomRowEditingOffset = 28.0;
-
 static const void *kSokoEditorBottomLayoutKey = &kSokoEditorBottomLayoutKey;
 static const void *kSokoLiquidAssConfigurationKey = &kSokoLiquidAssConfigurationKey;
 static const void *kSokoLiquidAssUserInfoKey = &kSokoLiquidAssUserInfoKey;
@@ -84,31 +82,30 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 + (CGRect)frameByAdjustingFrame:(CGRect)frame forElement:(unsigned long long)element boundingRect:(CGRect)boundingRect variant:(unsigned long long)variant layoutController:(CSProminentLayoutController *)layoutController {
 	if (element != kSokoComplicationRowElement || variant == kSokoReticleVariant || gComputingStockLayout) return frame;
 
-	BOOL editing = variant == kSokoEditingVariant;
-
-	BOOL bottom = editing ? [self usesBottomEditingRow] : [self layoutControllerUsesBottomLayout:layoutController];
-	if (!bottom) return frame;
-
 	CGFloat inset = SokoDockGeometryBottomInset();
 	if (isnan(inset) || CGRectIsNull(frame) || CGRectGetHeight(frame) <= 0.0 || !SokoIsPortrait(boundingRect)) return frame;
 
-	frame.origin.y = CGRectGetMaxY(boundingRect) - inset - CGRectGetHeight(frame);
-	if (editing) frame.origin.y -= kSokoBottomRowEditingOffset;
+	// 1.2.1-76 · 统一模型：行 y = 底部基准行 + 生效偏移。
+	//   偏移来自 SpringBoard 发布的通道（0 = 底部；-T = 顶部；中间值 = 任意位置），
+	//   编辑态与非编辑态用同一套，因此"滑块 -200 → 进入自定义也在 -200"成立。
+	CGFloat offset = SokoRowOffsetIsSet() ? SokoRowOffsetValue() : SokoTopOffsetValue();
+	if (isnan(offset)) return frame;
+
+	frame.origin.y = CGRectGetMaxY(boundingRect) - inset - CGRectGetHeight(frame) + offset;
 	return frame;
 }
 
 + (CGRect)reticleFrameByAdjustingFrame:(CGRect)frame layoutController:(CSProminentLayoutController *)layoutController boundingRect:(CGRect)boundingRect {
 	if (gComputingStockLayout || CGRectIsNull(frame)) return frame;
 
-	CGRect row = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
+	// 1.2.1-76 · 边框直接钉到"行应该出现的位置"，不再靠"系统行框差值"平移。
+	// 原实现：frame.origin.y += (row.minY - stockRow.minY)；实测系统两套行框在
+	// 17.2.1 上相同 → 差值恒 0 → 组件滑走了、虚线框留在原地。
+	CGFloat inset = SokoDockGeometryBottomInset();
+	CGFloat offset = SokoRowOffsetIsSet() ? SokoRowOffsetValue() : SokoTopOffsetValue();
+	if (isnan(inset) || isnan(offset) || !SokoIsPortrait(boundingRect)) return frame;
 
-	gComputingStockLayout = YES;
-	CGRect stockRow = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
-	gComputingStockLayout = NO;
-
-	if (CGRectIsNull(row) || CGRectIsNull(stockRow)) return frame;
-
-	frame.origin.y += CGRectGetMinY(row) - CGRectGetMinY(stockRow);
+	frame.origin.y = CGRectGetMaxY(boundingRect) - inset - CGRectGetHeight(frame) + offset;
 	return frame;
 }
 
