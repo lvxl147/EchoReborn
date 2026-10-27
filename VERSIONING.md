@@ -1030,3 +1030,7 @@
 - 完成/取消：不再依赖 setComplicationLayout / 私有 selector。编辑器出现时遍历视图树，按标题文字（完成/Done/Save/保存、取消/Cancel）给按钮挂 addTarget；点"完成"才把会话值发出去（trace 50=1 完成 / 2 取消）。
 - 每壁纸独立保存：SpringBoard 在壁纸配置回调里记录当前壁纸键（PRSPosterConfiguration._path 末段，退回 provider），写入 prefs 字典 soko_offsets_by_poster；切壁纸时读该壁纸的值并同步到滑块。完成时同时写"当前壁纸"这一条。
 - 归档编码路线确认不可用（SOKO-ENC-OFFSET 恒为 0），已弃用。
+
+## 1.2.1-95（1002195）· 完成判定改拦 UIApplication sendAction；编辑器打开后延迟扫描
+- 实测 code 50 恒为 0 → 编辑器"完成"是 UIBarButtonItem 而非 UIButton，按标题找 UIButton 全漏。改为 %hook UIApplication 的 sendAction:to:from:forEvent:，无论按钮还是 bar item 都能拿到标题：完成/Done/Save/保存 → 发 50=1 并写入当前值；取消/Cancel → 50=2，不写。
+- 编辑器登记后 0.8s 再补跑一次按钮安装与类名扫描（此前只在重排时跑，没滑动就等于没跑）。

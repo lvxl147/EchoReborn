@@ -768,6 +768,36 @@ static void SokoProbeEditorButtons(void) {
 }
 
 
+
+// 1.2.1-95 · 编辑器按钮监听改为拦 UIApplication 的 sendAction：
+// 编辑器的"完成"实际是 UIBarButtonItem，不是 UIButton，按标题找 UIButton 会全漏。
+%group SokoEditorActions
+%hook UIApplication
+- (void)sendAction:(SEL)action to:(id)target from:(id)sender forEvent:(UIEvent *)event {
+	NSString *title = nil;
+	if ([sender respondsToSelector:@selector(title)]) title = [sender title];
+	if (![title isKindOfClass:[NSString class]] || !title.length) {
+		if ([sender isKindOfClass:[UIButton class]]) title = [(UIButton *)sender titleForState:UIControlStateNormal];
+	}
+	if ([title isKindOfClass:[NSString class]] && title.length) {
+		BOOL isDone = [@[@"完成", @"Done", @"Save", @"保存"] containsObject:title];
+		BOOL isCancel = [@[@"取消", @"Cancel"] containsObject:title];
+		if (isDone) {
+			CGFloat offset = [SokoPosterLayout editingRowOffset];
+			SokoTrace(50, 1);
+			if (!isnan(offset)) {
+				SokoEditorRequestRowOffset(offset);
+				SokoFileLog(@"EDITOR-DONE %.1f", offset);
+			}
+		} else if (isCancel) {
+			SokoTrace(50, 2);
+		}
+	}
+	%orig;
+}
+%end
+%end
+
 %ctor {
 	NSString *bundleIdentifier = NSBundle.mainBundle.bundleIdentifier ?: @"";
 	BOOL isSpringBoard = [bundleIdentifier isEqualToString:@"com.apple.springboard"];
@@ -890,5 +920,6 @@ static void SokoProbeEditorButtons(void) {
 	SokoFileLog(@"CAP poster model=%d posterSupported=%d liquidAss=%d",
 	            (int)modelSupported, (int)posterSupported, (int)liquidAss);
 	SokoProbeEditorButtons();
+	%init(SokoEditorActions);
 	if (posterSupported) SokoInitPoster();
 }

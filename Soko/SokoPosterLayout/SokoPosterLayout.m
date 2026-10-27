@@ -187,6 +187,15 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	gEditingRowOffset = [self effectiveRowOffset];
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);
 	[SokoEditorChrome installEditorButtonWatchers:controller];
+
+	// 1.2.1-95 · 视图还没建好时按钮扫不到，延迟再补扫一次（并跑一次类名扫描探针）
+	__weak PREditingSceneViewController *weakScene = controller;
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+		PREditingSceneViewController *scene = weakScene;
+		if (!scene) return;
+		[SokoEditorChrome installEditorButtonWatchers:scene];
+		[SokoEditorChrome dumpCandidateViewsInEditingSceneViewController:scene];
+	});
 	SokoEditorPublishUsesBottomLayout([self editingSceneViewControllerUsesBottomLayout:controller]);
 	[self relayoutAnimated:NO];
 	return YES;
