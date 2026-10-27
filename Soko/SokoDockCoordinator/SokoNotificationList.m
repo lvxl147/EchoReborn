@@ -1,5 +1,5 @@
 #import "SokoNotificationList.h"
-#import "SokoPreferences.h"
+#import "../SokoPreferences.h"
 
 static const CGFloat kSokoListFooterPadding = 20.0;
 static const CGFloat kSokoNotificationToDockSpacing = 10.0;
