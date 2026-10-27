@@ -261,6 +261,46 @@ static NSNumber *gActiveRowOffset;
 	CSCoverSheetView *coverSheetView = (CSCoverSheetView *)self.coverSheetViewController.viewIfLoaded;
 	if (!coverSheetView) return;
 
+	UIView *rowSourceView = self.coverSheetViewController.complicationContainerViewController.viewIfLoaded;
+	if (!rowSourceView || !rowSourceView.superview) return;
+
+	CGRect rowRect = [rowSourceView convertRect:rowSourceView.bounds toView:coverSheetView];
+	CGFloat rowHeight = CGRectGetHeight(rowRect);
+	if (rowHeight < 1.0) return;
+
+	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - rowHeight;
+	CGFloat topOffset = CGRectGetMinY(rowRect) - bottomRowY;
+
+	BOOL offsetIsSet = (gActiveRowOffset != nil) || SokoPrefWidgetOffsetIsSet();
+	CGFloat effectiveOffset = gActiveRowOffset ? gActiveRowOffset.doubleValue : SokoPrefWidgetOffset();
+	if (!offsetIsSet) effectiveOffset = topOffset;
+
+	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
+}
+
+- (void)publishDockGeometry {
+	CSCoverSheetView *coverSheetView = (CSCoverSheetView *)self.coverSheetViewController.viewIfLoaded;
+	CGRect bounds = coverSheetView.bounds;
+	if (CGRectGetHeight(bounds) <= 0.0 || !SokoIsPortrait(bounds)) return;
+
+	SokoDockGeometryPublishBottomInset(CGRectGetHeight(bounds) - [self dockBottomYInCoverSheetView:coverSheetView]);
+	[self publishRowOffsetsIfPossible];
+}
+
+- (void)layoutDock {
+	CSCoverSheetView *coverSheetView = (CSCoverSheetView *)self.coverSheetViewController.viewIfLoaded;
+	UIView *host = self.hostView;
+	if (!coverSheetView || !host) return;
+
+	CGRect bounds = coverSheetView.bounds;
+	CGRect row = SokoIsPortrait(bounds) ? [self.layoutController frameForElements:kSokoComplicationRowElement withBoundingRect:bounds] : CGRectNull;
+	if (CGRectIsNull(row) || CGRectGetHeight(row) <= 0.0 || CGRectGetWidth(row) <= 0.0) {
+		host.hidden = YES;
+		self.dockTopY = NAN;
+		self.dockBottomY = NAN;
+		return;
+	}
+
 	[self publishRowOffsetsIfPossible];
 
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row);
@@ -284,11 +324,8 @@ static NSNumber *gActiveRowOffset;
 		complicationsView.frame = content.bounds;
 	}
 
-	// 1.2.1-68 · 几何取证：值变化立即打印，否则 2s 一条。判据 #4 就是拿
-	// botY 与 QA-APPLY 的按钮原始中心比（差应 ≈ kSokoDockBottomToButtonCenter 45）。
+	// 1.2.1-68 · 几何取证：值变化立即打印，否则 2s 一条。
 	{
-		// CGRectNull 不是编译期常量，static 不能直接拿它初始化（CI 实锤：
-		// error: initializer element is not a compile-time constant）。用脏标记代替。
 		static CFTimeInterval lastLogTime = 0.0;
 		static CGRect lastRow;
 		static BOOL hasLastRow = NO;
@@ -299,24 +336,10 @@ static NSNumber *gActiveRowOffset;
 			hasLastRow = YES;
 			CGFloat buttonCenterY = 0.0;
 			BOOL buttonHit = SokoQuickActionButtonCenterY(coverSheetView, &buttonCenterY);
-			ERSokoLog(@"SOKO-DOCK botY=%.1f topY=%.1f h=%.1f off=%.1f btnHit=%d btnCenterY=%.1f",
+			ERSokoLog(@"SOKO-DOCK botY=%.1f topY=%.1f h=%.1f off=%.1f btnHit=%d btnCenterY=%.1f top=%.1f set=%d",
 			          self.dockBottomY, self.dockTopY, CGRectGetHeight(row),
-			          SokoPrefWidgetOffset(), (int)buttonHit, buttonCenterY);
-
-			// 1.2.1-72 · 数值标定：同一个 layoutController 算出的"系统原位行"（= 组件
-			// 在顶部时的行）与"底部态行"的差值，就是滑块要跨越的行程。
-			// SpringBoard 里没有装 _frameForElement: 那个 hook（它只在海报进程），
-			// 所以这里拿到的是未被我方改写的系统原值。
-			CGRect stockRow = [self.layoutController frameForElements:kSokoComplicationRowElement withBoundingRect:bounds];
-			CGFloat stockY = CGRectGetMinY(stockRow);
-			CGFloat delta = stockY - CGRectGetMinY(row);          // 顶部相对底部的位移（负=在上方）
-			CGRect screenFrame = coverSheetView.window ? coverSheetView.window.bounds : bounds;
-			SokoFileLog(@"CALIB screen=%.0fx%.0f safeBottom=%.1f stockY=%.1f stockH=%.1f bottomY=%.1f bottomH=%.1f delta=%.1f off=%.1f",
-			            screenFrame.size.width, screenFrame.size.height,
-			            coverSheetView.safeAreaInsets.bottom,
-			            stockY, CGRectGetHeight(stockRow),
-			            CGRectGetMinY(row), CGRectGetHeight(row),
-			            delta, SokoPrefWidgetOffset());
+			          effectiveOffset, (int)buttonHit, buttonCenterY,
+			          SokoTopOffsetValue(), (int)offsetIsSet);
 		}
 	}
 }
