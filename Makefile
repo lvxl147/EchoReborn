@@ -34,7 +34,6 @@ THEOS_PACKAGE_SCHEME ?= rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam EchoRebornSource
 
 # 0.5.26: Soko and LiquidSiri are no longer separate subprojects / dylibs.
 # Shipping them as their own Soko.dylib + LiquidSiri.dylib put a SECOND copy of
@@ -111,7 +110,6 @@ EchoRebornDualCam_FRAMEWORKS = UIKit AVFoundation CoreMedia Photos CoreImage Cor
 EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
 
 # ---------------------------------------------------------------------------
-# 1.0.9-194 · EchoRebornSource：方案 B 源头拦截 · 诊断 dylib
 #
 # v183-v193 终局定性：岛黑底/外扩来自 CallAssist 渲染进程经 CAPortalLayer
 # 跨进程直绘屏幕，SpringBoard 侧任何层属性物理上作用不到它的像素（v191
@@ -125,9 +123,6 @@ EchoRebornDualCam_CFLAGS = -fobjc-arc -std=c++17 -Wno-deprecated-declarations
 # 诊断日志：/var/mobile/Documents/EchoReborn-src.log（第三方进程对主日志目录
 # 的沙盒不保证可写，Documents mobile 组可写且 Filza 直接可取）。
 # ---------------------------------------------------------------------------
-EchoRebornSource_FILES = SourceKit/Tweak.xm
-EchoRebornSource_FRAMEWORKS = UIKit Foundation QuartzCore
-EchoRebornSource_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
 
 # ---------------------------------------------------------------------------
 # 1.0.9-81 · EchoRebornUIKit：把液态玻璃渲染层注入 com.apple.UIKit（= 所有进程）
