@@ -908,3 +908,7 @@
 ## 1.2.1-65（1002165）· addAnimation hook 改 .x 扩展名（绕 Logos 预处理器）
 - -64 的 .xm 文件仍触发 Logos 报错（non-initialized hook group）——Logos 预处理 .xm 时的 group 机制与纯 ObjC constructor 天然冲突。
 - 修复：hook 移到 ERAddAnimHook.x（.x=纯 ObjC 无 Logos）；Tweak.xm 的 ERPagerTrace/gERDroopSuppressUntil 恢复 static，改用两个非 static 桥接函数（ERDroopSuppressRemaining/ERDropWatchNote）供 .x extern。
+
+## 1.2.1-66（1002166）· Logos 编译错误根修：补回 %init(_ungrouped)
+- -63 删除 AA 注册块时把 %ctor 里的 %init(_ungrouped); 一起删了（块跨度覆盖到它）→ Tweak.xm 编译报 non-initialized hook group: _ungrouped（连续四轮 CI 失败的根因，与缓落修复本身无关）。
+- 修复：在 RCP 块后补回 %init(_ungrouped);。AA 观察模式（ERAddAnimHook.x 纯 ObjC constructor）保持不变。
