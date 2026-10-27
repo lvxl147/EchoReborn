@@ -330,6 +330,11 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 		[SokoEditorChrome update];
 
+		// 1.2.1-93 · 只读：扫一遍候选视图类名（用于定位编辑态虚线框）
+		for (PREditingSceneViewController *scene in gEditingSceneViewControllers.allObjects) {
+			[SokoEditorChrome dumpCandidateViewsInEditingSceneViewController:scene];
+		}
+
 	};
 
 	if (!animated) {

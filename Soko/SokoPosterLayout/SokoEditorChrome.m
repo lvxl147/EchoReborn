@@ -158,4 +158,59 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 	[root layoutIfNeeded];
 }
 
+
++ (void)dumpCandidateViewsInEditingSceneViewController:(PREditingSceneViewController *)controller {
+	UIView *root = controller.viewIfLoaded;
+	if (!root || !root.window) return;
+
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(stock)) { SokoTrace(39, -3); return; }
+
+	CGFloat rowW = CGRectGetWidth(stock), rowH = CGRectGetHeight(stock), stockMid = CGRectGetMidY(stock);
+	if (rowW < 1.0 || rowH < 1.0) { SokoTrace(39, -4); return; }
+
+	NSMutableArray<NSString *> *names = [NSMutableArray array];
+	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+	NSInteger visited = 0;
+
+	while (stack.count && visited < 800 && names.count < 6) {
+		UIView *v = stack.lastObject;
+		[stack removeLastObject];
+		visited++;
+
+		if (v != root && v.window) {
+			CGRect r = [v convertRect:v.bounds toView:root.window];
+			BOOL sizeOK = fabs(CGRectGetWidth(r) - rowW) < rowW * 0.45 &&
+			              fabs(CGRectGetHeight(r) - rowH) < rowH * 0.7;
+			BOOL posOK = fabs(CGRectGetMidY(r) - stockMid) < 16.0;
+			if (sizeOK && posOK) [names addObject:NSStringFromClass([v class])];
+		}
+
+		for (UIView *sub in v.subviews) [stack addObject:sub];
+	}
+
+	// 39 = 候选数量（负数表示前置条件不满足）
+	SokoTrace(39, (long)names.count);
+
+	// 逐个类名按 50ms 间隔发送，避免连续通知被系统合并（之前共用一条名字只剩 -1）
+	__block NSUInteger step = 0;
+	for (NSString *name in names) {
+		const char *utf8 = name.UTF8String ?: "";
+		NSUInteger len = MIN([name lengthOfBytesUsingEncoding:NSUTF8StringEncoding], (NSUInteger)21);
+		for (NSUInteger i = 0; i < len; i += 3) {
+			long packed = 0;
+			for (NSUInteger j = 0; j < 3; j++) {
+				packed = (packed << 8) | (i + j < len ? (unsigned char)utf8[i + j] : 0);
+			}
+			NSUInteger delay = step++;
+			dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC * (delay + 1))),
+			               dispatch_get_main_queue(), ^{ SokoTrace(40, packed); });
+		}
+		NSUInteger sepDelay = step++;
+		dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC * (sepDelay + 1))),
+		               dispatch_get_main_queue(), ^{ SokoTrace(41, -1); });
+	}
+}
+
 @end
