@@ -142,7 +142,7 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	// 挪到底部之后的实际位置 —— 若两者不一致，点在底部行上会被判成 outside-row。
 	static CFTimeInterval lastLog = 0.0;
 	CFTimeInterval now = CACurrentMediaTime();
-	if (now - lastLog > 0.5) {
+	if (now - lastLog > 3.0) {
 		lastLog = now;
 		SokoTrace(16, (long)frame.origin.y);
 		SokoFileLog(@"ROW editingRowFrame=(%.1f,%.1f,%.1fx%.1f) inset=%.1f usesBottomEditingRow=%d editorBottom=%d dodging=%d",

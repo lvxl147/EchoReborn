@@ -83,22 +83,38 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 + (void)updateReticleForEditorRootViewController:(PREditorRootViewController *)controller {
 	// 1.2.1-91 · 只读探针：边框到底是被隐藏还是被裁剪。
 	// 31=alpha×100 32=hidden 33=reticle.y 34=reticle.h 35=父clips 36=父y 37=父h 38=裁剪祖先数
+	// 1.2.1-103 · 加 1 秒节流（上一版它每次 relayout 都发 8 条，把 500 行环冲掉，
+	//   60~63 的虚线框数据因此一条都没留下来）；并新增 22/23：
+	//   22=虚线框在窗口坐标里的 y，23=组件行在窗口坐标里的 y —— 两者应当同步移动。
 	{
 		UIView *probe = [controller respondsToSelector:@selector(graphicComplicationsReticleView)] ? controller.graphicComplicationsReticleView : nil;
 		if (probe) {
-			SokoTrace(31, (long)llround(probe.alpha * 100.0));
-			SokoTrace(32, probe.hidden ? 1 : 0);
-			SokoTrace(33, (long)llround(probe.frame.origin.y));
-			SokoTrace(34, (long)llround(probe.frame.size.height));
-			UIView *superview = probe.superview;
-			SokoTrace(35, (superview.clipsToBounds ? 1 : 0));
-			SokoTrace(36, (long)llround(superview.frame.origin.y));
-			SokoTrace(37, (long)llround(superview.frame.size.height));
-			NSInteger clippedAncestors = 0;
-			for (UIView *v = superview; v; v = v.superview) {
-				if (v.clipsToBounds) clippedAncestors++;
+			static CFTimeInterval lastReticleLog = 0.0;
+			CFTimeInterval nowReticle = CACurrentMediaTime();
+			if (nowReticle - lastReticleLog > 1.0) {
+				lastReticleLog = nowReticle;
+
+				UIWindow *window = probe.window;
+				CGRect inWindow = window ? [probe convertRect:probe.bounds toCoordinateSpace:window] : probe.frame;
+				SokoTrace(22, (long)llround(CGRectGetMinY(inWindow)));
+
+				CGRect rowRect = [NSClassFromString(@"CSProminentLayoutController") frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant];
+				SokoTrace(23, CGRectIsNull(rowRect) ? -9999 : (long)llround(CGRectGetMinY(rowRect)));
+
+				SokoTrace(31, (long)llround(probe.alpha * 100.0));
+				SokoTrace(32, probe.hidden ? 1 : 0);
+				SokoTrace(33, (long)llround(probe.frame.origin.y));
+				SokoTrace(34, (long)llround(probe.frame.size.height));
+				UIView *superview = probe.superview;
+				SokoTrace(35, (superview.clipsToBounds ? 1 : 0));
+				SokoTrace(36, (long)llround(superview.frame.origin.y));
+				SokoTrace(37, (long)llround(superview.frame.size.height));
+				NSInteger clippedAncestors = 0;
+				for (UIView *v = superview; v; v = v.superview) {
+					if (v.clipsToBounds) clippedAncestors++;
+				}
+				SokoTrace(38, clippedAncestors);
 			}
-			SokoTrace(38, clippedAncestors);
 		}
 	}
 

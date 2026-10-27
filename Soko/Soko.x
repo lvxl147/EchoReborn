@@ -82,7 +82,8 @@ static NSString *SokoPosterKeyForConfiguration(id configuration) {
 	// 1.2.1-102 · POSTER-PATH-SHAPE 给出的正解：PRSServerPosterPath 上有
 	//   `stablePersistenceIdentifier`（名字就是"稳定持久标识"，不含版本号后缀），
 	//   其次是 `identityPathComponent`。两者都比 description 干净且跨编辑稳定。
-	for (NSString *keyName in @[@"stablePersistenceIdentifier", @"identityPathComponent", @"serverIdentity"]) {
+	// identityPathComponent = <provider>/configurations/<UUID>，本身不带版本号，优先用
+	for (NSString *keyName in @[@"identityPathComponent", @"stablePersistenceIdentifier", @"serverIdentity"]) {
 		if (![pathObject respondsToSelector:NSSelectorFromString(keyName)]) continue;
 		id value = nil;
 		@try { value = [pathObject valueForKey:keyName]; } @catch (__unused NSException *e) {}
@@ -90,7 +91,7 @@ static NSString *SokoPosterKeyForConfiguration(id configuration) {
 		if ([value isKindOfClass:[NSURL class]]) { key = [(NSURL *)value path]; break; }
 	}
 
-	if (key.length) return key;
+	if (key.length) return SokoCanonicalPosterKey(key);
 
 	if ([pathObject isKindOfClass:[NSString class]]) {
 		key = [pathObject lastPathComponent];
@@ -105,13 +106,35 @@ static NSString *SokoPosterKeyForConfiguration(id configuration) {
 	}
 
 	if (![key isKindOfClass:[NSString class]] || !key.length) return nil;
-	return key;
+	return SokoCanonicalPosterKey(key);
+}
+
+// 1.2.1-103 · 去掉键尾的版本号（_98-0 / /98-0）。
+//   实测 `stablePersistenceIdentifier` 是
+//   `…_CreateAFacePhotos(EEAE4B4F-…)_PRPosterRoleLockScreen_98-0`，
+//   **每次保存壁纸版本号都会 +1**（日志里 95-0 → 96-0 → … → 99-0），
+//   于是同一张壁纸每编辑一次就换一个新键 → POSTER-SEED 而不是 POSTER-RESTORE
+//   → 表现就是"改完再进，值丢了"。这才是"每壁纸保存不正常"的最后一环。
+static NSString *SokoCanonicalPosterKey(NSString *key) {
+	static NSRegularExpression *expression;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		expression = [NSRegularExpression regularExpressionWithPattern:@"[_/][0-9]+-[0-9]+$" options:0 error:nil];
+	});
+	if (![key isKindOfClass:[NSString class]] || !key.length || !expression) return key;
+	return [expression stringByReplacingMatchesInString:key options:0 range:NSMakeRange(0, key.length) withTemplate:@""];
 }
 
 static NSMutableDictionary *SokoPosterOffsetMap(void) {
 	NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
 	NSDictionary *stored = [defaults dictionaryForKey:@"soko_offsets_by_poster"];
-	return stored ? [stored mutableCopy] : [NSMutableDictionary dictionary];
+	NSMutableDictionary *map = [NSMutableDictionary dictionary];
+	// 读的时候就把旧键（含版本号的历史条目）归一化合并，顺手清理脏数据
+	for (id rawKey in stored) {
+		if (![rawKey isKindOfClass:[NSString class]]) continue;
+		map[SokoCanonicalPosterKey(rawKey)] = stored[rawKey];
+	}
+	return map;
 }
 
 
@@ -653,6 +676,25 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 %end
 
+%hook PRMutablePosterConfiguration
+
+- (BOOL)storeComplicationLayout:(id)layout error:(NSError **)error {
+	// 1.2.1-103 · **真正的"完成"判据**。
+	//   PRPosterConfiguredProperties setComplicationLayout: 在一次编辑会话里被调用
+	//   上千次（code 18 计数到 1133），取消同样会走到 → 它不是完成/取消的分界线。
+	//   而 PRMutablePosterConfiguration 的 storeComplicationLayout:error: 是把 layout
+	//   **写回磁盘**的那一步，只有"完成"会调用；取消时系统丢弃这份 layout。
+	NSNumber *offset = layout ? [SokoPosterModel rowOffsetForComplicationLayout:layout] : nil;
+	if (offset) {
+		SokoEditorRequestRowOffset(offset.doubleValue);
+		// 21 = 真正的落盘提交（payload = 值）
+		SokoTrace(21, (long)llround(offset.doubleValue));
+	}
+	return %orig;
+}
+
+%end
+
 %hook PRPosterConfiguredProperties
 
 - (void)setComplicationLayout:(id)layout {
@@ -664,24 +706,28 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	// 1.2.1-99 · 提交条件：本次会话真的滑动过。没滑动（含"什么都没改就点完成"）
 	// 不写任何东西；取消时只要系统不调这个方法就天然不保存。
 	if (layout && [SokoPosterLayout editingRowOffsetDirty] && !isnan(editingOffset)) {
+		// 1.2.1-103 · 这里**只把值挂到 layout 上，不再写偏好**。
+		//   写偏好改由 PRMutablePosterConfiguration storeComplicationLayout:error: 负责
+		//   （真正的落盘入口，只有"完成"会走）。本方法一次会话被调用上千次，
+		//   取消一样会走到 —— 之前就是它导致"点取消也会保存"。
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
-		// 1.2.1-99 · 完成 = 提交。归档写一份（系统落盘），同时发通知让 SpringBoard
-		//   写 soko_widgetOffset + soko_offsets_by_poster[当前壁纸] 并立即生效。
-		//   （1.2.1-92 只写归档不写偏好 → 偏好永远不变 → "保存不了"）
-		SokoEditorRequestRowOffset(editingOffset);
-		// 17 = 完成路径命中（payload = 提交值）
-		SokoTrace(17, (long)llround(editingOffset));
-		[SokoPosterLayout clearEditingSession];
-		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
+		// 17 = 命中并挂上值（payload = 值，仅作证据）
+		static CFTimeInterval lastCommitLog = 0.0;
+		CFTimeInterval nowCommit = CACurrentMediaTime();
+		if (nowCommit - lastCommitLog > 2.0) {
+			lastCommitLog = nowCommit;
+			SokoTrace(17, (long)llround(editingOffset));
+		}
+		SokoFileLog(@"EDITOR-ATTACH %.1f", editingOffset);
 	} else {
-		// 18 = 命中但本会话没滑动（payload = 次数）。**取消如果也走这里，18 会涨**
-		//   —— 下轮据此判断要不要再找一个"仅完成"的判据。
-		//   实测这个方法在编辑期会被系统调用十几次，必须节流否则冲爆日志环。
+		// 18 = 命中但本会话没滑动（payload = 次数，仅作证据）。
+		//   实测这个方法一次会话被调用上千次，30 秒才记一条，否则冲爆 500 行环
+		//   （上一版就是被它把 60~63 的虚线框数据全冲掉了）。
 		static long noSessionHits = 0;
 		static CFTimeInterval lastHitLog = 0.0;
 		noSessionHits++;
 		CFTimeInterval nowHit = CACurrentMediaTime();
-		if (nowHit - lastHitLog > 2.0) {
+		if (nowHit - lastHitLog > 30.0) {
 			lastHitLog = nowHit;
 			SokoTrace(18, noSessionHits);
 		}
@@ -861,14 +907,9 @@ static void SokoProbeEditorButtons(void) {
 	Class cls = NSClassFromString(@"PREditingSceneViewController");
 	if (!cls) return;
 
-	// 1.2.1-102 · 方法表整体落盘（只做一次）
-	static BOOL dumped = NO;
-	if (!dumped) {
-		dumped = YES;
-		SokoDumpSelectors(cls);
-		SokoDumpSelectors(NSClassFromString(@"PREditor"));
-		SokoDumpSelectors(NSClassFromString(@"PREditorRootViewController"));
-	}
+	// 1.2.1-103 · 方法表改在 SpringBoard 侧落盘（见 %ctor）：
+	//   PosterBoard 写不进任何偏好域，SokoFileLog 在海报进程里是静默失败的，
+	//   上一版把 dump 放在这里，结果 METHODS 一条都没出来。
 
 	NSArray<NSString *> *keywords = @[@"done", @"cancel", @"save", @"apply", @"discard", @"commit", @"finish"];
 	unsigned int count = 0;
@@ -1025,6 +1066,13 @@ static void SokoProbeEditorButtons(void) {
 		}
 
 		SokoTrace(59, 1);   // 59=1：SpringBoard 侧已装点击钩子
+
+		// 1.2.1-103 · 方法表落盘（必须在 SpringBoard 侧：海报进程写不进偏好域，
+		// SokoFileLog 在那里静默失败）。用来从真实方法名里挑出"完成/取消"入口。
+		SokoDumpSelectors(NSClassFromString(@"PREditingSceneViewController"));
+		SokoDumpSelectors(NSClassFromString(@"PREditor"));
+		SokoDumpSelectors(NSClassFromString(@"PREditorRootViewController"));
+		SokoDumpSelectors(NSClassFromString(@"PRMutablePosterConfiguration"));
 
 		if (dockSupported) SokoInitDock();
 

@@ -15,8 +15,8 @@ static NSString *const kSokoLogKey = @"ERSokoMirror";
 static NSString *const kSokoTraceName = @"com.strive.echoreborn.soko.trace";
 // 1.2.1-99 · 环放大到 300 行 / 48KB：120 行只够存 3 秒，关键节点（进入编辑器、
 // 完成/取消）总是被刷掉，导致每轮都只能看到碎片、无法定论。
-static const NSUInteger kSokoLogRingLines = 300;
-static const NSUInteger kSokoLogRingBytes = 48 * 1024;
+static const NSUInteger kSokoLogRingLines = 500;
+static const NSUInteger kSokoLogRingBytes = 80 * 1024;
 
 // 1.2.1-71 · 双域写入。PosterBoard 写不了 com.strive.echoreborn.preferences（实测
 // SpringBoard 的该域可写、PosterBoard 的完全没出现），但每个进程都一定写得进

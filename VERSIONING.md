@@ -1112,3 +1112,24 @@
 关键字探针 40~51 一次都没命中 → 方法名里没有 done/cancel 这类词。
 新增 METHODS 落盘：把 PREditingSceneViewController / PREditor /
 PREditorRootViewController 的完整方法表打印出来，下一版直接挑真正的收尾方法。
+
+## 1.2.1-103（1002203）· 壁纸键去版本号 + 完成判据换到真正的落盘入口 + 方法表改在 SpringBoard 落盘
+**① 每壁纸保存"改完就丢"的最后一环**：偏好字典实测
+`…_CreateAFacePhotos(EEAE4B4F-…)_PRPosterRoleLockScreen_98-0` → **每次保存壁纸版本号
++1**（日志 95-0→96-0→…→99-0，POSTER-SEED 而非 POSTER-RESTORE）→ 同一张壁纸每编辑
+一次就换一个新键，值自然"丢了"。现在：键统一去掉尾部 `_NN-M` / `/NN-M`，
+读取时把历史脏键归一化合并；优先用不带版本号的 `identityPathComponent`。
+（跨壁纸切换本身已实测正常：3 张壁纸各自恢复 -507 / 0 / -163.2。）
+**② 完成/取消**：`setComplicationLayout:` 一次会话被调用**上千次**（code 18 计数到
+1133），取消一样会走到 —— 它根本不是完成判据（这就是"点取消也会保存"）。
+改为：它只把值挂到 layout 上（17/EDITOR-ATTACH），**写偏好改由
+PRMutablePosterConfiguration 的 storeComplicationLayout:error:** 负责（21），
+那是把 layout 写回磁盘的那一步，只有"完成"会走（上游 applyPendingDefaultLayout
+用的正是这个 API）。
+**③ 方法表落盘位置修好**：上一版 METHODS 一条都没出来 —— 海报进程写不进任何偏好域，
+SokoFileLog 在那里静默失败。改到 SpringBoard %ctor 里 dump
+（PREditingSceneViewController / PREditor / PREditorRootViewController /
+PRMutablePosterConfiguration）。
+**④ 噪声治理**：code 18 节流 30s、PUB/ROW 3s、虚线框探针 1s；日志环 500 行 / 80KB。
+（上一版 60~63 的边框数据就是被 code 18 上千条冲掉的。）
+新增 22=虚线框窗口 y、23=组件行窗口 y，用于判断边框到底有没有跟着走。

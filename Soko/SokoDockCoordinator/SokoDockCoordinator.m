@@ -298,7 +298,7 @@ static CGFloat gCachedSystemRowY = NAN;
 	{
 		static CFTimeInterval lastPub = 0.0;
 		CFTimeInterval now = CACurrentMediaTime();
-		if (now - lastPub > 1.0) {
+		if (now - lastPub > 3.0) {
 			lastPub = now;
 			SokoFileLog(@"PUB top=%.1f eff=%.1f set=%d prefs=%.1f archive=%@",
 			            topOffset, effectiveOffset, (int)offsetIsSet,
