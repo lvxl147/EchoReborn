@@ -50,12 +50,12 @@ EchoReborn_FILES = Tweak.xm \
                 GlassKit/LGLiveBackdropView.m \
                 GlassKit/LGGlassLog.m \
                 Soko/Soko.x \
-                Soko/SokoCompatibility/*.m \
-                Soko/SokoDockCoordinator/*.m \
-                Soko/SokoDockGeometry/*.m \
-                Soko/SokoPosterLayout/*.m \
-                Soko/SokoPosterModel/*.m \
-                Soko/SokoRuntime/*.m \
+                $(wildcard Soko/SokoCompatibility/*.m) \
+                $(wildcard Soko/SokoDockCoordinator/*.m) \
+                $(wildcard Soko/SokoDockGeometry/*.m) \
+                $(wildcard Soko/SokoPosterLayout/*.m) \
+                $(wildcard Soko/SokoPosterModel/*.m) \
+                $(wildcard Soko/SokoRuntime/*.m) \
                 Soko/SokoPreferences.m \
                 LiquidSiri/Tweak.x \
                 LiquidSiri/SwiftUIWave/Models/SiriWave.swift \
