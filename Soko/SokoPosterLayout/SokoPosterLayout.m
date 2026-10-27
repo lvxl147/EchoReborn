@@ -1,4 +1,5 @@
 #import "SokoPosterLayout.h"
+#import "../SokoFileLog.h"
 
 static const CGFloat kSokoBottomRowEditingOffset = 28.0;
 
@@ -105,7 +106,20 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 + (CGRect)editingRowFrame {
 	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
-	return [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant];
+	CGRect frame = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant];
+
+	// 1.2.1-69 · 手势判定用的就是这个 rect。它是「系统编辑态行位置」，不是我们
+	// 挪到底部之后的实际位置 —— 若两者不一致，点在底部行上会被判成 outside-row。
+	static CFTimeInterval lastLog = 0.0;
+	CFTimeInterval now = CACurrentMediaTime();
+	if (now - lastLog > 0.5) {
+		lastLog = now;
+		SokoFileLog(@"ROW editingRowFrame=(%.1f,%.1f,%.1fx%.1f) inset=%.1f usesBottomEditingRow=%d editorBottom=%d dodging=%d",
+		            frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+		            SokoDockGeometryBottomInset(), (int)[self usesBottomEditingRow],
+		            (int)SokoEditorUsesBottomLayout(), (int)[self isDodging]);
+	}
+	return frame;
 }
 
 + (void)registerComplicationContainerViewController:(UIViewController *)controller {

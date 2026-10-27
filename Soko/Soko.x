@@ -1,6 +1,7 @@
 #import "Soko.h"
 #import "SokoPreferences.h"
 #import "SokoLog.h"
+#import "SokoFileLog.h"
 
 static BOOL gActivePosterUsesBottomLayout;
 static __weak CSCoverSheetViewController *gCoverSheetViewController;
@@ -277,6 +278,8 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 - (void)viewDidLoad {
 	%orig;
 
+	// 1.2.1-69 · 编辑态拖动链路的第一个节点：容器 VC 有没有被登记
+	SokoFileLog(@"CONTAINER viewDidLoad proc=%@", NSProcessInfo.processInfo.processName);
 	[SokoPosterLayout registerComplicationContainerViewController:self];
 	[SokoLayoutSwipeHandler installOnComplicationContainerViewController:self];
 }
@@ -305,7 +308,12 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 - (void)viewDidLoad {
 	%orig;
 
-	if ([SokoPosterLayout registerEditingSceneViewController:self]) [SokoLayoutSwipeHandler installOnEditingSceneViewController:self];
+	BOOL registered = [SokoPosterLayout registerEditingSceneViewController:self];
+	SokoFileLog(@"EDITOR viewDidLoad registered=%d role=%@ dismissing=%d",
+	            (int)registered,
+	            [self respondsToSelector:@selector(posterRole)] ? self.posterRole : @"(none)",
+	            (int)[SokoPosterLayout editingSceneViewControllerIsDismissing:self]);
+	if (registered) [SokoLayoutSwipeHandler installOnEditingSceneViewController:self];
 }
 
 - (BOOL)_hasGraphicComplications {
@@ -571,24 +579,37 @@ static void SokoInitLiquidAssPoster(void) {
 }
 
 static void SokoInitPoster(void) {
-	if (![SokoPosterLayout isSupported]) return;
+	if (![SokoPosterLayout isSupported]) {
+		SokoFileLog(@"INITPOSTER abort: not supported");
+		return;
+	}
 	if (SokoLiquidAssClockEnabled()) {
+		SokoFileLog(@"INITPOSTER liquidAss branch (no editor hooks)");
 		SokoInitLiquidAssPoster();
 		return;
 	}
 
+	SokoFileLog(@"INITPOSTER full (editor + model + swipe)");
 	%init(SokoPoster);
 
 	Class editingSceneClass = objc_getClass("PREditingSceneViewController");
-	if ([editingSceneClass instancesRespondToSelector:@selector(setPresentedComplicationWidgetConfigurationViewController:)]) {
+	BOOL hasNewWidgetConfig = [editingSceneClass instancesRespondToSelector:@selector(setPresentedComplicationWidgetConfigurationViewController:)];
+	BOOL hasOldWidgetConfig = [editingSceneClass instancesRespondToSelector:@selector(setPresentedWidgetConfigurationViewController:)];
+	BOOL hasAddGestureLocation = [editingSceneClass instancesRespondToSelector:@selector(_shouldAllowAddComplicationsTapGestureForLocation:)];
+	BOOL hasAddGesture = [editingSceneClass instancesRespondToSelector:@selector(_shouldAllowAddComplicationsTapGesture)];
+	SokoFileLog(@"INITPOSTER editingScene=%@ newWidgetCfg=%d oldWidgetCfg=%d addGestureLoc=%d addGesture=%d",
+	            NSStringFromClass(editingSceneClass), (int)hasNewWidgetConfig, (int)hasOldWidgetConfig,
+	            (int)hasAddGestureLocation, (int)hasAddGesture);
+
+	if (hasNewWidgetConfig) {
 		%init(SokoPosterComplicationWidgetConfiguration);
-	} else if ([editingSceneClass instancesRespondToSelector:@selector(setPresentedWidgetConfigurationViewController:)]) {
+	} else if (hasOldWidgetConfig) {
 		%init(SokoPosterWidgetConfiguration);
 	}
 
-	if ([editingSceneClass instancesRespondToSelector:@selector(_shouldAllowAddComplicationsTapGestureForLocation:)]) {
+	if (hasAddGestureLocation) {
 		%init(SokoPosterAddGestureForLocation);
-	} else if ([editingSceneClass instancesRespondToSelector:@selector(_shouldAllowAddComplicationsTapGesture)]) {
+	} else if (hasAddGesture) {
 		%init(SokoPosterAddGesture);
 	}
 
@@ -610,6 +631,9 @@ static void SokoInitPoster(void) {
 	BOOL isPosterHost = [bundleIdentifier isEqualToString:@"com.apple.PosterBoard"] ||
 	                    [bundleIdentifier isEqualToString:@"com.apple.PosterKit"] ||
 	                    [bundleIdentifier isEqualToString:@"com.apple.MercuryPoster"];
+	// 1.2.1-69 · 进程归属只在文件日志里记一次，用来确认 PosterBoard 到底有没有注入。
+	SokoFileLog(@"CTOR enter pid=%d bid=%@ springboard=%d posterHost=%d",
+	            (int)getpid(), bundleIdentifier, (int)isSpringBoard, (int)isPosterHost);
 	if (!isSpringBoard && !isPosterHost) return;
 
 	BOOL modelSupported = [SokoPosterModel isSupported];
@@ -620,12 +644,16 @@ static void SokoInitPoster(void) {
 		BOOL dockSupported = [SokoDockCoordinator isSupported];
 		ERSokoLog(@"SOKO-CAP proc=%@ model=%d dock=%d poster=0",
 		          bundleIdentifier, (int)modelSupported, (int)dockSupported);
+		SokoFileLog(@"CAP springboard model=%d dock=%d", (int)modelSupported, (int)dockSupported);
 		if (dockSupported) SokoInitDock();
 		return;
 	}
 
 	BOOL posterSupported = [SokoPosterLayout isSupported];
+	BOOL liquidAss = SokoLiquidAssClockEnabled();
 	ERSokoLog(@"SOKO-CAP proc=%@ model=%d dock=0 poster=%d",
 	          bundleIdentifier, (int)modelSupported, (int)posterSupported);
+	SokoFileLog(@"CAP poster model=%d posterSupported=%d liquidAss=%d",
+	            (int)modelSupported, (int)posterSupported, (int)liquidAss);
 	if (posterSupported) SokoInitPoster();
 }

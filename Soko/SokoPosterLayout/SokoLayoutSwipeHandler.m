@@ -1,5 +1,6 @@
 #import "SokoLayoutSwipeHandler.h"
 #import "../SokoLog.h"
+#import "../SokoFileLog.h"
 
 static const CGFloat kSokoLayoutSwipeDistance = 30.0;
 static const CGFloat kSokoLayoutSwipeVelocity = 300.0;
@@ -26,7 +27,10 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 }
 
 + (void)installOnComplicationContainerViewController:(UIViewController *)controller {
-	if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.PosterBoard"]) return;
+	if (![NSBundle.mainBundle.bundleIdentifier isEqualToString:@"com.apple.PosterBoard"]) {
+		SokoFileLog(@"SWIPE-SKIP container: bid=%@", NSBundle.mainBundle.bundleIdentifier);
+		return;
+	}
 
 	SokoLayoutSwipeHandler *handler = [self new];
 	handler.complicationContainerViewController = controller;
@@ -40,6 +44,10 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 
 	objc_setAssociatedObject(swipe, @selector(handleSwipe:), self, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 	[view addGestureRecognizer:swipe];
+
+	// 1.2.1-69 · 手势装在哪一层，装了没有
+	SokoFileLog(@"SWIPE-INSTALL view=%@ proc=%@",
+	            NSStringFromClass([view class]), NSProcessInfo.processInfo.processName);
 }
 
 - (PREditingSceneViewController *)editor {
@@ -50,42 +58,93 @@ static CGPoint SokoScreenPoint(UIView *view, CGPoint point) {
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch {
 	self.touchTimestamp = touch.timestamp;
+
+	// 1.2.1-69 · 节流 1s：确认触摸到底有没有投递到这个 pan（没有 = 被别的视图/手势吃掉）
+	static CFTimeInterval lastTouchLog = 0.0;
+	CFTimeInterval now = CACurrentMediaTime();
+	if (now - lastTouchLog > 1.0) {
+		lastTouchLog = now;
+		CGPoint point = [touch locationInView:gestureRecognizer.view];
+		SokoFileLog(@"SWIPE-TOUCH view=%@ point=(%.1f,%.1f)", NSStringFromClass([gestureRecognizer.view class]), point.x, point.y);
+	}
 	return YES;
 }
 
 - (BOOL)gestureRecognizerShouldBegin:(UIGestureRecognizer *)gestureRecognizer {
 	PREditingSceneViewController *controller = [self editor];
-	if (![SokoPosterLayout canSwipeEditingSceneViewController:controller]) return NO;
-	if ([NSProcessInfo processInfo].systemUptime - self.touchTimestamp > kSokoLayoutSwipeMaximumHold) return NO;
-
+	CGFloat inset = SokoDockGeometryBottomInset();
 	UIPanGestureRecognizer *pan = (UIPanGestureRecognizer *)gestureRecognizer;
 	UIView *view = pan.view;
-
 	CGPoint velocity = [pan velocityInView:view];
-	if (fabs(velocity.y) <= fabs(velocity.x)) return NO;
+	CGRect row = [SokoPosterLayout editingRowFrame];
+
+	// 1.2.1-69 · 逐条记录拒绝原因：这轮就是要看清是哪一个门闩挡住了拖动。
+	if (!controller) {
+		SokoFileLog(@"SWIPE-BEGIN reject=no-editor inset=%.1f", inset);
+		return NO;
+	}
+	if (![SokoPosterLayout canSwipeEditingSceneViewController:controller]) {
+		SokoFileLog(@"SWIPE-BEGIN reject=canSwipe presented=%@ inset=%d(isnan) dodging=%d dismissing=%d portrait=%d",
+		            NSStringFromClass([controller.presentedViewController class]),
+		            (int)isnan(inset), (int)[SokoPosterLayout isDodging],
+		            (int)[SokoPosterLayout editingSceneViewControllerIsDismissing:controller],
+		            (int)SokoIsPortrait(controller.view.bounds));
+		return NO;
+	}
+
+	NSTimeInterval hold = [NSProcessInfo processInfo].systemUptime - self.touchTimestamp;
+	if (hold > kSokoLayoutSwipeMaximumHold) {
+		SokoFileLog(@"SWIPE-BEGIN reject=hold %.3fs > %.2fs", hold, kSokoLayoutSwipeMaximumHold);
+		return NO;
+	}
+
+	if (fabs(velocity.y) <= fabs(velocity.x)) {
+		SokoFileLog(@"SWIPE-BEGIN reject=not-vertical vy=%.1f vx=%.1f", velocity.y, velocity.x);
+		return NO;
+	}
 
 	BOOL bottom = [SokoPosterLayout editingSceneViewControllerUsesBottomLayout:controller];
-	if (bottom ? velocity.y >= 0.0 : velocity.y <= 0.0) return NO;
+	if (bottom ? velocity.y >= 0.0 : velocity.y <= 0.0) {
+		SokoFileLog(@"SWIPE-BEGIN reject=direction bottom=%d vy=%.1f", (int)bottom, velocity.y);
+		return NO;
+	}
 
-	CGRect row = [SokoPosterLayout editingRowFrame];
-	if (CGRectIsNull(row)) return NO;
+	if (CGRectIsNull(row)) {
+		SokoFileLog(@"SWIPE-BEGIN reject=row-null inset=%.1f", inset);
+		return NO;
+	}
 
 	CGPoint translation = [pan translationInView:view];
 	CGPoint location = [pan locationInView:view];
 	CGPoint start = SokoScreenPoint(view, CGPointMake(location.x - translation.x, location.y - translation.y));
-	return CGRectContainsPoint(CGRectInset(row, 0.0, -kSokoLayoutSwipeSlop), start);
+	CGRect band = CGRectInset(row, 0.0, -kSokoLayoutSwipeSlop);
+	if (!CGRectContainsPoint(band, start)) {
+		SokoFileLog(@"SWIPE-BEGIN reject=outside-row start=(%.1f,%.1f) row=(%.1f,%.1f,%.1fx%.1f) band=(%.1f,%.1f,%.1fx%.1f)",
+		            start.x, start.y, row.origin.x, row.origin.y, row.size.width, row.size.height,
+		            band.origin.x, band.origin.y, band.size.width, band.size.height);
+		return NO;
+	}
+
+	SokoFileLog(@"SWIPE-BEGIN accept bottom=%d start=(%.1f,%.1f) row=(%.1f,%.1f,%.1fx%.1f) inset=%.1f",
+	            (int)bottom, start.x, start.y, row.origin.x, row.origin.y, row.size.width, row.size.height, inset);
+	return YES;
 }
 
 - (void)handleSwipe:(UIPanGestureRecognizer *)pan {
 	if (pan.state != UIGestureRecognizerStateEnded) return;
 
 	PREditingSceneViewController *controller = [self editor];
-	if (![SokoPosterLayout canSwipeEditingSceneViewController:controller]) return;
+	if (![SokoPosterLayout canSwipeEditingSceneViewController:controller]) {
+		SokoFileLog(@"SWIPE-END reject=canSwipe");
+		return;
+	}
 
 	BOOL bottom = [SokoPosterLayout editingSceneViewControllerUsesBottomLayout:controller];
 	CGFloat direction = bottom ? -1.0 : 1.0;
 	CGFloat distance = [pan translationInView:pan.view].y * direction;
 	CGFloat velocity = [pan velocityInView:pan.view].y * direction;
+	SokoFileLog(@"SWIPE-END bottom=%d distance=%.1f velocity=%.1f threshold=(%.0f/%.0f)",
+	            (int)bottom, distance, velocity, kSokoLayoutSwipeDistance, kSokoLayoutSwipeVelocity);
 	if (distance < kSokoLayoutSwipeDistance && velocity < kSokoLayoutSwipeVelocity) return;
 
 	[SokoPosterLayout setUsesBottomLayout:!bottom forEditingSceneViewController:controller];

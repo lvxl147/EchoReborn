@@ -895,3 +895,8 @@
 - 旧设置桥：6 个 soko_* 键（域 com.strive.echoreborn.preferences、通知 com.strive.echoreborn/ReloadPrefs）名字/默认值/语义不变，1.1.0 的 SokoPreferences.m 按同键读取，设置页继续实时生效。
 - 修复：① 根 filter 补 com.apple.PosterKit / com.apple.MercuryPoster（壁纸配置在这两个进程编解码，缺了就是「编辑完退出回顶部」），Tweak.xm 的 %ctor 对它们第一行 return；② Soko 的 %ctor 改显式进程白名单（原来 Siri 三个进程会误走 poster 分支）；③ SokoPosterModel 的 <roothide.h> 改 __has_include 守卫（rootless 可编译），jbroot 兜底收进 SokoPrivate.h；④ 删除 Soko.x 里对 quickActionsView 的 transform 缩进 —— 与 Tweak.xm 的 center 路径叠加成 2× 位移，横向缩进唯一由 Tweak.xm 负责；⑤ marker 改名 com.strive.echoreborn.default-layout（不与真 Soko 抢文件）；本包不带 postinst，首次下滑一次即可，之后按壁纸记忆。
 - 诊断：新增 ERSokoLog 跨 TU 日志桥（Tweak.xm 实现 / Soko 各 .m 调用），打 SOKO-CAP / SOKO-DOCK / SOKO-SWIPE / SOKO-ENC / SOKO-DEC；日志开关未就绪前的行做早鸟缓冲，避免丢掉启动期探针。
+
+## 1.2.1-69（1002169）· 编辑态拖动诊断版（只加日志，不改行为）
+- 现象：长按进入编辑态后无法上下拖动切换组件位置。
+- 新增 Soko/SokoFileLog（独立文件 /var/mobile/Library/Logs/EchoReborn/soko.log，256KB 截断，按进程名打前缀）—— 不用 ERLogMirror 是因为它是 60 行环，SpringBoard 的 CC 心跳会把 PosterBoard 的判定行冲掉。
+- 探针：CTOR（进程归属/bundleId）、CAP（model/dock/poster/liquidAss）、INITPOSTER（支持判定 + 选中了哪组 widget 配置与加号手势钩子）、CONTAINER/EDITOR（登记与角色）、SWIPE-INSTALL/SKIP（手势装在哪一层）、SWIPE-TOUCH、SWIPE-BEGIN（逐条记录 canSwipe/presented/inset/dodging/dismissing/portrait/起手时长/方向/起手点是否落在 editingRowFrame±24 带内）、SWIPE-END（位移/速度/阈值）、ROW（editingRowFrame 与 inset/usesBottomEditingRow 的真值）。

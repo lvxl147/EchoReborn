@@ -57,6 +57,7 @@ EchoReborn_FILES = Tweak.xm \
                 $(wildcard Soko/SokoPosterModel/*.m) \
                 $(wildcard Soko/SokoRuntime/*.m) \
                 Soko/SokoPreferences.m \
+                Soko/SokoFileLog.m \
                 LiquidSiri/Tweak.x \
                 LiquidSiri/SwiftUIWave/Models/SiriWave.swift \
                 LiquidSiri/SwiftUIWave/Views/SupportLine.swift \
