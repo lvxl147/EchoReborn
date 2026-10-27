@@ -309,10 +309,9 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	%orig;
 
 	BOOL registered = [SokoPosterLayout registerEditingSceneViewController:self];
-	SokoFileLog(@"EDITOR viewDidLoad registered=%d role=%@ dismissing=%d",
+	SokoFileLog(@"EDITOR viewDidLoad registered=%d role=%@",
 	            (int)registered,
-	            [self respondsToSelector:@selector(posterRole)] ? self.posterRole : @"(none)",
-	            (int)[SokoPosterLayout editingSceneViewControllerIsDismissing:self]);
+	            [self respondsToSelector:@selector(posterRole)] ? self.posterRole : @"(none)");
 	if (registered) [SokoLayoutSwipeHandler installOnEditingSceneViewController:self];
 }
 

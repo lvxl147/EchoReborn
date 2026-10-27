@@ -23,6 +23,8 @@
 
 + (BOOL)canSwipeEditingSceneViewController:(PREditingSceneViewController *)controller;
 + (BOOL)usesBottomEditingRow;
+// 1.2.1-69 · 手势门禁日志要读它（实现本来就在 .m 里，只是没在头文件声明）
++ (BOOL)editingSceneViewControllerIsDismissing:(PREditingSceneViewController *)controller;
 
 + (void)setIgnoringGraphicComplications:(BOOL)ignoring;
 + (BOOL)isIgnoringGraphicComplications;
