@@ -282,10 +282,10 @@ static NSNumber *gActiveRowOffset;
 	// 1.2.1-79 · 顶部基线改用"系统实际摆放的组件行"（complications 视图的真实位置）。
 	// 之前用 layoutController 的类方法算，和系统真正摆出来的位置差 ~11pt，
 	// 导致顶部端点算成 -518 而实际 -507 才对齐。
-	UIView *complicationsView = self.coverSheetViewController.complicationContainerViewController.viewIfLoaded;
+	UIView *rowSourceView = self.coverSheetViewController.complicationContainerViewController.viewIfLoaded;
 	CGFloat systemRowY = NAN;
-	if (complicationsView.superview) {
-		systemRowY = [complicationsView convertRect:complicationsView.bounds toView:coverSheetView].origin.y;
+	if (rowSourceView.superview) {
+		systemRowY = [rowSourceView convertRect:rowSourceView.bounds toView:coverSheetView].origin.y;
 	}
 	CGFloat stockY = isfinite(systemRowY) ? systemRowY : CGRectGetMinY(row);
 
