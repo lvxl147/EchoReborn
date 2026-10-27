@@ -216,6 +216,8 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 }
 
 
+@end
+
 #pragma mark - 1.2.1-94 完成/取消按钮监听
 
 static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
@@ -249,6 +251,8 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 	}
 }
 @end
+
+@implementation SokoEditorChrome (ButtonsWatcher)
 
 + (void)installEditorButtonWatchers:(PREditingSceneViewController *)controller {
 	UIView *root = controller.viewIfLoaded;
