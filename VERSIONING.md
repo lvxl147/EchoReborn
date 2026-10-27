@@ -958,3 +958,8 @@
 - 开关修复：「调整组件位置」关闭 → 完全不接管（之前被 isSet 判定盖过）；「调整通知位置」关闭 → listMinY / footer inset / footer 中心三处全部不介入。
 - 设置页镜像：SpringBoard 读到归档偏移时写回 soko_widgetOffset，切壁纸滑块跟随。
 - 虚线框：仍不跟随，本轮加 TRACE 17/18/19（位移×10 / 边框高 / 系统原位）定位是没算对还是被系统复位。
+
+## 1.2.1-80（1002180）· 修复"上滑下滑无效"：几何发布与停靠解耦
+- 根因：顶部/底部基准只在 layoutDock 里计算并发布，而 layoutDock 只在"组件已被 dock 接管"时执行。默认顶部态下 dock 不启用 → 顶部 offset 从未发布（NaN）→ 编辑器滑动判定的 `isnan(topOffset)` 直接 return，表现为怎么滑都没反应。
+- 修复：抽出 publishRowOffsetsIfPossible，在 publishDockGeometry（每次锁屏布局都会走）里发布；layoutDock 改为复用发布值，两套算法不再漂移。
+- 顶部基线仍取"系统真实摆放的组件行"（≈ -507），滑块下限 -510。

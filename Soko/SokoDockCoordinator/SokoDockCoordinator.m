@@ -254,49 +254,20 @@ static NSNumber *gActiveRowOffset;
 	return CGRectGetHeight(coverSheetView.bounds) - coverSheetView.safeAreaInsets.bottom - kSokoDockBottomInsetWithoutButtons;
 }
 
-- (void)publishDockGeometry {
+- (void)publishRowOffsetsIfPossible {
+	// 1.2.1-80 · 几何发布与"是否停靠"解耦。之前只在 layoutDock 里算/发，一旦组件
+	// 不接管（默认顶部态）dock 不启用、layoutDock 不执行 → 顶部值一直是 NaN，
+	// 编辑器里上/下滑判定直接 return（就是"滑动没反应"）。
 	CSCoverSheetView *coverSheetView = (CSCoverSheetView *)self.coverSheetViewController.viewIfLoaded;
-	CGRect bounds = coverSheetView.bounds;
-	if (CGRectGetHeight(bounds) <= 0.0 || !SokoIsPortrait(bounds)) return;
+	if (!coverSheetView) return;
 
-	SokoDockGeometryPublishBottomInset(CGRectGetHeight(bounds) - [self dockBottomYInCoverSheetView:coverSheetView]);
-}
-
-- (void)layoutDock {
-	CSCoverSheetView *coverSheetView = (CSCoverSheetView *)self.coverSheetViewController.viewIfLoaded;
-	UIView *host = self.hostView;
-	if (!coverSheetView || !host) return;
-
-	CGRect bounds = coverSheetView.bounds;
-	CGRect row = SokoIsPortrait(bounds) ? [self.layoutController frameForElements:kSokoComplicationRowElement withBoundingRect:bounds] : CGRectNull;
-	if (CGRectIsNull(row) || CGRectGetHeight(row) <= 0.0 || CGRectGetWidth(row) <= 0.0) {
-		host.hidden = YES;
-		self.dockTopY = NAN;
-		self.dockBottomY = NAN;
-		return;
-	}
-
-	// 1.2.1-76 · 记下系统原位行（= 顶部），并发布给海报进程：
-	//   topOffset = 顶部相对"底部基准行"的位移（实测 -518）
-	//   rowOffset = 用户显式设置的值（未设置时等于 topOffset，即顶部）
-	// 1.2.1-79 · 顶部基线改用"系统实际摆放的组件行"（complications 视图的真实位置）。
-	// 之前用 layoutController 的类方法算，和系统真正摆出来的位置差 ~11pt，
-	// 导致顶部端点算成 -518 而实际 -507 才对齐。
-	UIView *rowSourceView = self.coverSheetViewController.complicationContainerViewController.viewIfLoaded;
-	CGFloat systemRowY = NAN;
-	if (rowSourceView.superview) {
-		systemRowY = [rowSourceView convertRect:rowSourceView.bounds toView:coverSheetView].origin.y;
-	}
-	CGFloat stockY = isfinite(systemRowY) ? systemRowY : CGRectGetMinY(row);
+	[self publishRowOffsetsIfPossible];
 
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row);
-	CGFloat topOffset = stockY - bottomRowY;
-
 	BOOL offsetIsSet = (gActiveRowOffset != nil) || SokoPrefWidgetOffsetIsSet();
 	CGFloat effectiveOffset = gActiveRowOffset ? gActiveRowOffset.doubleValue : SokoPrefWidgetOffset();
-	if (!offsetIsSet) effectiveOffset = topOffset;
-
-	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
+	if (!offsetIsSet) effectiveOffset = SokoTopOffsetValue();
+	if (isnan(effectiveOffset)) effectiveOffset = 0.0;
 
 	row.origin.y = bottomRowY + effectiveOffset;
 	self.dockTopY = CGRectGetMinY(row);
