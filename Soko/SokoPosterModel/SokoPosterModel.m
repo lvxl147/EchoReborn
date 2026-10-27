@@ -62,20 +62,23 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 }
 
 + (void)encodeComplicationLayout:(id)layout withCoder:(id)coder {
-	if (![self complicationLayoutUsesBottomLayout:layout] || ![coder respondsToSelector:@selector(encodeBool:forKey:)]) return;
+	if (![coder respondsToSelector:@selector(encodeBool:forKey:)]) return;
 
-	// 1.2.1-68 · 落盘判据：这一行出现在哪个进程，就说明那个进程的 filter 生效了
-	// （只在"底部布局"被写进归档时打印，不会刷屏）。
-	ERSokoLog(@"SOKO-ENC proc=%@ cls=%@ key=%@",
-	          NSProcessInfo.processInfo.processName,
-	          NSStringFromClass([layout class]), kSokoBottomLayoutCodingKey);
-
-	[coder encodeBool:YES forKey:kSokoBottomLayoutCodingKey];
+	// 1.2.1-98 · 关键修复：原来这里有一句
+	//   if (![self complicationLayoutUsesBottomLayout:layout]) return;
+	// 只要"底部态"布尔没设上就直接返回，下面我们的偏移编码永远执行不到
+	// （实测 SOKO-ENC-OFFSET 恒为 0 就是这个原因）。
+	// 现在布尔与偏移各自独立编码：系统保存壁纸时这一趟必然会被调用，
+	// 所以"完成才落盘、取消不落盘"由系统本身保证，归档也天然是按壁纸各一份。
+	if ([self complicationLayoutUsesBottomLayout:layout]) {
+		[coder encodeBool:YES forKey:kSokoBottomLayoutCodingKey];
+	}
 
 	NSNumber *offset = [self rowOffsetForComplicationLayout:layout];
 	if (offset && [coder respondsToSelector:@selector(encodeDouble:forKey:)]) {
 		[coder encodeDouble:offset.doubleValue forKey:kSokoRowOffsetCodingKey];
-		ERSokoLog(@"SOKO-ENC-OFFSET proc=%@ v=%.1f", NSProcessInfo.processInfo.processName, offset.doubleValue);
+		ERSokoLog(@"SOKO-ENC-OFFSET proc=%@ v=%.1f",
+		          NSProcessInfo.processInfo.processName, offset.doubleValue);
 	}
 }
 

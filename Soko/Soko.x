@@ -566,7 +566,6 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	// 1.2.1-79 · 写进"新 layout 归档"（不是偏好）：系统保存即落盘、取消即丢弃，
 	// 天然满足原版语义，也实现"每张壁纸各自记忆"。
 	CGFloat editingOffset = [SokoPosterLayout editingRowOffset];
-	SokoTrace(28, isnan(editingOffset) ? -1 : (long)llround(editingOffset));   // 28 = setComplicationLayout 触发
 	if (layout && !isnan(editingOffset)) {
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
 		// 1.2.1-92 · 这里只写归档，不写偏好：
