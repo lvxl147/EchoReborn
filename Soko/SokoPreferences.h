@@ -6,6 +6,8 @@
 CGFloat SokoPrefWidgetOffset(void);        // 组件区垂直偏移（有效值，关=0）
 // 1.2.1-76 · 用户是否显式设置过组件偏移（未设置 = 该壁纸处于顶部态）
 BOOL SokoPrefWidgetOffsetIsSet(void);
+BOOL SokoPrefWidgetsEnabled(void);
+BOOL SokoPrefNotificationsEnabled(void);
 CGFloat SokoPrefNotificationOffset(void);  // 通知列表垂直偏移（有效值，关=0）
 BOOL SokoPrefQuickActionsEnabled(void);    // 快捷操作开关
 CGFloat SokoPrefQuickActionsIndent(void);  // 快捷操作横向缩进（有效值，关=0）

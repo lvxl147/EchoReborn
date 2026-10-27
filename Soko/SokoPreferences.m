@@ -74,6 +74,16 @@ CGFloat SokoPrefWidgetOffset(void) {
 	SokoPreferencesLoadIfNeeded();
 	return gERSokoWidgetsEnabled ? gERSokoWidgetOffset : 0.0;
 }
+BOOL SokoPrefWidgetsEnabled(void) {
+	SokoPreferencesLoadIfNeeded();
+	return gERSokoWidgetsEnabled;
+}
+
+BOOL SokoPrefNotificationsEnabled(void) {
+	SokoPreferencesLoadIfNeeded();
+	return gERSokoNotificationsEnabled;
+}
+
 BOOL SokoPrefWidgetOffsetIsSet(void) {
 	SokoPreferencesLoadIfNeeded();
 	return gERSokoWidgetOffsetIsSet;

@@ -1,5 +1,6 @@
 #import "SokoNotificationList.h"
 #import "../SokoPreferences.h"
+#import "../SokoPreferences.h"
 
 static const CGFloat kSokoListFooterPadding = 20.0;
 static const CGFloat kSokoNotificationToDockSpacing = 10.0;
@@ -55,12 +56,15 @@ static const CGFloat kSokoNotificationToDockSpacing = 10.0;
 }
 
 - (double)listMinYByAdjustingListMinY:(double)listMinY {
+	// 1.2.1-79 · "调整通知位置"总开关关闭 → 完全不介入
+	if (!SokoPrefNotificationsEnabled()) return listMinY;
 	if (!self.dock.dockVisible) return listMinY;
 
 	return MAX(0.0, listMinY - self.dock.complicationContainerHeight);
 }
 
 - (UIEdgeInsets)footerInsetsByAdjustingInsets:(UIEdgeInsets)insets forCombinedListViewController:(CSCombinedListViewController *)combinedListViewController {
+	if (!SokoPrefNotificationsEnabled()) return insets;
 	self.originalInsets = insets;
 	if (!self.dock.dockVisible) return insets;
 
@@ -94,6 +98,7 @@ static const CGFloat kSokoNotificationToDockSpacing = 10.0;
 }
 
 - (BOOL)getFooterCenterY:(CGFloat *)centerY forListView:(UIView *)listView {
+	if (!SokoPrefNotificationsEnabled()) return NO;
 	if (!listView) return NO;
 
 	BOOL adjusted = listView == self.adjustedListView;

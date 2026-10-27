@@ -129,6 +129,7 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 	BOOL usesBottomLayout;
 	NSDictionary *liquidAssInfo = SokoLiquidAssUserInfoForConfiguration(configuration);
+	NSNumber *layoutOffset = nil;
 	if (SokoLiquidAssClockEnabled() && SokoLiquidAssUserInfoIsActive(liquidAssInfo)) {
 		usesBottomLayout = SokoLiquidAssUserInfoUsesBottomLayout(liquidAssInfo);
 	} else {
@@ -137,12 +138,27 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 			layout = [configuration pr_loadComplicationLayoutWithError:nil];
 		}
 
+		// 1.2.1-79 · 每张壁纸的行偏移（归档里的 double）优先
+		layoutOffset = [SokoPosterModel rowOffsetForComplicationLayout:layout];
 		usesBottomLayout = [SokoPosterModel complicationLayoutUsesBottomLayout:layout];
 	}
 
-	// 1.2.1-76 · 连续模型：只要用户显式设过偏移（含 0 / 负值），组件就由 dock 接管；
-	// 未设置时才维持"该壁纸在顶部"的原行为。
-	if (SokoPrefWidgetOffsetIsSet()) usesBottomLayout = YES;
+	[SokoDockCoordinator setActiveRowOffset:layoutOffset];
+	if (layoutOffset) usesBottomLayout = YES;
+
+	// 1.2.1-79 · "调整组件位置"总开关：关掉就整段不接管（之前被 isSet 判定盖过去了）
+	if (!SokoPrefWidgetsEnabled()) usesBottomLayout = NO;
+
+	// 归档里没有偏移但设置页设过值 → 沿用设置页的值（向后兼容旧操作方式）
+	if (!layoutOffset && SokoPrefWidgetOffsetIsSet() && SokoPrefWidgetsEnabled()) usesBottomLayout = YES;
+
+	// 把归档值镜像到设置页显示（保证"切壁纸→滑块跟随"）
+	if (layoutOffset) {
+		NSUserDefaults *mirror = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+		if (fabs([mirror doubleForKey:@"soko_widgetOffset"] - layoutOffset.doubleValue) > 0.5) {
+			[mirror setDouble:layoutOffset.doubleValue forKey:@"soko_widgetOffset"];
+		}
+	}
 	dispatch_async(dispatch_get_main_queue(), ^{
 		SokoSetActivePosterUsesBottomLayout(usesBottomLayout);
 	});
@@ -318,7 +334,10 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 - (instancetype)initWithProvider:(id)provider contents:(id)contents configurableOptions:(id)configurableOptions configuredProperties:(PRPosterConfiguredProperties *)configuredProperties additionalInfo:(id)additionalInfo {
 	self = %orig;
 
-	if (self) [SokoPosterLayout setInitialComplicationLayout:configuredProperties.complicationLayout forEditingSceneViewController:self];
+	if (self) {
+		[SokoPosterLayout setInitialComplicationLayout:configuredProperties.complicationLayout forEditingSceneViewController:self];
+		[SokoPosterLayout setInitialRowOffset:[SokoPosterModel rowOffsetForComplicationLayout:configuredProperties.complicationLayout] forEditingSceneViewController:self];
+	}
 	return self;
 }
 
@@ -495,9 +514,11 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 - (void)setComplicationLayout:(id)layout {
 	// 1.2.1-78 · 这里只在"完成"路径被调用（取消不会走）。把编辑会话里的偏移落盘：
 	// 海报进程写不了偏好，发通知让 SpringBoard 写，并清空会话值回到发布值。
+	// 1.2.1-79 · 写进"新 layout 归档"（不是偏好）：系统保存即落盘、取消即丢弃，
+	// 天然满足原版语义，也实现"每张壁纸各自记忆"。
 	CGFloat editingOffset = [SokoPosterLayout editingRowOffset];
-	if (!isnan(editingOffset)) {
-		SokoEditorRequestRowOffset(editingOffset);
+	if (layout && !isnan(editingOffset)) {
+		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
 		[SokoPosterLayout setEditingRowOffset:NAN];
 		SokoFileLog(@"EDITOR-COMMIT %.1f", editingOffset);
 	}

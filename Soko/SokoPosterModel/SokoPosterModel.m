@@ -2,8 +2,11 @@
 #import "../SokoLog.h"
 
 static NSString *const kSokoBottomLayoutCodingKey = @"SokoComplicationsUseBottomLayout";
+// 1.2.1-79 · 行偏移（pt，0 = 底部基准，-507 = 顶部）
+static NSString *const kSokoRowOffsetCodingKey = @"ERSokoRowOffset";
 
 static const void *kSokoBottomLayoutKey = &kSokoBottomLayoutKey;
+static const void *kSokoRowOffsetKey = &kSokoRowOffsetKey;
 
 // 1.2.1-68 · marker 改名：原来是 moe.waru.soko.default-layout，与真·Soko 包抢同一
 // 个文件（两台都装时谁先删谁赢）。换成 EchoReborn 自己的域。
@@ -30,6 +33,14 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 
 + (BOOL)complicationLayoutUsesBottomLayout:(id)layout {
 	return [[self bottomLayoutValueForComplicationLayout:layout] boolValue];
+}
+
++ (NSNumber *)rowOffsetForComplicationLayout:(id)layout {
+	return layout ? objc_getAssociatedObject(layout, kSokoRowOffsetKey) : nil;
+}
+
++ (void)setRowOffset:(NSNumber *)offset forComplicationLayout:(id)layout {
+	if (layout) objc_setAssociatedObject(layout, kSokoRowOffsetKey, offset, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 + (BOOL)applyPendingDefaultLayoutToConfiguration:(PRSPosterConfiguration *)configuration {
@@ -60,6 +71,12 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 	          NSStringFromClass([layout class]), kSokoBottomLayoutCodingKey);
 
 	[coder encodeBool:YES forKey:kSokoBottomLayoutCodingKey];
+
+	NSNumber *offset = [self rowOffsetForComplicationLayout:layout];
+	if (offset && [coder respondsToSelector:@selector(encodeDouble:forKey:)]) {
+		[coder encodeDouble:offset.doubleValue forKey:kSokoRowOffsetCodingKey];
+		ERSokoLog(@"SOKO-ENC-OFFSET proc=%@ v=%.1f", NSProcessInfo.processInfo.processName, offset.doubleValue);
+	}
 }
 
 + (void)decodeComplicationLayout:(id)layout withCoder:(id)coder {
@@ -70,6 +87,13 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 		ERSokoLog(@"SOKO-DEC proc=%@ cls=%@ bottom=1",
 		          NSProcessInfo.processInfo.processName, NSStringFromClass([layout class]));
 	}
+
+	if ([coder respondsToSelector:@selector(containsValueForKey:)] &&
+	    [coder containsValueForKey:kSokoRowOffsetCodingKey]) {
+		double offset = [coder decodeDoubleForKey:kSokoRowOffsetCodingKey];
+		[self setRowOffset:@(offset) forComplicationLayout:layout];
+		ERSokoLog(@"SOKO-DEC-OFFSET proc=%@ v=%.1f", NSProcessInfo.processInfo.processName, offset);
+	}
 }
 
 + (void)copyBottomLayoutFromComplicationLayout:(id)source toComplicationLayout:(id)copy {
@@ -77,10 +101,18 @@ static NSString *SokoPendingDefaultLayoutPath(void) {
 
 	NSNumber *value = [self bottomLayoutValueForComplicationLayout:source];
 	if (value) [self setBottomLayoutValue:value forComplicationLayout:copy];
+
+	NSNumber *offset = [self rowOffsetForComplicationLayout:source];
+	if (offset) [self setRowOffset:offset forComplicationLayout:copy];
 }
 
 + (BOOL)complicationLayout:(id)layout hasSameBottomLayoutAsComplicationLayout:(id)other {
-	return [self complicationLayoutUsesBottomLayout:layout] == [self complicationLayoutUsesBottomLayout:other];
+	if ([self complicationLayoutUsesBottomLayout:layout] != [self complicationLayoutUsesBottomLayout:other]) return NO;
+
+	// 1.2.1-79 · 偏移也要参与相等判断，否则系统认为"布局没变"而不落盘
+	NSNumber *a = [self rowOffsetForComplicationLayout:layout];
+	NSNumber *b = [self rowOffsetForComplicationLayout:other];
+	return fabs(a.doubleValue - b.doubleValue) < 0.01 && (a != nil) == (b != nil);
 }
 
 @end

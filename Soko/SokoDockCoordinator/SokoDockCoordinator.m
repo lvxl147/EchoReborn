@@ -10,6 +10,8 @@ static const CGFloat kSokoDockBottomInsetWithoutButtons = 71.0;
 
 static const void *kSokoDockCoordinatorKey = &kSokoDockCoordinatorKey;
 static __weak SokoDockCoordinator *gActiveCoordinator;
+// 1.2.1-79 · 当前壁纸归档里的行偏移（nil = 未设置 → 顶部）
+static NSNumber *gActiveRowOffset;
 
 @interface SokoDockCoordinator ()
 @property (nonatomic, weak) CSCoverSheetViewController *coverSheetViewController;
@@ -51,6 +53,10 @@ static __weak SokoDockCoordinator *gActiveCoordinator;
 		[UIViewController instancesRespondToSelector:@selector(bs_removeChildViewController:)];
 
 	return coverSheet && layout && hosting && (listFooter || containerFooter);
+}
+
++ (void)setActiveRowOffset:(NSNumber *)offset {
+	gActiveRowOffset = offset;
 }
 
 + (instancetype)coordinatorForCoverSheetViewController:(CSCoverSheetViewController *)controller {
@@ -273,14 +279,26 @@ static __weak SokoDockCoordinator *gActiveCoordinator;
 	// 1.2.1-76 · 记下系统原位行（= 顶部），并发布给海报进程：
 	//   topOffset = 顶部相对"底部基准行"的位移（实测 -518）
 	//   rowOffset = 用户显式设置的值（未设置时等于 topOffset，即顶部）
-	CGFloat stockY = CGRectGetMinY(row);
+	// 1.2.1-79 · 顶部基线改用"系统实际摆放的组件行"（complications 视图的真实位置）。
+	// 之前用 layoutController 的类方法算，和系统真正摆出来的位置差 ~11pt，
+	// 导致顶部端点算成 -518 而实际 -507 才对齐。
+	UIView *complicationsView = self.coverSheetViewController.complicationContainerViewController.viewIfLoaded;
+	CGFloat systemRowY = NAN;
+	if (complicationsView.superview) {
+		systemRowY = [complicationsView convertRect:complicationsView.bounds toView:coverSheetView].origin.y;
+	}
+	CGFloat stockY = isfinite(systemRowY) ? systemRowY : CGRectGetMinY(row);
+
 	CGFloat bottomRowY = [self dockBottomYInCoverSheetView:coverSheetView] - CGRectGetHeight(row);
 	CGFloat topOffset = stockY - bottomRowY;
-	BOOL offsetIsSet = SokoPrefWidgetOffsetIsSet();
-	CGFloat effectiveOffset = offsetIsSet ? SokoPrefWidgetOffset() : topOffset;
+
+	BOOL offsetIsSet = (gActiveRowOffset != nil) || SokoPrefWidgetOffsetIsSet();
+	CGFloat effectiveOffset = gActiveRowOffset ? gActiveRowOffset.doubleValue : SokoPrefWidgetOffset();
+	if (!offsetIsSet) effectiveOffset = topOffset;
+
 	SokoDockPublishRowOffsets(effectiveOffset, topOffset, offsetIsSet);
 
-	row.origin.y = bottomRowY + SokoPrefWidgetOffset();
+	row.origin.y = bottomRowY + effectiveOffset;
 	self.dockTopY = CGRectGetMinY(row);
 	self.dockBottomY = CGRectGetMaxY(row);
 

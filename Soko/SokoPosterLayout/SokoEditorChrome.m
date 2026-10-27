@@ -1,4 +1,5 @@
 #import "SokoEditorChrome.h"
+#import "../SokoLog.h"
 
 static const CGFloat kSokoLookNameToPageControlSpacing = 10.0;
 
@@ -62,6 +63,11 @@ static NSHashTable<PREditorRootViewController *> *gEditorRootViewControllers;
 
 	CGFloat target = CGRectGetMaxY(root.bounds) - inset - height + offset;
 	reticle.transform = CGAffineTransformMakeTranslation(0.0, target - stock);
+
+	// 1.2.1-79 · 诊断：17=位移(×10)、18=边框高、19=系统原位
+	SokoTrace(17, (long)llround((target - stock) * 10.0));
+	SokoTrace(18, (long)llround(height));
+	SokoTrace(19, (long)llround(stock));
 }
 
 + (NSLayoutConstraint *)stockPageControlConstraintForEditorRootViewController:(PREditorRootViewController *)controller {

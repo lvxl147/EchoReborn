@@ -3,6 +3,7 @@
 #import "../SokoFileLog.h"
 
 static const void *kSokoEditorBottomLayoutKey = &kSokoEditorBottomLayoutKey;
+static const void *kSokoEditorRowOffsetKey = &kSokoEditorRowOffsetKey;
 static const void *kSokoLiquidAssConfigurationKey = &kSokoLiquidAssConfigurationKey;
 static const void *kSokoLiquidAssUserInfoKey = &kSokoLiquidAssUserInfoKey;
 
@@ -172,7 +173,9 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 	// 1.2.1-78 · 进编辑就把"当前生效值"取进会话；之后滑动只改会话值，
 	// 不再跨进程写偏好（原版语义：点完成才生效）。
-	gEditingRowOffset = [self effectiveRowOffset];
+	NSNumber *initial = objc_getAssociatedObject(controller, kSokoEditorRowOffsetKey);
+	// 1.2.1-79 · 有归档值就用归档值（每张壁纸独立记忆），没有就是顶部。
+	gEditingRowOffset = initial ? initial.doubleValue : [self effectiveRowOffset];
 	gEditingSceneViewControllers = SokoRegister(gEditingSceneViewControllers, controller);
 	SokoEditorPublishUsesBottomLayout([self editingSceneViewControllerUsesBottomLayout:controller]);
 	[self relayoutAnimated:NO];
@@ -194,6 +197,10 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 		if (controller.viewIfLoaded.window) candidate = controller;
 	}
 	return candidate;
+}
+
++ (void)setInitialRowOffset:(NSNumber *)offset forEditingSceneViewController:(PREditingSceneViewController *)controller {
+	objc_setAssociatedObject(controller, kSokoEditorRowOffsetKey, offset, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 }
 
 + (void)setInitialComplicationLayout:(id)layout forEditingSceneViewController:(PREditingSceneViewController *)controller {

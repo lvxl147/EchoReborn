@@ -17,6 +17,7 @@
 + (PREditingSceneViewController *)editingSceneViewControllerForComplicationContainerViewController:(UIViewController *)container;
 
 + (void)setInitialComplicationLayout:(id)layout forEditingSceneViewController:(PREditingSceneViewController *)controller;
++ (void)setInitialRowOffset:(NSNumber *)offset forEditingSceneViewController:(PREditingSceneViewController *)controller;
 + (BOOL)editingSceneViewControllerUsesBottomLayout:(PREditingSceneViewController *)controller;
 + (void)setUsesBottomLayout:(BOOL)usesBottomLayout forEditingSceneViewController:(PREditingSceneViewController *)controller;
 + (NSNumber *)bottomLayoutValueForDismissingEditor;
