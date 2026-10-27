@@ -904,3 +904,8 @@
 ## 1.2.1-70（1002170）· 诊断通道改 cfprefsd 键（文件写不进）
 - 1.2.1-69 实锤：iOS 17.2.1 + rootless 下 SpringBoard 写 /var/mobile/Library/Logs/EchoReborn 被沙箱挡（目录能建、echoreborn.log 0 字节），Soko 文件日志同样写不进去。
 - 改为写 CFPreferences 独立键 com.strive.echoreborn.preferences / ERSokoMirror（120 行 / 20KB 环），不与 ERLogMirror 的 60 行环抢行；SSH 拉 plist 的 ERSokoMirror 即可读全部判定行。
+
+## 1.2.1-71（1002171）· 定位 PosterBoard 侧：双域日志 + isSupported 预演
+- 现象补充（用户）：原版 Soko 在底部态进编辑态，组件也在底部；我们这版进编辑态却回到顶部 —— 指向 PosterBoard 侧 Soko 完全没干活。
+- 双域日志：SokoFileLog 除写 com.strive.echoreborn.preferences 外，再写进程自己的 bundleId 域（PosterBoard 写不进宿主域，但一定写得进自己的域），SSH 读 com.apple.PosterBoard.plist 的 ERSokoMirror 即可。
+- SpringBoard 里预演 PosterBoard 的 isSupported 五项：nativeBottom（PRComplicationContainerViewController setWidgetsUseBottomLayout:）/ rowFrame / reticle / frameRect / frameVariant（后四项在 CSProminentLayoutController）。哪一项为 0 就是 PosterBoard 侧整段跳过的原因。

@@ -13,6 +13,37 @@ static NSString *const kSokoLogKey = @"ERSokoMirror";
 static const NSUInteger kSokoLogRingLines = 120;
 static const NSUInteger kSokoLogRingBytes = 20 * 1024;
 
+// 1.2.1-71 · 双域写入。PosterBoard 写不了 com.strive.echoreborn.preferences（实测
+// SpringBoard 的该域可写、PosterBoard 的完全没出现），但每个进程都一定写得进
+// **自己的 bundleId 域**。所以同时写 own-domain，SSH 读
+// /var/mobile/Library/Preferences/<bundleId>.plist 就能拿到 PosterBoard 的判定。
+static void SokoAppendToSuite(NSString *suiteName, NSString *keyName, NSString *line) {
+	CFStringRef suite = (__bridge CFStringRef)suiteName;
+	CFStringRef key = (__bridge CFStringRef)keyName;
+
+	NSMutableArray<NSString *> *lines = nil;
+	CFPropertyListRef existing = CFPreferencesCopyAppValue(key, suite);
+	if (existing) {
+		if (CFGetTypeID(existing) == CFArrayGetTypeID()) {
+			lines = [(__bridge NSArray *)existing mutableCopy];
+		}
+		CFRelease(existing);
+	}
+	if (!lines) lines = [NSMutableArray array];
+
+	[lines addObject:line];
+	while (lines.count > kSokoLogRingLines) [lines removeObjectAtIndex:0];
+	while (lines.count > 1) {
+		NSUInteger bytes = 0;
+		for (NSString *entry in lines) bytes += entry.length + 1;
+		if (bytes <= kSokoLogRingBytes) break;
+		[lines removeObjectAtIndex:0];
+	}
+
+	CFPreferencesSetAppValue(key, (__bridge CFPropertyListRef)lines, suite);
+	CFPreferencesAppSynchronize(suite);
+}
+
 void SokoFileLog(NSString *format, ...) {
 	va_list args;
 	va_start(args, format);
@@ -32,31 +63,14 @@ void SokoFileLog(NSString *format, ...) {
 	                  NSProcessInfo.processInfo.processName,
 	                  message];
 
-	CFStringRef suite = (__bridge CFStringRef)kSokoLogSuite;
-	CFStringRef key = (__bridge CFStringRef)kSokoLogKey;
-
 	@try {
-		NSMutableArray<NSString *> *lines = nil;
-		CFPropertyListRef existing = CFPreferencesCopyAppValue(key, suite);
-		if (existing) {
-			if (CFGetTypeID(existing) == CFArrayGetTypeID()) {
-				lines = [(__bridge NSArray *)existing mutableCopy];
-			}
-			CFRelease(existing);
-		}
-		if (!lines) lines = [NSMutableArray array];
+		SokoAppendToSuite(kSokoLogSuite, kSokoLogKey, line);
 
-		[lines addObject:line];
-		while (lines.count > kSokoLogRingLines) [lines removeObjectAtIndex:0];
-		while (lines.count > 1) {
-			NSUInteger bytes = 0;
-			for (NSString *entry in lines) bytes += entry.length + 1;
-			if (bytes <= kSokoLogRingBytes) break;
-			[lines removeObjectAtIndex:0];
+		// own-domain 副本：PosterBoard / PosterKit 靠这条通道留下证据
+		NSString *ownSuite = NSBundle.mainBundle.bundleIdentifier;
+		if (ownSuite.length && ![ownSuite isEqualToString:kSokoLogSuite]) {
+			SokoAppendToSuite(ownSuite, kSokoLogKey, line);
 		}
-
-		CFPreferencesSetAppValue(key, (__bridge CFPropertyListRef)lines, suite);
-		CFPreferencesAppSynchronize(suite);
 	} @catch (__unused NSException *exception) {
 	}
 }

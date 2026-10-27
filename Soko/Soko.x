@@ -644,6 +644,23 @@ static void SokoInitPoster(void) {
 		ERSokoLog(@"SOKO-CAP proc=%@ model=%d dock=%d poster=0",
 		          bundleIdentifier, (int)modelSupported, (int)dockSupported);
 		SokoFileLog(@"CAP springboard model=%d dock=%d", (int)modelSupported, (int)dockSupported);
+
+		// 1.2.1-71 · 在 SpringBoard 里预演 PosterBoard 的 SokoPosterLayout isSupported：
+		// 用的是同一批私有类，哪一条不满足就直接点名（PosterBoard 侧写不进日志时，
+		// 这一行就是唯一判据）。
+		{
+			Class containerCls = NSClassFromString(@"PRComplicationContainerViewController");
+			Class layoutCls = NSClassFromString(@"CSProminentLayoutController");
+			BOOL nativeBottom = [containerCls instancesRespondToSelector:NSSelectorFromString(@"setWidgetsUseBottomLayout:")];
+			BOOL rowFrame = [layoutCls instancesRespondToSelector:NSSelectorFromString(@"_frameForElement:withBoundingRect:variant:")];
+			BOOL reticle = [layoutCls instancesRespondToSelector:NSSelectorFromString(@"complicationRowElementEditingReticleFrameWithBoundingRect:")];
+			BOOL frameRect = [layoutCls instancesRespondToSelector:NSSelectorFromString(@"frameForElements:variant:withBoundingRect:")];
+			BOOL frameVariant = [layoutCls respondsToSelector:NSSelectorFromString(@"frameForElements:variant:")];
+			SokoFileLog(@"CAP-SEL container=%@ layout=%@ nativeBottom=%d rowFrame=%d reticle=%d frameRect=%d frameVariant=%d",
+			            NSStringFromClass(containerCls), NSStringFromClass(layoutCls),
+			            (int)nativeBottom, (int)rowFrame, (int)reticle, (int)frameRect, (int)frameVariant);
+		}
+
 		if (dockSupported) SokoInitDock();
 		return;
 	}
