@@ -1152,3 +1152,21 @@ PREditorRootViewController 的 cancelButton（方法表里有 setCancelButton: �
 (adjusted - stock)；已经跟着走的视图不动（避免二次位移）。26=delta 27=命中数 28=新命中。
 **④ 壁纸键**：identityPathComponent 也带版本号（…/configurations/<UUID>**/versions/99**，
 每次保存 99→100→101），正则补上 `/versions/N`。
+
+## 1.2.1-105（1002205）· 取消逻辑回到原版机制：只写归档，不写偏好
+**原版 Soko 是怎么做到"取消不生效"的**（读了 soko_new/Tweak 上游源码）：
+它**根本没有"完成/取消"这两个概念**。`PRPosterConfiguredProperties setComplicationLayout:`
+里只把值挂到 layout 对象上（`setBottomLayoutValue:`），`encodeComplicationLayout:` 再
+encode 进归档；**"完成=系统落盘、取消=系统丢弃"完全由系统自己保证**，插件从不写偏好。
+我们为了"编辑器里能看见移动"而在滑动时立刻写偏好（1.2.1-104），等于绕过了这套机制
+→ 取消也保存。
+**本版改动**：
+1. `setComplicationLayout:` 只 `setRowOffset:forComplicationLayout:`，不再
+   `SokoEditorRequestRowOffset`（不写偏好）。编辑器内可见移动仍由会话值提供。
+2. SpringBoard 只在**读到的归档值发生变化**时才写偏好 + 每壁纸记录
+   （ARCHIVE-COMMIT，trace 25）。取消 → 归档不变 → 偏好不动；只拖滑块 → 归档不变 →
+   也不会被归档顶回去（1.2.1-83 那个 bug 的正是这一条）。基线用 gLastArchiveValue，
+   首次只读不写。
+3. 虚线框：PREditorRootViewController 的 loadView 钩子在 17.2.1 上零触发（trace 24 全零），
+   补 viewDidLoad 入口，并把查找/平移**同时挂到编辑场景 VC**（code 4 已证明必然注册）。
+4. 编辑器关闭发 trace 30 作为时间标记（不再用于回滚判定）。

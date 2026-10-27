@@ -20,6 +20,8 @@ FOUNDATION_EXPORT NSString *const SokoSetRowOffsetRequestNotification;
 // 1.2.1-104 · 编辑会话基线（进编辑器时的值）+ 取消回滚
 FOUNDATION_EXPORT NSString *const SokoEditorBaselineNotification;
 FOUNDATION_EXPORT NSString *const SokoEditorRevertNotification;
+// 1.2.1-105 · 编辑器关闭（海报进程 → SpringBoard），用来判定"这次到底存没存"
+FOUNDATION_EXPORT NSString *const SokoEditorClosedNotification;
 
 static const CGFloat kSokoDockBottomToButtonCenter = 45.0;
 
@@ -50,5 +52,6 @@ FOUNDATION_EXPORT void SokoEditorRequestRowOffset(CGFloat offset);
 void SokoEditorRequestBaseline(CGFloat offset);
 CGFloat SokoRowOffsetBaselineValue(void);
 void SokoEditorRequestRevert(void);
+void SokoEditorRequestClosed(void);
 // SpringBoard 侧读取编辑器最后一次请求的值（NAN 表示没有）
 FOUNDATION_EXPORT CGFloat SokoRowOffsetRequestValue(void);

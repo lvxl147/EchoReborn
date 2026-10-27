@@ -65,7 +65,7 @@ static const void *kSokoWatchedButtonKey = &kSokoWatchedButtonKey;
 //   用 transform 平移 (adjusted - stock)。已经跟着走的视图不动（避免二次位移）。
 static NSHashTable<UIView *> *gReticleViews;
 
-+ (void)installCancelButtonWatcher:(PREditorRootViewController *)controller {
++ (void)installCancelButtonWatcher:(UIViewController *)controller {
 	if (!controller || !controller.isViewLoaded) return;
 
 	for (NSString *key in @[@"cancelButton", @"_cancelButton", @"cancelBarButtonItem"]) {
@@ -86,7 +86,7 @@ static NSHashTable<UIView *> *gReticleViews;
 	SokoTrace(24, 0);
 }
 
-+ (void)huntReticleViewsForEditorRootViewController:(PREditorRootViewController *)controller {
++ (void)huntReticleViewsForHostViewController:(UIViewController *)controller {
 	UIView *root = controller.viewIfLoaded;
 	if (!root || !root.window) return;
 
@@ -120,8 +120,8 @@ static NSHashTable<UIView *> *gReticleViews;
 	}
 }
 
-+ (void)updateReticleViewsForEditorRootViewController:(PREditorRootViewController *)controller {
-	[self huntReticleViewsForEditorRootViewController:controller];
++ (void)updateReticleViewsForHostViewController:(UIViewController *)controller {
+	[self huntReticleViewsForHostViewController:controller];
 
 	CGFloat delta = [SokoPosterLayout editingRowDelta];
 	if (isnan(delta)) return;
@@ -163,8 +163,10 @@ static NSHashTable<UIView *> *gReticleViews;
 + (void)update {
 	for (PREditorRootViewController *controller in gEditorRootViewControllers.allObjects) {
 		[self updateReticleForEditorRootViewController:controller];
-		// 1.2.1-104 · 真正的"让虚线框跟着走"：平移那个停在原位的 UIView
-		[self updateReticleViewsForEditorRootViewController:controller];
+		// 1.2.1-105 · 真正的"让虚线框跟着走"：平移那个停在原位的 UIView。
+		//   注意 PREditorRootViewController loadView 钩子在 iOS 17.2.1 上**一次都没触发**
+		//   （trace 24 全为零），所以这里必须再挂到已确认会注册的编辑场景 VC 上。
+		[self updateReticleViewsForHostViewController:controller];
 		[self updateLookControlsForEditorRootViewController:controller];
 	}
 

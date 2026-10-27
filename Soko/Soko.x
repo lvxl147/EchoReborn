@@ -19,6 +19,11 @@ static NSString *SokoHelloNameForBundleIdentifier(NSString *bundleIdentifier) {
 static NSString *gActivePosterKey = nil;
 // 1.2.1-104 · 编辑会话基线（进编辑器那一刻的生效偏移），取消时回滚到它
 static NSNumber *gEditBaselineOffset;
+// 1.2.1-105 · 刚提交的待定值 + 是否在等"存没存"的判定
+// 1.2.1-105 · 上一次读到的归档值。只有它变化才说明"系统刚保存了一份新 layout"。
+static NSNumber *gLastArchiveValue;
+
+
 
 // 1.2.1-103 · 去掉键尾的版本号（_98-0 / /98-0）。
 //   实测 `stablePersistenceIdentifier` 是
@@ -199,6 +204,24 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	return allowed;
 }
 
+// 1.2.1-105 · 统一写偏好（soko_widgetOffset + 当前壁纸的独立记录）并立即生效
+static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
+	NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:@"com.strive.echoreborn.preferences"];
+	[defaults setDouble:value forKey:@"soko_widgetOffset"];
+	if (gActivePosterKey) {
+		NSMutableDictionary *map = SokoPosterOffsetMap();
+		map[gActivePosterKey] = @(value);
+		[defaults setObject:map forKey:@"soko_offsets_by_poster"];
+	}
+	[defaults synchronize];
+	[SokoDockCoordinator setActiveRowOffset:@(value)];
+	SokoDockCoordinator *coordinator = SokoCoordinator();
+	[coordinator setEnabled:YES];
+	[coordinator refresh];
+	notify_post("com.strive.echoreborn/ReloadPrefs");
+	if (why) SokoFileLog(@"%@ %.1f", why, value);
+}
+
 %group SokoDock
 
 %hook CSCoverSheetViewController
@@ -288,6 +311,7 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 	BOOL usesBottomLayout;
 	NSDictionary *liquidAssInfo = SokoLiquidAssUserInfoForConfiguration(configuration);
+	NSNumber *archiveOffset = nil;
 	if (SokoLiquidAssClockEnabled() && SokoLiquidAssUserInfoIsActive(liquidAssInfo)) {
 		usesBottomLayout = SokoLiquidAssUserInfoUsesBottomLayout(liquidAssInfo);
 	} else {
@@ -300,9 +324,34 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 		//   这条回流（ARCHIVE-MIRROR）就是"时好时坏"的元凶：归档里残留着上一次
 		//   编辑会话的 -507 / 0，每次锁屏布局都把滑块顶掉，于是 eff 在
 		//   -431.7 → 0 → -507 → 0 之间跳。真源现在是 soko_offsets_by_poster。
-		NSNumber *archiveOffset = [SokoPosterModel rowOffsetForComplicationLayout:layout];
-		if (archiveOffset) SokoFileLog(@"ARCHIVE-READ v=%.1f (只读，不回流)", archiveOffset.doubleValue);
+		archiveOffset = [SokoPosterModel rowOffsetForComplicationLayout:layout];
 		usesBottomLayout = [SokoPosterModel complicationLayoutUsesBottomLayout:layout];
+	}
+
+	// 1.2.1-105 · **回到原版 Soko 的机制**：归档变化 = 系统真的保存了 = "完成"。
+	//
+	//   上游 Soko 里根本没有"完成/取消"这两个概念 —— 它只是把值写进 layout 归档
+	//   （encodeComplicationLayout 里 encode 一个 BOOL），靠"系统保存才落盘、
+	//   取消就丢弃"由系统自己保证语义。我们之前为了"编辑器里能看见移动"而
+	//   在滑动时立刻写偏好，等于绕过了这套机制 → 取消也保存。
+	//
+	//   现在：滑动只改会话值（编辑器内可见），落盘完全交给系统；
+	//   SpringBoard 只在"读到的归档值发生了变化"时才写偏好 + 每壁纸记录。
+	//   取消 → 归档不变 → 偏好不动 ✅
+	//   完成 → 归档变 → 写偏好 ✅
+	//   只拖滑块 → 归档不变 → 不会被归档顶回去 ✅（这正是 1.2.1-83 那个 bug）
+	if (archiveOffset) {
+		double archived = archiveOffset.doubleValue;
+		if (gLastArchiveValue == nil) {
+			gLastArchiveValue = @(archived);   // 首次只记基线，不写偏好
+			SokoFileLog(@"ARCHIVE-BASELINE v=%.1f", archived);
+		} else if (fabs(gLastArchiveValue.doubleValue - archived) > 0.5) {
+			gLastArchiveValue = @(archived);
+			SokoWriteOffsetToPrefs(archived, @"ARCHIVE-COMMIT");
+			SokoTrace(25, 1);
+		} else {
+			SokoFileLog(@"ARCHIVE-READ v=%.1f (未变化，不写偏好)", archived);
+		}
 	}
 
 	// 1.2.1-83 · 滑块是唯一渲染来源；"调整组件位置"关闭则整段不接管。
@@ -476,6 +525,15 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	[SokoEditorChrome registerEditorRootViewController:self];
 }
 
+// 1.2.1-105 · iOS 17.2.1 上 loadView 钩子**一次都没触发**（trace 24 全为零，
+// 取消按钮与虚线框查找因此都没跑）。补一个 viewDidLoad 入口，谁先到算谁。
+- (void)viewDidLoad {
+	%orig;
+
+	SokoTrace(24, 2);
+	[SokoEditorChrome registerEditorRootViewController:self];
+}
+
 %end
 
 %hook PREditingSceneViewController
@@ -498,6 +556,12 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 
 - (void)viewDidDisappear:(BOOL)animated {
 	%orig;
+
+	// 1.2.1-105 · 编辑器关闭 → 通知 SpringBoard 做"到底存没存"的判定。
+	//   这是取消回滚的触发点：滑动必须立即提交（否则编辑器里看不到移动），
+	//   所以"取消"只能靠关闭后回退到基线。
+	SokoEditorRequestClosed();
+	SokoTrace(30, 1);
 
 	// 1.2.1-99 · 会话收尾：编辑器完全消失 3 秒后清掉会话值，避免残留值被之后
 	// 任何一次 setComplicationLayout:（与本次编辑无关的）当成"完成"提交出去。
@@ -709,14 +773,14 @@ static BOOL SokoAllowsAddGestureOverRow(BOOL (^orig)(void)) {
 	// 1.2.1-99 · 提交条件：本次会话真的滑动过。没滑动（含"什么都没改就点完成"）
 	// 不写任何东西；取消时只要系统不调这个方法就天然不保存。
 	if (layout && [SokoPosterLayout editingRowOffsetDirty] && !isnan(editingOffset)) {
-		// 1.2.1-104 · **回到"在这里提交"**：1.2.1-103 把提交挪到
-		//   PRMutablePosterConfiguration storeComplicationLayout:error:，结果 trace 21
-		//   一次都没出现（该类在 iOS 17.2.1 上一共只有 14 个方法，列表里看不到
-		//   storeComplicationLayout:）→ "点击完成又失效了"。
-		//   所以提交仍放在这里（1.2.1-102 用户已确认有效），"取消不保存"改由
-		//   取消按钮 → EDITOR-REVERT 回滚解决。
+		// 1.2.1-105 · **对齐原版 Soko**：这里只把值挂到 layout 上，交给系统落盘，
+		//   **不写偏好**。
+		//   （1.2.1-103 试过 PRMutablePosterConfiguration storeComplicationLayout:error:，
+		//    trace 21 零命中 —— 该类只有 14 个方法，列表里没有它；
+		//    1.2.1-104 试过在这里直接写偏好 → 取消也保存。）
+		//   完成 → 系统保存这份 layout → SpringBoard 读到归档变化 → 写偏好；
+		//   取消 → 系统丢弃 → 归档不变 → 偏好不动。
 		[SokoPosterModel setRowOffset:@(editingOffset) forComplicationLayout:layout];
-		SokoEditorRequestRowOffset(editingOffset);
 		// 17 = 命中并挂上值（payload = 值，仅作证据）
 		static CFTimeInterval lastCommitLog = 0.0;
 		CFTimeInterval nowCommit = CACurrentMediaTime();

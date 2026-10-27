@@ -10,6 +10,7 @@ NSString *const SokoRowOffsetIsSetDidChangeNotification = @"moe.waru.soko.dock.r
 NSString *const SokoSetRowOffsetRequestNotification = @"com.strive.echoreborn.soko.setrowoffset";
 NSString *const SokoEditorBaselineNotification = @"com.strive.echoreborn.soko.baseline";
 NSString *const SokoEditorRevertNotification = @"com.strive.echoreborn.soko.revert";
+NSString *const SokoEditorClosedNotification = @"com.strive.echoreborn.soko.closed";
 NSString *const SokoWidgetsEnabledDidChangeNotification = @"com.strive.echoreborn.soko.widgetsenabled";
 
 static const double kSokoInsetScale = 64.0;
@@ -219,6 +220,10 @@ CGFloat SokoRowOffsetBaselineValue(void) {
 
 void SokoEditorRequestRevert(void) {
 	SokoWriteState(SokoEditorRevertNotification, 1);
+}
+
+void SokoEditorRequestClosed(void) {
+	SokoWriteState(SokoEditorClosedNotification, 1);
 }
 
 void SokoDockPublishWidgetsEnabled(BOOL enabled) {
