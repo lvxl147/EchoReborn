@@ -134,7 +134,7 @@ static NSString *ERLogTimestamp(void);   // 1.2.1-18 · 镜像行补时间戳用
 static NSString *ERCompactStack(NSUInteger maxFrames);   // 1.2.1-64 · 压栈短格式
 // 1.2.1-64 · 翻页生命周期专用环（见下方 ERPagerTrace 定义：ERPagerTrace 键，160 行/16KB）。
 // 因为 14600 行附近的看门狗 C 函数要调用它，必须先声明。
-void ERPagerTrace(NSString *line);
+static void ERPagerTrace(NSString *line);
 
 // 1.0.6-10（第 1 条）：热路径诊断的最小间隔闸门。
 //
@@ -4152,7 +4152,7 @@ static NSUInteger gERPageCount = 1;
 // 1.2.1-64 · 缓落抑制窗口：落位后 1.5s 内，CCUI 对模块集合的动画滚动
 // 强制转瞬时（setContentOffset:animated: 覆写）—— 动画拉扯与零位锚的
 // 合成轨迹就是缓落（ANIMCHAIN/DROOP 双实锤）。
-CGFloat gERDroopSuppressUntil = 0.0;
+static CGFloat gERDroopSuppressUntil = 0.0;
 // 1.2.1-64 · CALayer addAnimation 拦截（缓落封口战）：CCUI 每轮布局对模块
 // 集合的 layer **显式** addAnimation（bounds）——显式动画不走 actionForLayer
 // 查询（-60 关卡无效）、绕过 setContentOffset（-58/-59 无效）、清了会重挂
@@ -6270,12 +6270,21 @@ static NSString *ERLogTimestamp(void) {
 // 可见性/自愈），批量诊断一律不进；③ 160 行容量足够盖住 2-3 轮完整复现。
 // 调用点集中在：pageIndicatorTouchDown/Tapped/Panned、pagePanned、begin/
 // update/finishInteractive、animatePageSettle、setCurrentPage、reconcile。
-void ERPagerTrace(NSString *line) {
+static void ERPagerTrace(NSString *line) {
     if (!gERLoggingEnabled || !line.length) return;
     NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
     ERMirrorTraceLineIn(stamped);
 }
 
+
+// 1.2.1-65 · 桥接：供 ERAddAnimHook.x（纯 ObjC，无 Logos）访问抑制窗口与
+// 诊断环——static 变量不外泄，函数句柄外泄。
+CGFloat ERDroopSuppressRemaining(void) {
+    return gERDroopSuppressUntil - CACurrentMediaTime();
+}
+void ERDropWatchNote(NSString *line) {
+    ERPagerTrace(line);
+}
 
 
 
