@@ -1,4 +1,5 @@
 #import "SokoQuickActions.h"
+#import "SokoPreferences.h"
 
 static BOOL SokoButtonCenterYInQuickActionsView(CSQuickActionsView *quickActions, CGFloat *centerY) {
 	UIView *button = nil;
@@ -27,6 +28,7 @@ BOOL SokoQuickActionButtonsSupported(void) {
 }
 
 BOOL SokoQuickActionButtonCenterY(CSCoverSheetView *coverSheetView, CGFloat *centerY) {
+	if (!SokoPrefQuickActionsEnabled()) return NO;   // 1.2.1-67 · 设置开关：关 → 按钮回系统原位
 	if (!SokoQuickActionButtonsSupported()) return NO;
 
 	CSQuickActionsView *quickActions = [coverSheetView respondsToSelector:@selector(quickActionsView)] ? coverSheetView.quickActionsView : nil;
