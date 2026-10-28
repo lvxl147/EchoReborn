@@ -118,6 +118,10 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 
 	if (CGRectIsNull(row) || CGRectIsNull(stockRow)) return frame;
 
+	// 1.2.1-118 · 记录"delta 之前"的原始框（= 系统认为虚线框该在的位置），
+	//   自绘虚线框直接用它当 frame（窗口坐标，顶部 212 / 底部 719）
+	gSystemReticleRect = frame;
+
 	frame.origin.y += CGRectGetMinY(row) - CGRectGetMinY(stockRow);
 
 	SokoTrace(63, (long)llround(frame.origin.y));
@@ -238,6 +242,10 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	SokoEditorPublishUsesBottomLayout([self editingSceneViewControllerUsesBottomLayout:controller]);
 	[self relayoutAnimated:NO];
 	return YES;
+}
+
++ (NSArray<UIViewController *> *)complicationContainerViewControllers {
+	return gComplicationContainerViewControllers.allObjects ?: @[];
 }
 
 + (NSArray<PREditingSceneViewController *> *)editingSceneViewControllers {

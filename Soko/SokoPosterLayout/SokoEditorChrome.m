@@ -260,6 +260,11 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 
 	for (PREditingSceneViewController *controller in [SokoPosterLayout editingSceneViewControllers]) {
 		[self updateAddGestureForEditingSceneViewController:controller];
+		// 1.2.1-118 · 自绘虚线框 + 隐藏系统的框
+		if (controller.viewIfLoaded.window) {
+			[self updateDashedBorderForWindow:controller.viewIfLoaded.window];
+			[self hideSystemBorderForWindow:controller.viewIfLoaded.window];
+		}
 		// 1.2.1-105 · 虚线框查找/平移挂在这里（编辑场景 VC 已证明必然注册，code 4）。
 		//   上一版这行被误插进了上面那个永不执行的编辑器根循环，所以 26/27/28 全为零。
 		[self updateReticleViewsForHostViewController:controller];
@@ -508,6 +513,98 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 		}
 
 		for (UIView *sub in view.subviews) [stack addObject:sub];
+	}
+}
+
+
+#pragma mark - 1.2.1-118 · 自绘虚线框（系统的在 iOS 17.2.1 上不受控）
+
+static UIView *gSokoDashedBorderView;
+static CAShapeLayer *gSokoDashedBorderLayer;
+
+static BOOL SokoIsInsideComplicationContainer(UIView *view) {
+	for (UIViewController *container in [SokoPosterLayout complicationContainerViewControllers]) {
+		for (UIView *ancestor = view; ancestor; ancestor = ancestor.superview) {
+			if (ancestor == container.viewIfLoaded) return YES;
+		}
+	}
+	return NO;
+}
+
++ (void)updateDashedBorderForWindow:(UIWindow *)window {
+	BOOL hasSession = [SokoPosterLayout editingSceneViewControllers].count > 0;
+	if (!hasSession || !window) {
+		if (gSokoDashedBorderView.superview) [gSokoDashedBorderView removeFromSuperview];
+		return;
+	}
+
+	CGRect rect = [SokoPosterLayout systemReticleRect];
+	if (CGRectGetWidth(rect) < 1.0 || CGRectGetHeight(rect) < 1.0) return;
+
+	if (!gSokoDashedBorderView) {
+		UIView *view = [[UIView alloc] initWithFrame:rect];
+		view.userInteractionEnabled = NO;
+		view.backgroundColor = [UIColor clearColor];
+
+		CAShapeLayer *layer = [CAShapeLayer layer];
+		layer.fillColor = [UIColor clearColor].CGColor;
+		layer.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.85].CGColor;
+		layer.lineWidth = 2.0;
+		layer.lineDashPattern = @[@6, @5];
+		[view.layer addSublayer:layer];
+
+		gSokoDashedBorderView = view;
+		gSokoDashedBorderLayer = layer;
+	}
+
+	if (!gSokoDashedBorderView.window) [window addSubview:gSokoDashedBorderView];
+	[window bringSubviewToFront:gSokoDashedBorderView];
+
+	if (!CGRectEqualToRect(gSokoDashedBorderView.frame, rect)) {
+		gSokoDashedBorderView.frame = rect;
+		CGRect bounds = gSokoDashedBorderView.bounds;
+		gSokoDashedBorderLayer.frame = bounds;
+		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:18.0];
+		gSokoDashedBorderLayer.path = path.CGPath;
+	}
+	SokoTrace(50, (long)llround(CGRectGetMinY(rect)));
+}
+
++ (void)hideSystemBorderForWindow:(UIWindow *)window {
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect anchor = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(anchor)) return;
+
+	CGFloat w = CGRectGetWidth(anchor), h = CGRectGetHeight(anchor), mid = CGRectGetMidY(anchor);
+	if (w < 1.0 || h < 1.0) return;
+
+	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
+	NSInteger visited = 0, hidden = 0;
+
+	while (stack.count && visited < 4000) {
+		UIView *view = stack.lastObject;
+		[stack removeLastObject];
+		visited++;
+
+		if (view != window && !SokoIsInsideComplicationContainer(view)) {
+			CGRect rect = [view convertRect:view.bounds toView:window];
+			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.30 &&
+			              fabs(CGRectGetHeight(rect) - h) < h * 0.40;
+			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 45.0;
+			if (sizeOK && parkedAtStock && view.alpha > 0.01) {
+				view.alpha = 0.0;
+				hidden++;
+			}
+		}
+
+		for (UIView *subview in view.subviews) [stack addObject:subview];
+	}
+
+	static CFTimeInterval lastHideLog = 0.0;
+	CFTimeInterval nowHide = CACurrentMediaTime();
+	if (nowHide - lastHideLog > 1.0) {
+		lastHideLog = nowHide;
+		SokoTrace(51, hidden);
 	}
 }
 

@@ -14,6 +14,8 @@
 + (void)registerComplicationContainerViewController:(UIViewController *)controller;
 + (BOOL)registerEditingSceneViewController:(PREditingSceneViewController *)controller;
 + (NSArray<PREditingSceneViewController *> *)editingSceneViewControllers;
+// 1.2.1-118 · 已登记的组件容器 VC（用于把"组件内容"从隐藏集合里排除掉）
++ (NSArray<UIViewController *> *)complicationContainerViewControllers;
 + (PREditingSceneViewController *)editingSceneViewControllerForComplicationContainerViewController:(UIViewController *)container;
 
 + (void)setInitialComplicationLayout:(id)layout forEditingSceneViewController:(PREditingSceneViewController *)controller;

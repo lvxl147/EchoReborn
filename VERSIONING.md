@@ -1277,3 +1277,14 @@ PREditingSceneViewController 一直正常，因为它在我们加载前就已加
 修复：该类改用运行时手动 hook（class_getInstanceMethod + method_setImplementation），
 SokoInitEditorRoot 在类真正加载后才换 IMP，可无限重试（BOOL 门）。
 调用点：SokoInitPoster 末尾 / dyld 回调 / 容器 viewDidLoad（code 3，必然时机）。
+
+## 1.2.1-118（1002218）· 自绘虚线框 + 隐藏系统框（用户已确认方案 B）
+iOS 17.2.1 的可见虚线框不受任何已知钩子控制（上游机制整体失效），用户拍板走自绘。
+- 补回 1.2.1-116 重写时弄丢的 `gSystemReticleRect = frame`（delta 之前的原始框，
+  即系统认为虚线框该在的位置，窗口坐标 212/719）——自绘框直接用它当 frame。
+- 自绘：UIView + CAShapeLayer，圆角 18、白色 85% 虚线（6/5）、线宽 2，
+  userInteractionEnabled=NO，挂在 window 上并置顶；frame 变化时重建 path。
+  50 = 自绘框当前 minY。
+- 隐藏系统框：扫描整窗口，凡「尺寸 ±30%/±40%、停在系统原位 ±45pt」且
+  **不在组件容器子树里**的视图一律 alpha=0（组件内容绝不碰）。51 = 本轮隐藏数。
+- 编辑会话结束后自绘框随 removeFromSuperview 移除。

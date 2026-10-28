@@ -8,6 +8,9 @@
 + (void)installCancelButtonWatcher:(PREditorRootViewController *)controller;
 // 1.2.1-110 · 每次系统布局完都补一次平移（否则会被系统的 layout 冲掉）
 + (void)reapplyReticleTransform;
+// 1.2.1-118 · 自绘虚线框 + 隐藏系统框
++ (void)updateDashedBorderForWindow:(UIWindow *)window;
++ (void)hideSystemBorderForWindow:(UIWindow *)window;
 // 1.2.1-94 · 给编辑器"完成/取消"按钮挂监听（按标题文字匹配，不依赖私有 selector）
 + (void)installEditorButtonWatchers:(PREditingSceneViewController *)controller;
 // 1.2.1-93 · 只读：全深度扫描编辑器视图树，把「尺寸≈组件行、纵向位置≈系统行」的视图类名回传
