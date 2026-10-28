@@ -94,9 +94,9 @@ static void SokoCollectDashedViews(UIView *view, NSMutableArray<UIView *> *out) 
 	if (!view) return;
 
 	CALayer *layer = view.layer;
-	if ([layer isKindOfClass:[CAShapeLayer class]] && layer.lineDashPattern.count) [out addObject:view];
+	if ([layer isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)layer).lineDashPattern.count) [out addObject:view];
 	for (CALayer *sub in layer.sublayers) {
-		if ([sub isKindOfClass:[CAShapeLayer class]] && sub.lineDashPattern.count) { [out addObject:view]; break; }
+		if ([sub isKindOfClass:[CAShapeLayer class]] && ((CAShapeLayer *)sub).lineDashPattern.count) { [out addObject:view]; break; }
 	}
 
 	for (UIView *subview in view.subviews) SokoCollectDashedViews(subview, out);
