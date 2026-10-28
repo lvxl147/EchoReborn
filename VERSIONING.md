@@ -1266,3 +1266,14 @@ SokoInitPoster 末尾主动调一次（类多半已加载），dyld 回调 SokoI
 reticleFrameByAdjustingFrame 恢复为上游 Soko 1.1.0 的原样实现（91-104 行），
 包括 `frame.origin.y += row.minY - stockRow.minY` 这一行 —— 1.2.1-102 我把它删了。
 60~63 探针保留。
+
+## 1.2.1-117（1002217）· 边框真凶（最终）：Logos 对懒加载类的钩子无效
+与上游逐文件 diff 后定位：Logos 的 `%hook X` 生成
+`static Class _logos_static_class$X = objc_getClass("X")` —— **镜像加载时就求值**。
+PREditorRootViewController 属于 PosterBoard 主程序、懒加载，我们的 dylib 加载时它
+还不存在 → 静态引用恒为 nil → %init「成功」（24=3）也只是对 nil 挂钩。
+PREditingSceneViewController 一直正常，因为它在我们加载前就已加载。
+这也统一解释了：24 从未出现 1/2、48=0、31~38 全零、取消按钮找不到。
+修复：该类改用运行时手动 hook（class_getInstanceMethod + method_setImplementation），
+SokoInitEditorRoot 在类真正加载后才换 IMP，可无限重试（BOOL 门）。
+调用点：SokoInitPoster 末尾 / dyld 回调 / 容器 viewDidLoad（code 3，必然时机）。

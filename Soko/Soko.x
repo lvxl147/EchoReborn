@@ -863,54 +863,58 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 
 %end
 
-// 1.2.1-114 · **这才是边框十几个版本不动的真凶**。
-//   上游 Soko 的整条边框链路都压在 PREditorRootViewController 上：
-//     registerEditorRootViewController → updateReticleForEditorRootViewController
-//     → [controller updateReticleViewFrames]（系统自己重摆框）
-//     → 内部调 complicationRowElementEditingReticleFrameWithBoundingRect:（我们 hook 的）
-//   但 PREditorRootViewController 属于 PosterBoard 的 UI 层，**懒加载**——%ctor 里
-//   %init(SokoPoster) 那一刻它还不存在，Logos 的 hook 静默落空（trace 24 从头到尾
-//   都是 0 就是铁证）。于是 registerEditorRootViewController 一次都没被调过，
-//   updateReticleViewFrames 也从来没人调，边框自然不动。
-//   解法：单独成组，等类真正加载后再 %init（dyld 回调 + 主动探测双保险）。
-%group SokoEditorRoot
-%hook PREditorRootViewController
+// 1.2.1-117 · **边框不动的真凶（最终版）**：Logos 的 %hook 会生成
+//   `static Class _logos_static_class$X = objc_getClass("X")` 这种**镜像加载时就求值**
+//   的静态类引用。PREditorRootViewController 属于 PosterBoard 主程序、懒加载，
+//   我们的 dylib 加载时它还不存在 → 这个静态引用永远是 nil → %init 再"成功"也是
+//   对 nil 挂钩（24=3 就是这么来的，钩子看起来装了，实际挂在 nil 上）。
+//   PREditingSceneViewController 之所以一直正常，是因为它在我们加载前就已加载。
+//   解法：对这个类放弃 Logos，改用运行时手动 hook（类真正加载后再换 IMP）。
+static IMP gSokoOrigEditorRootLoadView;
+static IMP gSokoOrigEditorRootViewDidLoad;
+static IMP gSokoOrigEditorRootViewDidLayoutSubviews;
 
-- (void)loadView {
-	%orig;
-
+static void SokoEditorRootLoadView(id self, SEL _cmd) {
+	if (gSokoOrigEditorRootLoadView) ((void (*)(id, SEL))gSokoOrigEditorRootLoadView)(self, _cmd);
 	SokoTrace(24, 1);
 	[SokoEditorChrome registerEditorRootViewController:self];
 }
 
-- (void)viewDidLoad {
-	%orig;
-
+static void SokoEditorRootViewDidLoad(id self, SEL _cmd) {
+	if (gSokoOrigEditorRootViewDidLoad) ((void (*)(id, SEL))gSokoOrigEditorRootViewDidLoad)(self, _cmd);
 	SokoTrace(24, 2);
 	[SokoEditorChrome registerEditorRootViewController:self];
 }
 
-- (void)viewDidLayoutSubviews {
-	%orig;
-
+static void SokoEditorRootViewDidLayoutSubviews(id self, SEL _cmd) {
+	if (gSokoOrigEditorRootViewDidLayoutSubviews) {
+		((void (*)(id, SEL))gSokoOrigEditorRootViewDidLayoutSubviews)(self, _cmd);
+	}
 	// 1.2.1-110 · 系统每次布局都会把框摆回原位，布局完立刻再平移一次
 	[SokoEditorChrome update];
 }
 
-%end
-%end
-
-// 1.2.1-115 · **不能用 dispatch_once**：第一次调用时类多半还没加载，once 一旦
-//   走完就永远不会再装了（1.2.1-114 的 trace 24 仍是 0 就是这个原因）。
-//   改成 BOOL 门：类存在且未装 → 装；否则下次再试。
-static BOOL gSokoEditorRootInstalled;
 static void SokoInitEditorRoot(void) {
 	if (gSokoEditorRootInstalled) return;
-	if (!objc_getClass("PREditorRootViewController")) return;
 
-	%init(SokoEditorRoot);
+	Class cls = objc_getClass("PREditorRootViewController");
+	if (!cls) return;
+
+	Method loadView = class_getInstanceMethod(cls, @selector(loadView));
+	Method viewDidLoad = class_getInstanceMethod(cls, @selector(viewDidLoad));
+	Method didLayout = class_getInstanceMethod(cls, @selector(viewDidLayoutSubviews));
+	if (!loadView || !viewDidLoad || !didLayout) return;
+
+	gSokoOrigEditorRootLoadView = method_getImplementation(loadView);
+	gSokoOrigEditorRootViewDidLoad = method_getImplementation(viewDidLoad);
+	gSokoOrigEditorRootViewDidLayoutSubviews = method_getImplementation(didLayout);
+
+	method_setImplementation(loadView, (IMP)SokoEditorRootLoadView);
+	method_setImplementation(viewDidLoad, (IMP)SokoEditorRootViewDidLoad);
+	method_setImplementation(didLayout, (IMP)SokoEditorRootViewDidLayoutSubviews);
+
 	gSokoEditorRootInstalled = YES;
-	SokoTrace(24, 3);   // 3 = 钩子这次真的装上了
+	SokoTrace(24, 3);   // 3 = 运行时钩子真的挂上了
 }
 
 static void SokoImageAdded(const struct mach_header *header, intptr_t slide) {
