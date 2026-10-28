@@ -1350,3 +1350,13 @@ iOS 17.2.1 的可见虚线框不受任何已知钩子控制（上游机制整体
    的拉锯递归；遍历加 400 次访问上限。
 4. ERNCApply 改为转发 ERSafeApply 并补全各调用点签名。
 -123 已回滚（设备当前 -122）；本版修复后再装机。
+
+## 1.2.1-125（1002225）· 修复 -124 通知中心开关的无限递归（用户 .ips 16:20:45 实锤）
+崩溃栈：setHidden: → ERNCConceal(内部 view.hidden = YES) → 又走被 hook 的
+setHidden: → 无限递归。**属性赋值会经过被 hook 的 setter**，而我把 conceal 调用
+加进了 setHidden:/setAlpha: 钩子里 —— 原作者只在 layoutSubviews/didMoveToWindow 里调。
+修复：钩子内**禁止属性赋值**，可见性一律用保存下来的原 IMP 直调（绕过消息发送）：
+- ERNCHdrApplyVisibility / ERNCCoApplyVisibility（两类各自的 IMP，分开传）
+- setHidden:/setAlpha: 钩子只透传参数（gERNCTextOn ? 强制值 : 原参数），不再调 conceal
+- 删除 ERNCConceal / ERNCTextMakeVisible / 无引用的 ERHideNCTextEnabled
+滑动解锁那条不涉及（只 hook layoutSubviews/didMoveToWindow，没 hook setHidden:）。

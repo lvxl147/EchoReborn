@@ -36580,7 +36580,6 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
 static NSString *const kERHideNCTextKey   = @"SystemEnhance.HideLockScreenNCText";
 static NSString *const kERHideSwipeKey    = @"SystemEnhance.HideSwipeToUnlockText";
 
-static BOOL ERHideNCTextEnabled(void)  { return ERPreferenceBool(kERHideNCTextKey, NO); }
 static BOOL ERHideSwipeTextEnabled(void) { return ERPreferenceBool(kERHideSwipeKey, NO); }
 
 // 1.2.1-124 · **安全替换（保命逻辑，来自 HideNCHeaders 的 HNCApplyMethod）**：
@@ -36637,53 +36636,40 @@ static void ERStartLockTextPrefTimer(void) {
     gERNCTextOn    = ERPreferenceBool(kERHideNCTextKey, NO);
 }
 
-// 恢复可见（开关关闭时用）。只动视觉三件套，accessibility 不乱写。
-static void ERNCTextMakeVisible(UIView *view) {
-    if (!view) return;
-    view.hidden = NO;
-    view.alpha = 1.0;
-    view.userInteractionEnabled = YES;
-    view.accessibilityElementsHidden = NO;
+// 1.2.1-125 · **钩子内禁止 view.hidden / view.alpha 属性赋值**（.ips 16:20:45 实锤：
+//   属性赋值会再次经过被 hook 的 setHidden: → 无限递归）。要改可见性只能用保存下来
+//   的原 IMP 直调，绕过消息发送；两个类各有自己的原 IMP，必须分开传。
+static void ERNCHdrApplyVisibility(UIView *self, BOOL conceal) {
+    if (gERNCOldHeaderHidden) ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, @selector(setHidden:), conceal);
+    if (gERNCOldHeaderAlpha)  ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, @selector(setAlpha:), conceal ? 0.0 : 1.0);
+    self.userInteractionEnabled = conceal ? NO : YES;
+    self.accessibilityElementsHidden = conceal;
 }
-
-#pragma mark 隐藏锁屏通知中心文字 · 分组头（HideNCHeaders 移植）
-
-static IMP gERNCOldHeaderHidden, gERNCOldHeaderAlpha, gERNCOldHeaderLayout,
-            gERNCOldHeaderToWindow, gERNCOldHeaderToSuperview;
-static IMP gERNCOldCoalescingHidden, gERNCOldCoalescingAlpha, gERNCOldCoalescingLayout,
-           gERNCOldCoalescingToWindow, gERNCOldCoalescingToSuperview;
-static IMP gERNCOldHeaderHeight, gERNCOldCoalescingHeight;
-static BOOL gERNCTextInstalled;
-
-// 隐藏是" applied 而非 reported"：hidden 视图不参与命中测试，无需额外处理
-static void ERNCConceal(UIView *view) {
-    view.hidden = YES;
-    view.alpha = 0.0;
-    view.userInteractionEnabled = NO;
-    view.accessibilityElementsHidden = YES;
+static void ERNCCoApplyVisibility(UIView *self, BOOL conceal) {
+    if (gERNCOldCoalescingHidden) ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, @selector(setHidden:), conceal);
+    if (gERNCOldCoalescingAlpha)  ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, @selector(setAlpha:), conceal ? 0.0 : 1.0);
+    self.userInteractionEnabled = conceal ? NO : YES;
+    self.accessibilityElementsHidden = conceal;
 }
 
 // --- 分组头 NCNotificationListSectionHeaderView ---
 static void ERNCHdrSetHidden(UIView *self, SEL cmd, BOOL arg) {
-    if (gERNCTextOn) { ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, cmd, YES); ERNCConceal(self); return; }
-    ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, cmd, arg);
+    ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, cmd, gERNCTextOn ? YES : arg);
 }
 static void ERNCHdrSetAlpha(UIView *self, SEL cmd, CGFloat arg) {
-    if (gERNCTextOn) { ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, cmd, 0.0); ERNCConceal(self); return; }
-    ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, cmd, arg);
-    ERNCTextMakeVisible(self);
+    ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, cmd, gERNCTextOn ? 0.0 : arg);
 }
 static void ERNCHdrLayout(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldHeaderLayout)(self, cmd);
-    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    ERNCHdrApplyVisibility(self, gERNCTextOn);
 }
 static void ERNCHdrToWindow(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldHeaderToWindow)(self, cmd);
-    if (ERHideNCTextEnabled()) ERNCConceal(self);
+    ERNCHdrApplyVisibility(self, gERNCTextOn);
 }
 static void ERNCHdrToSuperview(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldHeaderToSuperview)(self, cmd);
-    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    ERNCHdrApplyVisibility(self, gERNCTextOn);
 }
 static double ERNCHdrHeight(id self, SEL cmd, double width, id title, BOOL collapse) {
     if (gERNCTextOn) return 0.0;
@@ -36693,25 +36679,22 @@ static double ERNCHdrHeight(id self, SEL cmd, double width, id title, BOOL colla
 
 // --- 合并通知头 NCNotificationListCoalescingHeaderCell ---
 static void ERNCCoSetHidden(UIView *self, SEL cmd, BOOL arg) {
-    if (gERNCTextOn) { ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, cmd, YES); ERNCConceal(self); return; }
-    ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, cmd, arg);
+    ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, cmd, gERNCTextOn ? YES : arg);
 }
 static void ERNCCoSetAlpha(UIView *self, SEL cmd, CGFloat arg) {
-    if (gERNCTextOn) { ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, cmd, 0.0); ERNCConceal(self); return; }
-    ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, cmd, arg);
-    ERNCTextMakeVisible(self);
+    ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, cmd, gERNCTextOn ? 0.0 : arg);
 }
 static void ERNCCoLayout(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldCoalescingLayout)(self, cmd);
-    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    ERNCCoApplyVisibility(self, gERNCTextOn);
 }
 static void ERNCCoToWindow(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldCoalescingToWindow)(self, cmd);
-    if (ERHideNCTextEnabled()) ERNCConceal(self);
+    ERNCCoApplyVisibility(self, gERNCTextOn);
 }
 static void ERNCCoToSuperview(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldCoalescingToSuperview)(self, cmd);
-    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    ERNCCoApplyVisibility(self, gERNCTextOn);
 }
 static double ERNCCoHeight(id self, SEL cmd, double width, id title) {
     if (gERNCTextOn) return 0.0;
