@@ -548,9 +548,9 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 
 		CAShapeLayer *layer = [CAShapeLayer layer];
 		layer.fillColor = [UIColor clearColor].CGColor;
-		layer.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.85].CGColor;
-		layer.lineWidth = 2.0;
-		layer.lineDashPattern = @[@6, @5];
+		// 1.2.1-119 · 样式对齐截图：细实线（非虚线）、圆角 14、白 75%
+		layer.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.75].CGColor;
+		layer.lineWidth = 1.5;
 		[view.layer addSublayer:layer];
 
 		gSokoDashedBorderView = view;
@@ -564,7 +564,7 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 		gSokoDashedBorderView.frame = rect;
 		CGRect bounds = gSokoDashedBorderView.bounds;
 		gSokoDashedBorderLayer.frame = bounds;
-		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:18.0];
+		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:14.0];
 		gSokoDashedBorderLayer.path = path.CGPath;
 	}
 	SokoTrace(50, (long)llround(CGRectGetMinY(rect)));
@@ -586,14 +586,23 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 		[stack removeLastObject];
 		visited++;
 
-		if (view != window && !SokoIsInsideComplicationContainer(view)) {
-			CGRect rect = [view convertRect:view.bounds toView:window];
-			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.30 &&
-			              fabs(CGRectGetHeight(rect) - h) < h * 0.40;
-			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 45.0;
-			if (sizeOK && parkedAtStock && view.alpha > 0.01) {
-				view.alpha = 0.0;
-				hidden++;
+		if (view != window && view.subviews.count == 0 && !SokoIsInsideComplicationContainer(view)) {
+			// 1.2.1-119 · 系统的框其实画在组件容器子树里（51=0 实锤），所以不能
+			//   整棵子树排除，只能排除"有子视图的"（那是内容），只藏叶子视图。
+			//   叶子 + 尺寸/位置都对得上 + 不可见则跳过。
+			BOOL isContainerItself = NO;
+			for (UIViewController *container in [SokoPosterLayout complicationContainerViewControllers]) {
+				if (view == container.viewIfLoaded) isContainerItself = YES;
+			}
+			if (!isContainerItself) {
+				CGRect rect = [view convertRect:view.bounds toView:window];
+				BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.30 &&
+				              fabs(CGRectGetHeight(rect) - h) < h * 0.40;
+				BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 45.0;
+				if (sizeOK && parkedAtStock && view.alpha > 0.01) {
+					view.alpha = 0.0;
+					hidden++;
+				}
 			}
 		}
 
