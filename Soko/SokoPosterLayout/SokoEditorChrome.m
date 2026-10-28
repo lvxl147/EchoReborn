@@ -87,8 +87,11 @@ static NSHashTable<UIView *> *gReticleViews;
 }
 
 + (void)huntReticleViewsForHostViewController:(UIViewController *)controller {
+	// 1.2.1-107 · 上一版从"编辑场景 VC 的视图"往下扫，实测只扫到 **8 个视图**（42=8）——
+	//   虚线框根本不在这棵子树里。改成从整个 window 往下扫。
 	UIView *root = controller.viewIfLoaded;
-	if (!root || !root.window) return;
+	UIWindow *window = root.window;
+	if (!root || !window) return;
 
 	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
 	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
@@ -97,36 +100,54 @@ static NSHashTable<UIView *> *gReticleViews;
 	CGFloat w = CGRectGetWidth(stock), h = CGRectGetHeight(stock), mid = CGRectGetMidY(stock);
 	if (w < 1.0 || h < 1.0) return;
 
-	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root];
+	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
 	NSInteger visited = 0;
-	while (stack.count && visited < 900) {
+	NSMutableArray<UIView *> *matches = [NSMutableArray array];
+
+	while (stack.count && visited < 4000) {
 		UIView *view = stack.lastObject;
 		[stack removeLastObject];
 		visited++;
 
-		if (view != root && view.window) {
-			CGRect rect = [view convertRect:view.bounds toView:root.window];
+		if (view != window) {
+			CGRect rect = [view convertRect:view.bounds toView:window];
 			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.5 &&
 			              fabs(CGRectGetHeight(rect) - h) < h * 0.8;
 			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 40.0;
-			if (sizeOK && parkedAtStock && ![gReticleViews containsObject:view]) {
-				if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
-				[gReticleViews addObject:view];
-				SokoTrace(28, 1);
-			}
+			if (sizeOK && parkedAtStock) [matches addObject:view];
 		}
 
 		for (UIView *subview in view.subviews) [stack addObject:subview];
 	}
 
-	// 1.2.1-106 · 取证：hunt 到底进没进、扫描了多少视图
+	// 虚线框通常是一个干净的 UIView（虚线画在它的 layer 上），优先只留这一类
+	NSMutableArray<UIView *> *plain = [NSMutableArray array];
+	for (UIView *view in matches) {
+		if ([NSStringFromClass([view class]) isEqualToString:@"UIView"]) [plain addObject:view];
+	}
+	NSArray<UIView *> *picked = plain.count ? plain : matches;
+
+	if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
+	BOOL added = NO;
+	for (UIView *view in picked) {
+		if (![gReticleViews containsObject:view]) {
+			[gReticleViews addObject:view];
+			added = YES;
+		}
+	}
+
+	// 1.2.1-107 · 取证：扫描量 / 候选数 / 纯 UIView 数 / 保留数
 	static CFTimeInterval lastHuntLog = 0.0;
 	CFTimeInterval nowHunt = CACurrentMediaTime();
 	if (nowHunt - lastHuntLog > 1.0) {
 		lastHuntLog = nowHunt;
 		SokoTrace(42, (long)visited);
 		SokoTrace(43, (long)llround(h));
+		SokoTrace(44, (long)matches.count);
+		SokoTrace(45, (long)plain.count);
+		SokoTrace(46, (long)gReticleViews.allObjects.count);
 	}
+	if (added) SokoTrace(28, 1);
 }
 
 + (void)updateReticleViewsForHostViewController:(UIViewController *)controller {
