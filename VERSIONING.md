@@ -1318,3 +1318,22 @@ iOS 17.2.1 的可见虚线框不受任何已知钩子控制（上游机制整体
 - 删除隐藏系统框（hideSystemBorderForWindow）
 - 移除编辑场景 viewDidLayoutSubviews 里的刷新调用
 保留：完成/取消、每壁纸独立保存、SokoInitEditorRoot 运行时钩子（无害）。
+
+## 1.2.1-123（1002223）· 系统增强「锁屏隐藏」卡：改名 + 两行新开关
+1. 纯文字改名（SystemEnhance.plist 6 处 label + ERSystemEnhanceController.m 分组名兜底）：
+   灵动岛→上岛配置、锁屏音乐→锁屏隐藏、天气模块城市选择→天气模块、
+   注销设置项→注销设置、长按桌面快速添加→长按桌面、iOS 26 开合动画→开合动效。
+   开关名「开合动画」按用户要求保持不动；footerText 不动。
+2. 新增「隐藏锁屏通知中心文字」（SystemEnhance.HideLockScreenNCText，默认关）。
+   HideNCHeaders 1.0.4 移植，按源代码 = 整个分组头隐藏（含「通知中心」标题与
+   「清除」按钮）：NCNotificationListSectionHeaderView + NCNotificationListCoalescingHeaderCell，
+   setHidden:/setAlpha:/layoutSubviews/didMoveToWindow/didMoveToSuperview + 高度→0。
+   适配：加偏好门禁（关时把已隐藏的视图恢复可见）；裁掉 footer/spacing/controls
+   三个无关模块；签名校验 fail-closed 保留。运行时 method_setImplementation（懒加载安全）。
+3. 新增「隐藏锁屏滑动解锁文字」（SystemEnhance.HideSwipeToUnlockText，默认关）。
+   参考 jikan 1.0.2（闭源，从 dylib 符号还原结构）：
+   SBUICallToActionLabel（旧路径 layoutSubviews/didMoveToWindow）+
+   CSTeachableMomentsContainerView（新路径 layoutSubviews），
+   找文本含「解锁/轻扫/swipe up/slide to unlock」的 UILabel 隐藏；关时恢复。
+4. 两行开关挂在「锁屏隐藏」卡（与「隐藏系统锁屏音乐」同卡），图标 bell.slash(橙) /
+   arrow.up.to.line(青)。安装点：主 %ctor 主队列异步（PosterKit/MercuryPoster 已前门 return）。
