@@ -36846,13 +36846,13 @@ static void ERSwipeHideIvarLabel(id container, NSString *ivarName, NSInteger *bu
     if (![label isKindOfClass:[UILabel class]]) {
         if (!gERSwipeIvarLogged) {
             gERSwipeIvarLogged = YES;
-            ERLogInfo(@"SWIPE-IVAR %@ = %@（非 UILabel）", ivarName, NSStringFromClass(label.class));
+            ERLogInfo(@"SWIPE-IVAR %@ = %@（非 UILabel）", ivarName, NSStringFromClass([label class]));
         }
         return;
     }
     if (!gERSwipeIvarLogged) {
         gERSwipeIvarLogged = YES;
-        ERLogInfo(@"SWIPE-IVAR %@ 命中 %@", ivarName, NSStringFromClass(label.class));
+        ERLogInfo(@"SWIPE-IVAR %@ 命中 %@", ivarName, NSStringFromClass([label class]));
     }
     ERSwipeHideLabel((UILabel *)label);
     (*budget)--;
