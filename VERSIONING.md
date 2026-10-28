@@ -1310,3 +1310,11 @@ iOS 17.2.1 的可见虚线框不受任何已知钩子控制（上游机制整体
 改从源头关掉：PREditingSceneViewController _hasGraphicComplications 直接返回 NO
 （这是系统画 graphic complications 框的开关，上游本来就 hook 着它）。
 样式对齐截图：虚线 4/4、线宽 1.5、白 68%、圆角 16。
+
+## 1.2.1-122（1002222）· 撤回自绘虚线框方案（-118 ~ -121 全部回退）
+用户接受现状：iOS 17.2.1 上系统的虚线框不跟随组件行，也不再尝试自绘/隐藏。
+- 恢复 _hasGraphicComplications 为上游原样（isIgnoringGraphicComplications ? NO : %orig）
+- 删除自绘虚线框（updateDashedBorderForWindow / refreshDashedBorder）
+- 删除隐藏系统框（hideSystemBorderForWindow）
+- 移除编辑场景 viewDidLayoutSubviews 里的刷新调用
+保留：完成/取消、每壁纸独立保存、SokoInitEditorRoot 运行时钩子（无害）。

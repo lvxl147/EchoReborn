@@ -582,17 +582,10 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 - (void)viewDidLayoutSubviews {
 	%orig;
 
-	// 1.2.1-110 · 同上：布局完立刻把虚线框再平移一次
-	[SokoEditorChrome reapplyReticleTransform];
-	// 1.2.1-120 · 保持自绘框置顶并跟随（编辑器后来加的内容会把它盖住）
-	[SokoEditorChrome refreshDashedBorder];
 }
 
-// 1.2.1-121 · 系统的虚线框是画在 _UIPortalView 合成进来的图像里的（本进程没有
-//   可隐藏的视图，47/48/51 全部为 0 已实锤）。让它不出现的唯一开关就是这个：
-//   _hasGraphicComplications 返回 NO，编辑器就不画 graphic complications 的框。
 - (BOOL)_hasGraphicComplications {
-	return NO;
+	return [SokoPosterLayout isIgnoringGraphicComplications] ? NO : %orig;
 }
 
 - (void)setPresentedComplicationsGallery:(UINavigationController *)gallery {
