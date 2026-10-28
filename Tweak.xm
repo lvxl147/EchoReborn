@@ -36808,7 +36808,10 @@ static BOOL ERSwipeTextMatches(NSString *text) {
 
 // 1.2.1-124 · **只在状态变化时写**。上一版无条件 setHidden，系统又摆回来，
 //   两边拉锯 = layoutSubviews 无限递归（.ips 的交替栈就是这个）。
-static void ERSwipeHideLabel(UILabel *label) {
+// 1.2.1-129 · 实锤：_callToActionLabel 是 **SBUILegibilityLabel**，不是 UILabel 子类
+//   （日志 SWIPE-IVAR _callToActionLabel = SBUILegibilityLabel（非 UILabel））。
+//   之前 isKindOfClass:[UILabel] 把这唯一正确的目标筛掉了 —— 放宽到任意 UIView。
+static void ERSwipeHideLabel(UIView *label) {
     BOOL visible = !gERSwipeTextOn;
     if (!visible && !ERSwipeTextMatches(label.text)) visible = YES;
     if (label.hidden == !visible) return;                 // 状态没变，绝不写
@@ -36817,7 +36820,7 @@ static void ERSwipeHideLabel(UILabel *label) {
 }
 
 // 遍历子树里的 UILabel（带访问上限）
-static void ERSwipeWalkLabels(UIView *view, void (^block)(UILabel *), NSInteger *budget) {
+static void ERSwipeWalkLabels(UIView *view, void (^block)(UIView *), NSInteger *budget) {
     if (*budget <= 0) return;
     (*budget)--;
     if ([view isKindOfClass:[UILabel class]]) block((UILabel *)view);
@@ -36826,11 +36829,11 @@ static void ERSwipeWalkLabels(UIView *view, void (^block)(UILabel *), NSInteger 
 
 static void ERSwipeCallToActionLayout(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldCallToActionLayout)(self, cmd);
-    if ([self isKindOfClass:[UILabel class]]) ERSwipeHideLabel((UILabel *)self);
+    if ([self isKindOfClass:[UIView class]]) ERSwipeHideLabel((UIView *)self);
 }
 static void ERSwipeCallToActionToWindow(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldCallToActionToWindow)(self, cmd);
-    if ([self isKindOfClass:[UILabel class]]) ERSwipeHideLabel((UILabel *)self);
+    if ([self isKindOfClass:[UIView class]]) ERSwipeHideLabel((UIView *)self);
 }
 // 1.2.1-127 · 逆向 jikan 1.0.2（CFString 0x55f80 实锤）：updateModernContainer: 用
 //   [container valueForKey:@"_callToActionLabel"] 拿到「向上轻扫以解锁」的
@@ -36842,19 +36845,19 @@ static BOOL gERSwipeIvarLogged = NO;
 static void ERSwipeHideIvarLabel(id container, NSString *ivarName, NSInteger *budget) {
     id label = nil;
     @try { label = [container valueForKey:ivarName]; } @catch (__unused NSException *e) { return; }
-    if (!label) return;
-    if (![label isKindOfClass:[UILabel class]]) {
+    if (!label || ![label isKindOfClass:[UIView class]]) {
         if (!gERSwipeIvarLogged) {
             gERSwipeIvarLogged = YES;
-            ERLogInfo(@"SWIPE-IVAR %@ = %@（非 UILabel）", ivarName, NSStringFromClass([label class]));
+            ERLogInfo(@"SWIPE-IVAR %@ = %@（非 UIView，跳过）", ivarName,
+                      label ? NSStringFromClass([label class]) : @"nil");
         }
         return;
     }
     if (!gERSwipeIvarLogged) {
         gERSwipeIvarLogged = YES;
-        ERLogInfo(@"SWIPE-IVAR %@ 命中 %@", ivarName, NSStringFromClass([label class]));
+        ERLogInfo(@"SWIPE-IVAR %@ 命中 %@，隐藏之", ivarName, NSStringFromClass([label class]));
     }
-    ERSwipeHideLabel((UILabel *)label);
+    ERSwipeHideLabel((UIView *)label);
     (*budget)--;
 }
 
@@ -36949,7 +36952,7 @@ static void ERSwipeTeachableLayout(id self, SEL cmd) {
     // ① jikan 的主路径：KVC 读 _callToActionLabel
     ERSwipeHideIvarLabel(self, @"_callToActionLabel", &budget);
     // ② 兜底：文本匹配遍历
-    ERSwipeWalkLabels((UIView *)self, ^(UILabel *label) { ERSwipeHideLabel(label); }, &budget);
+    ERSwipeWalkLabels((UIView *)self, ^(UIView *label) { ERSwipeHideLabel(label); }, &budget);
 }
 
 static void ERSwipeTextInstall(void) {
