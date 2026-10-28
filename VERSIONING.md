@@ -1209,3 +1209,10 @@ hunt 改用它做筛选（±15% 尺寸 / ±25pt 位置，比之前"组件行 94p
 另加 `reapplyReticleTransform`：挂到 PRComplicationContainerViewController 与
 PREditingSceneViewController 的 viewDidLayoutSubviews —— 系统每次布局都会把框摆回
 原位，必须布局完立刻再平移。
+
+## 1.2.1-111（1002211）· 虚线框：停止猜测，回传候选视图的类名+坐标
+-106~-110 连续五版平移了 1~3 个视图，虚线框都纹丝不动 —— 说明真正的框**根本不在
+被抓的集合里**。再按尺寸/位置猜下去没有意义。
+本版把 dumpCandidateViews 改为：用系统 reticle 矩形（±20% 尺寸 / ±30pt 位置）在整个
+window 里收候选，把**类名+坐标**打包经 trace 40/41 回传（最多 8 个，39=数量）。
+拿到真实类名后下一版直接对症。
