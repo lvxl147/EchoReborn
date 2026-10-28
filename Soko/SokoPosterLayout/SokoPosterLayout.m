@@ -12,7 +12,7 @@ static NSHashTable<PREditingSceneViewController *> *gEditingSceneViewControllers
 
 static __thread BOOL gComputingStockLayout;
 // 1.2.1-110 · 系统算出的编辑态 reticle 矩形（complicationRowElementEditingReticleFrame）
-static CGRect gSystemReticleRect = {0, 0, 0, 0};   // 高度>0 才有效
+static CGRect gSystemReticleRect;                  // 静态默认零值，高度>0 才有效
 static BOOL gIgnoringGraphicComplications;
 // 1.2.1-78 · 编辑会话内的偏移（NAN = 跟随 SpringBoard 发布值）
 static CGFloat gEditingRowOffset = NAN;
