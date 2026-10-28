@@ -36858,12 +36858,89 @@ static void ERSwipeHideIvarLabel(id container, NSString *ivarName, NSInteger *bu
     (*budget)--;
 }
 
+// 1.2.1-128 · 取证：17.2.1 上 CSTeachableMomentsContainerView 拿不到 jikan 用的
+//   _callToActionLabel（日志只有 SWIPE-CT 命中、没有 SWIPE-IVAR）。本版一次性 dump
+//   容器自己的 ivar 列表 + 窗口内所有带「解锁/轻扫/swipe」文本的视图及其父链，
+//   现场定位「向上轻扫以解锁」到底挂在哪个类、叫什么名字。
+static BOOL gERSwipeDumpDone = NO;
+
+static NSString *ERSwipeChainOf(id view) {
+    NSMutableString *s = [NSMutableString string];
+    id v = view;
+    int depth = 0;
+    while (v && depth < 5) {
+        [s appendFormat:@"%@%@", depth ? @" < " : @"", NSStringFromClass([v class])];
+        v = [v respondsToSelector:@selector(superview)] ? [v superview] : nil;
+        depth++;
+    }
+    return s;
+}
+
+static BOOL ERSwipeTextLooksLikeUnlock(NSString *t) {
+    if (!t.length) return NO;
+    static NSArray *keys = nil;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ keys = @[@"解锁", @"轻扫", @"轻拍", @"swipe", @"unlock", @"打开"]; });
+    for (NSString *k in keys) {
+        if ([t rangeOfString:k options:NSCaseInsensitiveSearch].location != NSNotFound) return YES;
+    }
+    return NO;
+}
+
+static void ERSwipeScanUnlock(UIView *root, NSInteger *budget, int *found) {
+    if (!root || *budget <= 0 || *found >= 8) return;
+    (*budget)--;
+    NSString *cls = NSStringFromClass([root class]);
+    NSString *text = nil;
+    if ([root respondsToSelector:@selector(text)] && [root isKindOfClass:[UILabel class]]) {
+        @try { text = ((UILabel *)root).text; } @catch (__unused NSException *e) { }
+    }
+    if ([cls rangeOfString:@"CallToAction" options:NSCaseInsensitiveSearch].location != NSNotFound) {
+        (*found)++;
+        ERLogInfo(@"SWIPE-CLS %@ text=%@ chain=%@", cls, text ?: @"-", ERSwipeChainOf(root));
+    } else if (ERSwipeTextLooksLikeUnlock(text)) {
+        (*found)++;
+        ERLogInfo(@"SWIPE-TXT %@ text=%@ chain=%@", cls, text, ERSwipeChainOf(root));
+    }
+    for (UIView *sv in root.subviews) ERSwipeScanUnlock(sv, budget, found);
+}
+
+static void ERSwipeDumpOnce(id container) {
+    if (gERSwipeDumpDone) return;
+    gERSwipeDumpDone = YES;
+
+    // ① 容器自己有哪些 ivar（jikan 的 _callToActionLabel 在不在一目了然）
+    Class c = [container class];
+    unsigned n = 0;
+    Ivar *ivars = class_copyIvarList(c, &n);
+    NSMutableString *s = [NSMutableString stringWithFormat:@"SWIPE-IVARS %@ n=%u:", NSStringFromClass(c), n];
+    for (unsigned i = 0; i < n && i < 60; i++) [s appendFormat:@" %s", ivar_getName(ivars[i])];
+    if (ivars) free(ivars);
+    ERLogInfo(@"%@", s);
+
+    // ② 容器直系子视图类名
+    NSMutableString *kids = [NSMutableString stringWithFormat:@"SWIPE-KIDS %@:", NSStringFromClass(c)];
+    for (UIView *sv in ((UIView *)container).subviews) {
+        [kids appendFormat:@" %@", NSStringFromClass([sv class])];
+    }
+    ERLogInfo(@"%@", kids);
+
+    // ③ 同窗口全量搜「解锁/轻扫/swipe」视图
+    UIWindow *win = [container respondsToSelector:@selector(window)] ? ((UIView *)container).window : nil;
+    NSInteger budget = 4000;
+    int found = 0;
+    if (win) ERSwipeScanUnlock(win, &budget, &found);
+    ERLogInfo(@"SWIPE-SCAN done win=%@ found=%d left=%d",
+              win ? NSStringFromClass([win class]) : @"nil", found, (int)budget);
+}
+
 static NSInteger gERSwipeLayoutHits;
 
 static void ERSwipeTeachableLayout(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldTeachableLayout)(self, cmd);
 
     gERSwipeLayoutHits++;
+    if (!gERSwipeDumpDone) ERSwipeDumpOnce(self);
     if ((gERSwipeLayoutHits % 50) == 1) {
         ERLogInfo(@"SWIPE-CT layout hit #%d enabled=%d", (int)gERSwipeLayoutHits, ERHideSwipeTextEnabled() ? 1 : 0);
     }

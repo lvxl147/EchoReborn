@@ -1378,3 +1378,11 @@ setHidden: → 无限递归。**属性赋值会经过被 hook 的 setter**，而
 "_callToActionLabel"（不是 -126 猜的 _staticLabel 等四个）。
 - 只 KVC 读 _callToActionLabel；命中/非命中打一条 SWIPE-IVAR 日志
 - 只 setHidden:（与 jikan updateLabel: 一致），文本遍历保留兜底
+
+## 1.2.1-128（1002228）· 取证版：现场定位「向上轻扫以解锁」
+实锤日志：SWIPE-CT layout hit #51 enabled=1 —— 容器在布局、开关是开，
+但没有 SWIPE-IVAR 命中 → 17.2.1 的 CSTeachableMomentsContainerView 里
+**没有 jikan 用的 _callToActionLabel**（jikan 面向 iOS 26 时代）。
+本版一次性 dump（SWIPE-IVARS / SWIPE-KIDS / SWIPE-SCAN / SWIPE-CLS / SWIPE-TXT）：
+容器 ivar 全表 + 直系子视图类名 + 同窗口搜带「解锁/轻扫/swipe」的视图及父链。
+用途只是取证，拿到名字后把隐藏逻辑改到正确的类/ivar 上。
