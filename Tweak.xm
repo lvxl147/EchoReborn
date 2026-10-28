@@ -36769,14 +36769,13 @@ static BOOL gERSwipeTextInstalled;
 
 static BOOL ERSwipeTextMatches(NSString *text) {
     if (![text isKindOfClass:[NSString class]] || !text.length) return NO;
-    return [text containsString:@"解锁"] || [text containsString:@"轻扫"] ||
-           [text containsString:@"解锁"] || [text lowercaseString].length > 0 &&
-           ([text.lowercaseString containsString:@"swipe up"] ||
-            [text.lowercaseString containsString:@"slide to unlock"]);
+    if ([text containsString:@"解锁"] || [text containsString:@"轻扫"]) return YES;
+    NSString *lower = text.lowercaseString;
+    return [lower containsString:@"swipe up"] || [lower containsString:@"slide to unlock"];
 }
 
 static void ERSwipeHideLabel(UILabel *label) {
-    BOOL on = ERSwipeTextEnabled();
+    BOOL on = ERHideSwipeTextEnabled();
     if (on && ERSwipeTextMatches(label.text)) {
         label.hidden = YES;
         label.alpha = 0.0;
@@ -36802,7 +36801,7 @@ static void ERSwipeCallToActionToWindow(id self, SEL cmd) {
 }
 static void ERSwipeTeachableLayout(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldTeachableLayout)(self, cmd);
-    if (!ERSwipeTextEnabled()) {
+    if (!ERHideSwipeTextEnabled()) {
         ERSwipeWalkLabels((UIView *)self, ^(UILabel *label) {
             if (ERSwipeTextMatches(label.text)) { label.hidden = NO; label.alpha = 1.0; }
         });
