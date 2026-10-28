@@ -139,12 +139,19 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 	UIWindow *window = root.window;
 	if (!root || !window) return;
 
-	// 1.2.1-110 · 用**系统自己算出来的 reticle 矩形**做精确筛选。
-	//   之前的失败原因：按"组件行 94pt"宽打地筛，44=9/13 抓到一堆不相干视图；
-	//   而真正的虚线框高度与组件行一致（截图实测），必须用 reticle 矩形本身来比。
-	CGRect reticleRect = [SokoPosterLayout systemReticleRect];
-	CGFloat w = CGRectGetWidth(reticleRect), h = CGRectGetHeight(reticleRect);
-	CGFloat mid = CGRectGetMidY(reticleRect);
+	// 1.2.1-113 · **锚点必须用"系统原位"**。
+	//   1.2.1-110 改成用"当前 reticle 矩形"当位置基准，这是个隐蔽的反向 bug：
+	//   滑到底部时当前 reticle 也到了 728，于是只在 728 附近找 —— 找到的是
+	//   **跟着组件走的内容视图**（-112 实锤 V:UIView|30,728,370x76），而真正的
+	//   虚线框还停在顶部 212，永远不进搜索范围 → 永远平移不到它。
+	//   1.2.1-107 用对了锚点（frameForElements:reticleVariant = 系统原位），
+	//   但那时只扫了 8 个视图的子树；两个 bug 互补着把这条路堵死了十几个版本。
+	//   现在：整窗口扫描 + 系统原位锚点。
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect anchor = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(anchor)) return;
+
+	CGFloat w = CGRectGetWidth(anchor), h = CGRectGetHeight(anchor), mid = CGRectGetMidY(anchor);
 	if (w < 1.0 || h < 1.0) return;
 
 	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
@@ -158,20 +165,18 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 
 		if (view != window) {
 			CGRect rect = [view convertRect:view.bounds toView:window];
-			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.15 &&
-			              fabs(CGRectGetHeight(rect) - h) < h * 0.15;
-			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 25.0;
+			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.25 &&
+			              fabs(CGRectGetHeight(rect) - h) < h * 0.25;
+			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 40.0;
 			if (sizeOK && parkedAtStock) [matches addObject:view];
 		}
 
 		for (UIView *subview in view.subviews) [stack addObject:subview];
 	}
 
-	// 尺寸/位置完全对上的视图里，优先挑"没有子视图"的（贴图/自绘框都是叶子）
+	// 叶子优先（贴图/自绘框都是叶子）
 	NSMutableArray<UIView *> *leaves = [NSMutableArray array];
-	for (UIView *view in matches) {
-		if (view.subviews.count == 0) [leaves addObject:view];
-	}
+	for (UIView *view in matches) if (view.subviews.count == 0) [leaves addObject:view];
 	NSArray<UIView *> *picked = leaves.count ? leaves : matches;
 
 	if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
@@ -192,7 +197,6 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 	}
 	if (changed) SokoTrace(28, 1);
 }
-
 + (void)reapplyReticleTransform {
 	CGFloat delta = [SokoPosterLayout editingRowDelta];
 	if (isnan(delta) || !gReticleViews) return;
