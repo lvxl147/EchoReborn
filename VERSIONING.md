@@ -1260,3 +1260,9 @@ SokoInitPoster 末尾主动调一次（类多半已加载），dyld 回调 SokoI
 并新增一个必然时机：PRComplicationContainerViewController viewDidLoad（code 3，
 编辑器打开必发生）里也调 SokoInitEditorRoot —— 此刻 PREditorRootViewController
 一定已加载。24=3 表示这次真的装上了。
+
+## 1.2.1-116（1002216）· reticle 逐字照抄上游
+用户指出"原版至少会动，源代码摆在这里你复制粘贴都不会"。照做：
+reticleFrameByAdjustingFrame 恢复为上游 Soko 1.1.0 的原样实现（91-104 行），
+包括 `frame.origin.y += row.minY - stockRow.minY` 这一行 —— 1.2.1-102 我把它删了。
+60~63 探针保留。

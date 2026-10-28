@@ -105,43 +105,23 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 }
 
 + (CGRect)reticleFrameByAdjustingFrame:(CGRect)frame layoutController:(CSProminentLayoutController *)layoutController boundingRect:(CGRect)boundingRect {
+	// 1.2.1-116 · **逐字照抄上游 Soko 1.1.0**（soko_new/Tweak/SokoPosterLayout.m 91-104 行）。
+	//   1.2.1-102 我把这段 delta 拿掉了，理由是"系统已经算对了"——但框实测不动，
+	//   说明那个判断错了。现在回到上游原样，先让框动起来再说。
 	if (gComputingStockLayout || CGRectIsNull(frame)) return frame;
 
-	// 1.2.1-90 · 上游实现：用「编辑态行(已调整) − 编辑态行(系统原值)」的差做平移。
-	// 这里的第二次调用靠 gComputingStockLayout 关掉我方调整，拿到真正的原值。
 	CGRect row = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
 
 	gComputingStockLayout = YES;
 	CGRect stockRow = [layoutController frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant withBoundingRect:boundingRect];
 	gComputingStockLayout = NO;
 
-	// 1.2.1-92 · 探针：60=进入(reticle frame.y) 61=row.minY 62=stockRow.minY 63=返回值
-	SokoTrace(60, (long)llround(CGRectGetMinY(frame)));
-	SokoTrace(61, (long)llround(CGRectGetMinY(row)));
-	SokoTrace(62, (long)llround(CGRectGetMinY(stockRow)));
-
 	if (CGRectIsNull(row) || CGRectIsNull(stockRow)) return frame;
 
-	// 1.2.1-102 · **边框不跟随的真凶：这里二次位移了。**
-	//   放开 SokoTrace 的 32 码上限后第一次真正拿到 60~63（此前"恒为 0"是假阴性）：
-	//     60=212 61=221 62=221 → reticle.y == row.minY - 9
-	//     60=719 61=728 62=221 → reticle.y == row.minY - 9
-	//   **系统自己就是按我们改过的行算虚线框的**（reticle.y 恒等于 row.minY-9）。
-	//   再叠加 (row - stockRow) 就成了二次位移：
-	//     偏移=顶部(-507) 时 delta=0，侥幸正确（这就是"滑到上面边框正常"）；
-	//     偏移=底部(0)    时 delta=+507 → 719+507=1226 → 飞出屏幕
-	//     —— 正是用户说的"滑动到下面，直接变为不显示"。
-	//   所以这里什么都不做，直接把系统算好的 frame 原样返回。
-	// 1.2.1-110 · 把系统算出来的 reticle 矩形存下来，给视图查找当**精确**筛选条件
-	//   （60/63 证明系统确实会算这个矩形：顶部 212、底部 719）
-	gSystemReticleRect = frame;
+	frame.origin.y += CGRectGetMinY(row) - CGRectGetMinY(stockRow);
 
 	SokoTrace(63, (long)llround(frame.origin.y));
 	return frame;
-}
-
-+ (CGRect)systemReticleRect {
-	return gSystemReticleRect;
 }
 
 + (CGRect)editingRowFrame {
