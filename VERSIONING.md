@@ -1191,3 +1191,11 @@ encode 进归档；**"完成=系统落盘、取消=系统丢弃"完全由系统�
 换成唯一确定的判据：虚线框是 **CAShapeLayer 的 lineDashPattern**，全窗口只有它有。
 SokoCollectDashedViews 递归扫整个 window（含 sublayer），命中即以其为唯一目标集
 （47=命中的虚线视图数），不再走尺寸/位置猜测。
+
+## 1.2.1-109（1002209）· 直接拿系统自己的 reticle 视图
+1.2.1-108 的 trace 47 = 0：**全窗口没有任何 CAShapeLayer 虚线** —— 系统的虚线框不是
+shape layer 画的（多半是拉伸的虚线贴图）。
+改走最正规的路：从 window 的 **VC 树**里翻出 `PREditorRootViewController` 实例
+（它一直没被我们注册到，但类确实存在、且 SokoPrivate.h 里声明了
+`graphicComplicationsReticleView`），直接取那个视图来平移。
+48=找到的系统 reticle 视图数。次选仍是 1.2.1-108 的虚线图层判据。

@@ -102,6 +102,38 @@ static void SokoCollectDashedViews(UIView *view, NSMutableArray<UIView *> *out) 
 	for (UIView *subview in view.subviews) SokoCollectDashedViews(subview, out);
 }
 
+// 1.2.1-109 · 1.2.1-108 的 47=0 证明系统**不是**用 CAShapeLayer 虚线画的（多半是
+//   拉伸的虚线贴图）。改走最正规的路：**直接拿系统自己的 reticle 视图**。
+//   PREditorRootViewController 有 graphicComplicationsReticleView（SokoPrivate.h 有声明，
+//   METHODS 表也确认这个类存在），只是一直没拿到它的实例 —— 它不在我们注册的那两个
+//   VC 里。这里从 window 的 VC 树把它翻出来。
+static void SokoCollectViewControllers(UIViewController *controller, NSMutableArray<UIViewController *> *out) {
+	if (!controller) return;
+
+	[out addObject:controller];
+	for (UIViewController *child in controller.childViewControllers) SokoCollectViewControllers(child, out);
+	if (controller.presentedViewController) SokoCollectViewControllers(controller.presentedViewController, out);
+}
+
+static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
+	Class editorRootClass = NSClassFromString(@"PREditorRootViewController");
+	if (!editorRootClass || !window.rootViewController) return @[];
+
+	NSMutableArray<UIViewController *> *controllers = [NSMutableArray array];
+	SokoCollectViewControllers(window.rootViewController, controllers);
+
+	NSMutableArray<UIView *> *views = [NSMutableArray array];
+	for (UIViewController *controller in controllers) {
+		if (![controller isKindOfClass:editorRootClass]) continue;
+		if (![controller respondsToSelector:@selector(graphicComplicationsReticleView)]) continue;
+
+		UIView *reticle = nil;
+		@try { reticle = [controller valueForKey:@"graphicComplicationsReticleView"]; } @catch (__unused NSException *e) {}
+		if (reticle) [views addObject:reticle];
+	}
+	return views;
+}
+
 + (void)huntReticleViewsForHostViewController:(UIViewController *)controller {
 	// 1.2.1-107 · 上一版从"编辑场景 VC 的视图"往下扫，实测只扫到 **8 个视图**（42=8）——
 	//   虚线框根本不在这棵子树里。改成从整个 window 往下扫。
@@ -152,7 +184,17 @@ static void SokoCollectDashedViews(UIView *view, NSMutableArray<UIView *> *out) 
 		}
 	}
 
-	// 1.2.1-108 · 优先用"画了虚线的视图"——这是唯一确定的判据
+	// 1.2.1-109 · 首选：系统自己的 reticle 视图
+	NSArray<UIView *> *systemReticles = SokoSystemReticleViews(window);
+	if (systemReticles.count) {
+		if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
+		[gReticleViews removeAllObjects];
+		for (UIView *view in systemReticles) [gReticleViews addObject:view];
+		SokoTrace(48, (long)systemReticles.count);
+		return;
+	}
+
+	// 1.2.1-108 · 次选：画了虚线的视图
 	NSMutableArray<UIView *> *dashed = [NSMutableArray array];
 	SokoCollectDashedViews(window, dashed);
 	if (dashed.count) {
