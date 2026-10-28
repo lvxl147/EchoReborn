@@ -511,6 +511,8 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 	SokoFileLog(@"CONTAINER viewDidLoad proc=%@", NSProcessInfo.processInfo.processName);
 	// code 3：容器 VC 登记
 	SokoTrace(3, 1);
+	// 1.2.1-115 · 编辑器打开的必然时机，此刻 PREditorRootViewController 一定已加载
+	SokoInitEditorRoot();
 	[SokoPosterLayout registerComplicationContainerViewController:self];
 	[SokoLayoutSwipeHandler installOnComplicationContainerViewController:self];
 }
@@ -895,13 +897,17 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 %end
 %end
 
+// 1.2.1-115 · **不能用 dispatch_once**：第一次调用时类多半还没加载，once 一旦
+//   走完就永远不会再装了（1.2.1-114 的 trace 24 仍是 0 就是这个原因）。
+//   改成 BOOL 门：类存在且未装 → 装；否则下次再试。
+static BOOL gSokoEditorRootInstalled;
 static void SokoInitEditorRoot(void) {
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{
-		if (!objc_getClass("PREditorRootViewController")) return;
-		%init(SokoEditorRoot);
-		SokoFileLog(@"EDITOR-ROOT-INIT ok");
-	});
+	if (gSokoEditorRootInstalled) return;
+	if (!objc_getClass("PREditorRootViewController")) return;
+
+	%init(SokoEditorRoot);
+	gSokoEditorRootInstalled = YES;
+	SokoTrace(24, 3);   // 3 = 钩子这次真的装上了
 }
 
 static void SokoImageAdded(const struct mach_header *header, intptr_t slide) {

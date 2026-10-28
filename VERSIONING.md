@@ -1252,3 +1252,11 @@ registerEditorRootViewController 一次都没被调过，updateReticleViewFrames
 修复：拆出独立 %group SokoEditorRoot，用 dispatch_once 包住 %init；
 SokoInitPoster 末尾主动调一次（类多半已加载），dyld 回调 SokoImageAdded 里再调一次
 （覆盖晚加载）。EDITOR-ROOT-INIT 落盘即成功。viewDidLayoutSubviews 里补 update。
+
+## 1.2.1-115（1002215）· 钩子安装改成可重试
+1.2.1-114 的 trace 24 仍是 0 —— 因为我用 dispatch_once 包了 %init：第一次调用时
+类还没加载，once 走完就永远不会再装了。
+改成 BOOL 门（gSokoEditorRootInstalled）：类存在且未装 → 装，否则下次再试。
+并新增一个必然时机：PRComplicationContainerViewController viewDidLoad（code 3，
+编辑器打开必发生）里也调 SokoInitEditorRoot —— 此刻 PREditorRootViewController
+一定已加载。24=3 表示这次真的装上了。
