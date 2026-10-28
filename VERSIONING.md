@@ -1360,3 +1360,15 @@ setHidden: → 无限递归。**属性赋值会经过被 hook 的 setter**，而
 - setHidden:/setAlpha: 钩子只透传参数（gERNCTextOn ? 强制值 : 原参数），不再调 conceal
 - 删除 ERNCConceal / ERNCTextMakeVisible / 无引用的 ERHideNCTextEnabled
 滑动解锁那条不涉及（只 hook layoutSubviews/didMoveToWindow，没 hook setHidden:）。
+
+## 1.2.1-126（1002226）· 逆向 jikan 后对齐「隐藏滑动解锁文字」的实现
+逆向（fat dylib 拆 arm64e 切片 → 符号表 → capstone 反汇编 + objc stub selector 解析）：
+- jikan 有专门类 JikanUnlockTextVisibility：+trackedLabels / +originalVisibility /
+  +refreshTrackedLabels / +updateLabel: / +updateLegacyLabel: / +updateModernContainer: /
+  +hiddenValueForControl:requestedHidden:
+- 它的 modern 路径同样 hook CSTeachableMomentsContainerView layoutSubviews，
+  但**不做文本匹配** —— 用 KVC 直接读容器自己的 ivar：_staticLabel / _label /
+  _ringPrimaryLabel / _ringSecondaryLabel（系统自己管理的提示 label）。
+- 我们按文本找 UILabel 在 17.2.1 上找不到（那行字未必是 UILabel、文本也未必猜中）。
+修复：ERSwipeTeachableLayout 先 KVC 读这 4 个 ivar 藏掉，文本遍历保留作兜底；
+加 SWIPE-CT 布局命中日志（50 次打 1 条）确认容器是否被布局。

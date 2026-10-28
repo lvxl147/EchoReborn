@@ -36832,9 +36832,37 @@ static void ERSwipeCallToActionToWindow(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldCallToActionToWindow)(self, cmd);
     if ([self isKindOfClass:[UILabel class]]) ERSwipeHideLabel((UILabel *)self);
 }
+// 1.2.1-126 · 逆向 jikan 1.0.2 后对齐：它**不做文本匹配**，而是用 KVC 直接读
+//   CSTeachableMomentsContainerView 自己的 ivar（_staticLabel / _label /
+//   _ringPrimaryLabel / _ringSecondaryLabel / _containerView）—— 那是系统自己管理
+//   的提示 label，拿得到就不必猜文本（17.2.1 上那行字未必是 UILabel，文本也未必
+//   是我们猜的字符串，这正是 -123/-125 找不到的原因）。文本遍历保留作兜底。
+static void ERSwipeHideIvarLabel(id container, NSString *ivarName, NSInteger *budget) {
+    id label = nil;
+    @try { label = [container valueForKey:ivarName]; } @catch (__unused NSException *e) { return; }
+    if (![label isKindOfClass:[UILabel class]]) return;
+    ERSwipeHideLabel((UILabel *)label);
+    (*budget)--;
+}
+
+static NSInteger gERSwipeLayoutHits;
+
 static void ERSwipeTeachableLayout(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldTeachableLayout)(self, cmd);
+
+    // 取证：容器到底有没有被布局、走了哪条分支（52=命中数）
+    gERSwipeLayoutHits++;
+    if ((gERSwipeLayoutHits % 50) == 1) {
+        ERLogInfo(@"SWIPE-CT layout hit #%d enabled=%d", (int)gERSwipeLayoutHits, ERHideSwipeTextEnabled() ? 1 : 0);
+    }
+
     NSInteger budget = 400;
+    // ① jikan 的主路径：KVC 读系统自己的 label
+    ERSwipeHideIvarLabel(self, @"_staticLabel", &budget);
+    ERSwipeHideIvarLabel(self, @"_label", &budget);
+    ERSwipeHideIvarLabel(self, @"_ringPrimaryLabel", &budget);
+    ERSwipeHideIvarLabel(self, @"_ringSecondaryLabel", &budget);
+    // ② 兜底：文本匹配遍历
     ERSwipeWalkLabels((UIView *)self, ^(UILabel *label) { ERSwipeHideLabel(label); }, &budget);
 }
 
