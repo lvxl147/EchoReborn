@@ -870,6 +870,7 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 //   对 nil 挂钩（24=3 就是这么来的，钩子看起来装了，实际挂在 nil 上）。
 //   PREditingSceneViewController 之所以一直正常，是因为它在我们加载前就已加载。
 //   解法：对这个类放弃 Logos，改用运行时手动 hook（类真正加载后再换 IMP）。
+static BOOL gSokoEditorRootInstalled;
 static IMP gSokoOrigEditorRootLoadView;
 static IMP gSokoOrigEditorRootViewDidLoad;
 static IMP gSokoOrigEditorRootViewDidLayoutSubviews;
