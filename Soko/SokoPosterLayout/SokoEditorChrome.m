@@ -413,8 +413,9 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 
 
 + (void)dumpCandidateViewsInEditingSceneViewController:(PREditingSceneViewController *)controller {
-	// 1.2.1-112 · 纯取证：回传 (a) window 里全部 VC 的类名 (b) reticle 位置上的候选视图。
-	//   1.2.1-111 全是 39=-3 —— gSystemReticleRect 在 dump 时还没被算出来，加个兜底。
+	// 1.2.1-120 · 锚定"系统原位"（系统的框一直停在那儿），把该位置的候选视图
+	//   类名+坐标全部回传 —— 上次用"当前 reticle 矩形"锚定，滑走之后系统的框
+	//   就不在搜索范围里了，所以一直定位不到它。
 	static CFTimeInterval lastDump = 0.0;
 	CFTimeInterval nowD = CACurrentMediaTime();
 	if (nowD - lastDump < 5.0) return;
@@ -424,48 +425,32 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 	if (!root || !root.window) { SokoTrace(39, -1); return; }
 	UIWindow *window = root.window;
 
+	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
+	CGRect anchor = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	if (CGRectIsNull(anchor)) { SokoTrace(39, -2); return; }
+
+	CGFloat w = CGRectGetWidth(anchor), h = CGRectGetHeight(anchor), mid = CGRectGetMidY(anchor);
+
 	NSMutableArray<NSString *> *names = [NSMutableArray array];
+	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
+	NSInteger visited = 0;
 
-	// (a) VC 树 —— 确认 PREditorRootViewController 到底在不在
-	static void (^collectVCs)(UIViewController *, NSMutableArray *) = nil;
-	static dispatch_once_t once;
-	dispatch_once(&once, ^{
-		collectVCs = ^(UIViewController *vc, NSMutableArray *out) {
-			if (!vc) return;
-			[out addObject:NSStringFromClass([vc class])];
-			for (UIViewController *child in vc.childViewControllers) collectVCs(child, out);
-			if (vc.presentedViewController) collectVCs(vc.presentedViewController, out);
-		};
-	});
-	NSMutableArray<NSString *> *vcNames = [NSMutableArray array];
-	collectVCs(window.rootViewController, vcNames);
-	for (NSString *n in vcNames) if (names.count < 14) [names addObject:[@"VC:" stringByAppendingString:n]];
+	while (stack.count && visited < 4000 && names.count < 8) {
+		UIView *v = stack.lastObject;
+		[stack removeLastObject];
+		visited++;
 
-	// (b) reticle 位置上的候选视图
-	CGRect reticleRect = [SokoPosterLayout systemReticleRect];
-	if (CGRectGetHeight(reticleRect) < 1.0) {
-		reticleRect = [NSClassFromString(@"CSProminentLayoutController") frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
-	}
-	SokoTrace(49, (long)llround(CGRectGetHeight(reticleRect)));
-
-	if (CGRectGetHeight(reticleRect) > 1.0) {
-		CGFloat w = CGRectGetWidth(reticleRect), h = CGRectGetHeight(reticleRect), mid = CGRectGetMidY(reticleRect);
-		NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
-		NSInteger visited = 0;
-		while (stack.count && visited < 4000) {
-			UIView *v = stack.lastObject;
-			[stack removeLastObject];
-			visited++;
-			if (v != window) {
-				CGRect r = [v convertRect:v.bounds toView:window];
-				if (fabs(CGRectGetWidth(r) - w) < w * 0.25 && fabs(CGRectGetHeight(r) - h) < h * 0.25 &&
-				    fabs(CGRectGetMidY(r) - mid) < 40.0 && names.count < 22) {
-					[names addObject:[NSString stringWithFormat:@"V:%@|%.0f,%.0f,%.0fx%.0f",
-					                  NSStringFromClass([v class]), r.origin.x, r.origin.y, r.size.width, r.size.height]];
-				}
+		if (v != window) {
+			CGRect r = [v convertRect:v.bounds toView:window];
+			BOOL sizeOK = fabs(CGRectGetWidth(r) - w) < w * 0.30 && fabs(CGRectGetHeight(r) - h) < h * 0.45;
+			BOOL posOK = fabs(CGRectGetMidY(r) - mid) < 45.0;
+			if (sizeOK && posOK) {
+				[names addObject:[NSString stringWithFormat:@"%@|%.0f,%.0f,%.0fx%.0f",
+				                  NSStringFromClass([v class]), r.origin.x, r.origin.y, r.size.width, r.size.height]];
 			}
-			for (UIView *sub in v.subviews) [stack addObject:sub];
 		}
+
+		for (UIView *sub in v.subviews) [stack addObject:sub];
 	}
 
 	SokoTrace(39, (long)names.count);
@@ -560,13 +545,7 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 	if (!gSokoDashedBorderView.window) [window addSubview:gSokoDashedBorderView];
 	[window bringSubviewToFront:gSokoDashedBorderView];
 
-	if (!CGRectEqualToRect(gSokoDashedBorderView.frame, rect)) {
-		gSokoDashedBorderView.frame = rect;
-		CGRect bounds = gSokoDashedBorderView.bounds;
-		gSokoDashedBorderLayer.frame = bounds;
-		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:14.0];
-		gSokoDashedBorderLayer.path = path.CGPath;
-	}
+	[self refreshDashedBorder];
 	SokoTrace(50, (long)llround(CGRectGetMinY(rect)));
 }
 
@@ -614,6 +593,28 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 	if (nowHide - lastHideLog > 1.0) {
 		lastHideLog = nowHide;
 		SokoTrace(51, hidden);
+	}
+}
+
+
+// 1.2.1-120 · 轻量刷新：只更新自绘框的位置 + 保持置顶。
+//   挂在编辑场景的 viewDidLayoutSubviews 上（每次布局都跑），
+//   之前只在 relayout 时更新，编辑器后来加进来的内容会把框盖住 → "有时消失"。
++ (void)refreshDashedBorder {
+	if (!gSokoDashedBorderView || !gSokoDashedBorderView.window) return;
+
+	UIWindow *window = gSokoDashedBorderView.window;
+	CGRect rect = [SokoPosterLayout systemReticleRect];
+	if (CGRectGetWidth(rect) < 1.0 || CGRectGetHeight(rect) < 1.0) return;
+
+	[window bringSubviewToFront:gSokoDashedBorderView];
+
+	if (!CGRectEqualToRect(gSokoDashedBorderView.frame, rect)) {
+		gSokoDashedBorderView.frame = rect;
+		CGRect bounds = gSokoDashedBorderView.bounds;
+		gSokoDashedBorderLayer.frame = bounds;
+		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:14.0];
+		gSokoDashedBorderLayer.path = path.CGPath;
 	}
 }
 

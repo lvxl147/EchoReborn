@@ -584,6 +584,8 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 
 	// 1.2.1-110 · 同上：布局完立刻把虚线框再平移一次
 	[SokoEditorChrome reapplyReticleTransform];
+	// 1.2.1-120 · 保持自绘框置顶并跟随（编辑器后来加的内容会把它盖住）
+	[SokoEditorChrome refreshDashedBorder];
 }
 
 - (BOOL)_hasGraphicComplications {
