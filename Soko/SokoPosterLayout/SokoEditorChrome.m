@@ -118,6 +118,15 @@ static NSHashTable<UIView *> *gReticleViews;
 
 		for (UIView *subview in view.subviews) [stack addObject:subview];
 	}
+
+	// 1.2.1-106 · 取证：hunt 到底进没进、扫描了多少视图
+	static CFTimeInterval lastHuntLog = 0.0;
+	CFTimeInterval nowHunt = CACurrentMediaTime();
+	if (nowHunt - lastHuntLog > 1.0) {
+		lastHuntLog = nowHunt;
+		SokoTrace(42, (long)visited);
+		SokoTrace(43, (long)llround(h));
+	}
 }
 
 + (void)updateReticleViewsForHostViewController:(UIViewController *)controller {
@@ -172,6 +181,9 @@ static NSHashTable<UIView *> *gReticleViews;
 
 	for (PREditingSceneViewController *controller in [SokoPosterLayout editingSceneViewControllers]) {
 		[self updateAddGestureForEditingSceneViewController:controller];
+		// 1.2.1-105 · 虚线框查找/平移挂在这里（编辑场景 VC 已证明必然注册，code 4）。
+		//   上一版这行被误插进了上面那个永不执行的编辑器根循环，所以 26/27/28 全为零。
+		[self updateReticleViewsForHostViewController:controller];
 	}
 }
 

@@ -1170,3 +1170,10 @@ encode 进归档；**"完成=系统落盘、取消=系统丢弃"完全由系统�
 3. 虚线框：PREditorRootViewController 的 loadView 钩子在 17.2.1 上零触发（trace 24 全零），
    补 viewDidLoad 入口，并把查找/平移**同时挂到编辑场景 VC**（code 4 已证明必然注册）。
 4. 编辑器关闭发 trace 30 作为时间标记（不再用于回滚判定）。
+
+## 1.2.1-106（1002206）· 虚线框平移调用点接错位置（修）
+1.2.1-105 的 `[self updateReticleViewsForHostViewController:]` 被 Python 替换误插到了
+**编辑器根循环**（gEditorRootViewControllers，iOS 17.2.1 上永远为空 → 一次都不执行），
+而真正会跑的"编辑场景循环"里没有这行 → trace 26/27/28 全为零，虚线框纹丝不动。
+本版把这行加进编辑场景循环（code 4 已证明必然注册），并补取证：
+42=hunt 扫过的视图数、43=基准行高。
