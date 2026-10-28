@@ -404,42 +404,59 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 
 
 + (void)dumpCandidateViewsInEditingSceneViewController:(PREditingSceneViewController *)controller {
-	// 1.2.1-111 · 纯取证：把"系统 reticle 矩形"位置上的候选视图**类名**逐个回传。
-	//   为什么必须做：-106~-110 我们平移了 1~3 个视图，虚线框却纹丝不动 —— 说明
-	//   真正的框根本不在被抓的集合里。再猜下去没有意义，把类名拿到手直接对症。
+	// 1.2.1-112 · 纯取证：回传 (a) window 里全部 VC 的类名 (b) reticle 位置上的候选视图。
+	//   1.2.1-111 全是 39=-3 —— gSystemReticleRect 在 dump 时还没被算出来，加个兜底。
 	static CFTimeInterval lastDump = 0.0;
 	CFTimeInterval nowD = CACurrentMediaTime();
-	if (nowD - lastDump < 3.0) return;
+	if (nowD - lastDump < 5.0) return;
 	lastDump = nowD;
 
 	UIView *root = controller.viewIfLoaded;
-	if (!root || !root.window) return;
-
-	CGRect reticleRect = [SokoPosterLayout systemReticleRect];
-	CGFloat w = CGRectGetWidth(reticleRect), h = CGRectGetHeight(reticleRect), mid = CGRectGetMidY(reticleRect);
-	if (w < 1.0 || h < 1.0) { SokoTrace(39, -3); return; }
+	if (!root || !root.window) { SokoTrace(39, -1); return; }
+	UIWindow *window = root.window;
 
 	NSMutableArray<NSString *> *names = [NSMutableArray array];
-	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:root.window];
-	NSInteger visited = 0;
 
-	while (stack.count && visited < 4000 && names.count < 8) {
-		UIView *v = stack.lastObject;
-		[stack removeLastObject];
-		visited++;
+	// (a) VC 树 —— 确认 PREditorRootViewController 到底在不在
+	static void (^collectVCs)(UIViewController *, NSMutableArray *) = nil;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		collectVCs = ^(UIViewController *vc, NSMutableArray *out) {
+			if (!vc) return;
+			[out addObject:NSStringFromClass([vc class])];
+			for (UIViewController *child in vc.childViewControllers) collectVCs(child, out);
+			if (vc.presentedViewController) collectVCs(vc.presentedViewController, out);
+		};
+	});
+	NSMutableArray<NSString *> *vcNames = [NSMutableArray array];
+	collectVCs(window.rootViewController, vcNames);
+	for (NSString *n in vcNames) if (names.count < 14) [names addObject:[@"VC:" stringByAppendingString:n]];
 
-		if (v != root.window) {
-			CGRect r = [v convertRect:v.bounds toView:root.window];
-			BOOL sizeOK = fabs(CGRectGetWidth(r) - w) < w * 0.20 &&
-			              fabs(CGRectGetHeight(r) - h) < h * 0.20;
-			BOOL posOK = fabs(CGRectGetMidY(r) - mid) < 30.0;
-			if (sizeOK && posOK) {
-				[names addObject:[NSString stringWithFormat:@"%@|%.0f,%.0f,%.0fx%.0f",
-				                  NSStringFromClass([v class]), r.origin.x, r.origin.y, r.size.width, r.size.height]];
+	// (b) reticle 位置上的候选视图
+	CGRect reticleRect = [SokoPosterLayout systemReticleRect];
+	if (CGRectGetHeight(reticleRect) < 1.0) {
+		reticleRect = [NSClassFromString(@"CSProminentLayoutController") frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
+	}
+	SokoTrace(49, (long)llround(CGRectGetHeight(reticleRect)));
+
+	if (CGRectGetHeight(reticleRect) > 1.0) {
+		CGFloat w = CGRectGetWidth(reticleRect), h = CGRectGetHeight(reticleRect), mid = CGRectGetMidY(reticleRect);
+		NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
+		NSInteger visited = 0;
+		while (stack.count && visited < 4000) {
+			UIView *v = stack.lastObject;
+			[stack removeLastObject];
+			visited++;
+			if (v != window) {
+				CGRect r = [v convertRect:v.bounds toView:window];
+				if (fabs(CGRectGetWidth(r) - w) < w * 0.25 && fabs(CGRectGetHeight(r) - h) < h * 0.25 &&
+				    fabs(CGRectGetMidY(r) - mid) < 40.0 && names.count < 22) {
+					[names addObject:[NSString stringWithFormat:@"V:%@|%.0f,%.0f,%.0fx%.0f",
+					                  NSStringFromClass([v class]), r.origin.x, r.origin.y, r.size.width, r.size.height]];
+				}
 			}
+			for (UIView *sub in v.subviews) [stack addObject:sub];
 		}
-
-		for (UIView *sub in v.subviews) [stack addObject:sub];
 	}
 
 	SokoTrace(39, (long)names.count);

@@ -1263,7 +1263,6 @@ static void SokoProbeEditorButtons(void) {
 	          bundleIdentifier, (int)modelSupported, (int)posterSupported);
 	SokoFileLog(@"CAP poster model=%d posterSupported=%d liquidAss=%d",
 	            (int)modelSupported, (int)posterSupported, (int)liquidAss);
-	SokoProbeEditorButtons();
 	SokoTrace(59, 2);   // 59=2：海报进程侧已装点击钩子
 	if (posterSupported) SokoInitPoster();
 }

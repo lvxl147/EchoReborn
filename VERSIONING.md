@@ -1216,3 +1216,13 @@ PREditingSceneViewController 的 viewDidLayoutSubviews —— 系统每次布局
 本版把 dumpCandidateViews 改为：用系统 reticle 矩形（±20% 尺寸 / ±30pt 位置）在整个
 window 里收候选，把**类名+坐标**打包经 trace 40/41 回传（最多 8 个，39=数量）。
 拿到真实类名后下一版直接对症。
+
+## 1.2.1-112（1002212）· 取证：window 里的完整 VC 树 + reticle 位置候选视图
+1.2.1-111 装机后 39 连续 5 次 = -3：gSystemReticleRect 在 dump 时还没算出来（兜底）。
+另外 -110 时代唯一抓到的候选类名是 **UIView**，但坐标段没出来（当时跑的是旧 dump）。
+本版 dump 回传两类字符串（39=条数、40=3 字节分片、41=分隔符）：
+  · `VC:类名` —— window.rootViewController 递归 childViewControllers/presentedViewController
+    最多 14 个，用来确认 PREditorRootViewController 到底在不在、叫什么
+  · `V:类名|x,y,w*h` —— reticle 矩形（兜底用 frameForElements:reticleVariant）±25% / ±40pt
+    位置上的候选视图，最多 8 个
+49 = reticle 矩形高度。停用 SokoProbeEditorButtons（15 版零产出，腾出 40~51）。
