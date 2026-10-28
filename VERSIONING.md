@@ -1237,3 +1237,18 @@ reticle 也在 728 → 只在 728 附近找 → 框（停在 212）永远不在�
 1.2.1-107 用对了锚点（frameForElements:reticleVariant = 系统原位）但只扫了 8 个
 视图的子树。两个 bug 互补，把这条路堵死了十几个版本。
 修复：**整窗口扫描 + 系统原位锚点 + delta 平移**（叶子视图优先）。
+
+## 1.2.1-114（1002214）· 边框真凶：PREditorRootViewController 的钩子从未装上
+对照上游源码（soko_new/Tweak，1.1.0）后确认：上游的整条边框链路都压在
+PREditorRootViewController 上：
+  registerEditorRootViewController → updateReticleForEditorRootViewController
+  → [controller updateReticleViewFrames]（系统自己重摆框）
+  → 内部调 complicationRowElementEditingReticleFrameWithBoundingRect:（我们 hook 的）
+而我们的 trace 24 从头到尾都是 0 —— loadView / viewDidLoad 钩子**一次都没触发**。
+原因：PREditorRootViewController 属于 PosterBoard 的 UI 层，**懒加载**；%ctor 里
+%init(SokoPoster) 那一刻它还不存在，Logos 的 hook 静默落空。于是
+registerEditorRootViewController 一次都没被调过，updateReticleViewFrames 也没人调，
+边框自然不动。（这也解释了 48=0、31~38 全零。）
+修复：拆出独立 %group SokoEditorRoot，用 dispatch_once 包住 %init；
+SokoInitPoster 末尾主动调一次（类多半已加载），dyld 回调 SokoImageAdded 里再调一次
+（覆盖晚加载）。EDITOR-ROOT-INIT 落盘即成功。viewDidLayoutSubviews 里补 update。

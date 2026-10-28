@@ -524,25 +524,6 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 
 %end
 
-%hook PREditorRootViewController
-
-- (void)loadView {
-	%orig;
-
-	[SokoEditorChrome registerEditorRootViewController:self];
-}
-
-// 1.2.1-105 · iOS 17.2.1 上 loadView 钩子**一次都没触发**（trace 24 全为零，
-// 取消按钮与虚线框查找因此都没跑）。补一个 viewDidLoad 入口，谁先到算谁。
-- (void)viewDidLoad {
-	%orig;
-
-	SokoTrace(24, 2);
-	[SokoEditorChrome registerEditorRootViewController:self];
-}
-
-%end
-
 %hook PREditingSceneViewController
 
 - (instancetype)initWithProvider:(id)provider contents:(id)contents configurableOptions:(id)configurableOptions configuredProperties:(PRPosterConfiguredProperties *)configuredProperties additionalInfo:(id)additionalInfo {
@@ -877,7 +858,56 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 
 %end
 
+// 1.2.1-114 · **这才是边框十几个版本不动的真凶**。
+//   上游 Soko 的整条边框链路都压在 PREditorRootViewController 上：
+//     registerEditorRootViewController → updateReticleForEditorRootViewController
+//     → [controller updateReticleViewFrames]（系统自己重摆框）
+//     → 内部调 complicationRowElementEditingReticleFrameWithBoundingRect:（我们 hook 的）
+//   但 PREditorRootViewController 属于 PosterBoard 的 UI 层，**懒加载**——%ctor 里
+//   %init(SokoPoster) 那一刻它还不存在，Logos 的 hook 静默落空（trace 24 从头到尾
+//   都是 0 就是铁证）。于是 registerEditorRootViewController 一次都没被调过，
+//   updateReticleViewFrames 也从来没人调，边框自然不动。
+//   解法：单独成组，等类真正加载后再 %init（dyld 回调 + 主动探测双保险）。
+%group SokoEditorRoot
+%hook PREditorRootViewController
+
+- (void)loadView {
+	%orig;
+
+	SokoTrace(24, 1);
+	[SokoEditorChrome registerEditorRootViewController:self];
+}
+
+- (void)viewDidLoad {
+	%orig;
+
+	SokoTrace(24, 2);
+	[SokoEditorChrome registerEditorRootViewController:self];
+}
+
+- (void)viewDidLayoutSubviews {
+	%orig;
+
+	// 1.2.1-110 · 系统每次布局都会把框摆回原位，布局完立刻再平移一次
+	[SokoEditorChrome update];
+}
+
+%end
+%end
+
+static void SokoInitEditorRoot(void) {
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		if (!objc_getClass("PREditorRootViewController")) return;
+		%init(SokoEditorRoot);
+		SokoFileLog(@"EDITOR-ROOT-INIT ok");
+	});
+}
+
 static void SokoImageAdded(const struct mach_header *header, intptr_t slide) {
+	// 1.2.1-114 · PREditorRootViewController 晚加载时在这里补装
+	SokoInitEditorRoot();
+
 	if (!objc_getClass("PUWallpaperPosterEditorController")) return;
 
 	static dispatch_once_t once;
@@ -959,6 +989,8 @@ static void SokoInitPoster(void) {
 		[SokoPosterLayout relayoutAnimated:NO];
 	});
 
+	// 1.2.1-114 · 边框钩子：类已加载就立刻装，没加载就等 dyld 回调
+	SokoInitEditorRoot();
 	_dyld_register_func_for_add_image(SokoImageAdded);
 }
 
