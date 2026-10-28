@@ -588,8 +588,11 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 	[SokoEditorChrome refreshDashedBorder];
 }
 
+// 1.2.1-121 · 系统的虚线框是画在 _UIPortalView 合成进来的图像里的（本进程没有
+//   可隐藏的视图，47/48/51 全部为 0 已实锤）。让它不出现的唯一开关就是这个：
+//   _hasGraphicComplications 返回 NO，编辑器就不画 graphic complications 的框。
 - (BOOL)_hasGraphicComplications {
-	return [SokoPosterLayout isIgnoringGraphicComplications] ? NO : %orig;
+	return NO;
 }
 
 - (void)setPresentedComplicationsGallery:(UINavigationController *)gallery {

@@ -534,8 +534,10 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 		CAShapeLayer *layer = [CAShapeLayer layer];
 		layer.fillColor = [UIColor clearColor].CGColor;
 		// 1.2.1-119 · 样式对齐截图：细实线（非虚线）、圆角 14、白 75%
-		layer.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.75].CGColor;
+		// 1.2.1-121 · 对齐截图：虚线 4/4、线宽 1.5、白 68%
+		layer.strokeColor = [UIColor colorWithWhite:1.0 alpha:0.68].CGColor;
 		layer.lineWidth = 1.5;
+		layer.lineDashPattern = @[@4, @4];
 		[view.layer addSublayer:layer];
 
 		gSokoDashedBorderView = view;
@@ -613,7 +615,7 @@ static BOOL SokoIsInsideComplicationContainer(UIView *view) {
 		gSokoDashedBorderView.frame = rect;
 		CGRect bounds = gSokoDashedBorderView.bounds;
 		gSokoDashedBorderLayer.frame = bounds;
-		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:14.0];
+		UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:bounds cornerRadius:16.0];
 		gSokoDashedBorderLayer.path = path.CGPath;
 	}
 }
