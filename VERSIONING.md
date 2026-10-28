@@ -1372,3 +1372,9 @@ setHidden: → 无限递归。**属性赋值会经过被 hook 的 setter**，而
 - 我们按文本找 UILabel 在 17.2.1 上找不到（那行字未必是 UILabel、文本也未必猜中）。
 修复：ERSwipeTeachableLayout 先 KVC 读这 4 个 ivar 藏掉，文本遍历保留作兜底；
 加 SWIPE-CT 布局命中日志（50 次打 1 条）确认容器是否被布局。
+
+## 1.2.1-127（1002227）· 修正 KVC ivar 名（jikan CFString 0x55f80 实锤）
+反汇编 updateModernContainer: 的 msgSend<valueForKey:> 参数是 CFString
+"_callToActionLabel"（不是 -126 猜的 _staticLabel 等四个）。
+- 只 KVC 读 _callToActionLabel；命中/非命中打一条 SWIPE-IVAR 日志
+- 只 setHidden:（与 jikan updateLabel: 一致），文本遍历保留兜底
