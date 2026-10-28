@@ -86,6 +86,22 @@ static NSHashTable<UIView *> *gReticleViews;
 	SokoTrace(24, 0);
 }
 
+// 1.2.1-108 · 用户截图确认：虚线框把「日期 + 大时钟 + 空槽」整个框住，高度远大于
+//   组件行（94pt）—— 所以按"高度≈94"筛是**永远筛不到它的**（1.2.1-107 的 44=9/13、
+//   45=1/3 抓到的都不是它）。
+//   换成精准定位：虚线框就是一个 CAShapeLayer 的 lineDashPattern，全窗口只有它有。
+static void SokoCollectDashedViews(UIView *view, NSMutableArray<UIView *> *out) {
+	if (!view) return;
+
+	CALayer *layer = view.layer;
+	if ([layer isKindOfClass:[CAShapeLayer class]] && layer.lineDashPattern.count) [out addObject:view];
+	for (CALayer *sub in layer.sublayers) {
+		if ([sub isKindOfClass:[CAShapeLayer class]] && sub.lineDashPattern.count) { [out addObject:view]; break; }
+	}
+
+	for (UIView *subview in view.subviews) SokoCollectDashedViews(subview, out);
+}
+
 + (void)huntReticleViewsForHostViewController:(UIViewController *)controller {
 	// 1.2.1-107 · 上一版从"编辑场景 VC 的视图"往下扫，实测只扫到 **8 个视图**（42=8）——
 	//   虚线框根本不在这棵子树里。改成从整个 window 往下扫。
@@ -134,6 +150,17 @@ static NSHashTable<UIView *> *gReticleViews;
 			[gReticleViews addObject:view];
 			added = YES;
 		}
+	}
+
+	// 1.2.1-108 · 优先用"画了虚线的视图"——这是唯一确定的判据
+	NSMutableArray<UIView *> *dashed = [NSMutableArray array];
+	SokoCollectDashedViews(window, dashed);
+	if (dashed.count) {
+		if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
+		[gReticleViews removeAllObjects];
+		for (UIView *view in dashed) [gReticleViews addObject:view];
+		SokoTrace(47, (long)dashed.count);
+		return;
 	}
 
 	// 1.2.1-107 · 取证：扫描量 / 候选数 / 纯 UIView 数 / 保留数
