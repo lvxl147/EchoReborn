@@ -135,17 +135,16 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 }
 
 + (void)huntReticleViewsForHostViewController:(UIViewController *)controller {
-	// 1.2.1-107 · 上一版从"编辑场景 VC 的视图"往下扫，实测只扫到 **8 个视图**（42=8）——
-	//   虚线框根本不在这棵子树里。改成从整个 window 往下扫。
 	UIView *root = controller.viewIfLoaded;
 	UIWindow *window = root.window;
 	if (!root || !window) return;
 
-	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
-	CGRect stock = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoReticleVariant];
-	if (CGRectIsNull(stock)) return;
-
-	CGFloat w = CGRectGetWidth(stock), h = CGRectGetHeight(stock), mid = CGRectGetMidY(stock);
+	// 1.2.1-110 · 用**系统自己算出来的 reticle 矩形**做精确筛选。
+	//   之前的失败原因：按"组件行 94pt"宽打地筛，44=9/13 抓到一堆不相干视图；
+	//   而真正的虚线框高度与组件行一致（截图实测），必须用 reticle 矩形本身来比。
+	CGRect reticleRect = [SokoPosterLayout systemReticleRect];
+	CGFloat w = CGRectGetWidth(reticleRect), h = CGRectGetHeight(reticleRect);
+	CGFloat mid = CGRectGetMidY(reticleRect);
 	if (w < 1.0 || h < 1.0) return;
 
 	NSMutableArray<UIView *> *stack = [NSMutableArray arrayWithObject:window];
@@ -159,53 +158,28 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 
 		if (view != window) {
 			CGRect rect = [view convertRect:view.bounds toView:window];
-			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.5 &&
-			              fabs(CGRectGetHeight(rect) - h) < h * 0.8;
-			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 40.0;
+			BOOL sizeOK = fabs(CGRectGetWidth(rect) - w) < w * 0.15 &&
+			              fabs(CGRectGetHeight(rect) - h) < h * 0.15;
+			BOOL parkedAtStock = fabs(CGRectGetMidY(rect) - mid) < 25.0;
 			if (sizeOK && parkedAtStock) [matches addObject:view];
 		}
 
 		for (UIView *subview in view.subviews) [stack addObject:subview];
 	}
 
-	// 虚线框通常是一个干净的 UIView（虚线画在它的 layer 上），优先只留这一类
-	NSMutableArray<UIView *> *plain = [NSMutableArray array];
+	// 尺寸/位置完全对上的视图里，优先挑"没有子视图"的（贴图/自绘框都是叶子）
+	NSMutableArray<UIView *> *leaves = [NSMutableArray array];
 	for (UIView *view in matches) {
-		if ([NSStringFromClass([view class]) isEqualToString:@"UIView"]) [plain addObject:view];
+		if (view.subviews.count == 0) [leaves addObject:view];
 	}
-	NSArray<UIView *> *picked = plain.count ? plain : matches;
+	NSArray<UIView *> *picked = leaves.count ? leaves : matches;
 
 	if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
-	BOOL added = NO;
+	BOOL changed = NO;
 	for (UIView *view in picked) {
-		if (![gReticleViews containsObject:view]) {
-			[gReticleViews addObject:view];
-			added = YES;
-		}
+		if (![gReticleViews containsObject:view]) { [gReticleViews addObject:view]; changed = YES; }
 	}
 
-	// 1.2.1-109 · 首选：系统自己的 reticle 视图
-	NSArray<UIView *> *systemReticles = SokoSystemReticleViews(window);
-	if (systemReticles.count) {
-		if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
-		[gReticleViews removeAllObjects];
-		for (UIView *view in systemReticles) [gReticleViews addObject:view];
-		SokoTrace(48, (long)systemReticles.count);
-		return;
-	}
-
-	// 1.2.1-108 · 次选：画了虚线的视图
-	NSMutableArray<UIView *> *dashed = [NSMutableArray array];
-	SokoCollectDashedViews(window, dashed);
-	if (dashed.count) {
-		if (!gReticleViews) gReticleViews = [NSHashTable weakObjectsHashTable];
-		[gReticleViews removeAllObjects];
-		for (UIView *view in dashed) [gReticleViews addObject:view];
-		SokoTrace(47, (long)dashed.count);
-		return;
-	}
-
-	// 1.2.1-107 · 取证：扫描量 / 候选数 / 纯 UIView 数 / 保留数
 	static CFTimeInterval lastHuntLog = 0.0;
 	CFTimeInterval nowHunt = CACurrentMediaTime();
 	if (nowHunt - lastHuntLog > 1.0) {
@@ -213,10 +187,21 @@ static NSArray<UIView *> *SokoSystemReticleViews(UIWindow *window) {
 		SokoTrace(42, (long)visited);
 		SokoTrace(43, (long)llround(h));
 		SokoTrace(44, (long)matches.count);
-		SokoTrace(45, (long)plain.count);
+		SokoTrace(45, (long)leaves.count);
 		SokoTrace(46, (long)gReticleViews.allObjects.count);
 	}
-	if (added) SokoTrace(28, 1);
+	if (changed) SokoTrace(28, 1);
+}
+
++ (void)reapplyReticleTransform {
+	CGFloat delta = [SokoPosterLayout editingRowDelta];
+	if (isnan(delta) || !gReticleViews) return;
+
+	for (UIView *view in gReticleViews.allObjects) {
+		if (!view.window) continue;
+		if (fabs(view.transform.ty - delta) < 0.5) continue;
+		view.transform = CGAffineTransformMakeTranslation(0.0, delta);
+	}
 }
 
 + (void)updateReticleViewsForHostViewController:(UIViewController *)controller {

@@ -1199,3 +1199,13 @@ shape layer 画的（多半是拉伸的虚线贴图）。
 （它一直没被我们注册到，但类确实存在、且 SokoPrivate.h 里声明了
 `graphicComplicationsReticleView`），直接取那个视图来平移。
 48=找到的系统 reticle 视图数。次选仍是 1.2.1-108 的虚线图层判据。
+
+## 1.2.1-110（1002210）· 用系统算出的 reticle 矩形做精确匹配 + 布局后重平移
+1.2.1-109 的 48=0：PREditorRootViewController 不在 window 的 VC 树里。
+改用我们自己就有的数据 —— `complicationRowElementEditingReticleFrameWithBoundingRect:`
+返回的那个矩形（60/63：顶部 212 / 底部 719），存成 gSystemReticleRect 暴露出来。
+hunt 改用它做筛选（±15% 尺寸 / ±25pt 位置，比之前"组件行 94pt 宽打"精确得多），
+候选里优先取"叶子视图"（贴图/自绘框都是叶子）。
+另加 `reapplyReticleTransform`：挂到 PRComplicationContainerViewController 与
+PREditingSceneViewController 的 viewDidLayoutSubviews —— 系统每次布局都会把框摆回
+原位，必须布局完立刻再平移。

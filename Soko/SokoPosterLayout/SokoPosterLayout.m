@@ -11,6 +11,8 @@ static NSHashTable<UIViewController *> *gComplicationContainerViewControllers;
 static NSHashTable<PREditingSceneViewController *> *gEditingSceneViewControllers;
 
 static __thread BOOL gComputingStockLayout;
+// 1.2.1-110 · 系统算出的编辑态 reticle 矩形（complicationRowElementEditingReticleFrame）
+static CGRect gSystemReticleRect = {{0, 0, 0, 0}};   // 高度>0 才有效
 static BOOL gIgnoringGraphicComplications;
 // 1.2.1-78 · 编辑会话内的偏移（NAN = 跟随 SpringBoard 发布值）
 static CGFloat gEditingRowOffset = NAN;
@@ -130,8 +132,16 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	//     偏移=底部(0)    时 delta=+507 → 719+507=1226 → 飞出屏幕
 	//     —— 正是用户说的"滑动到下面，直接变为不显示"。
 	//   所以这里什么都不做，直接把系统算好的 frame 原样返回。
+	// 1.2.1-110 · 把系统算出来的 reticle 矩形存下来，给视图查找当**精确**筛选条件
+	//   （60/63 证明系统确实会算这个矩形：顶部 212、底部 719）
+	gSystemReticleRect = frame;
+
 	SokoTrace(63, (long)llround(frame.origin.y));
 	return frame;
+}
+
++ (CGRect)systemReticleRect {
+	return gSystemReticleRect;
 }
 
 + (CGRect)editingRowFrame {

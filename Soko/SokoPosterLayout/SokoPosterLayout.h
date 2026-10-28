@@ -33,6 +33,8 @@
 + (void)clearEditingSession;
 // 1.2.1-104 · 编辑态行相对"系统原位"的位移量（虚线框要跟着挪这么多）
 + (CGFloat)editingRowDelta;
+// 1.2.1-110 · 系统算出的编辑态虚线框矩形（用于精确匹配视图）
++ (CGRect)systemReticleRect;
 + (CGFloat)effectiveRowOffset;               // 编辑期取会话值，否则取发布值
 + (CGFloat)stockEditingRowMinY;              // 系统原位行（不含我们的调整）
 // 1.2.1-69 · 手势门禁日志要读它（实现本来就在 .m 里，只是没在头文件声明）

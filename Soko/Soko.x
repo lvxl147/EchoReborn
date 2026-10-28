@@ -515,6 +515,13 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 	[SokoLayoutSwipeHandler installOnComplicationContainerViewController:self];
 }
 
+- (void)viewDidLayoutSubviews {
+	%orig;
+
+	// 1.2.1-110 · 系统每次布局都会把虚线框摆回原位，必须布局完立刻再平移一次
+	[SokoEditorChrome reapplyReticleTransform];
+}
+
 %end
 
 %hook PREditorRootViewController
@@ -562,7 +569,6 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 	//   所以"取消"只能靠关闭后回退到基线。
 	SokoEditorRequestClosed();
 	SokoTrace(30, 1);
-
 	// 1.2.1-99 · 会话收尾：编辑器完全消失 3 秒后清掉会话值，避免残留值被之后
 	// 任何一次 setComplicationLayout:（与本次编辑无关的）当成"完成"提交出去。
 	// 3 秒是因为"完成"路径的 setComplicationLayout: 可能在消失过程中稍晚才到。
@@ -585,6 +591,13 @@ static void SokoWriteOffsetToPrefs(CGFloat value, NSString *why) {
 	// code 4：编辑器登记成功（1）/失败（0）；失败时 role 见 payload 无法携带，看 CAP 行
 	SokoTrace(4, (long)registered);
 	if (registered) [SokoLayoutSwipeHandler installOnEditingSceneViewController:self];
+}
+
+- (void)viewDidLayoutSubviews {
+	%orig;
+
+	// 1.2.1-110 · 同上：布局完立刻把虚线框再平移一次
+	[SokoEditorChrome reapplyReticleTransform];
 }
 
 - (BOOL)_hasGraphicComplications {
