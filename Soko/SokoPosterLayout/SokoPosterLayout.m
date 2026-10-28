@@ -124,6 +124,11 @@ static NSHashTable *SokoRegister(NSHashTable *table, id object) {
 	return frame;
 }
 
++ (CGRect)systemReticleRect {
+	// 1.2.1-110 · 系统算出的 reticle 矩形（view 查找兜底用）
+	return gSystemReticleRect;
+}
+
 + (CGRect)editingRowFrame {
 	Class layoutClass = NSClassFromString(@"CSProminentLayoutController");
 	CGRect frame = [layoutClass frameForElements:kSokoComplicationRowElement variant:kSokoEditingVariant];
