@@ -36636,6 +36636,15 @@ static void ERStartLockTextPrefTimer(void) {
     gERNCTextOn    = ERPreferenceBool(kERHideNCTextKey, NO);
 }
 
+#pragma mark 隐藏锁屏通知中心文字 · 分组头（HideNCHeaders 移植）
+
+static IMP gERNCOldHeaderHidden, gERNCOldHeaderAlpha, gERNCOldHeaderLayout,
+            gERNCOldHeaderToWindow, gERNCOldHeaderToSuperview;
+static IMP gERNCOldCoalescingHidden, gERNCOldCoalescingAlpha, gERNCOldCoalescingLayout,
+           gERNCOldCoalescingToWindow, gERNCOldCoalescingToSuperview;
+static IMP gERNCOldHeaderHeight, gERNCOldCoalescingHeight;
+static BOOL gERNCTextInstalled;
+
 // 1.2.1-125 · **钩子内禁止 view.hidden / view.alpha 属性赋值**（.ips 16:20:45 实锤：
 //   属性赋值会再次经过被 hook 的 setHidden: → 无限递归）。要改可见性只能用保存下来
 //   的原 IMP 直调，绕过消息发送；两个类各有自己的原 IMP，必须分开传。
