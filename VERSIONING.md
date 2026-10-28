@@ -1226,3 +1226,14 @@ window 里收候选，把**类名+坐标**打包经 trace 40/41 回传（最多 
   · `V:类名|x,y,w*h` —— reticle 矩形（兜底用 frameForElements:reticleVariant）±25% / ±40pt
     位置上的候选视图，最多 8 个
 49 = reticle 矩形高度。停用 SokoProbeEditorButtons（15 版零产出，腾出 40~51）。
+
+## 1.2.1-113（1002213）· 边框锚点反了（真正的修复）
+1.2.1-112 取证实锤：VC 树里只有 PBFPosterRackCollection… / PREditingSceneViewController
+（没有 PREditorRootViewController，48=0 的原因），而 reticle 位置上的候选是
+`V:UIView|30,728,370x76` —— y=728 是**底部**，说明那是跟着组件走的内容视图，
+不是框。
+**根因**：1.2.1-110 把 hunt 的位置锚点换成了"当前 reticle 矩形"。滑到底时当前
+reticle 也在 728 → 只在 728 附近找 → 框（停在 212）永远不在搜索范围。
+1.2.1-107 用对了锚点（frameForElements:reticleVariant = 系统原位）但只扫了 8 个
+视图的子树。两个 bug 互补，把这条路堵死了十几个版本。
+修复：**整窗口扫描 + 系统原位锚点 + delta 平移**（叶子视图优先）。
