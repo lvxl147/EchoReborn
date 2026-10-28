@@ -1337,3 +1337,16 @@ iOS 17.2.1 的可见虚线框不受任何已知钩子控制（上游机制整体
    找文本含「解锁/轻扫/swipe up/slide to unlock」的 UILabel 隐藏；关时恢复。
 4. 两行开关挂在「锁屏隐藏」卡（与「隐藏系统锁屏音乐」同卡），图标 bell.slash(橙) /
    arrow.up.to.line(青)。安装点：主 %ctor 主队列异步（PosterKit/MercuryPoster 已前门 return）。
+
+## 1.2.1-124（1002224）· 修复 -123 无限注销（.ips 定位的三层失误）
+崩溃栈：CFPreferences alreadylocked_generationCountFromListOfSources → SIGSEGV 主线程。
+1. **安全替换 ERSafeApply**（照抄 HideNCHeaders 的 HNCApplyMethod）：只在本类自己
+   实现该方法时才 method_setImplementation，否则 class_addMethod 加在本类 ——
+   绝不碰父类（UIView）的全局实现。上一版直接换掉 SBUICallToActionLabel 继承来的
+   layoutSubviews/didMoveToWindow，等于替换了全 SpringBoard 的 UIView。
+2. **偏好缓存**：1 秒定时器统一刷新 gERSwipeTextOn / gERNCTextOn，钩子内不再读
+   CFPreferences（didMoveToWindow 期间重入 cfprefsd 即崩）。
+3. **状态变化才写**：ERSwipeHideLabel 先比对 hidden 再写，杜绝「我藏 / 系统摆回」
+   的拉锯递归；遍历加 400 次访问上限。
+4. ERNCApply 改为转发 ERSafeApply 并补全各调用点签名。
+-123 已回滚（设备当前 -122）；本版修复后再装机。

@@ -36583,6 +36583,60 @@ static NSString *const kERHideSwipeKey    = @"SystemEnhance.HideSwipeToUnlockTex
 static BOOL ERHideNCTextEnabled(void)  { return ERPreferenceBool(kERHideNCTextKey, NO); }
 static BOOL ERHideSwipeTextEnabled(void) { return ERPreferenceBool(kERHideSwipeKey, NO); }
 
+// 1.2.1-124 · **安全替换（保命逻辑，来自 HideNCHeaders 的 HNCApplyMethod）**：
+//   只在【本类自己实现】了该方法时才 method_setImplementation；否则 class_addMethod
+//   加在本类上。绝不碰父类（UIView 等）的全局实现 —— 上一版直接换掉
+//   SBUICallToActionLabel 继承来的 layoutSubviews/didMoveToWindow，等于把全 SpringBoard
+//   的 UIView 都换了，且 didMoveToWindow 在窗口装配期被高频调用 → cfprefsd 重入崩溃
+//   （.ips 实锤：alreadylocked_generationCountFromListOfSources）。
+static BOOL ERSafeApply(Class cls, SEL selector, IMP replacement, IMP *original,
+                        char result, const char *arguments) {
+    Method method = class_getInstanceMethod(cls, selector);
+    if (!method) return NO;
+    if (method_getNumberOfArguments(method) != strlen(arguments) + 2) return NO;
+    char *rt = method_copyReturnType(method);
+    BOOL rtOK = rt && rt[0] == result;
+    free(rt);
+    if (!rtOK) return NO;
+    for (size_t i = 0; arguments[i]; ++i) {
+        char *at = method_copyArgumentType(method, (unsigned int)i + 2);
+        BOOL ok = at && at[0] == arguments[i];
+        free(at);
+        if (!ok) return NO;
+    }
+    unsigned int count = 0;
+    Method *methods = class_copyMethodList(cls, &count);
+    Method local = NULL;
+    for (unsigned int i = 0; i < count; ++i) {
+        if (sel_isEqual(method_getName(methods[i]), selector)) { local = methods[i]; break; }
+    }
+    free(methods);
+    IMP previous = method_getImplementation(local ? local : method);
+    if (original) *original = previous;
+    if (local) { method_setImplementation(local, replacement); return YES; }
+    return class_addMethod(cls, selector, replacement, method_getTypeEncoding(method));
+}
+
+// 1.2.1-124 · 偏好缓存：钩子内绝不直接读 CFPreferences（didMoveToWindow 期间会重入
+//   cfprefsd，.ips 崩在 alreadylocked_generationCountFromListOfSources）。1 秒定时器统一刷。
+static BOOL gERSwipeTextOn = NO;
+static BOOL gERNCTextOn = NO;
+static dispatch_source_t gERLockTextPrefTimer;
+static void ERStartLockTextPrefTimer(void) {
+    if (gERLockTextPrefTimer) return;
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
+    if (!timer) return;
+    dispatch_source_set_timer(timer, DISPATCH_TIME_NOW, (uint64_t)(1.0 * NSEC_PER_SEC), (uint64_t)(0.2 * NSEC_PER_SEC));
+    dispatch_source_set_event_handler(timer, ^{
+        gERSwipeTextOn = ERPreferenceBool(kERHideSwipeKey, NO);
+        gERNCTextOn    = ERPreferenceBool(kERHideNCTextKey, NO);
+    });
+    dispatch_resume(timer);
+    gERLockTextPrefTimer = timer;
+    gERSwipeTextOn = ERPreferenceBool(kERHideSwipeKey, NO);
+    gERNCTextOn    = ERPreferenceBool(kERHideNCTextKey, NO);
+}
+
 // 恢复可见（开关关闭时用）。只动视觉三件套，accessibility 不乱写。
 static void ERNCTextMakeVisible(UIView *view) {
     if (!view) return;
@@ -36611,17 +36665,17 @@ static void ERNCConceal(UIView *view) {
 
 // --- 分组头 NCNotificationListSectionHeaderView ---
 static void ERNCHdrSetHidden(UIView *self, SEL cmd, BOOL arg) {
-    if (ERHideNCTextEnabled()) { ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, cmd, YES); ERNCConceal(self); return; }
+    if (gERNCTextOn) { ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, cmd, YES); ERNCConceal(self); return; }
     ((void (*)(id, SEL, BOOL))gERNCOldHeaderHidden)(self, cmd, arg);
 }
 static void ERNCHdrSetAlpha(UIView *self, SEL cmd, CGFloat arg) {
-    if (ERHideNCTextEnabled()) { ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, cmd, 0.0); ERNCConceal(self); return; }
+    if (gERNCTextOn) { ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, cmd, 0.0); ERNCConceal(self); return; }
     ((void (*)(id, SEL, CGFloat))gERNCOldHeaderAlpha)(self, cmd, arg);
     ERNCTextMakeVisible(self);
 }
 static void ERNCHdrLayout(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldHeaderLayout)(self, cmd);
-    if (ERHideNCTextEnabled()) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
 }
 static void ERNCHdrToWindow(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldHeaderToWindow)(self, cmd);
@@ -36629,27 +36683,27 @@ static void ERNCHdrToWindow(UIView *self, SEL cmd) {
 }
 static void ERNCHdrToSuperview(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldHeaderToSuperview)(self, cmd);
-    if (ERHideNCTextEnabled()) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
 }
 static double ERNCHdrHeight(id self, SEL cmd, double width, id title, BOOL collapse) {
-    if (ERHideNCTextEnabled()) return 0.0;
+    if (gERNCTextOn) return 0.0;
     if (!gERNCOldHeaderHeight) return 0.0;
     return ((double (*)(id, SEL, double, id, BOOL))gERNCOldHeaderHeight)(self, cmd, width, title, collapse);
 }
 
 // --- 合并通知头 NCNotificationListCoalescingHeaderCell ---
 static void ERNCCoSetHidden(UIView *self, SEL cmd, BOOL arg) {
-    if (ERHideNCTextEnabled()) { ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, cmd, YES); ERNCConceal(self); return; }
+    if (gERNCTextOn) { ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, cmd, YES); ERNCConceal(self); return; }
     ((void (*)(id, SEL, BOOL))gERNCOldCoalescingHidden)(self, cmd, arg);
 }
 static void ERNCCoSetAlpha(UIView *self, SEL cmd, CGFloat arg) {
-    if (ERHideNCTextEnabled()) { ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, cmd, 0.0); ERNCConceal(self); return; }
+    if (gERNCTextOn) { ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, cmd, 0.0); ERNCConceal(self); return; }
     ((void (*)(id, SEL, CGFloat))gERNCOldCoalescingAlpha)(self, cmd, arg);
     ERNCTextMakeVisible(self);
 }
 static void ERNCCoLayout(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldCoalescingLayout)(self, cmd);
-    if (ERHideNCTextEnabled()) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
 }
 static void ERNCCoToWindow(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldCoalescingToWindow)(self, cmd);
@@ -36657,10 +36711,10 @@ static void ERNCCoToWindow(UIView *self, SEL cmd) {
 }
 static void ERNCCoToSuperview(UIView *self, SEL cmd) {
     ((void (*)(id, SEL))gERNCOldCoalescingToSuperview)(self, cmd);
-    if (ERHideNCTextEnabled()) ERNCConceal(self); else ERNCTextMakeVisible(self);
+    if (gERNCTextOn) ERNCConceal(self); else ERNCTextMakeVisible(self);
 }
 static double ERNCCoHeight(id self, SEL cmd, double width, id title) {
-    if (ERHideNCTextEnabled()) return 0.0;
+    if (gERNCTextOn) return 0.0;
     if (!gERNCOldCoalescingHeight) return 0.0;
     return ((double (*)(id, SEL, double, id))gERNCOldCoalescingHeight)(self, cmd, width, title);
 }
@@ -36695,23 +36749,9 @@ static BOOL ERNCValid(Method method, char result, const char *arguments) {
     return YES;
 }
 // 在"本类"上加覆盖（继承来的方法也加在本类），绝不改 UIView 的实现
-static BOOL ERNCApply(Class cls, SEL selector, IMP replacement, IMP *original) {
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!ERNCValid(method, replacement == (IMP)ERNCHdrHeight || replacement == (IMP)ERNCCoHeight ? 'd' : 'v',
-                   replacement == (IMP)ERNCHdrHeight ? "d@B" :
-                   replacement == (IMP)ERNCCoHeight  ? "d@"  :
-                   replacement == (IMP)ERNCHdrSetHidden || replacement == (IMP)ERNCCoSetHidden ? "B" : "d")) return NO;
-    unsigned int count = 0;
-    Method *methods = class_copyMethodList(cls, &count);
-    Method local = NULL;
-    for (unsigned int i = 0; i < count; ++i) {
-        if (sel_getName(method_getName(methods[i])) == sel_getName(selector)) { local = methods[i]; break; }
-    }
-    free(methods);
-    IMP previous = method_getImplementation(local ? local : method);
-    if (original) *original = previous;
-    if (local) { method_setImplementation(local, replacement); return YES; }
-    return class_addMethod(cls, selector, replacement, method_getTypeEncoding(method));
+static BOOL ERNCApply(Class cls, SEL selector, IMP replacement, IMP *original,
+                      char result, const char *arguments) {
+    return ERSafeApply(cls, selector, replacement, original, result, arguments);
 }
 
 static BOOL ERNCInstallOne(Class cls, BOOL isCoalescing) {
@@ -36720,27 +36760,27 @@ static BOOL ERNCInstallOne(Class cls, BOOL isCoalescing) {
         !ERNCValid(class_getInstanceMethod(cls, @selector(setAlpha:)), 'v', "d")) return NO;
 
     if (isCoalescing) {
-        BOOL a = ERNCApply(cls, @selector(setHidden:), (IMP)ERNCCoSetHidden, &gERNCOldCoalescingHidden);
-        BOOL b = ERNCApply(cls, @selector(setAlpha:),  (IMP)ERNCCoSetAlpha,  &gERNCOldCoalescingAlpha);
+        BOOL a = ERNCApply(cls, @selector(setHidden:), (IMP)ERNCCoSetHidden, &gERNCOldCoalescingHidden, 'v', "B");
+        BOOL b = ERNCApply(cls, @selector(setAlpha:),  (IMP)ERNCCoSetAlpha,  &gERNCOldCoalescingAlpha,  'v', "d");
         if (!a || !b) return NO;
-        ERNCApply(cls, @selector(layoutSubviews),    (IMP)ERNCCoLayout,      &gERNCOldCoalescingLayout);
-        ERNCApply(cls, @selector(didMoveToWindow),   (IMP)ERNCCoToWindow,    &gERNCOldCoalescingToWindow);
-        ERNCApply(cls, @selector(didMoveToSuperview),(IMP)ERNCCoToSuperview, &gERNCOldCoalescingToSuperview);
+        ERNCApply(cls, @selector(layoutSubviews),    (IMP)ERNCCoLayout,      &gERNCOldCoalescingLayout,      'v', "");
+        ERNCApply(cls, @selector(didMoveToWindow),   (IMP)ERNCCoToWindow,    &gERNCOldCoalescingToWindow,    'v', "");
+        ERNCApply(cls, @selector(didMoveToSuperview),(IMP)ERNCCoToSuperview, &gERNCOldCoalescingToSuperview, 'v', "");
         ERNCApply(object_getClass(cls),
                   sel_registerName("coalescingHeaderCellHeightForWidth:title:"),
-                  (IMP)ERNCCoHeight, &gERNCOldCoalescingHeight);
+                  (IMP)ERNCCoHeight, &gERNCOldCoalescingHeight, 'd', "d@");
         return YES;
     }
 
-    BOOL a = ERNCApply(cls, @selector(setHidden:), (IMP)ERNCHdrSetHidden, &gERNCOldHeaderHidden);
-    BOOL b = ERNCApply(cls, @selector(setAlpha:),  (IMP)ERNCHdrSetAlpha,  &gERNCOldHeaderAlpha);
+    BOOL a = ERNCApply(cls, @selector(setHidden:), (IMP)ERNCHdrSetHidden, &gERNCOldHeaderHidden, 'v', "B");
+    BOOL b = ERNCApply(cls, @selector(setAlpha:),  (IMP)ERNCHdrSetAlpha,  &gERNCOldHeaderAlpha,  'v', "d");
     if (!a || !b) return NO;
-    ERNCApply(cls, @selector(layoutSubviews),     (IMP)ERNCHdrLayout,      &gERNCOldHeaderLayout);
-    ERNCApply(cls, @selector(didMoveToWindow),    (IMP)ERNCHdrToWindow,    &gERNCOldHeaderToWindow);
-    ERNCApply(cls, @selector(didMoveToSuperview), (IMP)ERNCHdrToSuperview, &gERNCOldHeaderToSuperview);
+    ERNCApply(cls, @selector(layoutSubviews),     (IMP)ERNCHdrLayout,      &gERNCOldHeaderLayout,      'v', "");
+    ERNCApply(cls, @selector(didMoveToWindow),    (IMP)ERNCHdrToWindow,    &gERNCOldHeaderToWindow,    'v', "");
+    ERNCApply(cls, @selector(didMoveToSuperview), (IMP)ERNCHdrToSuperview, &gERNCOldHeaderToSuperview, 'v', "");
     ERNCApply(object_getClass(cls),
               sel_registerName("headerHeightWithWidth:title:isShowingCollapseButton:"),
-              (IMP)ERNCHdrHeight, &gERNCOldHeaderHeight);
+              (IMP)ERNCHdrHeight, &gERNCOldHeaderHeight, 'd', "d@B");
     return YES;
 }
 
@@ -36774,21 +36814,22 @@ static BOOL ERSwipeTextMatches(NSString *text) {
     return [lower containsString:@"swipe up"] || [lower containsString:@"slide to unlock"];
 }
 
+// 1.2.1-124 · **只在状态变化时写**。上一版无条件 setHidden，系统又摆回来，
+//   两边拉锯 = layoutSubviews 无限递归（.ips 的交替栈就是这个）。
 static void ERSwipeHideLabel(UILabel *label) {
-    BOOL on = ERHideSwipeTextEnabled();
-    if (on && ERSwipeTextMatches(label.text)) {
-        label.hidden = YES;
-        label.alpha = 0.0;
-    } else if (!on) {
-        label.hidden = NO;
-        label.alpha = 1.0;
-    }
+    BOOL visible = !gERSwipeTextOn;
+    if (!visible && !ERSwipeTextMatches(label.text)) visible = YES;
+    if (label.hidden == !visible) return;                 // 状态没变，绝不写
+    label.hidden = !visible;
+    label.alpha = visible ? 1.0 : 0.0;
 }
 
-// 遍历子树里所有 UILabel（用于新路径容器）
-static void ERSwipeWalkLabels(UIView *view, void (^block)(UILabel *)) {
+// 遍历子树里的 UILabel（带访问上限）
+static void ERSwipeWalkLabels(UIView *view, void (^block)(UILabel *), NSInteger *budget) {
+    if (*budget <= 0) return;
+    (*budget)--;
     if ([view isKindOfClass:[UILabel class]]) block((UILabel *)view);
-    for (UIView *sub in view.subviews) ERSwipeWalkLabels(sub, block);
+    for (UIView *sub in view.subviews) ERSwipeWalkLabels(sub, block, budget);
 }
 
 static void ERSwipeCallToActionLayout(id self, SEL cmd) {
@@ -36801,42 +36842,35 @@ static void ERSwipeCallToActionToWindow(id self, SEL cmd) {
 }
 static void ERSwipeTeachableLayout(id self, SEL cmd) {
     ((void (*)(id, SEL))gEROldTeachableLayout)(self, cmd);
-    if (!ERHideSwipeTextEnabled()) {
-        ERSwipeWalkLabels((UIView *)self, ^(UILabel *label) {
-            if (ERSwipeTextMatches(label.text)) { label.hidden = NO; label.alpha = 1.0; }
-        });
-        return;
-    }
-    ERSwipeWalkLabels((UIView *)self, ^(UILabel *label) { ERSwipeHideLabel(label); });
+    NSInteger budget = 400;
+    ERSwipeWalkLabels((UIView *)self, ^(UILabel *label) { ERSwipeHideLabel(label); }, &budget);
 }
 
 static void ERSwipeTextInstall(void) {
     if (gERSwipeTextInstalled) return;
 
     Class legacy = objc_lookUpClass("SBUICallToActionLabel");
-    if (legacy) {
-        Method m1 = class_getInstanceMethod(legacy, @selector(layoutSubviews));
-        Method m2 = class_getInstanceMethod(legacy, @selector(didMoveToWindow));
-        if (m1 && m2) {
-            gEROldCallToActionLayout   = method_getImplementation(m1);
-            gEROldCallToActionToWindow = method_getImplementation(m2);
-            method_setImplementation(m1, (IMP)ERSwipeCallToActionLayout);
-            method_setImplementation(m2, (IMP)ERSwipeCallToActionToWindow);
-        }
-    }
-
     Class modern = objc_lookUpClass("CSTeachableMomentsContainerView");
+    BOOL okLegacy = NO, okModern = NO;
+
+    if (legacy) {
+        // 只在本类自己实现时才换 IMP；否则在本类新增 —— 绝不动 UIView 的全局实现
+        okLegacy  = ERSafeApply(legacy, @selector(layoutSubviews),  (IMP)ERSwipeCallToActionLayout,   &gEROldCallToActionLayout,   'v', "");
+        BOOL ok2  = ERSafeApply(legacy, @selector(didMoveToWindow), (IMP)ERSwipeCallToActionToWindow, &gEROldCallToActionToWindow, 'v', "");
+        okLegacy  = okLegacy && ok2;
+    }
     if (modern) {
-        Method m = class_getInstanceMethod(modern, @selector(layoutSubviews));
-        if (m) {
-            gEROldTeachableLayout = method_getImplementation(m);
-            method_setImplementation(m, (IMP)ERSwipeTeachableLayout);
-        }
+        okModern = ERSafeApply(modern, @selector(layoutSubviews), (IMP)ERSwipeTeachableLayout, &gEROldTeachableLayout, 'v', "");
     }
 
-    if (legacy || modern) {
+    if (okLegacy || okModern) {
         gERSwipeTextInstalled = YES;
-        ERLogInfo(@"SWIPE-TEXT installed legacy=%d modern=%d", legacy != nil, modern != nil);
+        ERStartLockTextPrefTimer();
+        ERLogInfo(@"SWIPE-TEXT installed legacy=%d modern=%d", okLegacy ? 1 : 0, okModern ? 1 : 0);
+    } else {
+        ERLogInfo(@"SWIPE-TEXT install failed legacy=%@ modern=%@",
+                  legacy ? NSStringFromClass(legacy) : @"nil",
+                  modern ? NSStringFromClass(modern) : @"nil");
     }
 }
 
