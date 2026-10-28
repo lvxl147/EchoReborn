@@ -1386,3 +1386,16 @@ setHidden: → 无限递归。**属性赋值会经过被 hook 的 setter**，而
 本版一次性 dump（SWIPE-IVARS / SWIPE-KIDS / SWIPE-SCAN / SWIPE-CLS / SWIPE-TXT）：
 容器 ivar 全表 + 直系子视图类名 + 同窗口搜带「解锁/轻扫/swipe」的视图及父链。
 用途只是取证，拿到名字后把隐藏逻辑改到正确的类/ivar 上。
+
+## 1.2.1-130（1002230）· 桌面胶囊手势「回桌面立刻生效」
+根因（代码实锤）：gestureRecognizerShouldBegin: 用**缓存帧** sERSPGPillWinFrame 判定，
+App 返回桌面后缓存帧是切换前的旧值 → shouldBegin 直接 NO → pan 起不来；
+而 1.2.0-74 那句"起手实时取帧"的补丁在 pan 处理器里，跑不到。缓存帧只在 5s tick
+刷新且带 2 tick 防抖 → 正好 5~15 秒死区。
+三处齐改：
+① shouldBegin 起手时用 sERSPGPillRef 实时帧校正缓存，并按外扩矩形判定（与开火同几何）
+② 胶囊类 didMoveToWindow 事件驱动：新实例一进窗口就地 ConfigurePillEx(immediate=YES)，
+   跳过帧防抖；顺带把 pan 挂到该 window
+③ SBIconController viewDidAppear: → 立即 ERSPGScanTick()（类懒加载，每 tick 重试挂上）
+④ 首次 tick 从 respring 后 8s 提前到 1s
+轮询（5s）退化为兜底，不再是唯一入口。

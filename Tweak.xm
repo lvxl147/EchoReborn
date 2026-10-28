@@ -35185,8 +35185,16 @@ static const void *kERSPGPillRecognizersKey = &kERSPGPillRecognizersKey;
         UIWindow *w = view.window ?: (UIWindow *)view;
         if (!w) return NO;
         CGPoint p = [gestureRecognizer locationInView:w];
-        return !CGRectIsEmpty(sERSPGPillWinFrame) &&
-               CGRectContainsPoint(sERSPGPillWinFrame, p);
+        // 1.2.1-130 · 起手闸门实时校正：先用当前胶囊的实时帧刷新缓存，再判定
+        //   （旧值来自 App 切换前 → 回桌面头 5~15s 每次都被这里判死）
+        UIView *sbLive = sERSPGPillRef;
+        if (sbLive && sbLive.window) {
+            CGRect sbf = [sbLive convertRect:sbLive.bounds toView:sbLive.window];
+            if (!CGRectIsEmpty(sbf)) sERSPGPillWinFrame = sbf;
+        }
+        CGRect sbArea = ERSPGExpandPillRect(sERSPGPillWinFrame, ERSPGTriggerExpand());
+        if (CGRectIsEmpty(sbArea)) sbArea = sERSPGPillWinFrame;
+        return !CGRectIsEmpty(sbArea) && CGRectContainsPoint(sbArea, p);
     } @catch (__unused NSException *e) {}
     return NO;
 }
@@ -35841,7 +35849,17 @@ static void ERSPGSyncSearchLayerPan(BOOL gestureEnabled) {
     }
 }
 
-static void ERSPGConfigurePill(UIView *pill) {
+// 1.2.1-130 · 桌面胶囊手势「回桌面立刻生效」
+//   根因：gestureRecognizerShouldBegin: 用**缓存帧** sERSPGPillWinFrame 判定，
+//   App 返回桌面后缓存帧还是切换前的旧值 → shouldBegin 直接 NO → pan 不起来，
+//   而 1.2.0-74 那句"起手实时取帧"的补丁在 pan 处理器里，根本跑不到。
+//   缓存帧只在 5s tick 里刷新，还有 2 tick 防抖 → 正好 5~15 秒死区。
+//   本版三处齐改：① shouldBegin 实时校正 ② 胶囊进窗口事件驱动挂载 ③ 桌面出现即扫描。
+static void ERSPGConfigurePillEx(UIView *pill, BOOL immediate);
+static void ERSPGAttachPillWindowHook(Class cls);
+static void ERSPGAttachIconControllerHook(void);
+static void ERSPGConfigurePill(UIView *pill) { ERSPGConfigurePillEx(pill, NO); }
+static void ERSPGConfigurePillEx(UIView *pill, BOOL immediate) {
     BOOL enabled = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
     // 1.2.0-8 · 在场心跳：30s 一条，证明扫描每轮都能找到胶囊（手势挂着）
     static NSTimeInterval sERSPGLastPresent = 0;
@@ -35873,7 +35891,7 @@ static void ERSPGConfigurePill(UIView *pill) {
             static NSInteger sERSPGPendingCount = 0;
             CGPoint nc = CGPointMake(CGRectGetMidX(f), CGRectGetMidY(f));
             CGPoint cc = CGPointMake(CGRectGetMidX(sERSPGPillWinFrame), CGRectGetMidY(sERSPGPillWinFrame));
-            BOOL jumped = hypot(nc.x - cc.x, nc.y - cc.y) > 20.0 &&
+            BOOL jumped = !immediate && hypot(nc.x - cc.x, nc.y - cc.y) > 20.0 &&
                           !CGRectIsEmpty(sERSPGPillWinFrame);
             if (!jumped) {
                 sERSPGPillWinFrame = f;
@@ -35921,11 +35939,90 @@ static void ERSPGConfigurePill(UIView *pill) {
     }
     // 1.2.0-12 · touches 直挂（参考插件方案，类级一次）；与 pan 并存，ERSPGShouldFire 去重。
     ERSPGAttachTouchHook(pill.class);
+    // 1.2.1-130 · 类级 didMoveToWindow：新胶囊实例一进窗口就地挂载，不等 tick
+    ERSPGAttachPillWindowHook(pill.class);
     if (sERSPGWinPan) sERSPGWinPan.enabled = enabled;
     // 1.2.0-22 · 系统胶囊手势压制/恢复（心跳维持，每 tick 同步一次）。
     ERSPGSyncSystemGestures(pill, enabled);
     // 1.2.0-23 · 搜索层 pan 压制/恢复（总开关联动，每 tick 心跳维持）。
     ERSPGSyncSearchLayerPan(enabled);
+}
+
+// ---------------------------------------------------------------------------
+// 1.2.1-130 · 事件驱动：桌面胶囊手势「回桌面立刻生效」
+//
+// 原来只有 5s 轮询一个入口，回桌面后新胶囊实例 / 新窗口要等 1~3 个 tick 才挂上
+// 手势（用户实测 5~15s 失灵）。这里补两个**事件入口**，轮询退化为兜底：
+//   ① 胶囊实例 didMoveToWindow —— 新实例一进窗口就地挂载（immediate，跳过帧防抖）
+//   ② SBIconController viewDidAppear: —— 一进桌面立即扫一次
+// ---------------------------------------------------------------------------
+static void ERSPGScanTick(void);   // 前向声明（定义在本段下方）
+static IMP    gERSPGOldPillToWindow = NULL;
+static Class  gERSPGPillSuperCls    = Nil;
+static BOOL   gERSPGPillWinHooked   = NO;
+
+static void ERSPGPillDidMoveToWindow(UIView *self, SEL _cmd) {
+    if (gERSPGOldPillToWindow) {
+        ((void (*)(id, SEL))gERSPGOldPillToWindow)(self, _cmd);
+    } else if (gERSPGPillSuperCls) {
+        struct objc_super sup = { self, gERSPGPillSuperCls };
+        ((void (*)(struct objc_super *, SEL))objc_msgSendSuper)(&sup, _cmd);
+    }
+    @try {
+        if (!self.window) return;
+        BOOL on = ERSPGBool(@"HomeScreen.SearchPill.Enabled", NO);
+        ERSPGConfigurePillEx(self, YES);          // immediate：实时帧，不走防抖
+        ERLogInfo(@"SPG-INSTANT 胶囊进窗口 cls=%@ frame=%@ enabled=%d pan=%d",
+                  NSStringFromClass(self.class),
+                  NSStringFromCGRect([self convertRect:self.bounds toView:self.window]),
+                  on ? 1 : 0, sERSPGWinPan ? 1 : 0);
+    } @catch (__unused NSException *e) {}
+}
+
+static void ERSPGAttachPillWindowHook(Class cls) {
+    if (gERSPGPillWinHooked || !cls) return;
+    IMP prev = class_replaceMethod(cls, @selector(didMoveToWindow),
+                                   (IMP)ERSPGPillDidMoveToWindow, "v@:");
+    if (prev) gERSPGOldPillToWindow = prev;
+    else      gERSPGPillSuperCls = class_getSuperclass(cls);
+    gERSPGPillWinHooked = YES;
+    ERLogInfo(@"SPG-INSTANT didMoveToWindow 钩已挂 cls=%@ orig=%d",
+              NSStringFromClass(cls), prev ? 1 : 0);
+}
+
+static IMP   gERSPGOldIconViewDidAppear = NULL;
+static Class gERSPGIconSuperCls         = Nil;
+static BOOL  gERSPGIconHooked           = NO;
+
+static void ERSPGIconViewDidAppear(id self, SEL _cmd, BOOL animated) {
+    if (gERSPGOldIconViewDidAppear) {
+        ((void (*)(id, SEL, BOOL))gERSPGOldIconViewDidAppear)(self, _cmd, animated);
+    } else if (gERSPGIconSuperCls) {
+        struct objc_super sup = { self, gERSPGIconSuperCls };
+        ((void (*)(struct objc_super *, SEL, BOOL))objc_msgSendSuper)(&sup, _cmd, animated);
+    }
+    @try { ERSPGScanTick(); } @catch (__unused NSException *e) {}
+    static NSTimeInterval sLastHome = 0;
+    NSTimeInterval nowH = [[NSDate date] timeIntervalSince1970];
+    if (nowH - sLastHome > 30.0) {
+        sLastHome = nowH;
+        ERLogInfo(@"SPG-HOME 桌面出现 → 立即扫描（事件驱动）");
+    }
+}
+
+static void ERSPGAttachIconControllerHook(void) {
+    if (gERSPGIconHooked) return;
+    id ic = ERSPGIconController();
+    if (!ic) return;
+    Class cls = object_getClass(ic);
+    if (!cls) return;
+    IMP prev = class_replaceMethod(cls, @selector(viewDidAppear:),
+                                   (IMP)ERSPGIconViewDidAppear, "v@:B");
+    if (prev) gERSPGOldIconViewDidAppear = prev;
+    else      gERSPGIconSuperCls = class_getSuperclass(cls);
+    gERSPGIconHooked = YES;
+    ERLogInfo(@"SPG-HOME viewDidAppear 钩已挂 cls=%@ orig=%d",
+              NSStringFromClass(cls), prev ? 1 : 0);
 }
 
 // 1.2.0-7 · 一次性 dump SBIconController 的 page/list/scroll 相关 selector——
@@ -35973,6 +36070,7 @@ static void ERSPGScanTick(void) {
             ERBootLog(msg);
         }
         ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
+        ERSPGAttachIconControllerHook();   // 1.2.1-130 · 类懒加载，挂上为止
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
         if (cnt >= 1) {
@@ -37157,7 +37255,7 @@ static void ERSwipeTextInstall(void) {
                 ERLogInfo(@"SPG-CTOR timer create result=%@", spgTimer ? @"OK" : @"NIL");
                 if (spgTimer) {
                     dispatch_source_set_timer(spgTimer,
-                                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8.0 * NSEC_PER_SEC)),
+                                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
                                               (uint64_t)(5.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
                     // 1.2.0-13 · 根因实锤（日志：SPG-CTOR resumed ok 但 5 分钟零 SPG-TICK，
                     // 而同为毛队列定时器的 QACORR 心跳正常）：timer 此前只被 ctor 栈上的
