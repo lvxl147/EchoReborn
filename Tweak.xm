@@ -36811,19 +36811,38 @@ static BOOL ERSwipeTextMatches(NSString *text) {
 // 1.2.1-129 · 实锤：_callToActionLabel 是 **SBUILegibilityLabel**，不是 UILabel 子类
 //   （日志 SWIPE-IVAR _callToActionLabel = SBUILegibilityLabel（非 UILabel））。
 //   之前 isKindOfClass:[UILabel] 把这唯一正确的目标筛掉了 —— 放宽到任意 UIView。
-static void ERSwipeHideLabel(UIView *label) {
-    BOOL visible = !gERSwipeTextOn;
-    if (!visible && !ERSwipeTextMatches(label.text)) visible = YES;
-    if (label.hidden == !visible) return;                 // 状态没变，绝不写
-    label.hidden = !visible;
-    label.alpha = visible ? 1.0 : 0.0;
+// 只在状态变化时才写（写了系统会摆回来 → 拉锯 → 无限递归）
+static void ERSwipeApplyHidden(UIView *v, BOOL hidden) {
+    if (!v || v.hidden == hidden) return;
+    v.hidden = hidden;
+    v.alpha = hidden ? 0.0 : 1.0;
 }
 
-// 遍历子树里的 UILabel（带访问上限）
+// 安全读 text（SBUILegibilityLabel 之类不是 UILabel，但同样有 text）
+static NSString *ERSwipeSafeText(UIView *v) {
+    if (![v respondsToSelector:NSSelectorFromString(@"text")]) return nil;
+    @try {
+        id t = [v valueForKey:@"text"];
+        return [t isKindOfClass:[NSString class]] ? (NSString *)t : nil;
+    } @catch (__unused NSException *e) { return nil; }
+}
+
+// ① 已知目标（jikan 实证的 _callToActionLabel）：开关开就藏，**不校验文本**
+static void ERSwipeHideKnownLabel(UIView *v) {
+    ERSwipeApplyHidden(v, gERSwipeTextOn ? YES : NO);
+}
+
+// ② 兜底遍历：必须文本匹配（中英文都认）
+static void ERSwipeHideLabel(UIView *label) {
+    if (!gERSwipeTextOn) { ERSwipeApplyHidden(label, NO); return; }
+    if (ERSwipeTextMatches(ERSwipeSafeText(label))) ERSwipeApplyHidden(label, YES);
+}
+
+// 遍历子树（不只 UILabel —— SBUILegibilityLabel 才是 17.2.1 上的真身）
 static void ERSwipeWalkLabels(UIView *view, void (^block)(UIView *), NSInteger *budget) {
     if (*budget <= 0) return;
     (*budget)--;
-    if ([view isKindOfClass:[UILabel class]]) block((UILabel *)view);
+    if ([view respondsToSelector:NSSelectorFromString(@"text")]) block(view);
     for (UIView *sub in view.subviews) ERSwipeWalkLabels(sub, block, budget);
 }
 
@@ -36857,7 +36876,7 @@ static void ERSwipeHideIvarLabel(id container, NSString *ivarName, NSInteger *bu
         gERSwipeIvarLogged = YES;
         ERLogInfo(@"SWIPE-IVAR %@ 命中 %@，隐藏之", ivarName, NSStringFromClass([label class]));
     }
-    ERSwipeHideLabel((UIView *)label);
+    ERSwipeHideKnownLabel((UIView *)label);
     (*budget)--;
 }
 
