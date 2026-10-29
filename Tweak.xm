@@ -20935,6 +20935,30 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if ([[ERModuleIdentifier(module) lowercaseString] containsString:@"echoreborn.connectivity"]) return;
     CGFloat radius = [self refinedCornerRadiusForModuleView:moduleView];
     if ([self moduleUsesOversizedMediaRadius:module view:moduleView]) radius = EROversizedMediaCornerRadius();
+    // 1.2.1-140 · 2×1 高亮白底诊断：dump 手电筒模块子树（类名/bounds/圆角/隐藏），
+    // 每秒最多 1 条。白底若被下面的扩匹配修中，此日志只用于确认；若仍漏网，
+    // 日志直接给出白底真实类名与圆角，下一轮按名精确打击。
+    {
+        static NSTimeInterval sER2x1DbgLast = 0.0;
+        NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+        NSString *ident2x1 = ERModuleIdentifier(module) ?: @"";
+        if ([ident2x1.lowercaseString containsString:@"flashlightmodule"] && now - sER2x1DbgLast > 1.0) {
+            sER2x1DbgLast = now;
+            NSMutableArray<NSString *> *rows = [NSMutableArray array];
+            NSMutableArray<UIView *> *dq = [NSMutableArray arrayWithObject:moduleView];
+            while (dq.count) {
+                UIView *c = dq.firstObject;
+                [dq removeObjectAtIndex:0];
+                [rows addObject:[NSString stringWithFormat:@"%@ b={%.0f,%.0f,%.0fx%.0f} r=%.1f h=%d a=%.2f",
+                                 NSStringFromClass(c.class),
+                                 c.bounds.origin.x, c.bounds.origin.y,
+                                 c.bounds.size.width, c.bounds.size.height,
+                                 c.layer.cornerRadius, c.hidden, c.alpha]];
+                [dq addObjectsFromArray:c.subviews];
+            }
+            ERLogInfo(@"ER2X1DBG r=%.1f %@", radius, [rows componentsJoinedByString:@" | "]);
+        }
+    }
     // The platter-return animation targets the container's stored compact
     // radius. Seed it with the refined value so modules come home at the
     // tweaked radius instead of settling native and snapping afterwards.
@@ -20951,7 +20975,17 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         BOOL materialSurface = [name containsString:@"Material"] || [name containsString:@"VisualEffect"] || [name containsString:@"Platter"];
         BOOL fillsModule = fabs(CGRectGetWidth(candidate.bounds) - CGRectGetWidth(moduleView.bounds)) < 3.0 &&
                            fabs(CGRectGetHeight(candidate.bounds) - CGRectGetHeight(moduleView.bounds)) < 3.0;
-        if (candidate == moduleView || buttonSurface || (materialSurface && fillsModule)) {
+        // 1.2.1-140 · 高亮白底归一：系统在模块 ON 态自绘的白色高亮底（手电筒实测
+        // 2×1 下 ≈27pt）不在 Material/VisualEffect/Platter 名单里，或晚于最后一轮
+        // 圆角 pass 才创建 → 液态玻璃开、磁贴 31.5、白底 27，四角错位可见。
+        // 补一类 Highlight/Selected/Background 命名且铺满模块的视图；安全阀：
+        // 自身圆角 ≥8pt 才归一（只统一本来就圆的，方形视图一律不碰）。本函数
+        // 开头 !gEnabled 直接 return，液态玻璃关闭 = 原生 27 零回归。
+        BOOL highlightSurface = fillsModule && candidate.layer.cornerRadius >= 8.0 &&
+            ([name containsString:@"Highlight"] || [name containsString:@"Selected"] ||
+             [name containsString:@"Background"]);
+        if (candidate == moduleView || buttonSurface ||
+            (materialSurface && fillsModule) || highlightSurface) {
             // 1.0.6-12（第 4 条）：只在圆角真的变化时才赋值。
             //
             // 本函数在 layout / 展开 / 收回路径上被反复调用（一次收回就有 1 + 8 轮全量扫描），
@@ -25722,7 +25756,16 @@ static void ERInstallModuleTapFeedback(UIView *host) {
         responder = responder.nextResponder;
     }
     if (module) {
-        dispatch_async(dispatch_get_main_queue(), ^{ [[EchoRebornCoordinator shared] applyResizedPresentationToModule:module]; });
+        dispatch_async(dispatch_get_main_queue(), ^{
+            EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
+            [coordinator applyResizedPresentationToModule:module];
+            // 1.2.1-140 · 选中态切换：系统此刻创建/动画的高亮白底带原生圆角
+            //（2×1 实测 ≈27），而点开关没有展开/收回转场，applyTransitionRadius
+            // 不会被任何人调用 → 白底一直停在原生圆角，液态玻璃开时四角错位。
+            // 这里补一次圆角归一；液态玻璃关 = 该函数开头 !gEnabled 直接 return，
+            // 原生 27 路径零回归。
+            [coordinator applyTransitionRadiusToModule:module];
+        });
     }
 }
 
