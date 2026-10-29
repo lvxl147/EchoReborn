@@ -6186,13 +6186,15 @@ static void ERMirrorLogLine(NSString *line) {
     ERMirrorRingUpdate(@"ERLogMirror", line, 60, 12000);
 }
 
-// 1.2.1-141 · 2×1 高亮白底诊断专用环：不受 gERLoggingEnabled 门控——用户设备
-// 日志总开关是关的，-140 的 ER2X1DBG 一条都没落盘。独立键 ER2X1DbgMirror
-//（8 行 / 12KB），SSH 拉 com.strive.echoreborn.preferences plist 即可读。
-static void ER2X1DbgMirrorIn(NSString *line) {
+// 1.2.1-145 · 1×2 滑块 + 展开跳动诊断专用环：不受 gERLoggingEnabled 门控
+//（-141 教训：用户设备日志总开关是关的，凡被总开关门控的通道一条都落不了盘）。
+// 独立键 ERSliderDbgMirror（24 行 / 12KB）：
+//   ER12DBG —— 1×2 滑块模块子树 dump（白填充类名/圆角/mask/contents/背景）
+//   ERXPAND —— 长按展开时间线快照（亮度/音量模块 frame/hidden/alpha/链）
+static void ERSliderDbgMirrorIn(NSString *line) {
     if (!line.length) return;
     NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
-    ERMirrorRingUpdate(@"ER2X1DbgMirror", stamped, 8, 12000);
+    ERMirrorRingUpdate(@"ERSliderDbgMirror", stamped, 24, 12000);
 }
 
 static void ERMirrorDiagLine(NSString *line) {
@@ -6602,6 +6604,43 @@ static NSString *ERModuleIdentifier(UIViewController *controller) {
         if ([value isKindOfClass:[NSString class]]) return value;
     } @catch (__unused NSException *exception) {}
     return nil;
+}
+
+// 1.2.1-145 · 问题 2（长按音量时亮度模块可见且往左上跳）诊断快照。
+// 视频逐帧实锤：f58 展开开始亮度未淡出；f84 亮度在展开面板内部左下角重现并
+// 随面板移动。三个嫌疑：①分页几何同步与原生展开动画竞争 ②owned duplicate /
+// compact presentation 副本漏隐藏 ③收起路径布局 pass 改写兄弟模块 frame。
+// 本函数对亮度/音量 1×2 模块拍时间线快照（frame/hidden/alpha/视图链），
+// 由展开入口（clickPresentationInteraction preview 回调）与收起路径调用。
+static void ERSliderExpansionSnapshot(UIViewController *overlay, NSString *tag) {
+    if (!overlay || !overlay.view) return;
+    NSMutableArray<NSString *> *rows = [NSMutableArray array];
+    for (UIViewController *m in ERCollectModuleControllers(overlay)) {
+        if (!m.view || !m.view.window) continue;
+        NSString *ident = (ERModuleIdentifier(m).lowercaseString) ?: @"";
+        BOOL hit = [ident containsString:@"displaymodule"] ||
+                   [ident containsString:@"controlcenter.audio"] ||
+                   [ident containsString:@"volumemodule"];
+        if (!hit) continue;
+        CGRect f = [m.view convertRect:m.view.bounds toView:overlay.view];
+        UIView *v = m.view;
+        NSMutableArray<NSString *> *chain = [NSMutableArray array];
+        for (NSInteger lvl = 0; v && lvl < 5; lvl++, v = v.superview) {
+            [chain addObject:[NSString stringWithFormat:@"%@{%.0f,%.0f,%.0fx%.0f}",
+                              NSStringFromClass(v.class),
+                              v.frame.origin.x, v.frame.origin.y,
+                              v.frame.size.width, v.frame.size.height]];
+        }
+        [rows addObject:[NSString stringWithFormat:
+            @"%@ f={%.0f,%.0f,%.0fx%.0f} h=%d a=%.2f tf=%.4f,%.4f chain=%@",
+            ident, f.origin.x, f.origin.y, f.size.width, f.size.height,
+            m.view.hidden, m.view.alpha,
+            m.view.transform.a, m.view.transform.ty,
+            [chain componentsJoinedByString:@" > "]]];
+    }
+    if (!rows.count) return;
+    ERSliderDbgMirrorIn([NSString stringWithFormat:@"ERXPAND %@ %@", tag,
+                         [rows componentsJoinedByString:@" || "]]);
 }
 
 static UIViewController *ERModuleControllerForView(UIView *view) {
@@ -20962,15 +21001,35 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             [bq addObjectsFromArray:c.subviews];
         }
     }
+    // 1.2.1-145 · 问题 1 修复尝试：1×2 滑块白填充跟随玻璃背板。
+    // -144 的 roundedPlatter 规则只命中铺满模块的面；1×2 竖条滑块的白色值填充
+    // 是部分高度视图（fillsModule 不成立），从未被归一 —— 玻璃开、背板药丸弧线
+    // （短边一半≈41pt），白填充原生圆角更小 → 底部两角露背板边（录屏 f20 八倍
+    // 放大实锤，与 2×1 修复前同签名）。规则：滑块模块（controlcenter.audio /
+    // volumemodule / displaymodule）子树内、非玻璃/材质命名、自身圆角∈[8,45]、
+    // 底边与模块底对齐且高度不足模块（部分高）的圆角面 → 视为值填充面，
+    // cornerRadius 写 platterRadius，maskedCorners 只开底部两角（保住顶部小
+    // 圆角）。若填充是 shape/mask 异形绘制，写入不生效 —— 同构建 ER12DBG
+    // dump 会给出填充的真实类名与绘制方式。
+    NSString *erSliderIdent = (ERModuleIdentifier(module).lowercaseString) ?: @"";
+    BOOL isSlider12 = [erSliderIdent containsString:@"controlcenter.audio"] ||
+                      [erSliderIdent containsString:@"volumemodule"] ||
+                      [erSliderIdent containsString:@"displaymodule"];
     // 1.2.1-140 · 2×1 高亮白底诊断：dump 手电筒模块子树（类名/bounds/圆角/隐藏），
     // 每秒最多 1 条。白底若被下面的扩匹配修中，此日志只用于确认；若仍漏网，
     // 日志直接给出白底真实类名与圆角，下一轮按名精确打击。
+    // 1.2.1-145 · dump 扩展到 1×2 滑块（compact 态 + 长按展开态都经过本函数），
+    // 全部进 ERSliderDbgMirror 专用环。按 identifier 独立节流。
     {
-        static NSTimeInterval sER2x1DbgLast = 0.0;
+        static NSMutableDictionary<NSString *, NSTimeInterval> *sERDbgLast = nil;
+        static dispatch_once_t sERDbgOnce;
+        dispatch_once(&sERDbgOnce, ^{ sERDbgLast = [NSMutableDictionary dictionary]; });
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-        NSString *ident2x1 = ERModuleIdentifier(module) ?: @"";
-        if ([ident2x1.lowercaseString containsString:@"flashlightmodule"] && now - sER2x1DbgLast > 1.0) {
-            sER2x1DbgLast = now;
+        NSString *ident2x1 = erSliderIdent.length ? erSliderIdent
+                            : ((ERModuleIdentifier(module).lowercaseString) ?: @"");
+        BOOL isDbgTarget = [ident2x1 containsString:@"flashlightmodule"] || isSlider12;
+        if (isDbgTarget && now - [sERDbgLast[ident2x1] doubleValue] > 1.0) {
+            sERDbgLast[ident2x1] = @(now);
             NSMutableArray<NSString *> *rows = [NSMutableArray array];
             NSMutableArray<UIView *> *dq = [NSMutableArray arrayWithObject:moduleView];
             while (dq.count) {
@@ -20987,10 +21046,9 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                                  c.hidden, c.alpha]];
                 [dq addObjectsFromArray:c.subviews];
             }
-            ERLogInfo(@"ER2X1DBG r=%.1f %@", radius, [rows componentsJoinedByString:@" | "]);
-            // 1.2.1-141 · 绕过日志总开关的专用镜像环（用户设备 gERLoggingEnabled=NO）
-            ER2X1DbgMirrorIn([NSString stringWithFormat:@"ER2X1DBG r=%.1f %@",
-                              radius, [rows componentsJoinedByString:@" | "]]);
+            ERSliderDbgMirrorIn([NSString stringWithFormat:@"ER12DBG %@ xp=%d r=%.1f %@",
+                                 ident2x1, gERExpandedModuleOpen, radius,
+                                 [rows componentsJoinedByString:@" | "]]);
         }
     }
     // The platter-return animation targets the container's stored compact
@@ -21032,9 +21090,20 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // 背板弧线（2×1 实测 37.5），否则白底 31.5 比背板方、四角露背板边（用户
         // 对比图左下角实锤）；磁贴本体与材质层继续写 refined（31.5）。
         BOOL isPlatter = highlightSurface || roundedPlatter;
-        CGFloat targetR = isPlatter ? platterRadius : radius;
+        // 1.2.1-145 · 1×2 值填充面判定：滑块模块内、部分高度、底边与模块底对齐、
+        // 圆角窗口内的非玻璃/材质圆角面（详见本函数开头的注释）。
+        BOOL sliderFill = NO;
+        if (isSlider12 && !glassOwned && !materialSurface && !isPlatter &&
+            candidate != moduleView &&
+            candidate.layer.cornerRadius >= 8.0 && candidate.layer.cornerRadius <= 45.0) {
+            CGRect inModule = [moduleView convertRect:candidate.frame fromView:candidate.superview];
+            BOOL bottomAligned = fabs(CGRectGetMaxY(inModule) - CGRectGetHeight(moduleView.bounds)) < 3.0;
+            BOOL partialHeight = CGRectGetHeight(inModule) < CGRectGetHeight(moduleView.bounds) - 3.0;
+            sliderFill = bottomAligned && partialHeight;
+        }
+        CGFloat targetR = (isPlatter || sliderFill) ? platterRadius : radius;
         if (candidate == moduleView || buttonSurface ||
-            (materialSurface && fillsModule) || isPlatter) {
+            (materialSurface && fillsModule) || isPlatter || sliderFill) {
             // 1.0.6-12（第 4 条）：只在圆角真的变化时才赋值。
             //
             // 本函数在 layout / 展开 / 收回路径上被反复调用（一次收回就有 1 + 8 轮全量扫描），
@@ -21045,6 +21114,11 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                 candidate.layer.cornerRadius = targetR;
             }
             candidate.layer.cornerCurve = kCACornerCurveContinuous;
+            // 1.2.1-145 · 值填充面只开底部两角的圆角（顶角保持原生小圆角观感）
+            if (sliderFill) {
+                NSUInteger wantCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                if (candidate.layer.maskedCorners != wantCorners) candidate.layer.maskedCorners = wantCorners;
+            }
             if (candidate == moduleView && !candidate.layer.masksToBounds) candidate.layer.masksToBounds = YES;
         }
         [queue addObjectsFromArray:candidate.subviews];
@@ -21053,6 +21127,18 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 
 - (void)applyClosingCompactRadiusToModule:(UIViewController *)module overlay:(UIViewController *)overlay sourceObject:(id)object {
     if (!gEnabled || !module.view) return;
+    // 1.2.1-145 · 收起路径快照（问题 2）：抓收起动画里亮度模块的回归 frame。
+    // 0.5s 节流：本函数在收起过程中可能被多次调用。
+    {
+        static NSTimeInterval sERXpCloseLast = 0.0;
+        NSTimeInterval nowXp = [[NSDate date] timeIntervalSince1970];
+        UIViewController *xpOverlay = overlay ?: gOverlayControllers.allObjects.firstObject;
+        if (xpOverlay && nowXp - sERXpCloseLast > 0.5) {
+            sERXpCloseLast = nowXp;
+            ERSliderExpansionSnapshot(xpOverlay, @"close-t0");
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.30 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ERSliderExpansionSnapshot(xpOverlay, @"close-t300"); });
+        }
+    }
     NSString *identifier = [ERModuleIdentifier(module) copy] ?: [ERIdentifierFromObject(object) copy];
     UIViewController *compactModule = nil;
     if (identifier.length) {
@@ -25337,6 +25423,17 @@ static void ERConfigureExpandedConnectivityChild(UIViewController *child) {
     }
     ERApplyExpansionPageGeometrySync(gOverlayControllers.allObjects.firstObject);
     ERResetGenericExpansionDismissal();
+    // 1.2.1-145 · 展开跳动时间线：t0 即刻 + 0.15/0.4/0.9s 追拍，
+    // 抓「亮度模块跟跳上左」发生的时刻与 frame 来源。
+    {
+        UIViewController *erDbgOverlay = gOverlayControllers.allObjects.firstObject;
+        if (erDbgOverlay) {
+            ERSliderExpansionSnapshot(erDbgOverlay, @"open-t0");
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ERSliderExpansionSnapshot(erDbgOverlay, @"open-t150"); });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.40 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ERSliderExpansionSnapshot(erDbgOverlay, @"open-t400"); });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.90 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ ERSliderExpansionSnapshot(erDbgOverlay, @"open-t900"); });
+        }
+    }
     UIView *sourceView = ((UIViewController *)(id)self).view;
     NSString *sourceIdentifier = ERModuleIdentifier((UIViewController *)(id)self);
     if (ERExpansionIdentifierUsesLiveTransition(sourceIdentifier) ||
