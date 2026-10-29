@@ -21021,14 +21021,14 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     // 1.2.1-145 · dump 扩展到 1×2 滑块（compact 态 + 长按展开态都经过本函数），
     // 全部进 ERSliderDbgMirror 专用环。按 identifier 独立节流。
     {
-        static NSMutableDictionary<NSString *, NSTimeInterval> *sERDbgLast = nil;
+        static NSMutableDictionary<NSString *, NSNumber *> *sERDbgLast = nil;
         static dispatch_once_t sERDbgOnce;
         dispatch_once(&sERDbgOnce, ^{ sERDbgLast = [NSMutableDictionary dictionary]; });
         NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
         NSString *ident2x1 = erSliderIdent.length ? erSliderIdent
                             : ((ERModuleIdentifier(module).lowercaseString) ?: @"");
         BOOL isDbgTarget = [ident2x1 containsString:@"flashlightmodule"] || isSlider12;
-        if (isDbgTarget && now - [sERDbgLast[ident2x1] doubleValue] > 1.0) {
+        if (isDbgTarget && now - sERDbgLast[ident2x1].doubleValue > 1.0) {
             sERDbgLast[ident2x1] = @(now);
             NSMutableArray<NSString *> *rows = [NSMutableArray array];
             NSMutableArray<UIView *> *dq = [NSMutableArray arrayWithObject:moduleView];
