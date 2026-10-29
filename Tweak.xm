@@ -21110,7 +21110,54 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
         }
         [wq addObjectsFromArray:c.subviews];
     }
-    // 3) 复核留痕：0.4s 后再读一次材质圆角，确认没有被原生改回
+    // 3) 1.2.1-151 · 白填充归属修正。
+    //
+    // 150 的 ER12POST 实锤：0.4s 后 glass=37.5 / root=37.5 都稳住了，没有被原生改回，
+    // 但同一棵子树的 MTMaterialView 半径仍是 **21.0** —— 我们从来没写过它。
+    // 而 141 / 146 两次 dump 早已确认：1×2 的白色值填充正是这块材质自己绘制的，
+    // 不是任何 bg=1.00 的独立视图。所以「不够圆」的根因就是它停在原生的 21。
+    //
+    // 规则：模块内的 Material 面分两类写 ——
+    //   · 铺满模块高度 → 四角 R
+    //   · 只占下部一截（值填充）→ 底两角 min(R, h/2)，避免半圆被拉成椭圆
+    NSMutableArray<UIView *> *matQ = [NSMutableArray arrayWithObject:moduleView];
+    NSUInteger matGuard = 0;
+    // 只在紧凑态写材质填充。展开态里 audio 模块的 view 仍是 75x163（dump 证实），
+    // 若不设这道门，展开后 54x54 的圆形按钮材质会被写成 27 的方角。
+    BOOL compactCtx = !gERExpandedModuleOpen && !gERExpandedModuleClosingActive && w < 120.0;
+    while (compactCtx && matQ.count && matGuard++ < 300) {
+        UIView *c = matQ.firstObject;
+        [matQ removeObjectAtIndex:0];
+        NSString *mcn = NSStringFromClass(c.class);
+        if ([mcn containsString:@"Material"]) {
+            CGRect mf = [c convertRect:c.bounds toView:moduleView];
+            CGFloat mw = CGRectGetWidth(mf), mh = CGRectGetHeight(mf);
+            if (mw > 1.0 && mh > 1.0) {
+                BOOL fullHeight = mh >= h - 6.0;
+                BOOL bottomAligned = fabs(CGRectGetMaxY(mf) - h) < 6.0;
+                CGFloat nr = fullHeight ? R : MIN(R, mh * 0.5);
+                CGFloat beforeM = c.layer.cornerRadius;
+                if (fabs(beforeM - nr) > 0.01) c.layer.cornerRadius = nr;
+                c.layer.cornerCurve = kCACornerCurveContinuous;
+                if (!fullHeight && bottomAligned) {
+                    c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                }
+                static NSTimeInterval sERMatLogLast = 0.0;
+                NSTimeInterval nowM = [[NSDate date] timeIntervalSince1970];
+                if (nowM - sERMatLogLast > 2.0) {
+                    sERMatLogLast = nowM;
+                    ERSliderDbgMirrorIn([NSString stringWithFormat:
+                        @"ER12MAT %@ %@ %.1f->%.1f b=%.0fx%.0f full=%d ba=%d mc=%lu",
+                        ERModuleIdentifier(module) ?: @"?", mcn, beforeM, nr, mw, mh,
+                        (int)fullHeight, (int)bottomAligned,
+                        (unsigned long)c.layer.maskedCorners]);
+                }
+            }
+        }
+        [matQ addObjectsFromArray:c.subviews];
+    }
+
+    // 4) 复核留痕：0.4s 后再读一次材质圆角，确认没有被原生改回
     static NSTimeInterval sERPostLogLast = 0.0;
     NSTimeInterval nowP = [[NSDate date] timeIntervalSince1970];
     if (nowP - sERPostLogLast > 3.0) {
@@ -21132,8 +21179,14 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
                     [mq removeObjectAtIndex:0];
                     NSString *cn = NSStringFromClass(c.class);
                     if ([cn containsString:@"Material"]) {
-                        matInfo = [NSString stringWithFormat:@"%@:%.1f", cn, c.layer.cornerRadius];
-                        break;
+                        CGRect mf = [c convertRect:c.bounds toView:r];
+                        // 只报真正有尺寸的材质面（0x0 的是未布局的残留，不参与绘制）
+                        if (CGRectGetWidth(mf) > 1.0 && CGRectGetHeight(mf) > 1.0) {
+                            matInfo = [NSString stringWithFormat:@"%@:%.1f@%.0fx%.0f",
+                                       cn, c.layer.cornerRadius,
+                                       CGRectGetWidth(mf), CGRectGetHeight(mf)];
+                            break;
+                        }
                     }
                     [mq addObjectsFromArray:c.subviews];
                 }
@@ -21486,6 +21539,8 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)),
                                dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)),
                                dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
             }
         }
