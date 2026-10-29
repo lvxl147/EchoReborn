@@ -20958,11 +20958,15 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             while (dq.count) {
                 UIView *c = dq.firstObject;
                 [dq removeObjectAtIndex:0];
-                [rows addObject:[NSString stringWithFormat:@"%@ b={%.0f,%.0f,%.0fx%.0f} r=%.1f h=%d a=%.2f",
+                [rows addObject:[NSString stringWithFormat:@"%@ b={%.0f,%.0f,%.0fx%.0f} r=%.1f m=%d c=%d bg=%.2f h=%d a=%.2f",
                                  NSStringFromClass(c.class),
                                  c.bounds.origin.x, c.bounds.origin.y,
                                  c.bounds.size.width, c.bounds.size.height,
-                                 c.layer.cornerRadius, c.hidden, c.alpha]];
+                                 c.layer.cornerRadius,
+                                 c.layer.mask != nil ? 1 : 0,
+                                 c.layer.contents != nil ? 1 : 0,
+                                 c.layer.backgroundColor ? CGColorGetAlpha((__bridge CGColorRef)c.layer.backgroundColor) : -1.0,
+                                 c.hidden, c.alpha]];
                 [dq addObjectsFromArray:c.subviews];
             }
             ERLogInfo(@"ER2X1DBG r=%.1f %@", radius, [rows componentsJoinedByString:@" | "]);
