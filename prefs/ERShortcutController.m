@@ -635,7 +635,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     if (rows.count == 0) {
         // 1.1.8-18 · 空状态引导去点右上角的「添加」——那个按钮在主页上，
         // 所以这句话也只能放在主页说。
-        cell.textLabel.text = @"点击右上角添加的快捷指令";
+        cell.textLabel.text = @"点击右上角添加快捷指令";
         cell.textLabel.textColor = UIColor.secondaryLabelColor;
         cell.detailTextLabel.text = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
