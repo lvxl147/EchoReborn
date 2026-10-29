@@ -24411,12 +24411,32 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
     if (identifier.length && !gERBaseLayoutSizes[identifier]) gERBaseLayoutSizes[identifier] = [NSValue value:&size withObjCType:@encode(CCUILayoutSize)];
     NSArray<NSNumber *> *custom = gERCustomSizes[identifier];
     if (custom.count >= 2) size = (CCUILayoutSize){custom[0].unsignedIntegerValue, custom[1].unsignedIntegerValue};
-    // 1.2.1-16 · 问题 2 修复（自 1.2.1-4 移植）：横屏下音量/亮度被拉成 1×3。
-    // 原生布局引擎在横屏态会把 slider 类模块给到 3 行高（1.0.9-2x 时代就有
-    // 「拖拽时 1×3 强改回 2」的补丁佐证）；折行逻辑只改 origin 不改 size，3 行高
-    // 直接体现在最终布局上。这里对无自定义尺寸的 slider 类模块在横屏态钳制 1×2；
-    // 用户显式自定义过尺寸的（gERCustomSizes 命中）完全尊重用户。
-    if (gEnabled && ERLandscapePresentationActive() && custom.count < 2 && identifier.length) {
+    // 横屏 1×3 钳制（1.2.1-4 引入，自 1.2.1-16 起一直保留）：原生布局引擎在横屏态会把
+    // slider 类模块给到 3 行高；折行逻辑只改 origin 不改 size，3 行高直接体现在最终布局上。
+    // 这里对无自定义尺寸的 slider 类模块在横屏态钳制 1×2；用户显式自定义过尺寸的完全尊重用户。
+    //
+    // 1.2.1-159 · 回归根修：这套钳制必须在「长按展开」期间让路。
+    // 版本二分实测：1.2.1-3 干净、1.2.1-4 起坏（-3/-4 的 Tweak.xm 逐行 diff 只差 4 处，
+    // 其中唯一直接改模块尺寸的就是本钳制）。展开期 CCUI 会重新向模块询问布局尺寸，
+    // 此时如果被钳回 2 行：展开面板几何被压小 → 面板内部圆角按错误尺寸计算、
+    // 面板盖不住下方模块、收起时按错误尺寸归位闪一下。三条症状一次全中。
+    // 判据还必须用 hook 自带的 orientation 之外再加展开门 —— 原实现用
+    // ERLandscapePresentationActive()（读窗口宽高比）跨状态判断，展开瞬间不可靠。
+    BOOL erExpandedNow = (gERExpandedModuleOpen || gERExpandedModuleClosingActive);
+    if (identifier.length) {
+        BOOL isSliderDbg = [identifier isEqualToString:@"controlcenter.audio"]
+                        || [identifier containsString:@"controlcenter.audio"]
+                        || [identifier isEqualToString:@"displaymodule"]
+                        || [identifier isEqualToString:@"com.apple.control-center.DisplayModule"];
+        if (isSliderDbg) {
+            ERAppendDebugFile(@"er_size.txt", [NSString stringWithFormat:
+                @"SIZE t=%.2f id=%@ land=%d ori=%ld exp=%d req=%lux%lu",
+                CACurrentMediaTime(), identifier, (int)ERLandscapePresentationActive(),
+                (long)orientation, (int)erExpandedNow,
+                (unsigned long)size.width, (unsigned long)size.height]);
+        }
+    }
+    if (gEnabled && !erExpandedNow && ERLandscapePresentationActive() && custom.count < 2 && identifier.length) {
         BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
                            || [identifier containsString:@"controlcenter.audio"]
                            || [identifier isEqualToString:@"com.apple.mediaremote.controlcenter.audio"]
@@ -24443,9 +24463,11 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
         if (customOrigin.count >= 2) rect.origin = (CCUILayoutPoint){customOrigin[0].unsignedIntegerValue, customOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[identifier];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
-        // 1.2.1-16 · 问题 2 同源钳制（自 1.2.1-4 移植，与 moduleLayoutSizeForContentModuleContext: 一致）：
         // 横屏下 slider 类模块无自定义尺寸时高度钳到 2 行，杜绝 1×3。
-        if (gEnabled && ERLandscapePresentationActive() && customSize.count < 2 && rect.size.height > 2) {
+        // 1.2.1-159 · 同源回归根修：展开/收起期必须让路（理由见
+        // moduleLayoutSizeForContentModuleContext: 处的长注释）。
+        BOOL erExpandedNowRect = (gERExpandedModuleOpen || gERExpandedModuleClosingActive);
+        if (gEnabled && !erExpandedNowRect && ERLandscapePresentationActive() && customSize.count < 2 && rect.size.height > 2) {
             BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
                                || [identifier containsString:@"controlcenter.audio"]
                                || [identifier isEqualToString:@"displaymodule"]
@@ -27026,7 +27048,19 @@ static void ERInstallModuleTapFeedback(UIView *host) {
             UIView *qaHost = [dismissOverlay.view viewWithTag:181000];   // 快捷区 host（现役 tag）
             UIViewController *colFade = ((id (*)(id, SEL, id))objc_msgSend)([EchoRebornCoordinator shared], NSSelectorFromString(@"moduleCollectionControllerInOverlay:"), dismissOverlay);
             [CATransaction begin];
-            if (state == 3 && colFade && colFade.view.layer.opacity > 0.01) {
+            // 1.2.1-159 · 模块展开/收起期间不做整体淡出。
+            // 1.2.1-49「残影根修」把 moduleCollection 的内容层用 fillMode=forwards
+            // 永久压成 opacity 0，只靠 state 2 的一条分支还原。模块长按走的是另一条
+            // 呈现路径，state 2 不一定到 —— 内容层就停在已压暗状态，再叠上为消残影
+            // 加的快照，就成了用户报的「亮度模块漏着 + 返回左上角闪烁」。
+            // 模块自己的进出场由 CCUI 管，这里让路。
+            // 1.2.1-159 · 单变量纪律：本守卫（下面 moduleExpansionActive）暂时下线。
+            // 版本二分已实锤回归起点=1.2.1-4（-3 干净），而本段淡出是 1.2.1-49 才加的，
+            // 时间上不可能是问题起点。为避免「到底是尺寸钳制还是本守卫修好的」混淆，
+            // 本轮先把门恒置 NO（= 恢复 159 之前的行为），只验证尺寸钳制一处。
+            // 若装机后仍有残留，160 再把它打开单独验。
+            BOOL moduleExpansionActive = NO;
+            if (state == 3 && colFade && colFade.view.layer.opacity > 0.01 && !moduleExpansionActive) {
                 // 收起动画启动：内容层 0.2s 统一淡出（跟随面板，允许动画）
                 CABasicAnimation *fadeOut = [CABasicAnimation animationWithKeyPath:@"opacity"];
                 fadeOut.fromValue = @(colFade.view.layer.opacity);
@@ -27037,10 +27071,12 @@ static void ERInstallModuleTapFeedback(UIView *host) {
                 [colFade.view.layer addAnimation:fadeOut forKey:@"ERDismissFade"];
                 [colFade.view.layer setValue:@0.0 forKeyPath:@"opacity"];
             } else if (state == 0 && colFade) {
-                // 完全收起：兜底切 0（无动画）
-                [CATransaction setDisableActions:YES];
-                [colFade.view.layer removeAnimationForKey:@"ERDismissFade"];
-                colFade.view.layer.opacity = 0.0;
+                // 完全收起：兜底切 0（无动画）。模块展开期同样让路。
+                if (!moduleExpansionActive) {
+                    [CATransaction setDisableActions:YES];
+                    [colFade.view.layer removeAnimationForKey:@"ERDismissFade"];
+                    colFade.view.layer.opacity = 0.0;
+                }
             }
             if (dupHost && !dupHost.isHidden) { dupHost.hidden = YES; dupHost.alpha = 0.0; }
             if (qaHost && !qaHost.isHidden) qaHost.hidden = YES;
