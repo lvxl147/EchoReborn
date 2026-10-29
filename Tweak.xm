@@ -511,6 +511,9 @@ static const void *kERDragHiddenChromeKey = &kERDragHiddenChromeKey;
 static const void *kERResizeButtonKey = &kERResizeButtonKey;
 static const void *kEROwnedDuplicateContainerKey = &kEROwnedDuplicateContainerKey;
 static const void *kEROwnedDuplicatePresentationKey = &kEROwnedDuplicatePresentationKey;
+// 1.2.1-146 · 1×2 滑块值填充面标记：首次命中后按标记重认，不再依赖当前圆角值
+//（145 实测：一旦半径被写坏到窗口外，几何规则就永远匹配不上，坏值留到注销）。
+static const void *kERSliderFillKey = &kERSliderFillKey;
 static const void *kERResizeStartSizeKey = &kERResizeStartSizeKey;
 static const void *kERResizeCandidateSizeKey = &kERResizeCandidateSizeKey;
 static const void *kERResizePreviewKey = &kERResizePreviewKey;
@@ -6625,11 +6628,15 @@ static void ERSliderExpansionSnapshot(UIViewController *overlay, NSString *tag) 
         CGRect f = [m.view convertRect:m.view.bounds toView:overlay.view];
         UIView *v = m.view;
         NSMutableArray<NSString *> *chain = [NSMutableArray array];
+        // 1.2.1-146 · 链上带 alpha 与 layer.opacity：145 只记 frame，无法区分
+        //「模块自己可见」与「祖先 alpha=0 因而实际不可见」，这是展开期亮度是否
+        // 真的可见的唯一判据。
         for (NSInteger lvl = 0; v && lvl < 5; lvl++, v = v.superview) {
-            [chain addObject:[NSString stringWithFormat:@"%@{%.0f,%.0f,%.0fx%.0f}",
+            [chain addObject:[NSString stringWithFormat:@"%@{%.0f,%.0f %.0fx%.0f a=%.2f o=%.2f}",
                               NSStringFromClass(v.class),
                               v.frame.origin.x, v.frame.origin.y,
-                              v.frame.size.width, v.frame.size.height]];
+                              v.frame.size.width, v.frame.size.height,
+                              v.alpha, v.layer.opacity]];
         }
         [rows addObject:[NSString stringWithFormat:
             @"%@ f={%.0f,%.0f,%.0fx%.0f} h=%d a=%.2f tf=%.4f,%.4f chain=%@",
@@ -6641,6 +6648,29 @@ static void ERSliderExpansionSnapshot(UIViewController *overlay, NSString *tag) 
     if (!rows.count) return;
     ERSliderDbgMirrorIn([NSString stringWithFormat:@"ERXPAND %@ %@", tag,
                          [rows componentsJoinedByString:@" || "]]);
+    // 1.2.1-146 · 展开期白色面专项探针：145 截图里展开面板左下角有一个带太阳
+    // 图标的白色小药丸，必须确认它是「原生磁贴露出来」还是「面板自身缺角」——
+    // 前者要修可见性，后者要修圆角。这里只列画面内白底/有位图的圆角面（≤8 条）。
+    NSMutableArray<NSString *> *whites = [NSMutableArray array];
+    NSMutableArray<UIView *> *wq = [NSMutableArray arrayWithObject:overlay.view];
+    while (wq.count && whites.count < 8) {
+        UIView *c = wq.firstObject;
+        [wq removeObjectAtIndex:0];
+        CGFloat bgAlpha = c.layer.backgroundColor ? CGColorGetAlpha(c.layer.backgroundColor) : -1.0;
+        if (c.window && !c.hidden && c.alpha > 0.05 &&
+            (bgAlpha > 0.5 || c.layer.contents != nil) && c.layer.cornerRadius > 0.01) {
+            CGRect wf = [c convertRect:c.bounds toView:overlay.view];
+            [whites addObject:[NSString stringWithFormat:@"%@ tag=%ld f={%.0f,%.0f,%.0fx%.0f} r=%.1f bg=%.2f a=%.2f",
+                               NSStringFromClass(c.class), (long)c.tag,
+                               wf.origin.x, wf.origin.y, wf.size.width, wf.size.height,
+                               c.layer.cornerRadius, bgAlpha, c.alpha]];
+        }
+        if (c.subviews.count) [wq addObjectsFromArray:c.subviews];
+    }
+    if (whites.count && [tag containsString:@"t400"]) {
+        ERSliderDbgMirrorIn([NSString stringWithFormat:@"ERXPWHITE %@ %@", tag,
+                             [whites componentsJoinedByString:@" | "]]);
+    }
 }
 
 static UIViewController *ERModuleControllerForView(UIView *view) {
@@ -21032,18 +21062,27 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             sERDbgLast[ident2x1] = @(now);
             NSMutableArray<NSString *> *rows = [NSMutableArray array];
             NSMutableArray<UIView *> *dq = [NSMutableArray arrayWithObject:moduleView];
-            while (dq.count) {
+            while (dq.count && rows.count < 18) {
                 UIView *c = dq.firstObject;
                 [dq removeObjectAtIndex:0];
-                [rows addObject:[NSString stringWithFormat:@"%@ b={%.0f,%.0f,%.0fx%.0f} r=%.1f m=%d c=%d bg=%.2f h=%d a=%.2f",
-                                 NSStringFromClass(c.class),
-                                 c.bounds.origin.x, c.bounds.origin.y,
-                                 c.bounds.size.width, c.bounds.size.height,
-                                 c.layer.cornerRadius,
-                                 c.layer.mask != nil ? 1 : 0,
-                                 c.layer.contents != nil ? 1 : 0,
-                                 c.layer.backgroundColor ? CGColorGetAlpha(c.layer.backgroundColor) : -1.0,
-                                 c.hidden, c.alpha]];
+                // 1.2.1-146 · 只留「有形状信息」的视图：有圆角 / 有底色 / 有位图 /
+                // 有掩码。145 全量 dump 单行上万字符，被 12KB 环从行首截断，
+                // 根视图与白底那几行正好被截掉，等于没证据。
+                BOOL interesting = c.layer.cornerRadius > 0.01 || c.layer.mask != nil ||
+                    c.layer.contents != nil ||
+                    (c.layer.backgroundColor && CGColorGetAlpha(c.layer.backgroundColor) > 0.3);
+                if (interesting) {
+                    [rows addObject:[NSString stringWithFormat:@"%@ b={%.0f,%.0f,%.0fx%.0f} r=%.1f m=%d c=%d bg=%.2f h=%d a=%.2f mc=%lu",
+                                     NSStringFromClass(c.class),
+                                     c.bounds.origin.x, c.bounds.origin.y,
+                                     c.bounds.size.width, c.bounds.size.height,
+                                     c.layer.cornerRadius,
+                                     c.layer.mask != nil ? 1 : 0,
+                                     c.layer.contents != nil ? 1 : 0,
+                                     c.layer.backgroundColor ? CGColorGetAlpha(c.layer.backgroundColor) : -1.0,
+                                     c.hidden, c.alpha,
+                                     (unsigned long)c.layer.maskedCorners]];
+                }
                 [dq addObjectsFromArray:c.subviews];
             }
             ERSliderDbgMirrorIn([NSString stringWithFormat:@"ER12DBG %@ xp=%d r=%.1f %@",
@@ -21090,34 +21129,94 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // 背板弧线（2×1 实测 37.5），否则白底 31.5 比背板方、四角露背板边（用户
         // 对比图左下角实锤）；磁贴本体与材质层继续写 refined（31.5）。
         BOOL isPlatter = highlightSurface || roundedPlatter;
-        // 1.2.1-145 · 1×2 值填充面判定：滑块模块内、部分高度、底边与模块底对齐、
-        // 圆角窗口内的非玻璃/材质圆角面（详见本函数开头的注释）。
+        // 1.2.1-146 · 值填充面判定加固（问题 1「长按返回后失效」的根因）。
+        //
+        // 145 实机：注销后首开正确，长按展开再返回即失效，且必须注销才恢复。
+        // 实测链路：展开期间本函数在展开态模块（150x400）上跑，部分高度判定在
+        // 展开面上误命中，把**大于半宽**的半径 + maskedCorners 底部两角写给紧凑
+        // 填充；该填充的圆角一旦越出 [8,45] 窗口，几何规则永远匹配不上 → 坏值
+        // 一直留到注销（这就是「必须注销」的真正原因）。同时 1×2 填充宽 75，
+        // 写 37.5 以上的半径会让两段底弧相互交叠，形成截图里的凸起/缺口。
+        //
+        // 加固三条：
+        //   ① 只在紧凑态判定（未展开、未收起中、模块宽 <120）；
+        //   ② 目标半径一律钳到 min(宽,高)*0.5 —— 任何情况下都不会超过半宽；
+        //   ③ 首次命中的视图打 kERSliderFillKey 标记，之后按标记重认，
+        //      不再依赖当前圆角是否还在窗口内（坏值可自愈）。
+        BOOL sliderCompact = isSlider12 &&
+            !gERExpandedModuleOpen && !gERExpandedModuleClosingActive &&
+            CGRectGetWidth(moduleView.bounds) < 120.0;
         BOOL sliderFill = NO;
+        BOOL wasSliderFill = [objc_getAssociatedObject(candidate, kERSliderFillKey) boolValue];
         if (isSlider12 && !glassOwned && !materialSurface && !isPlatter &&
-            candidate != moduleView &&
-            candidate.layer.cornerRadius >= 8.0 && candidate.layer.cornerRadius <= 45.0) {
-            CGRect inModule = [moduleView convertRect:candidate.frame fromView:candidate.superview];
-            BOOL bottomAligned = fabs(CGRectGetMaxY(inModule) - CGRectGetHeight(moduleView.bounds)) < 3.0;
-            BOOL partialHeight = CGRectGetHeight(inModule) < CGRectGetHeight(moduleView.bounds) - 3.0;
-            sliderFill = bottomAligned && partialHeight;
+            candidate != moduleView && sliderCompact) {
+            BOOL roundedNow = candidate.layer.cornerRadius >= 8.0 && candidate.layer.cornerRadius <= 45.0;
+            if (roundedNow || wasSliderFill) {
+                CGRect inModule = [moduleView convertRect:candidate.frame fromView:candidate.superview];
+                BOOL bottomAligned = fabs(CGRectGetMaxY(inModule) - CGRectGetHeight(moduleView.bounds)) < 3.0;
+                BOOL partialHeight = CGRectGetHeight(inModule) < CGRectGetHeight(moduleView.bounds) - 3.0;
+                sliderFill = bottomAligned && partialHeight;
+                if (sliderFill && !wasSliderFill) {
+                    objc_setAssociatedObject(candidate, kERSliderFillKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                }
+            }
         }
-        CGFloat targetR = (isPlatter || sliderFill) ? platterRadius : radius;
+        // 1.2.1-146 · 展开面板白底跟随玻璃背板（用户第 1 条后半：长按进入也不圆）。
+        // 展开态实测：玻璃背板 LGLiveBackdropView 150x400 取药丸半径 75（150/2），
+        // 而面板白底仍是原生小半径 → 上下两端都比背板方。展开态只对「铺满模块
+        // 且是白色/已圆角」的面写钳制后的背板半径，不写 maskedCorners（四角同为
+        // 药丸弧线，与紧凑态的值填充「只圆底部」区分开）。
+        BOOL expandedPlatter = NO;
+        if (isSlider12 && !sliderCompact && !glassOwned && !materialSurface &&
+            candidate != moduleView && fillsModule &&
+            (candidate.layer.cornerRadius >= 8.0 ||
+             (candidate.layer.backgroundColor && CGColorGetAlpha(candidate.layer.backgroundColor) > 0.5))) {
+            expandedPlatter = YES;
+        }
+        // 钳制：任何面都不能超过自身短边一半（1×2 填充宽 75 → 上限 37.5；
+        // 展开面板宽 150 → 上限 75），从构造上排除「过半宽透镜形」凸起。
+        CGFloat fillCap = MIN(CGRectGetWidth(candidate.bounds), CGRectGetHeight(candidate.bounds)) * 0.5;
+        CGFloat platterR = fillCap > 0.0 ? MIN(platterRadius, fillCap) : platterRadius;
+        CGFloat targetR = (isPlatter || sliderFill || expandedPlatter) ? platterR : radius;
         if (candidate == moduleView || buttonSurface ||
-            (materialSurface && fillsModule) || isPlatter || sliderFill) {
+            (materialSurface && fillsModule) || isPlatter || sliderFill || expandedPlatter) {
             // 1.0.6-12（第 4 条）：只在圆角真的变化时才赋值。
             //
             // 本函数在 layout / 展开 / 收回路径上被反复调用（一次收回就有 1 + 8 轮全量扫描），
             // 每一轮都会遍历整棵子树。无条件逐层赋值会让 CALayer 判定「几何已变」并重新
             // 生成圆角遮罩、重新提交渲染事务 —— 日志里 layout 交替出现 6ms / 20ms 的锯齿
             // 就是这个开销。改成差量写入后，稳态下这些写入全部变成空操作。
+            // 1.2.1-146 · 写入时刻的原值与结果留痕（短行，独立环）：下一轮可直读
+            //「哪个类被写成多少、钳制前后各是多少、掩码是什么」。
+            CGFloat r0Before = candidate.layer.cornerRadius;
             if (fabs(candidate.layer.cornerRadius - targetR) > 0.01) {
                 candidate.layer.cornerRadius = targetR;
             }
+            if (sliderFill || expandedPlatter) {
+                static NSTimeInterval sERFillLogLast = 0.0;
+                NSTimeInterval nowFill = [[NSDate date] timeIntervalSince1970];
+                if (nowFill - sERFillLogLast > 1.0) {
+                    sERFillLogLast = nowFill;
+                    ERSliderDbgMirrorIn([NSString stringWithFormat:
+                        @"ER12FILL %@ c=%@ b=%.0fx%.0f r %.1f>%.1f rp=%.1f cap=%.1f mc=%lu pd=%d xp=%d",
+                        erSliderIdent, NSStringFromClass(candidate.class),
+                        CGRectGetWidth(candidate.bounds), CGRectGetHeight(candidate.bounds),
+                        r0Before, candidate.layer.cornerRadius, platterRadius, fillCap,
+                        (unsigned long)candidate.layer.maskedCorners,
+                        (int)sliderFill, (int)gERExpandedModuleOpen]);
+                }
+            }
             candidate.layer.cornerCurve = kCACornerCurveContinuous;
-            // 1.2.1-145 · 值填充面只开底部两角的圆角（顶角保持原生小圆角观感）
+            // 1.2.1-146 · 圆角掩码分流：紧凑值填充只圆底部两角（保住顶部原生小
+            // 圆角观感）；展开面板四角全圆。两者互相清除对方的掩码，保证从展开态
+            // 退回紧凑态时不会残留「底部两角」的半圆角形状。
             if (sliderFill) {
                 NSUInteger wantCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
                 if (candidate.layer.maskedCorners != wantCorners) candidate.layer.maskedCorners = wantCorners;
+            } else if (expandedPlatter) {
+                NSUInteger allCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
+                                        kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                if (candidate.layer.maskedCorners != allCorners) candidate.layer.maskedCorners = allCorners;
             }
             if (candidate == moduleView && !candidate.layer.masksToBounds) candidate.layer.masksToBounds = YES;
         }
