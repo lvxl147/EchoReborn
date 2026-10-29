@@ -21086,11 +21086,18 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 // 到底是哪个视图、用什么画的（view.backgroundColor / layer.backgroundColor /
 // layer.contents / 子层），这些问题必须**无过滤**才能回答。
 // 这里改成直接写文件，一次把整棵树摊平（最多 400 个节点），用 SFTP 拉回来。
-static void ERDumpSliderTreeToFileAt(UIViewController *module, NSString *path) {
-    if (!gEnabled || !module.view) return;
+static void ERDumpSliderTreeToFileAt(UIViewController *module, NSString *name) {
+    if (!gEnabled || !module.view) {
+        ERSliderDbgMirrorIn([NSString stringWithFormat:@"ER12TREE %@ 前置不满足 g=%d view=%@",
+                             name, (int)gEnabled, module.view ? @"y" : @"n"]);
+        return;
+    }
     UIView *root = module.view;
     CGFloat rw = CGRectGetWidth(root.bounds), rh = CGRectGetHeight(root.bounds);
-    if (rw < 1.0 || rh < 1.0) return;
+    if (rw < 1.0 || rh < 1.0) {
+        ERSliderDbgMirrorIn([NSString stringWithFormat:@"ER12TREE %@ 尺寸为0 %.0fx%.0f", name, rw, rh]);
+        return;
+    }
     NSMutableString *sb = [NSMutableString string];
     [sb appendFormat:@"=== %@ root=%.0fx%.0f t=%@ ===\n",
         ERModuleIdentifier(module) ?: @"?", rw, rh,
@@ -21124,13 +21131,27 @@ static void ERDumpSliderTreeToFileAt(UIViewController *module, NSString *path) {
         for (UIView *s in v.subviews) [q addObject:@[s, @(depth + 1)]];
         idx++;
     }
-    if (![sb writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
-        ERSliderDbgMirrorIn(@"ER12TREE 写文件失败");
+    // 1.2.1-155 · SpringBoard 有沙盒，/var/mobile/Documents 写不进去（154 试过，
+    // 文件根本没落地）。逐个路径试，用第一个成功的，并把实际路径记进诊断环。
+    NSString *fname = [name stringByAppendingString:@".txt"];
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    NSString *tmpDir = NSTemporaryDirectory();
+    if (tmpDir.length) [candidates addObject:[tmpDir stringByAppendingPathComponent:fname]];
+    [candidates addObject:[@"/var/mobile/Library/Preferences" stringByAppendingPathComponent:fname]];
+    [candidates addObject:[@"/var/mobile/Documents" stringByAppendingPathComponent:fname]];
+    [candidates addObject:[@"/tmp" stringByAppendingPathComponent:fname]];
+    NSData *data = [sb dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *usedPath = nil;
+    for (NSString *p in candidates) {
+        if ([data writeToFile:p atomically:YES]) { usedPath = p; break; }
     }
+    ERSliderDbgMirrorIn([NSString stringWithFormat:
+        @"ER12TREE %@ nodes=%lu bytes=%lu path=%@",
+        name, (unsigned long)idx, (unsigned long)data.length, usedPath ?: @"FAIL"]);
 }
 
 static void ERDumpSliderTreeToFile(UIViewController *module) {
-    ERDumpSliderTreeToFileAt(module, @"/var/mobile/Documents/er_slider_tree.txt");
+    ERDumpSliderTreeToFileAt(module, @"er_slider_tree");
 }
 
 // 1.2.1-150 · 1×2 滑块表面归一（可独立重复调用）。
@@ -28557,7 +28578,7 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
                        dispatch_get_main_queue(), ^{
             UIViewController *ov = weakOverlay;
             UIViewController *panel = ov.presentedViewController ?: weakExpanded;
-            if (panel) ERDumpSliderTreeToFileAt(panel, @"/var/mobile/Documents/er_slider_expanded.txt");
+            if (panel) ERDumpSliderTreeToFileAt(panel, @"er_slider_expanded");
         });
     }
 }
