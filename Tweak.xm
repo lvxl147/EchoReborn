@@ -20965,7 +20965,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                                  c.layer.cornerRadius,
                                  c.layer.mask != nil ? 1 : 0,
                                  c.layer.contents != nil ? 1 : 0,
-                                 c.layer.backgroundColor ? CGColorGetAlpha((__bridge CGColorRef)c.layer.backgroundColor) : -1.0,
+                                 c.layer.backgroundColor ? CGColorGetAlpha(c.layer.backgroundColor) : -1.0,
                                  c.hidden, c.alpha]];
                 [dq addObjectsFromArray:c.subviews];
             }
