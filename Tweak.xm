@@ -21139,6 +21139,13 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
                 CGFloat beforeM = c.layer.cornerRadius;
                 if (fabs(beforeM - nr) > 0.01) c.layer.cornerRadius = nr;
                 c.layer.cornerCurve = kCACornerCurveContinuous;
+                // 1.2.1-152 · 决定性一环：dump 里 MTMaterialView 恒定 m=0
+                //（masksToBounds=NO）。cornerRadius 只对 layer 自身的背景色生效，
+                // 对子层无效 —— 而 1×2 的白色值填充正是这块材质的内部 backdrop
+                // 子层画的。所以前 7 轮把半径从 21 写到 37.5 全部白写：数值对，
+                // 但不裁剪，视觉一动不动。这里必须把裁剪打开。
+                BOOL wasMasked = c.layer.masksToBounds;
+                c.layer.masksToBounds = YES;
                 if (!fullHeight && bottomAligned) {
                     c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
                 }
@@ -21147,10 +21154,10 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
                 if (nowM - sERMatLogLast > 2.0) {
                     sERMatLogLast = nowM;
                     ERSliderDbgMirrorIn([NSString stringWithFormat:
-                        @"ER12MAT %@ %@ %.1f->%.1f b=%.0fx%.0f full=%d ba=%d mc=%lu",
+                        @"ER12MAT %@ %@ %.1f->%.1f b=%.0fx%.0f full=%d ba=%d m=%d->1 mc=%lu",
                         ERModuleIdentifier(module) ?: @"?", mcn, beforeM, nr, mw, mh,
                         (int)fullHeight, (int)bottomAligned,
-                        (unsigned long)c.layer.maskedCorners]);
+                        (int)wasMasked, (unsigned long)c.layer.maskedCorners]);
                 }
             }
         }
