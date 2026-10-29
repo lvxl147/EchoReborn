@@ -43,7 +43,7 @@
 			<key>key</key>
 			<string>enabled</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
 		</dict>

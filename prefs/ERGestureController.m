@@ -455,9 +455,12 @@ static void ERGestureShowDropdown(UIButton *anchor,
     NSString *curText = [_valueButton titleForState:UIControlStateNormal] ?: @"";
     CGSize ts = [curText sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
     CGFloat curTextW = ts.width;
-    // 默认按自身文本走；保留最小可点宽度与上限（防极端超长文件夹名）。
+    // 1.2.1-132 · 基准宽 = 「第12页」版（5+文本+5+箭头+5）：比它短的值（1~2 个字）
+    // 不缩窄，一律用基准宽；比它长的值按自身文本放大（右缘固定、自然向左伸）。
+    // 上限 260 仍保留，防极端超长文件夹名。
+    CGSize bs = [@"第12页" sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
     CGFloat btnW = 5.0 + curTextW + 5.0 + chevW + 5.0;
-    btnW = MIN(MAX(btnW, 44.0), 260.0);
+    btnW = MIN(MAX(btnW, 5.0 + bs.width + 5.0 + chevW + 5.0), 260.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
@@ -468,7 +471,9 @@ static void ERGestureShowDropdown(UIButton *anchor,
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5.0, 5.0, 5.0, pad + chevW);  // 右内边距 = 5 + 箭头
-    [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
+    // 1.2.1-132 · 删除 setTitleEdgeInsets 右14：contentEdgeInsets 已把文字挡在箭头区外，
+    // 再扣一次会把文字标签压窄 14pt → 四字名截断成「投…财」+ 19pt 空白。
+    // 现在文本框严格贴字（零内空白），左5 / 文字↔箭头5 / 箭头↔右5。
 #pragma clang diagnostic pop
     _chevron.center = CGPointMake(btnW - pad - chevW / 2.0, btnH / 2.0);   // 箭头右留 5
     CGFloat textX = left + 27 + 12;

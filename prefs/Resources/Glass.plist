@@ -14,7 +14,7 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>key</key>
@@ -154,7 +154,7 @@
 			<key>key</key>
 			<string>LiquidifyDynamicIslandLiquidGlassEnabled</string>
 			<key>label</key>
-			<string>液态玻璃</string>
+			<string>灵动岛</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>

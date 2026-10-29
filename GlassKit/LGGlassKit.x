@@ -53,8 +53,11 @@ BOOL LGProcessMatchesExclusionList(id list) {
 BOOL lgHostEnabled(NSString *prefix) {
     if (!prefix.length) return YES;
     id global = LGGlassPreferenceValue(@"Global.Enabled");
-    if (![prefix isEqualToString:@"Global"] && [global isKindOfClass:[NSNumber class]] && ![global boolValue])
-        return NO;
+    // 1.2.1-132 · 缺键 = 默认关：Global.Enabled 没写过时整组玻璃不生效（与设置页默认值一致）。
+    if (![prefix isEqualToString:@"Global"]) {
+        if (![global isKindOfClass:[NSNumber class]]) return NO;
+        if (![global boolValue]) return NO;
+    }
     id v = LGGlassPreferenceValue([prefix stringByAppendingString:@".Enabled"]);
 
     if (!v) {

@@ -6419,7 +6419,7 @@ static void ERLoadPrefs(void) {
     // switch off keeps the lines recorded up to that moment.
     ERLogFlush();
     CFPreferencesAppSynchronize(kERPrefsDomain);
-    gEnabled = ERPreferenceBool(@"Enabled", YES);
+    gEnabled = ERPreferenceBool(@"Enabled", NO);   // 1.2.1-132 · 缺键=默认关，与设置页默认值一致
     gQuickAccessButtonsEnabled = ERPreferenceBool(@"QuickAccessButtonsEnabled", YES);
     gQuickAccessVerticalOffset = ERPreferenceDouble(@"QuickAccessVerticalOffset", 0.0);
     gQuickAccessHorizontalInset = ERPreferenceDouble(@"QuickAccessHorizontalInset", 22.0);
@@ -13263,7 +13263,7 @@ static const void *kEREditBadgeLineGlassKey = &kEREditBadgeLineGlassKey;
 static const void *kEREditBadgeGlassStateKey = &kEREditBadgeGlassStateKey;
 
 static BOOL EREditBadgeGlassOn(NSString *key) {
-    if (!ERPreferenceBool(@"Global.Enabled", YES)) return NO;   // 总开关
+    if (!ERPreferenceBool(@"Global.Enabled", NO)) return NO;   // 总开关（1.2.1-132 缺键=默认关）
     if (!lgHostEnabled(@"ControlCenter")) return NO;            // 控制中心宿主开关
     return ERPreferenceBool(key, YES);
 }
