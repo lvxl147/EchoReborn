@@ -37205,8 +37205,73 @@ static void ERSwipeTextInstall(void) {
         // current and future feature is covered automatically because nothing
         // below this line runs. (Toggling the master switch needs a respring to
         // fully take effect, since hooks can't be uninstalled live.)
+        // 1.2.1-135 · 全插件能力门禁提前（此前在「启动」return 之后，语义颠倒：
+        // iOS 18 / CC 集群缺失时整个插件不工作，与主开关无关）。
+        // The package intentionally has no firmware ceiling so it installs on
+        // anything from iOS 16 up.  iOS 18, however, rebuilt Control Center on
+        // a different module-grid architecture; EchoReborn disables itself there
+        // at runtime instead of half-hooking a surface it does not understand.
+        if (ERSystemVersionAtLeast(18.0)) {
+            ERLogRecord(@"WARN", [NSString stringWithFormat:@"ctor: iOS %.1f detected, EchoReborn inactive", ERSystemVersion()]);
+            return;
+        }
+        if (!ERControlCenterClusterAvailable()) {
+            ERLogRecord(@"ERROR", @"ctor: ControlCenterUIKit cluster missing, EchoReborn inactive");
+            return;
+        }
+        // 1.2.1-135 · 以下常驻能力**不属于「启动」管辖**，必须全部放在主开关
+        // early-return 之前（此前 SPG tick 在 return 之后，启动一关桌面胶囊手势
+        // 连同手势管理整体失效 = 用户实锤"关闭所有功能都失效"）：
+        //   ① 桌面胶囊手势 5s tick（手势管理/页数发布）
+        //   ② 岛黑底 CAPackage blend + 岛安全扫描（灵动岛基础修复）
+        //   ③ CC 玻璃宿主注册（液态玻璃，自有 Global.Enabled 总开关）
+        //   ④ DumpFolders 观察者（设置页进手势管理即刷新文件夹列表）
+        // 1.2.0-1 · 桌面胶囊手势：主线程周期扫描（respring 后 1s 起每 5s 一轮），
+        //   负责搜索胶囊识别/挂手势 + 桌面页数发布（HomeScreen.PageCount）。
+        {
+            dispatch_source_t spgTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
+                                                                dispatch_get_main_queue());
+            ERBootLog(@"SPG-CTOR timer created? (1=yes)");
+            ERLogInfo(@"SPG-CTOR timer create result=%@", spgTimer ? @"OK" : @"NIL");
+            if (spgTimer) {
+                dispatch_source_set_timer(spgTimer,
+                                          dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                                          (uint64_t)(5.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
+                // 1.2.0-13 · static 持有（ctor 栈上 __block 会在返回后释放 source）。
+                static dispatch_source_t sERSPGTimer = nil;
+                sERSPGTimer = spgTimer;
+                dispatch_source_set_event_handler(spgTimer, ^{
+                    @autoreleasepool { ERSPGScanTick(); }
+                });
+                dispatch_resume(spgTimer);
+                (void)sERSPGTimer;   // 抑制 -Wunused-but-set-variable（持有即目的）
+                ERBootLog(@"SPG-CTOR timer resumed (static kept)");
+                ERLogInfo(@"SPG-CTOR timer resumed ok (static kept)");
+            }
+        }
+        // 1.1.0b · 岛黑底根修：CAPackage 宿主 screenBlend（手动 swizzle）
+        ERInstallCAPackageBlend();
+        // 1.1.0-2 · 安全扫描常开（不依赖 swizzle 是否命中；命中类只挂 screenBlend，零波及）
+        ERStartIslandBlendScan();
+        // 0.4.0: liquid glass is vendored, not delegated. Register the Control
+        // Center material host so the ported MTMaterialView router glasses
+        // native module platters / sliders; converted connectivity tiles are
+        // glassed directly in EREnsureConnectivityTileMaterial. Enable state
+        // lives in the shared prefs domain (Global.Enabled / ControlCenter.
+        // Enabled) and reloads live through GlassKit's Darwin observer.
+        ERGlassRegisterControlCenterHost();
+        // 1.2.1-135 · 设置页进「手势管理」即请求重 dump 文件夹列表（近实时）
+        {
+            int dfTok = 0;
+            notify_register_dispatch("com.strive.echoreborn/DumpFolders", &dfTok,
+                                     dispatch_get_main_queue(), ^(int t) {
+                @try { ERSPGDumpFolders(); } @catch (__unused NSException *e135) {}
+            });
+        }
         if (!gEnabled) {
-            ERLogRecord(@"WARN", @"ctor: EchoReborn disabled, no hooks installed");
+            // 1.2.1-135 · 主开关关闭 = 只跳过控制中心 hook（%init(_ungrouped) 与
+            // 录屏挂钩）；上方非 CC 常驻能力已全部装完。
+            ERLogRecord(@"WARN", @"ctor: master off — CC hooks skipped, non-CC features installed");
             return;
         }
         // 1.1.1 · 主开关读值显式落盘：录屏无延迟/隐藏锁屏音乐都挂在本开关之后（1.1.9-74 找回）。
@@ -37257,32 +37322,6 @@ static void ERSwipeTextInstall(void) {
                 });
             }
             ERLogInfo(@"ctor: CC-RECORD init done (1.1.7-2 host=RPControlCenterClient)");
-            // 1.2.0-1 · 桌面胶囊手势：主线程周期扫描（respring 后 8s 起每 5s 一轮），
-            //   负责搜索胶囊识别/挂手势 + 桌面页数发布（HomeScreen.PageCount）。
-            {
-                dispatch_source_t spgTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0,
-                                                                    dispatch_get_main_queue());
-                ERBootLog(@"SPG-CTOR timer created? (1=yes)");
-                ERLogInfo(@"SPG-CTOR timer create result=%@", spgTimer ? @"OK" : @"NIL");
-                if (spgTimer) {
-                    dispatch_source_set_timer(spgTimer,
-                                              dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
-                                              (uint64_t)(5.0 * NSEC_PER_SEC), (uint64_t)(1.0 * NSEC_PER_SEC));
-                    // 1.2.0-13 · 根因实锤（日志：SPG-CTOR resumed ok 但 5 分钟零 SPG-TICK，
-                    // 而同为毛队列定时器的 QACORR 心跳正常）：timer 此前只被 ctor 栈上的
-                    // __block keepSPG 持有——ctor 一返回 source 即被释放，handler 永不执行。
-                    // 改 static 持有（其它常驻定时器同款做法）。
-                    static dispatch_source_t sERSPGTimer = nil;
-                    sERSPGTimer = spgTimer;
-                    dispatch_source_set_event_handler(spgTimer, ^{
-                        @autoreleasepool { ERSPGScanTick(); }
-                    });
-                    dispatch_resume(spgTimer);
-                    (void)sERSPGTimer;   // 抑制 -Wunused-but-set-variable（持有即目的）
-                    ERBootLog(@"SPG-CTOR timer resumed (static kept)");
-                    ERLogInfo(@"SPG-CTOR timer resumed ok (static kept)");
-                }
-            }
             // 1.1.4 · RCPScreenRecorder 日志钩子（RCP-TIMELINE 时间线，orig 透传）（1.1.9-74 找回）
             {
                 Class rcp = objc_getClass("RCPScreenRecorder");
@@ -37303,24 +37342,9 @@ static void ERSwipeTextInstall(void) {
                 }
             }
         }
-        // The package intentionally has no firmware ceiling so it installs on
-        // anything from iOS 16 up.  iOS 18, however, rebuilt Control Center on
-        // a different module-grid architecture; EchoReborn disables itself there
-        // at runtime instead of half-hooking a surface it does not understand.
-        if (ERSystemVersionAtLeast(18.0)) {
-            ERLogRecord(@"WARN", [NSString stringWithFormat:@"ctor: iOS %.1f detected, EchoReborn inactive", ERSystemVersion()]);
-            return;
-        }
-        if (!ERControlCenterClusterAvailable()) {
-            ERLogRecord(@"ERROR", @"ctor: ControlCenterUIKit cluster missing, EchoReborn inactive");
-            return;
-        }
+        // 1.2.1-135 · iOS 18 / CC 集群门禁已提前到主开关 return 之前（原位置删除）。
         ERBootLog(@"4-GATES-PASSED-PRE-INIT");
         %init(_ungrouped);
-        // 1.1.0b · 岛黑底根修：CAPackage 宿主 screenBlend（手动 swizzle）
-        ERInstallCAPackageBlend();
-        // 1.1.0-2 · 安全扫描常开（不依赖 swizzle 是否命中；命中类只挂 screenBlend，零波及）
-        ERStartIslandBlendScan();
         ERBootLog(@"5-INIT-DONE");
         ERLogRecord(@"INFO", [NSString stringWithFormat:@"ctor: hooks installed on iOS %.1f", ERSystemVersion()]);
         // 1.0.9-167 · 操作按钮横向缩进：滑块/开关写入后（ReloadPrefs 通知）即时重贴
@@ -37332,13 +37356,8 @@ static void ERSwipeTextInstall(void) {
                 dispatch_async(dispatch_get_main_queue(), ^{ ERQuickActionsReapplyAll(); });
             });
         }
-        // 0.4.0: liquid glass is vendored, not delegated. Register the Control
-        // Center material host so the ported MTMaterialView router glasses
-        // native module platters / sliders; converted connectivity tiles are
-        // glassed directly in EREnsureConnectivityTileMaterial. Enable state
-        // lives in the shared prefs domain (Global.Enabled / ControlCenter.
-        // Enabled) and reloads live through GlassKit's Darwin observer.
-        ERGlassRegisterControlCenterHost();
+        // 1.2.1-135 · ERGlassRegisterControlCenterHost 已提前到主开关 return 之前
+        // （玻璃宿主服务液态玻璃，自有 Global.Enabled 总开关，不受「启动」管辖）。
         // Nothing is swizzled for the slider readout. Previous builds
         // enumerated the class list here and installed a -layoutSubviews
         // trampoline; because that trampoline resolved its original by walking

@@ -30,7 +30,7 @@
 			<key>label</key>
 			<string>启动</string>
 			<key>set</key>
-			<string>setMasterEnabled:specifier:</string>
+			<string>setRespringToggle:specifier:</string>
 		</dict>
 		<dict>
 			<key>cell</key>

@@ -1163,6 +1163,21 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                 (unsigned long)self.specifiers.count);
     // 1.2.0-7：页面标题与入口行文字统一为「手势管理」（只改显示文字）。
     self.title = @"手势管理";
+    // 1.2.1-135 · 回桌面→回前台时 PS 复用组头，ⓘ 需要同步（弱引用静态槽位 +
+    // dispatch_once 常驻观察者，控制器销毁自动失效，无保留环）。
+    static __weak ERGestureController *sERGGestureActive = nil;
+    sERGGestureActive = self;
+    static dispatch_once_t sERGGestureActiveTok;
+    dispatch_once(&sERGGestureActiveTok, ^{
+        [[NSNotificationCenter defaultCenter]
+            addObserverForName:UIApplicationDidBecomeActiveNotification
+            object:nil queue:[NSOperationQueue mainQueue]
+            usingBlock:^__unused(NSNotification *note) {
+                ERGestureController *c = sERGGestureActive;
+                if (!c || !c.view.window) return;
+                [c erScheduleGroupInfoSync];
+            }];
+    });
 }
 
 // 1.2.0-77 · ⓘ 挂到组头「搜索胶囊」右侧（用户指定位置）。PS 的组头是
@@ -1191,32 +1206,64 @@ static UITableView *ERGestureFindTableView(UIView *v) {
     return nil;
 }
 
-static void ERGestureInstallGroupInfo(ERGestureController *self) {
+// 1.2.1-135 · 组头 ⓘ 同步（原"装一次就不动"改为"每次同步"）：UITableView 组头视图
+// 跨分组复用，回桌面→回前台后原宿主可能被复用给别的分组（实测 ⓘ 漂到「震动反馈」
+// 旁边且下移）。同步三步：①清陈旧（宿主已非「搜索胶囊」组头的 ⓘ 全部摘除）
+// ②补缺失（当前「搜索胶囊」组头上没有就按原规则装）③重定位（跟随 label 当前 frame）。
+static void ERGestureCollectTagViews(UIView *v, NSInteger tag, NSMutableArray<UIView *> *out) {
+    if (!v) return;
+    for (UIView *sub in v.subviews) {
+        if (sub.tag == tag) [out addObject:sub];
+        ERGestureCollectTagViews(sub, tag, out);
+    }
+}
+
+static void ERGestureSyncGroupInfo(ERGestureController *self) {
     UITableView *tv = ERGestureFindTableView(self.view);
     if (!tv || !tv.window) return;
-    ERGPrefsLog(@"group info install begin");
+    NSMutableArray<UIView *> *btns = [NSMutableArray array];
+    ERGestureCollectTagViews(tv, 7601, btns);
     UILabel *found = ERGestureFindHeaderLabel(tv);
-    if (!found) { ERGPrefsLog(@"group info label not found"); return; }
-    UIView *host = found.superview ?: tv;
-    if ([host viewWithTag:7601]) return;   // 已装过
-    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
-    btn.tag = 7601;
-    // 1.2.0-80 · 用户反馈 ⓘ 偏大：按组头文字字号生成 SF Symbol（文字同高）
-    UIFont *hfont = found.font ?: [UIFont systemFontOfSize:13.0];
-    UIImage *img = [UIImage systemImageNamed:@"info.circle"
-        withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
-    if (!img) img = [UIImage imageNamed:@"info.circle"];
-    [btn setImage:img forState:UIControlStateNormal];
-    btn.tintColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.55],
-                               [UIColor colorWithRed:0.25 green:0.55 blue:1.00 alpha:1.0]);
-    [btn addTarget:self action:@selector(erGroupInfoTapped)
-      forControlEvents:UIControlEventTouchUpInside];
-    CGFloat side = ceil(hfont.lineHeight);
-    btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 3.0,   // 1.2.0-81 · 用户反馈间距减半 6→3
+    UIView *host = found.superview;
+    for (UIView *b in btns) {
+        if (!host || b.superview != host) [b removeFromSuperview];   // 陈旧
+    }
+    if (!found) return;
+    UIButton *btn = (UIButton *)[host viewWithTag:7601];
+    if (!btn || ![btn isKindOfClass:[UIButton class]]) {
+        btn = [UIButton buttonWithType:UIButtonTypeSystem];
+        btn.tag = 7601;
+        UIFont *hfont = found.font ?: [UIFont systemFontOfSize:13.0];
+        UIImage *img = [UIImage systemImageNamed:@"info.circle"
+            withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
+        if (!img) img = [UIImage imageNamed:@"info.circle"];
+        [btn setImage:img forState:UIControlStateNormal];
+        btn.tintColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.55],
+                                   [UIColor colorWithRed:0.25 green:0.55 blue:1.00 alpha:1.0]);
+        [btn addTarget:self action:@selector(erGroupInfoTapped)
+          forControlEvents:UIControlEventTouchUpInside];
+        [host addSubview:btn];
+        ERGPrefsLog(@"group info sync install host=%@", NSStringFromClass(object_getClass(host)));
+    }
+    // 重定位：无论新旧，一律按 label 当前 frame 重算（组头复用/布局变化都跟住）
+    CGFloat side = ceil((found.font ?: [UIFont systemFontOfSize:13.0]).lineHeight);
+    btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 3.0,   // 1.2.0-81 · 间距 3
                            CGRectGetMidY(found.frame) - side / 2.0, side, side);
-    [host addSubview:btn];
-    ERGPrefsLog(@"group info install ok frame=%@ host=%@",
-                NSStringFromCGRect(btn.frame), NSStringFromClass(object_getClass(host)));
+}
+
+// 前台后分两次同步（0.3/0.8s），覆盖 PS 异步重建组头的时机
+- (void)erScheduleGroupInfoSync {
+    __weak typeof(self) wself = self;
+    for (NSInteger i = 0; i < 2; i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((i ? 0.8 : 0.3) * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            __strong typeof(wself) sself = wself;
+            if (!sself) return;
+            @try { ERGestureSyncGroupInfo(sself); } @catch (NSException *e) {
+                ERGPrefsLog(@"group info sync threw: %@", e);
+            }
+        });
+    }
 }
 
 - (void)erGroupInfoTapped {
@@ -1230,19 +1277,11 @@ static void ERGestureInstallGroupInfo(ERGestureController *self) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     ERGPrefsLog(@"viewWillAppear (group info scheduled)");
+    // 1.2.1-135 · 进本页即请求 SpringBoard 重 dump 文件夹列表（近实时：
+    // 新增/改名/解散的文件夹，点开下拉立刻可见），30s 周期 dump 降级为兜底。
+    notify_post("com.strive.echoreborn/DumpFolders");
     // 组头延迟出现（PS 异步构建）；-80 实锤异常已修，1 秒才显示是定时器太晚 → 调回 0.25/0.6s
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
-            ERGPrefsLog(@"group info install threw: %@", e);
-        }
-    });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
-                   dispatch_get_main_queue(), ^{
-        @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
-            ERGPrefsLog(@"group info install threw(2): %@", e);
-        }
-    });
+    [self erScheduleGroupInfoSync];
 }
 
 @end
