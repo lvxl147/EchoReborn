@@ -6712,9 +6712,23 @@ static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewControll
                             CGRectGetHeight(m.view.bounds) > 120.0;
         if (!sliderByIdent && !sliderBySize) continue;
         if ([m.view isDescendantOfView:expandingController.view]) continue;
-        BOOL alreadyMarked = [objc_getAssociatedObject(m.view, kERExpansionSiblingHiddenKey) boolValue];
+        // 1.2.1-153 · 148 只藏了 module.view，实测「还能看见」——说明可见的东西
+        // 不在这一层。容器 CCUIContentModuleContainerView 自带背景与投影，藏内层
+        // 等于没藏。这里把抑制层上提到容器，模块视图本身一并压。
+        UIView *target = m.view;
+        for (UIView *v = m.view; v; v = v.superview) {
+            if ([NSStringFromClass(v.class) isEqualToString:@"CCUIContentModuleContainerView"]) {
+                target = v;
+                break;
+            }
+        }
+        BOOL alreadyMarked = [objc_getAssociatedObject(target, kERExpansionSiblingHiddenKey) boolValue];
+        objc_setAssociatedObject(target, kERExpansionSiblingHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(m.view, kERExpansionSiblingHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         // hidden 是最硬的属性（原生淡出只动 alpha/opacity，不会把 hidden 翻回来）
+        target.hidden = YES;
+        target.alpha = 0.0;
+        target.layer.opacity = 0.0;
         m.view.hidden = YES;
         m.view.alpha = 0.0;
         m.view.layer.opacity = 0.0;
@@ -6722,16 +6736,33 @@ static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewControll
     }
 }
 
-static void ERRestoreSiblingSliderModules(UIViewController *overlay) {
-    if (!overlay || gERHiddenSiblingCount == 0) return;
-    for (UIViewController *m in ERCollectModuleControllers(overlay)) {
-        if (![objc_getAssociatedObject(m.view, kERExpansionSiblingHiddenKey) boolValue]) continue;
-        objc_setAssociatedObject(m.view, kERExpansionSiblingHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        m.view.hidden = NO;
-        m.view.alpha = 1.0;
-        m.view.layer.opacity = 1.0;
-        if (gERHiddenSiblingCount > 0) gERHiddenSiblingCount--;
+static void ERRRestoreMarkedHiddenViews(UIView *root) {
+    if (!root) return;
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:root];
+    NSUInteger guard = 0;
+    while (q.count && guard++ < 3000) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        if ([objc_getAssociatedObject(c, kERExpansionSiblingHiddenKey) boolValue]) {
+            c.hidden = NO;
+            c.alpha = 1.0;
+            c.layer.opacity = 1.0;
+            objc_setAssociatedObject(c, kERExpansionSiblingHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [q addObjectsFromArray:c.subviews];
     }
+}
+
+static void ERRestoreSiblingSliderModules(UIViewController *overlay) {
+    if (!overlay) return;
+    // 1.2.1-153 · 兜底：直接全树扫标记，不依赖 controller 收集。
+    // 抑制层上提到 CCUIContentModuleContainerView 之后，一旦这条路径漏掉，
+    // 亮度模块就会被永久隐藏 —— 必须有一条不看控制器的恢复路径。
+    ERRRestoreMarkedHiddenViews(overlay.view);
+    for (UIViewController *m in ERCollectModuleControllers(overlay)) {
+        ERRRestoreMarkedHiddenViews(m.view);
+    }
+    gERHiddenSiblingCount = 0;
 }
 
 static UIViewController *ERModuleControllerForView(UIView *view) {
@@ -21048,6 +21079,57 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     }
 }
 
+// 1.2.1-153 · 1×2 滑块全树落盘取证。
+//
+// 前面 8 轮的诊断都困在 12KB 的 CFPreferences 环里：为了塞进去，dump 必须过滤
+// 「有形状信息」的视图、限制 18 行，结果就是关键视图永远在过滤之外。而白填充
+// 到底是哪个视图、用什么画的（view.backgroundColor / layer.backgroundColor /
+// layer.contents / 子层），这些问题必须**无过滤**才能回答。
+// 这里改成直接写文件，一次把整棵树摊平（最多 400 个节点），用 SFTP 拉回来。
+static void ERDumpSliderTreeToFile(UIViewController *module) {
+    if (!gEnabled || !module.view) return;
+    UIView *root = module.view;
+    CGFloat rw = CGRectGetWidth(root.bounds), rh = CGRectGetHeight(root.bounds);
+    if (rw < 1.0 || rh < 1.0) return;
+    NSMutableString *sb = [NSMutableString string];
+    [sb appendFormat:@"=== %@ root=%.0fx%.0f t=%@ ===\n",
+        ERModuleIdentifier(module) ?: @"?", rw, rh,
+        [NSDateFormatter localizedStringFromDate:[NSDate date]
+                                       dateStyle:NSDateFormatterNoStyle
+                                       timeStyle:NSDateFormatterMediumStyle]];
+    NSMutableArray *q = [NSMutableArray arrayWithObject:@[root, @(0)]];
+    NSUInteger idx = 0;
+    while (q.count && idx < 400) {
+        NSArray *pair = q.firstObject;
+        [q removeObjectAtIndex:0];
+        UIView *v = (UIView *)pair[0];
+        NSInteger depth = [(NSNumber *)pair[1] integerValue];
+        CGRect f = [v convertRect:v.bounds toView:root];
+        // layer.backgroundColor 才是真正被绘制的颜色；view.backgroundColor 常为空
+        NSString *bgStr = @"-";
+        CGColorRef lc = v.layer.backgroundColor;
+        if (lc) {
+            size_t n = CGColorGetNumberOfComponents(lc);
+            const CGFloat *c = CGColorGetComponents(lc);
+            if (n >= 4) bgStr = [NSString stringWithFormat:@"%.2f,%.2f,%.2f,%.2f", c[0], c[1], c[2], c[3]];
+            else if (n == 2) bgStr = [NSString stringWithFormat:@"w%.2f,a%.2f", c[0], c[1]];
+        }
+        NSMutableString *indent = [NSMutableString string];
+        for (NSInteger i = 0; i < depth && i < 20; i++) [indent appendString:@"  "];
+        [sb appendFormat:@"%@#%lu %@ f=%.0f,%.0f,%.0fx%.0f r=%.1f m=%d a=%.2f h=%d bg=%@ sub=%lu\n",
+            indent, (unsigned long)idx, NSStringFromClass(v.class),
+            f.origin.x, f.origin.y, f.size.width, f.size.height,
+            v.layer.cornerRadius, (int)v.layer.masksToBounds,
+            v.alpha, (int)v.hidden, bgStr, (unsigned long)v.subviews.count];
+        for (UIView *s in v.subviews) [q addObject:@[s, @(depth + 1)]];
+        idx++;
+    }
+    if (![sb writeToFile:@"/var/mobile/Documents/er_slider_tree.txt"
+              atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+        ERSliderDbgMirrorIn(@"ER12TREE 写文件失败");
+    }
+}
+
 // 1.2.1-150 · 1×2 滑块表面归一（可独立重复调用）。
 //
 // 149 探针实锤：写在模块外层容器上的圆角已生效（cont r=37.5）且容器**不裁剪**
@@ -21535,6 +21617,15 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
         // 对材质圆角的重置（149 已排除外层裁剪，剩下的唯一解释就是被改回）。
         // 节流 0.5s/模块，避免本函数被 layout 高频调用时刷出成百个定时器。
         if (compactNow) {
+            // 1.2.1-153 · 全树落盘（节流 2s，覆盖写，最后一次即最终布局态）
+            {
+                static NSTimeInterval sERTreeLast = 0.0;
+                NSTimeInterval nowT = [[NSDate date] timeIntervalSince1970];
+                if (nowT - sERTreeLast > 2.0) {
+                    sERTreeLast = nowT;
+                    ERDumpSliderTreeToFile(module);
+                }
+            }
             NSTimeInterval nowR = [[NSDate date] timeIntervalSince1970];
             NSNumber *lastR = objc_getAssociatedObject(moduleView, kERSliderReassertKey);
             if (!lastR || nowR - lastR.doubleValue > 0.5) {
