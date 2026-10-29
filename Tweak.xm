@@ -28645,16 +28645,28 @@ static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, doubl
     if (!overlay.view) return;
     UIView *win = overlay.view.window ?: overlay.view;
     NSMutableString *sb = [NSMutableString string];
-    [sb appendFormat:@"== %@ dt=%.2f exp=%d close=%d ===\n", tag, dt,
-                     (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive];
+    [sb appendFormat:@"== %@ dt=%.2f exp=%d close=%d cur=%lu ===\n", tag, dt,
+                     (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive,
+                     (unsigned long)gERCurrentPage];
+    // 1.2.1-162 · 只记「屏幕上看得见的 + 两个滑块」。161 是全量 dump（50 个模块远超
+    // 一屏），连按几次就把 60KB 环形缓冲写爆，前面的 OPEN 采样被整段冲掉，只剩尾部
+    // 三帧 CLOSE。压到每帧约 8 行后，一次完整操作的所有帧都能留住。
+    CGRect screen = win.bounds;
+    NSUInteger onScreenCount = 0;
     for (UIViewController *m in ERCollectModuleControllers(overlay)) {
         UIView *v = m.view;
         if (!v) continue;
+        NSString *ident = ERModuleIdentifier(m) ?: NSStringFromClass(m.class);
+        BOOL isSlider = [ident containsString:@"audio"] || [ident containsString:@"Display"]
+                     || [ident containsString:@"display"];
         CGRect f = [v convertRect:v.bounds toView:win];
-        [sb appendFormat:@"M %@ a=%.2f h=%d lo=%.2f f=%.0f,%.0f,%.0fx%.0f z=%.1f\n",
-         ERModuleIdentifier(m) ?: NSStringFromClass(m.class),
+        BOOL onScreen = CGRectIntersectsRect(f, screen);
+        if (onScreen) onScreenCount++;
+        if (!isSlider && !onScreen) continue;
+        [sb appendFormat:@"M%@ %@ a=%.2f h=%d lo=%.2f f=%.0f,%.0f,%.0fx%.0f\n",
+         isSlider ? @"*" : @" ", ident,
          v.alpha, (int)v.hidden, v.layer.opacity,
-         f.origin.x, f.origin.y, f.size.width, f.size.height, v.layer.zPosition];
+         f.origin.x, f.origin.y, f.size.width, f.size.height];
     }
     // 左上角残影候选：窗口坐标 (0,0,200,200) 内有面积、可见的视图
     CGRect corner = CGRectMake(0, 0, 200, 200);
@@ -28674,13 +28686,15 @@ static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, doubl
          NSStringFromClass(c.class), c.alpha, c.layer.opacity,
          f.origin.x, f.origin.y, f.size.width, f.size.height, c.layer.zPosition];
     }
+    [sb appendFormat:@"-- onscreen=%lu\n", (unsigned long)onScreenCount];
     ERAppendDebugFile(@"er_exp.txt", sb);
 }
 
 static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag) {
     if (!overlay) return;
-    double ts[7] = {0.02, 0.06, 0.10, 0.16, 0.24, 0.34, 0.50};
-    for (int i = 0; i < 7; i++) {
+    // 保留 161 的密采样，另加 0.60/0.85/1.20 看落定态（②是否到落定才消失）
+    double ts[9] = {0.02, 0.08, 0.16, 0.24, 0.36, 0.50, 0.60, 0.85, 1.20};
+    for (int i = 0; i < 9; i++) {
         double dt = ts[i];
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(dt * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
