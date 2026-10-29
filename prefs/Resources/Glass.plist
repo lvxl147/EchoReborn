@@ -21,6 +21,8 @@
 			<string>Global.Enabled</string>
 			<key>label</key>
 			<string>启用液态玻璃</string>
+			<key>set</key>
+			<string>setRespringToggle:specifier:</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -155,6 +157,8 @@
 			<string>LiquidifyDynamicIslandLiquidGlassEnabled</string>
 			<key>label</key>
 			<string>灵动岛</string>
+			<key>set</key>
+			<string>setRespringToggle:specifier:</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>

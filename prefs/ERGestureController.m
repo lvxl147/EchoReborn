@@ -475,7 +475,9 @@ static void ERGestureShowDropdown(UIButton *anchor,
     // 再扣一次会把文字标签压窄 14pt → 四字名截断成「投…财」+ 19pt 空白。
     // 现在文本框严格贴字（零内空白），左5 / 文字↔箭头5 / 箭头↔右5。
 #pragma clang diagnostic pop
-    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0, btnH / 2.0);   // 箭头右留 5
+    // 1.2.1-133 · 箭头墨迹在槽内居中自带约 2pt 符号内空白，整体左移 2pt，
+    // 让「文字↔箭头」的视觉间距 = 5（槽位 14 与间距公式不变）。
+    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 - 2.0, btnH / 2.0);   // 箭头右留 5
     CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);

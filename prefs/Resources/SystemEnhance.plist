@@ -29,6 +29,8 @@
 			<string>LiquidifyHideDynamicIslandEnabled</string>
 			<key>label</key>
 			<string>隐藏灵动岛</string>
+			<key>set</key>
+			<string>setRespringToggle:specifier:</string>
 		</dict>
 		<dict>
 			<key>cell</key>

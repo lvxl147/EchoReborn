@@ -46,6 +46,8 @@
 			<false/>
 			<key>PostNotification</key>
 			<string>com.strive.echoreborn/ReloadPrefs</string>
+			<key>set</key>
+			<string>setRespringToggle:specifier:</string>
 		</dict>
 
 		<dict>
