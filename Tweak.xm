@@ -20996,8 +20996,17 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         BOOL highlightSurface = fillsModule && candidate.layer.cornerRadius >= 8.0 &&
             ([name containsString:@"Highlight"] || [name containsString:@"Selected"] ||
              [name containsString:@"Background"]);
+        // 1.2.1-141 · ER2X1DbgMirror 实锤：手电筒 2×1 的白底是一个**匿名 UIView**
+        //（类名就是 UIView），b={0,0,163x75} 铺满模块，cornerRadius=21 —— 上面
+        // 的关键词匹配对匿名类完全失效，这就是 -140 没修中的原因。改用几何+
+        // 圆角窗口规则：铺满模块、自身圆角在 [8,45]（明显是圆角底板）、且不是
+        // 玻璃 kit 自己的背板（LG* / *Glass*，如 LGLiveBackdropView 的 37.5 由
+        // 玻璃侧管理）→ 一律归一到 refined。r=0 的布局容器全被下限挡住。
+        BOOL glassOwned = [name hasPrefix:@"LG"] || [name containsString:@"Glass"];
+        BOOL roundedPlatter = fillsModule && !glassOwned &&
+            candidate.layer.cornerRadius >= 8.0 && candidate.layer.cornerRadius <= 45.0;
         if (candidate == moduleView || buttonSurface ||
-            (materialSurface && fillsModule) || highlightSurface) {
+            (materialSurface && fillsModule) || highlightSurface || roundedPlatter) {
             // 1.0.6-12（第 4 条）：只在圆角真的变化时才赋值。
             //
             // 本函数在 layout / 展开 / 收回路径上被反复调用（一次收回就有 1 + 8 轮全量扫描），
