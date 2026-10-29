@@ -21097,8 +21097,33 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 // 识别规则刻意收窄，避免误伤按钮的圆形底座：
 //   宽度 ≈ 最近祖先玻璃的宽（±4），且高度 < 玻璃高 * 0.8
 //   60x60 的按钮底座因 h=60 不小于 60*0.8 而被排除。
+// 1.2.1-157 · 追加写调试文件。诊断环只有 24 行，而 ERXPAND 每行含完整 chain
+// （几千字符）会把环占满，ER12CLIP / ER12PANELBG 根本留不下来 —— 156 就是这样
+// 一条都没读到。关键结论改走独立文件，不受环长度限制。
+static void ERAppendDebugFile(NSString *name, NSString *line) {
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+    NSMutableString *cur = [NSMutableString stringWithContentsOfFile:path
+                                                            encoding:NSUTF8StringEncoding
+                                                               error:nil];
+    if (!cur || cur.length > 60000) cur = [NSMutableString string];
+    [cur appendFormat:@"%@\n", line];
+    [cur writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+}
+
 static void ERAlignSliderFillClips(UIView *root) {
     if (!root) return;
+    // 被调用也要留痕：否则「没命中」和「没执行」永远分不清（156 就卡在这）
+    {
+        static NSTimeInterval sERClipCallLast = 0.0;
+        NSTimeInterval nowCall = [[NSDate date] timeIntervalSince1970];
+        if (nowCall - sERClipCallLast > 3.0) {
+            sERClipCallLast = nowCall;
+            ERAppendDebugFile(@"er_clip.txt", [NSString stringWithFormat:
+                @"CALL root=%@ %.0fx%.0f",
+                NSStringFromClass(root.class),
+                CGRectGetWidth(root.bounds), CGRectGetHeight(root.bounds)]);
+        }
+    }
     NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:root];
     NSUInteger guard = 0;
     static NSInteger sERClipLogBudget = 0;
@@ -21108,9 +21133,19 @@ static void ERAlignSliderFillClips(UIView *root) {
         if (c.layer.masksToBounds && c.layer.cornerRadius < 1.0) {
             CGFloat w = CGRectGetWidth(c.bounds), h = CGRectGetHeight(c.bounds);
             if (w > 30.0 && h > 8.0) {
+                // 1.2.1-157 · 玻璃不一定是祖先！树里 #47（填充容器）的父是
+                // _CCUIBaseSliderContentView，而玻璃 #44 是这个父的**兄弟**。
+                // 156 只沿祖先链找，一次都没命中，所以 ER12CLIP 一条都没打出来。
+                // 改为逐层向上、在每一层找同尺寸的玻璃兄弟。
                 UIView *g = nil;
-                for (UIView *a = c.superview; a; a = a.superview) {
-                    if ([a isKindOfClass:[LGLiveBackdropView class]]) { g = a; break; }
+                for (UIView *a = c; a && !g; a = a.superview) {
+                    for (UIView *s in a.subviews) {
+                        if (s != c && [s isKindOfClass:[LGLiveBackdropView class]] &&
+                            fabs(CGRectGetWidth(s.bounds) - w) < 4.0) {
+                            g = s;
+                            break;
+                        }
+                    }
                 }
                 if (g) {
                     CGFloat gw = CGRectGetWidth(g.bounds), gh = CGRectGetHeight(g.bounds);
@@ -21123,7 +21158,7 @@ static void ERAlignSliderFillClips(UIView *root) {
                         c.clipsToBounds = YES;
                         if (sERClipLogBudget < 6) {
                             sERClipLogBudget++;
-                            ERSliderDbgMirrorIn([NSString stringWithFormat:
+                            ERAppendDebugFile(@"er_clip.txt", [NSString stringWithFormat:
                                 @"ER12CLIP %@ %.0fx%.0f r=0->%.1f g=%.0fx%.0f gr=%.1f",
                                 NSStringFromClass(c.class), w, h, nr, gw, gh, gr]);
                         }
@@ -21136,7 +21171,14 @@ static void ERAlignSliderFillClips(UIView *root) {
 }
 
 static void ERFixExpandedSliderPanel(UIViewController *panel) {
-    if (!panel.view) return;
+    if (!panel.view) {
+        ERAppendDebugFile(@"er_panelbg.txt", @"PANEL view=nil");
+        return;
+    }
+    ERAppendDebugFile(@"er_panelbg.txt", [NSString stringWithFormat:
+        @"PANEL %@ %.0fx%.0f",
+        NSStringFromClass(panel.class),
+        CGRectGetWidth(panel.view.bounds), CGRectGetHeight(panel.view.bounds)]);
     ERAlignSliderFillClips(panel.view);
     CGFloat pw = CGRectGetWidth(panel.view.bounds), ph = CGRectGetHeight(panel.view.bounds);
     if (pw < 400.0 || ph < 600.0) return;
@@ -21161,6 +21203,11 @@ static void ERFixExpandedSliderPanel(UIViewController *panel) {
                 }
                 ERSliderDbgMirrorIn([NSString stringWithFormat:
                     @"ER12PANELBG b=%.0fx%.0f a=%.2f h=%d r=%.1f sub=%lu kids=[%@]",
+                    CGRectGetWidth(c.bounds), CGRectGetHeight(c.bounds), c.alpha,
+                    (int)c.hidden, c.layer.cornerRadius, (unsigned long)c.subviews.count,
+                    kids.length ? kids : @"none"]);
+                ERAppendDebugFile(@"er_panelbg.txt", [NSString stringWithFormat:
+                    @"BG b=%.0fx%.0f a=%.2f h=%d r=%.1f sub=%lu kids=[%@]",
                     CGRectGetWidth(c.bounds), CGRectGetHeight(c.bounds), c.alpha,
                     (int)c.hidden, c.layer.cornerRadius, (unsigned long)c.subviews.count,
                     kids.length ? kids : @"none"]);
