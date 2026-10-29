@@ -420,7 +420,10 @@ static const void *kERInitialMasterEnabledKey = &kERInitialMasterEnabledKey;
         style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定"
         style:UIAlertActionStyleDestructive
-        handler:^__unused(UIAlertAction *a) { [self respring]; }]];
+        handler:^(UIAlertAction *action) {
+            (void)action;   // -Werror：显式消费未用参数（__unused 不能贴在 block 参数上）
+            [self respring];
+        }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
