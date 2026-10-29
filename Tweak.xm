@@ -21086,7 +21086,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 // 到底是哪个视图、用什么画的（view.backgroundColor / layer.backgroundColor /
 // layer.contents / 子层），这些问题必须**无过滤**才能回答。
 // 这里改成直接写文件，一次把整棵树摊平（最多 400 个节点），用 SFTP 拉回来。
-static void ERDumpSliderTreeToFile(UIViewController *module) {
+static void ERDumpSliderTreeToFileAt(UIViewController *module, NSString *path) {
     if (!gEnabled || !module.view) return;
     UIView *root = module.view;
     CGFloat rw = CGRectGetWidth(root.bounds), rh = CGRectGetHeight(root.bounds);
@@ -21099,7 +21099,7 @@ static void ERDumpSliderTreeToFile(UIViewController *module) {
                                        timeStyle:NSDateFormatterMediumStyle]];
     NSMutableArray *q = [NSMutableArray arrayWithObject:@[root, @(0)]];
     NSUInteger idx = 0;
-    while (q.count && idx < 400) {
+    while (q.count && idx < 700) {
         NSArray *pair = q.firstObject;
         [q removeObjectAtIndex:0];
         UIView *v = (UIView *)pair[0];
@@ -21124,10 +21124,13 @@ static void ERDumpSliderTreeToFile(UIViewController *module) {
         for (UIView *s in v.subviews) [q addObject:@[s, @(depth + 1)]];
         idx++;
     }
-    if (![sb writeToFile:@"/var/mobile/Documents/er_slider_tree.txt"
-              atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+    if (![sb writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
         ERSliderDbgMirrorIn(@"ER12TREE 写文件失败");
     }
+}
+
+static void ERDumpSliderTreeToFile(UIViewController *module) {
+    ERDumpSliderTreeToFileAt(module, @"/var/mobile/Documents/er_slider_tree.txt");
 }
 
 // 1.2.1-150 · 1×2 滑块表面归一（可独立重复调用）。
@@ -21543,6 +21546,13 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
             CGFloat r0Before = candidate.layer.cornerRadius;
             if (fabs(candidate.layer.cornerRadius - targetR) > 0.01) {
                 candidate.layer.cornerRadius = targetR;
+                // 1.2.1-154 · 只写半径不开裁剪等于没写（m=0 时子层不裁剪）。
+                // 这就是「首次打开不生效、长按返回后才恢复」的确切机制：首次打开
+                // 走这条 walker，只写了 radius；而返回路径走 ERNormalize，那里开了
+                // masksToBounds，所以只有返回之后才对。两条路径必须一致。
+                if (sliderFill || sliderMaterial || expandedPlatter) {
+                    candidate.layer.masksToBounds = YES;
+                }
             }
             if (sliderFill || expandedPlatter || sliderMaterial) {
                 static NSTimeInterval sERFillLogLast = 0.0;
@@ -21616,7 +21626,9 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
         // 1.2.1-150 · 布局之后重放归一：0.08/0.22/0.45s 各一次，压掉原生布局
         // 对材质圆角的重置（149 已排除外层裁剪，剩下的唯一解释就是被改回）。
         // 节流 0.5s/模块，避免本函数被 layout 高频调用时刷出成百个定时器。
-        if (compactNow) {
+        {   // 1.2.1-154 · 去掉 compactNow 门。用户实测：首次打开控制中心圆角不对，
+            // 长按再返回之后才恢复 —— 典型的「展开标志残留挡住了这条路」。
+            // 归一本身对展开态无害（Material 段另有 compactCtx 门守着 54x54 按钮）。
             // 1.2.1-153 · 全树落盘（节流 2s，覆盖写，最后一次即最终布局态）
             {
                 static NSTimeInterval sERTreeLast = 0.0;
@@ -28535,6 +28547,18 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
                        dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
+    }
+    // 1.2.1-154 · 展开面板全树落盘。用户实测：长按返回后紧凑态圆角已恢复，
+    // 但「长按里面」的仍然没修 —— 说明展开面板是另一棵树，得单独看。
+    {
+        __weak UIViewController *weakOverlay = overlay;
+        __weak UIViewController *weakExpanded = expandedController;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.90 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *ov = weakOverlay;
+            UIViewController *panel = ov.presentedViewController ?: weakExpanded;
+            if (panel) ERDumpSliderTreeToFileAt(panel, @"/var/mobile/Documents/er_slider_expanded.txt");
+        });
     }
 }
 
