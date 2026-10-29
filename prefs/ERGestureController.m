@@ -810,6 +810,10 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 
 @end
 
+// 1.2.1-139 · 字形构建时的明暗标记（关联对象挂在 label 上）：每帧自检拿它和
+// 当前明暗比对，不一致=颜色过时（控制中心切深色后 apply 早退不换色的实锤根因）。
+static char sERGlyphDarkKey;
+
 // 1.2.1-137 · 组头 label 宽度按原始四字文本固定，拼上「空格+ⓘ」后内容变宽而
 // frame 不变 → 截断成「搜索胶...」（用户截图实锤，字形与点击都正常只是宽度不够）。
 // 把 label 拉宽到内容实际宽度；helper 每帧调用维持，防系统复用布局改回去。
@@ -868,6 +872,11 @@ static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
         initWithString:@" " attributes:@{NSFontAttributeName: hfont}]];
     [as appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
     l.attributedText = as;
+    if (@available(iOS 12.0, *)) {
+        objc_setAssociatedObject(l, &sERGlyphDarkKey,
+            @(l.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark),
+            OBJC_ASSOCIATION_RETAIN);
+    }
     ERGestureWidenHeaderLabel(l);   // 1.2.1-137：拼宽了内容就要拉宽 frame，否则截断
     return YES;
 }
@@ -982,7 +991,16 @@ static void ERGestureEnsureTapOnLabel(UILabel *l) {
 
 #pragma mark - 控制器
 
-@implementation ERGestureController
+@implementation ERGestureController {
+    // 1.2.1-139 · 每帧自检（灭闪+颜色实时）：KVO/布局回调都可能被系统绕过——
+    // PS 重设标题不一定走常规 setter、trait 从 window 向下传播顺序不定（助手可能
+    // 先于 label 拿到新模式，用旧 trait 重拼出旧颜色）。回调通知是"可能丢的"，
+    // 每帧检查是确定性的：字形在不在 / 颜色标记和当前明暗一致吗 / 宽度够不够，
+    // 不对当场修（同帧/次帧完成，30fps 自检上限 33ms，肉眼不可见）。
+    CADisplayLink *_erGlyphDl;
+    __weak UITableView *_erGlyphTv;
+    __weak UILabel *_erGlyphLabel;
+}
 
 // ---- 1.2.0-3 · 自带崩溃记录器 ----
 // 设备上 CrashReporter 目录不存在（系统 .ips 一个都拿不到），"点手势管理闪退"
@@ -1451,6 +1469,58 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
     }
 }
 
+// 1.2.1-139 · 每帧自检回调（页面可见期间 30fps）：只在状态不对时动手，其余帧
+// 只是两次字符串比较，开销可忽略。
+- (void)erGlyphDisplayTick {
+    if (!self.view.window) return;
+    UITableView *tv = _erGlyphTv;
+    if (!tv.window) {
+        tv = ERGestureFindTableView(self.view);
+        _erGlyphTv = tv;
+    }
+    if (!tv) return;
+    UILabel *l = _erGlyphLabel;
+    NSString *t = l.text ?: @"";
+    // 缓存的 label 不再是「搜索胶囊」组头（被复用/重建）→ 重找
+    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) {
+        l = ERGestureFindHeaderLabel(tv);
+        _erGlyphLabel = l;
+        t = l.text ?: @"";
+    }
+    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
+    BOOL dark = NO;
+    if (@available(iOS 12.0, *)) {
+        dark = (l.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
+    }
+    NSNumber *built = objc_getAssociatedObject(l, &sERGlyphDarkKey);
+    if (![t containsString:@"\uFFFC"] || built == nil || built.boolValue != dark) {
+        // 缺字形（系统重设过标题）/ 颜色过时（明暗切了）→ 拆旧重拼
+        if ([t containsString:@"\uFFFC"]) l.text = @"搜索胶囊";
+        ERGestureApplyGlyphToLabel(l);
+        ERGestureEnsureTapOnLabel(l);
+    } else {
+        ERGestureWidenHeaderLabel(l);
+    }
+}
+
+- (void)erGlyphDisplayStart {
+    if (!_erGlyphDl) {
+        __weak typeof(self) wself = self;
+        _erGlyphDl = [CADisplayLink displayLinkWithBlock:^(CADisplayLink *dl) {
+            (void)dl;
+            __strong typeof(wself) sself = wself;
+            if (sself) [sself erGlyphDisplayTick];
+        } queue:[NSOperationQueue mainQueue]];
+        _erGlyphDl.preferredFramesPerSecond = 30;   // 30fps 足够，省电
+    }
+    [_erGlyphDl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+}
+
+- (void)erGlyphDisplayStop {
+    [_erGlyphDl invalidate];
+    _erGlyphDl = nil;
+}
+
 - (void)erGroupInfoTapGesture:(UITapGestureRecognizer *)tap {
     // 1.2.1-136 · 组头复用后手势仍留在 label 上：点到的不是「搜索胶囊」就不弹
     UILabel *l = (UILabel *)tap.view;
@@ -1474,6 +1544,18 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
     notify_post("com.strive.echoreborn/DumpFolders");
     // 组头延迟出现（PS 异步构建）；-80 实锤异常已修，1 秒才显示是定时器太晚 → 调回 0.25/0.6s
     [self erScheduleGroupInfoSync];
+    // 1.2.1-139 · 每帧自检：灭回前台闪现 + 明暗切换颜色实时跟随
+    [self erGlyphDisplayStart];
+}
+
+- (void)viewWillDisappear:(BOOL)animated {
+    [super viewWillDisappear:animated];
+    // 1.2.1-139 · 页面不可见就停表，零常驻开销
+    [self erGlyphDisplayStop];
+}
+
+- (void)dealloc {
+    [_erGlyphDl invalidate];
 }
 
 @end
