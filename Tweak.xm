@@ -21471,23 +21471,23 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
                     want, platterRadius, (int)gERExpandedModuleOpen]);
             }
         }
-    }
-    // 1.2.1-150 · 布局之后重放归一：0.08/0.22/0.45s 各一次，压掉原生布局
-    // 对材质圆角的重置（149 已排除外层裁剪，剩下的唯一解释就是被改回）。
-    // 节流 0.5s/模块，避免本函数被 layout 高频调用时刷出成百个定时器。
-    if (isSlider12 && compactNow) {
-        NSTimeInterval nowR = [[NSDate date] timeIntervalSince1970];
-        NSNumber *lastR = objc_getAssociatedObject(moduleView, kERSliderReassertKey);
-        if (!lastR || nowR - lastR.doubleValue > 0.5) {
-            objc_setAssociatedObject(moduleView, kERSliderReassertKey, @(nowR), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            ERNormalizeSliderSurfaces(module);
-            __weak UIViewController *weakModule = module;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+        // 1.2.1-150 · 布局之后重放归一：0.08/0.22/0.45s 各一次，压掉原生布局
+        // 对材质圆角的重置（149 已排除外层裁剪，剩下的唯一解释就是被改回）。
+        // 节流 0.5s/模块，避免本函数被 layout 高频调用时刷出成百个定时器。
+        if (compactNow) {
+            NSTimeInterval nowR = [[NSDate date] timeIntervalSince1970];
+            NSNumber *lastR = objc_getAssociatedObject(moduleView, kERSliderReassertKey);
+            if (!lastR || nowR - lastR.doubleValue > 0.5) {
+                objc_setAssociatedObject(moduleView, kERSliderReassertKey, @(nowR), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+                ERNormalizeSliderSurfaces(module);
+                __weak UIViewController *weakModule = module;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
+                               dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+            }
         }
     }
 }
