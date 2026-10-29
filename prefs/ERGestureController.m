@@ -1172,7 +1172,8 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
         [[NSNotificationCenter defaultCenter]
             addObserverForName:UIApplicationDidBecomeActiveNotification
             object:nil queue:[NSOperationQueue mainQueue]
-            usingBlock:^__unused(NSNotification *note) {
+            usingBlock:^(NSNotification *note) {
+                (void)note;   // -Werror：__unused 不能贴 block 参数
                 ERGestureController *c = sERGGestureActive;
                 if (!c || !c.view.window) return;
                 [c erScheduleGroupInfoSync];
