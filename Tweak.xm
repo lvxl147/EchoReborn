@@ -28643,7 +28643,7 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
 // 逐帧拍下来：谁在什么时候被写成 alpha/opacity 多少。
 static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, double dt) {
     if (!overlay.view) return;
-    UIWindow *win = overlay.view.window ?: overlay.view;
+    UIView *win = overlay.view.window ?: overlay.view;
     NSMutableString *sb = [NSMutableString string];
     [sb appendFormat:@"== %@ dt=%.2f exp=%d close=%d ===\n", tag, dt,
                      (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive];
