@@ -21332,6 +21332,46 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         }
         [queue addObjectsFromArray:candidate.subviews];
     }
+    // 1.2.1-149 · 祖先容器归一 + 探针。
+    //
+    // 148 实测：写入值已正确（ER12FILL … r 31.5>37.5 rp=37.5），但用户视觉无变化。
+    // 唯一合理解释是裁剪发生在模块视图**之外**：CCUIContentModuleContainerView
+    // 若不透明地裁在 31.5，子树内所有 37.5 都会被裁成 31.5。148 之前所有修法都
+    // 只动子树，所以永远看不到效果。
+    // 这里把同尺寸的祖先容器也归一到背板半径（不改 masksToBounds 开关，
+    // 避免改变原生裁剪语义），并落一行 ER12CONT 供下一轮核对。
+    if (isSlider12) {
+        BOOL compactNow = !gERExpandedModuleOpen && !gERExpandedModuleClosingActive &&
+                          CGRectGetWidth(moduleView.bounds) < 120.0;
+        UIView *container = nil;
+        for (UIView *v = moduleView.superview; v; v = v.superview) {
+            if ([NSStringFromClass(v.class) isEqualToString:@"CCUIContentModuleContainerView"]) {
+                container = v;
+                break;
+            }
+        }
+        if (container) {
+            CGFloat capC = MIN(CGRectGetWidth(container.bounds), CGRectGetHeight(container.bounds)) * 0.5;
+            CGFloat want = capC > 0.0 ? MIN(platterRadius, capC) : platterRadius;
+            if (compactNow || container.layer.cornerRadius > 1.0) {
+                if (fabs(container.layer.cornerRadius - want) > 0.01) {
+                    container.layer.cornerRadius = want;
+                    container.layer.cornerCurve = kCACornerCurveContinuous;
+                }
+            }
+            static NSTimeInterval sERContLogLast = 0.0;
+            NSTimeInterval nowC = [[NSDate date] timeIntervalSince1970];
+            if (nowC - sERContLogLast > 2.0) {
+                sERContLogLast = nowC;
+                ERSliderDbgMirrorIn([NSString stringWithFormat:
+                    @"ER12CONT %@ cont r=%.1f mb=%d b=%.0fx%.0f want=%.1f rp=%.1f xp=%d",
+                    erSliderIdent, container.layer.cornerRadius,
+                    (int)container.layer.masksToBounds,
+                    CGRectGetWidth(container.bounds), CGRectGetHeight(container.bounds),
+                    want, platterRadius, (int)gERExpandedModuleOpen]);
+            }
+        }
+    }
 }
 
 - (void)applyClosingCompactRadiusToModule:(UIViewController *)module overlay:(UIViewController *)overlay sourceObject:(id)object {
