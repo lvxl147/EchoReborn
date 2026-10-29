@@ -514,6 +514,9 @@ static const void *kEROwnedDuplicatePresentationKey = &kEROwnedDuplicatePresenta
 // 1.2.1-146 · 1×2 滑块值填充面标记：首次命中后按标记重认，不再依赖当前圆角值
 //（145 实测：一旦半径被写坏到窗口外，几何规则就永远匹配不上，坏值留到注销）。
 static const void *kERSliderFillKey = &kERSliderFillKey;
+// 1.2.1-147 · 展开期间被本插件强制隐藏的「兄弟滑块模块」标记（用于收起时恢复）
+static const void *kERExpansionSiblingHiddenKey = &kERExpansionSiblingHiddenKey;
+static NSUInteger gERHiddenSiblingCount = 0;   // 被压低的兄弟滑块数量（0 = 免遍历）
 static const void *kERResizeStartSizeKey = &kERResizeStartSizeKey;
 static const void *kERResizeCandidateSizeKey = &kERResizeCandidateSizeKey;
 static const void *kERResizePreviewKey = &kERResizePreviewKey;
@@ -6670,6 +6673,48 @@ static void ERSliderExpansionSnapshot(UIViewController *overlay, NSString *tag) 
     if (whites.count && [tag containsString:@"t400"]) {
         ERSliderDbgMirrorIn([NSString stringWithFormat:@"ERXPWHITE %@ %@", tag,
                              [whites componentsJoinedByString:@" | "]]);
+    }
+}
+
+// 1.2.1-147 · 问题 2（长按音量时亮度模块可见）确定性修复。
+//
+// 146 抽取的时间线：volume 展开时，亮度模块 t400 已淡到 a=0.00，t900 又回到
+// a=1.00（被某条路径拉回来）；而 brightness 展开时 volume 一直是 0.00。
+// 与「亮度模块被 ERBrightnessGlyph 相关路径反复重刷」的时序一致，但未定位到
+// 具体写入方 —— 因此改为**结果导向**：滑块模块展开期间，强制把另一个滑块模块
+// 藏起来；收起时按标记恢复。只作用于 displaymodule / controlcenter.audio /
+// volumemodule 三者，其它模块一行不碰。
+static BOOL ERIdentifierIsSlider12(NSString *identifier) {
+    NSString *lower = identifier.lowercaseString ?: @"";
+    return [lower containsString:@"displaymodule"] ||
+           [lower containsString:@"controlcenter.audio"] ||
+           [lower containsString:@"volumemodule"];
+}
+
+static void ERHideSiblingSliderModules(UIViewController *overlay, NSString *expandingIdentifier) {
+    if (!overlay || !ERIdentifierIsSlider12(expandingIdentifier)) return;
+    NSString *expandingLower = expandingIdentifier.lowercaseString;
+    for (UIViewController *m in ERCollectModuleControllers(overlay)) {
+        NSString *ident = ERModuleIdentifier(m);
+        if (!ERIdentifierIsSlider12(ident)) continue;
+        if ([ident.lowercaseString isEqualToString:expandingLower]) continue;
+        if (m.view.alpha <= 0.001 && m.view.layer.opacity <= 0.001) continue;
+        BOOL alreadyMarked = [objc_getAssociatedObject(m.view, kERExpansionSiblingHiddenKey) boolValue];
+        objc_setAssociatedObject(m.view, kERExpansionSiblingHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        m.view.alpha = 0.0;
+        m.view.layer.opacity = 0.0;
+        if (!alreadyMarked) gERHiddenSiblingCount++;
+    }
+}
+
+static void ERRestoreSiblingSliderModules(UIViewController *overlay) {
+    if (!overlay || gERHiddenSiblingCount == 0) return;
+    for (UIViewController *m in ERCollectModuleControllers(overlay)) {
+        if (![objc_getAssociatedObject(m.view, kERExpansionSiblingHiddenKey) boolValue]) continue;
+        objc_setAssociatedObject(m.view, kERExpansionSiblingHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        m.view.alpha = 1.0;
+        m.view.layer.opacity = 1.0;
+        if (gERHiddenSiblingCount > 0) gERHiddenSiblingCount--;
     }
 }
 
@@ -21011,6 +21056,11 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     //     ERGlassPillRadius 的 37.5 —— 材质与玻璃的圆角边线对不上，背景因此「还是有问题」
     //     （第 1 条）。
     if ([[ERModuleIdentifier(module) lowercaseString] containsString:@"echoreborn.connectivity"]) return;
+    // 1.2.1-147 · 自愈：不在展开态时，任何遗留的「被压低兄弟滑块」标记一律恢复
+    //（防止个别路径漏调 didClose 导致某个滑块一直 alpha=0）。
+    if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) {
+        ERRestoreSiblingSliderModules(module.parentViewController ?: gOverlayControllers.allObjects.firstObject);
+    }
     CGFloat radius = [self refinedCornerRadiusForModuleView:moduleView];
     if ([self moduleUsesOversizedMediaRadius:module view:moduleView]) radius = EROversizedMediaCornerRadius();
     // 1.2.1-144 · 白底目标半径改为「跟随玻璃背板」：截图实测实锤——OFF 态玻璃磁贴
@@ -21024,9 +21074,14 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             UIView *c = bq.firstObject;
             [bq removeObjectAtIndex:0];
             NSString *cn = NSStringFromClass(c.class);
-            if ([cn containsString:@"Backdrop"]) {
+            // 1.2.1-147 · 只认尺寸正常的背板（跳过全屏背景层），并把上限放到 120：
+            // 展开面板的玻璃背板是 150x400 → 药丸半径 75，146 的 [8,60] 上限把
+            // 它挡在外面，展开态只能退回 refined（比原生 42 还小），这是「长按
+            // 进去更不圆」的直接原因。钳制在后续 fillCap 处统一做。
+            if ([cn containsString:@"Backdrop"] &&
+                CGRectGetWidth(c.bounds) < 400.0 && CGRectGetHeight(c.bounds) < 600.0) {
                 CGFloat br = c.layer.cornerRadius;
-                if (br >= 8.0 && br <= 60.0) { platterRadius = br; break; }
+                if (br >= 8.0 && br <= 120.0) { platterRadius = br; break; }
             }
             [bq addObjectsFromArray:c.subviews];
         }
@@ -21161,13 +21216,32 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                 }
             }
         }
+        // 1.2.1-147 · 全屏级容器排除。146 抽取实锤：展开态滑块模块的根视图是
+        // **430x932 全屏**（不是 150x400 面板），其内部还有一层同尺寸的
+        // CCUIContentModuleBackgroundView。146 的 expandedPlatter 因此误命中它，
+        // ER12FILL 留下 `c=CCUIContentModuleBackgroundView b=430x932 r 31.5>37.5`。
+        // 全屏面永远不是底板：不写圆角、不参与填充判定。
+        BOOL hugeSurface = CGRectGetWidth(candidate.bounds) > 400.0 ||
+                           CGRectGetHeight(candidate.bounds) > 600.0;
+        // 1.2.1-147 · 1×2 滑块材质层跟随玻璃背板（问题 1 的真根因）。
+        //
+        // 146 抽取（ER12DBG audio/displaymodule compact + expanded）：
+        //   根 UIView 75x163 r=31.5
+        //   MTMaterialView 75x163 r=31.5 h=1   ← 背板替换，隐藏
+        //   LGLiveBackdropView 75x163 r=37.5   ← 玻璃，可见
+        //   MTMaterialView 75x163 r=31.5 h=0   ← **这一个就是白色值填充**，可见
+        // 也就是说 1×2 的白填充不是独立 UIView（没有 bg=1.00 的视图），而是
+        // MTMaterialView 自己画的；-144 定下的「材质层写 refined(31.5)」正是让
+        // 白填充永远比玻璃背板(37.5)方的元凶。滑块模块的材质层必须跟随背板，
+        // 其它模块的材质层保持原行为（写 refined），把修改面收窄到 1×2。
+        BOOL sliderMaterial = isSlider12 && materialSurface && !glassOwned && !hugeSurface;
         // 1.2.1-146 · 展开面板白底跟随玻璃背板（用户第 1 条后半：长按进入也不圆）。
         // 展开态实测：玻璃背板 LGLiveBackdropView 150x400 取药丸半径 75（150/2），
         // 而面板白底仍是原生小半径 → 上下两端都比背板方。展开态只对「铺满模块
         // 且是白色/已圆角」的面写钳制后的背板半径，不写 maskedCorners（四角同为
         // 药丸弧线，与紧凑态的值填充「只圆底部」区分开）。
         BOOL expandedPlatter = NO;
-        if (isSlider12 && !sliderCompact && !glassOwned && !materialSurface &&
+        if (isSlider12 && !sliderCompact && !glassOwned && !materialSurface && !hugeSurface &&
             candidate != moduleView && fillsModule &&
             (candidate.layer.cornerRadius >= 8.0 ||
              (candidate.layer.backgroundColor && CGColorGetAlpha(candidate.layer.backgroundColor) > 0.5))) {
@@ -21177,9 +21251,11 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // 展开面板宽 150 → 上限 75），从构造上排除「过半宽透镜形」凸起。
         CGFloat fillCap = MIN(CGRectGetWidth(candidate.bounds), CGRectGetHeight(candidate.bounds)) * 0.5;
         CGFloat platterR = fillCap > 0.0 ? MIN(platterRadius, fillCap) : platterRadius;
-        CGFloat targetR = (isPlatter || sliderFill || expandedPlatter) ? platterR : radius;
-        if (candidate == moduleView || buttonSurface ||
-            (materialSurface && fillsModule) || isPlatter || sliderFill || expandedPlatter) {
+        CGFloat targetR = (isPlatter || sliderFill || expandedPlatter || sliderMaterial) ? platterR : radius;
+        // 1.2.1-147 · isSlider12 的全屏根视图不写圆角/裁剪（它承载整个展开覆盖层）
+        BOOL skipRootWrite = isSlider12 && candidate == moduleView && hugeSurface;
+        if (!skipRootWrite && (candidate == moduleView || buttonSurface ||
+            (materialSurface && fillsModule) || isPlatter || sliderFill || expandedPlatter || sliderMaterial)) {
             // 1.0.6-12（第 4 条）：只在圆角真的变化时才赋值。
             //
             // 本函数在 layout / 展开 / 收回路径上被反复调用（一次收回就有 1 + 8 轮全量扫描），
@@ -21192,7 +21268,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             if (fabs(candidate.layer.cornerRadius - targetR) > 0.01) {
                 candidate.layer.cornerRadius = targetR;
             }
-            if (sliderFill || expandedPlatter) {
+            if (sliderFill || expandedPlatter || sliderMaterial) {
                 static NSTimeInterval sERFillLogLast = 0.0;
                 NSTimeInterval nowFill = [[NSDate date] timeIntervalSince1970];
                 if (nowFill - sERFillLogLast > 1.0) {
@@ -28100,6 +28176,18 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     dispatch_async(dispatch_get_main_queue(), ^{
         [coordinator hideOwnedChromeForExpandedPlatterInOverlay:overlay];
     });
+    // 1.2.1-147 · 问题 2：滑块展开时把另一个滑块模块压掉。146 时间线实锤
+    //「volume 展开 → 亮度 t400 已 a=0.00 → t900 又被拉回 a=1.00」，这里立即压
+    // 一次，并在 0.25s / 0.6s 复压，压掉任何把它重新点亮的路径（原生淡出、
+    // 亮度字形重刷、材质恢复都可能写 alpha）。
+    {
+        NSString *expandingIdent = [openingIdentifier copy];
+        ERHideSiblingSliderModules(overlay, expandingIdent);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingIdent); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.60 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingIdent); });
+    }
 }
 
 - (void)moduleCollectionViewController:(id)collection didCloseExpandedModule:(id)module {
@@ -28118,6 +28206,9 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     gERExpandedModuleClosingActive = NO;
     gERConnectivityExpansionActive = NO;
     gERExpandedModuleIdentifier = nil;
+    // 1.2.1-147 · 恢复被压掉的兄弟滑块模块（见 ERHideSiblingSliderModules）
+    ERRestoreSiblingSliderModules(overlay);
+    gERHiddenSiblingCount = 0;
     if (closingConnectivity) ERFinishConnectivityClosingTransition(closingConnectivity);
     EchoRebornCoordinator *coordinator = [EchoRebornCoordinator shared];
     UIView *pageIndicators = [overlay.view viewWithTag:kERPageIndicatorHostTag];
