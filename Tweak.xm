@@ -6691,16 +6691,30 @@ static BOOL ERIdentifierIsSlider12(NSString *identifier) {
            [lower containsString:@"volumemodule"];
 }
 
-static void ERHideSiblingSliderModules(UIViewController *overlay, NSString *expandingIdentifier) {
-    if (!overlay || !ERIdentifierIsSlider12(expandingIdentifier)) return;
-    NSString *expandingLower = expandingIdentifier.lowercaseString;
+static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewController *expandingController) {
+    if (!overlay) return;
+    // 1.2.1-148 · 147 实测失效：按 identifier 匹配 expanding 时，滑块模块在
+    // willOpen 阶段拿不到 identifier（ERModuleIdentifier 返回 nil，audio 实为
+    // mediaControls 的模块），函数直接 return，一次都没压过。
+    // 改为按**控制器实例**判定：只压「属于滑块模块且不是正在展开的那个控制器」
+    // 的视图，其它模块一行不碰。判定滑块用 identifier ∪ 尺寸（宽<120 且高>120）。
+    if (!expandingController) return;
+    BOOL expandingIsSlider = ERIdentifierIsSlider12(ERModuleIdentifier(expandingController)) ||
+        (CGRectGetWidth(expandingController.view.bounds) < 120.0 &&
+         CGRectGetHeight(expandingController.view.bounds) > 120.0);
+    if (!expandingIsSlider) return;
     for (UIViewController *m in ERCollectModuleControllers(overlay)) {
+        if (m == expandingController) continue;
         NSString *ident = ERModuleIdentifier(m);
-        if (!ERIdentifierIsSlider12(ident)) continue;
-        if ([ident.lowercaseString isEqualToString:expandingLower]) continue;
-        if (m.view.alpha <= 0.001 && m.view.layer.opacity <= 0.001) continue;
+        BOOL sliderByIdent = ERIdentifierIsSlider12(ident);
+        BOOL sliderBySize = CGRectGetWidth(m.view.bounds) < 120.0 &&
+                            CGRectGetHeight(m.view.bounds) > 120.0;
+        if (!sliderByIdent && !sliderBySize) continue;
+        if ([m.view isDescendantOfView:expandingController.view]) continue;
         BOOL alreadyMarked = [objc_getAssociatedObject(m.view, kERExpansionSiblingHiddenKey) boolValue];
         objc_setAssociatedObject(m.view, kERExpansionSiblingHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        // hidden 是最硬的属性（原生淡出只动 alpha/opacity，不会把 hidden 翻回来）
+        m.view.hidden = YES;
         m.view.alpha = 0.0;
         m.view.layer.opacity = 0.0;
         if (!alreadyMarked) gERHiddenSiblingCount++;
@@ -6712,6 +6726,7 @@ static void ERRestoreSiblingSliderModules(UIViewController *overlay) {
     for (UIViewController *m in ERCollectModuleControllers(overlay)) {
         if (![objc_getAssociatedObject(m.view, kERExpansionSiblingHiddenKey) boolValue]) continue;
         objc_setAssociatedObject(m.view, kERExpansionSiblingHiddenKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        m.view.hidden = NO;
         m.view.alpha = 1.0;
         m.view.layer.opacity = 1.0;
         if (gERHiddenSiblingCount > 0) gERHiddenSiblingCount--;
@@ -21068,24 +21083,39 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     // refined 31.5 后边线仍比背板方，四角露出背板弧形边（用户对比图实锤）。
     // 正确目标 = 白底与背板同弧线。找不到背板时退回 refined。
     CGFloat platterRadius = radius;
+    CGSize platterSize = moduleView.bounds.size;
     {
+        // 1.2.1-148 · 按面积挑背板（真根因修正）。
+        // 147 实测 ER12FILL：rp=27.0 —— BFS 第一个命中的是**字形底**那张
+        // 54x54 的 LGLiveBackdropView（r=27），不是模块底板 75x163 的 LG（37.5），
+        // 于是材质层被写成 27，比修改前更方（用户 147 反馈「两个问题依旧」）。
+        // 改为：遍历整棵子树，取面积最大且非全屏的 Backdrop 作为底板参照，
+        // 同时记住它的尺寸 —— 后续只改与底板同尺寸的面，字形/按钮等小材质
+        // 一律不碰。
+        CGFloat bestArea = 0.0;
         NSMutableArray<UIView *> *bq = [NSMutableArray arrayWithObject:moduleView];
         while (bq.count) {
             UIView *c = bq.firstObject;
             [bq removeObjectAtIndex:0];
             NSString *cn = NSStringFromClass(c.class);
-            // 1.2.1-147 · 只认尺寸正常的背板（跳过全屏背景层），并把上限放到 120：
-            // 展开面板的玻璃背板是 150x400 → 药丸半径 75，146 的 [8,60] 上限把
-            // 它挡在外面，展开态只能退回 refined（比原生 42 还小），这是「长按
-            // 进去更不圆」的直接原因。钳制在后续 fillCap 处统一做。
-            if ([cn containsString:@"Backdrop"] &&
-                CGRectGetWidth(c.bounds) < 400.0 && CGRectGetHeight(c.bounds) < 600.0) {
+            BOOL huge = CGRectGetWidth(c.bounds) > 400.0 || CGRectGetHeight(c.bounds) > 600.0;
+            if ([cn containsString:@"Backdrop"] && !huge) {
                 CGFloat br = c.layer.cornerRadius;
-                if (br >= 8.0 && br <= 120.0) { platterRadius = br; break; }
+                CGFloat area = CGRectGetWidth(c.bounds) * CGRectGetHeight(c.bounds);
+                if (br >= 8.0 && br <= 120.0 && area > bestArea) {
+                    bestArea = area;
+                    platterRadius = br;
+                    platterSize = c.bounds.size;
+                }
             }
             [bq addObjectsFromArray:c.subviews];
         }
     }
+    // 与底板同尺寸（±4pt）才算「底板面」：材质层白填充、底板背景、展开面板
+    // 白底都满足；字形 54x54、按钮 60x60 之类的小材质一律不匹配。
+    BOOL moduleIsBig = CGRectGetWidth(moduleView.bounds) > 400.0 ||
+                       CGRectGetHeight(moduleView.bounds) > 600.0;
+    CGSize referenceSize = moduleIsBig ? platterSize : moduleView.bounds.size;
     // 1.2.1-145 · 问题 1 修复尝试：1×2 滑块白填充跟随玻璃背板。
     // -144 的 roundedPlatter 规则只命中铺满模块的面；1×2 竖条滑块的白色值填充
     // 是部分高度视图（fillsModule 不成立），从未被归一 —— 玻璃开、背板药丸弧线
@@ -21161,6 +21191,9 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         BOOL materialSurface = [name containsString:@"Material"] || [name containsString:@"VisualEffect"] || [name containsString:@"Platter"];
         BOOL fillsModule = fabs(CGRectGetWidth(candidate.bounds) - CGRectGetWidth(moduleView.bounds)) < 3.0 &&
                            fabs(CGRectGetHeight(candidate.bounds) - CGRectGetHeight(moduleView.bounds)) < 3.0;
+        // 1.2.1-148 · 只有与底板同尺寸（±4pt）的面才是底板面
+        BOOL matchesPlatter = fabs(CGRectGetWidth(candidate.bounds) - referenceSize.width) < 4.0 &&
+                              fabs(CGRectGetHeight(candidate.bounds) - referenceSize.height) < 4.0;
         // 1.2.1-140 · 高亮白底归一：系统在模块 ON 态自绘的白色高亮底（手电筒实测
         // 2×1 下 ≈27pt）不在 Material/VisualEffect/Platter 名单里，或晚于最后一轮
         // 圆角 pass 才创建 → 液态玻璃开、磁贴 31.5、白底 27，四角错位可见。
@@ -21204,7 +21237,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         BOOL sliderFill = NO;
         BOOL wasSliderFill = [objc_getAssociatedObject(candidate, kERSliderFillKey) boolValue];
         if (isSlider12 && !glassOwned && !materialSurface && !isPlatter &&
-            candidate != moduleView && sliderCompact) {
+            candidate != moduleView && sliderCompact && matchesPlatter) {
             BOOL roundedNow = candidate.layer.cornerRadius >= 8.0 && candidate.layer.cornerRadius <= 45.0;
             if (roundedNow || wasSliderFill) {
                 CGRect inModule = [moduleView convertRect:candidate.frame fromView:candidate.superview];
@@ -21234,7 +21267,8 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // MTMaterialView 自己画的；-144 定下的「材质层写 refined(31.5)」正是让
         // 白填充永远比玻璃背板(37.5)方的元凶。滑块模块的材质层必须跟随背板，
         // 其它模块的材质层保持原行为（写 refined），把修改面收窄到 1×2。
-        BOOL sliderMaterial = isSlider12 && materialSurface && !glassOwned && !hugeSurface;
+        BOOL sliderMaterial = isSlider12 && materialSurface && !glassOwned &&
+                              !hugeSurface && matchesPlatter;
         // 1.2.1-146 · 展开面板白底跟随玻璃背板（用户第 1 条后半：长按进入也不圆）。
         // 展开态实测：玻璃背板 LGLiveBackdropView 150x400 取药丸半径 75（150/2），
         // 而面板白底仍是原生小半径 → 上下两端都比背板方。展开态只对「铺满模块
@@ -21242,7 +21276,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // 药丸弧线，与紧凑态的值填充「只圆底部」区分开）。
         BOOL expandedPlatter = NO;
         if (isSlider12 && !sliderCompact && !glassOwned && !materialSurface && !hugeSurface &&
-            candidate != moduleView && fillsModule &&
+            candidate != moduleView && matchesPlatter &&
             (candidate.layer.cornerRadius >= 8.0 ||
              (candidate.layer.backgroundColor && CGColorGetAlpha(candidate.layer.backgroundColor) > 0.5))) {
             expandedPlatter = YES;
@@ -28181,12 +28215,15 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     // 一次，并在 0.25s / 0.6s 复压，压掉任何把它重新点亮的路径（原生淡出、
     // 亮度字形重刷、材质恢复都可能写 alpha）。
     {
-        NSString *expandingIdent = [openingIdentifier copy];
-        ERHideSiblingSliderModules(overlay, expandingIdent);
+        UIViewController *expandingVC = expandedController;
+        if (!expandingVC && [module isKindOfClass:[UIViewController class]]) expandingVC = (UIViewController *)module;
+        ERHideSiblingSliderModules(overlay, expandingVC);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingIdent); });
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.60 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingIdent); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.70 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
     }
 }
 
