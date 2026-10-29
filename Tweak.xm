@@ -517,6 +517,7 @@ static const void *kERSliderFillKey = &kERSliderFillKey;
 // 1.2.1-147 · 展开期间被本插件强制隐藏的「兄弟滑块模块」标记（用于收起时恢复）
 static const void *kERExpansionSiblingHiddenKey = &kERExpansionSiblingHiddenKey;
 static NSUInteger gERHiddenSiblingCount = 0;   // 被压低的兄弟滑块数量（0 = 免遍历）
+static const void *kERSliderReassertKey = &kERSliderReassertKey;   // 归一重放节流时间戳
 static const void *kERResizeStartSizeKey = &kERResizeStartSizeKey;
 static const void *kERResizeCandidateSizeKey = &kERResizeCandidateSizeKey;
 static const void *kERResizePreviewKey = &kERResizePreviewKey;
@@ -21047,6 +21048,105 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     }
 }
 
+// 1.2.1-150 · 1×2 滑块表面归一（可独立重复调用）。
+//
+// 149 探针实锤：写在模块外层容器上的圆角已生效（cont r=37.5）且容器**不裁剪**
+//（mb=0）—— 所以「视觉不变」不是被外层裁掉，而是**原生每次布局把材质圆角写回
+// 31.5**，我们的写入在这条布局链里被覆盖。修法：本函数可脱离布局链反复调用，
+// 由 applyTransitionRadiusToModule 在写完后 0.05/0.15/0.35s 各重放一次，
+// 让最后一次写入落在原生布局之后。
+static void ERNormalizeSliderSurfaces(UIViewController *module) {
+    if (!gEnabled || !module.view) return;
+    UIView *moduleView = module.view;
+    CGFloat w = CGRectGetWidth(moduleView.bounds), h = CGRectGetHeight(moduleView.bounds);
+    if (w <= 1.0 || h <= 1.0) return;
+    if (w > 400.0 || h > 600.0) return;   // 展开态容器，交给展开逻辑
+    // 1) 找底板玻璃（面积最大、非全屏）
+    UIView *glass = nil;
+    CGFloat bestArea = 0.0;
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:moduleView];
+    while (q.count) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        NSString *cn = NSStringFromClass(c.class);
+        BOOL huge = CGRectGetWidth(c.bounds) > 400.0 || CGRectGetHeight(c.bounds) > 600.0;
+        if ([cn containsString:@"Backdrop"] && !huge) {
+            CGFloat br = c.layer.cornerRadius;
+            CGFloat area = CGRectGetWidth(c.bounds) * CGRectGetHeight(c.bounds);
+            if (br >= 8.0 && br <= 120.0 && area > bestArea) { bestArea = area; glass = c; }
+        }
+        [q addObjectsFromArray:c.subviews];
+    }
+    if (!glass) return;
+    CGFloat cap = MIN(w, h) * 0.5;
+    CGFloat R = MIN(glass.layer.cornerRadius, cap);
+    // 2) 同尺寸面全部对齐（根 / 材质 / 背景 / 内容容器）
+    NSMutableArray<UIView *> *wq = [NSMutableArray arrayWithObject:moduleView];
+    while (wq.count) {
+        UIView *c = wq.firstObject;
+        [wq removeObjectAtIndex:0];
+        BOOL sameSize = fabs(CGRectGetWidth(c.bounds) - w) < 4.0 &&
+                        fabs(CGRectGetHeight(c.bounds) - h) < 4.0;
+        NSString *cn = NSStringFromClass(c.class);
+        BOOL surface = c == moduleView || [cn containsString:@"Material"] ||
+                       [cn containsString:@"Background"] || [cn containsString:@"ContentContainer"] ||
+                       [cn containsString:@"ContentModuleContent"];
+        if (sameSize && surface && !(c.layer.cornerRadius < 1.0 && c != moduleView)) {
+            CGFloat before = c.layer.cornerRadius;
+            if (fabs(before - R) > 0.01) c.layer.cornerRadius = R;
+            c.layer.cornerCurve = kCACornerCurveContinuous;
+            // 1.2.1-150 · 写入留痕：before 是多少、写成了多少。若 before 一直是 31.5，
+            // 说明原生每轮布局都在改回；若 before 已是 R，说明写入生效但仍不圆，
+            // 那白填充就不在这些面上。
+            static NSTimeInterval sERNormLogLast = 0.0;
+            NSTimeInterval nowN = [[NSDate date] timeIntervalSince1970];
+            if (nowN - sERNormLogLast > 2.0) {
+                sERNormLogLast = nowN;
+                ERSliderDbgMirrorIn([NSString stringWithFormat:
+                    @"ER12NORM %@ %@ %.1f->%.1f sz=%.0fx%.0f",
+                    ERModuleIdentifier(module) ?: @"?", cn, before, R,
+                    CGRectGetWidth(c.bounds), CGRectGetHeight(c.bounds)]);
+            }
+        }
+        [wq addObjectsFromArray:c.subviews];
+    }
+    // 3) 复核留痕：0.4s 后再读一次材质圆角，确认没有被原生改回
+    static NSTimeInterval sERPostLogLast = 0.0;
+    NSTimeInterval nowP = [[NSDate date] timeIntervalSince1970];
+    if (nowP - sERPostLogLast > 3.0) {
+        sERPostLogLast = nowP;
+        __weak UIView *weakGlass = glass;
+        __weak UIView *weakRoot = moduleView;
+        NSString *ident = ERModuleIdentifier(module);
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.40 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIView *g = weakGlass; UIView *r = weakRoot;
+            // 1.2.1-150 · 把材质层也读出来：白填充的绘制者若真是 MTMaterialView，
+            // 那 0.4s 后它的半径是否被原生改回，就是问题 1 的最终判决。
+            NSString *matInfo = @"-";
+            if (r) {
+                NSMutableArray<UIView *> *mq = [NSMutableArray arrayWithObject:r];
+                NSUInteger guard = 0;
+                while (mq.count && guard++ < 200) {
+                    UIView *c = mq.firstObject;
+                    [mq removeObjectAtIndex:0];
+                    NSString *cn = NSStringFromClass(c.class);
+                    if ([cn containsString:@"Material"]) {
+                        matInfo = [NSString stringWithFormat:@"%@:%.1f", cn, c.layer.cornerRadius];
+                        break;
+                    }
+                    [mq addObjectsFromArray:c.subviews];
+                }
+            }
+            ERSliderDbgMirrorIn([NSString stringWithFormat:
+                @"ER12POST %@ glass=%@ r=%.1f root=%.1f mat=%@", ident ?: @"?",
+                g ? NSStringFromClass(g.class) : @"nil",
+                g ? g.layer.cornerRadius : -1.0,
+                r ? r.layer.cornerRadius : -1.0, matInfo]);
+        });
+    }
+}
+
 - (void)applyTransitionRadiusToModule:(UIViewController *)module {
     if (!gEnabled || !module.view) return;
     UIView *moduleView = module.view;
@@ -21370,6 +21470,24 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                     CGRectGetWidth(container.bounds), CGRectGetHeight(container.bounds),
                     want, platterRadius, (int)gERExpandedModuleOpen]);
             }
+        }
+    }
+    // 1.2.1-150 · 布局之后重放归一：0.08/0.22/0.45s 各一次，压掉原生布局
+    // 对材质圆角的重置（149 已排除外层裁剪，剩下的唯一解释就是被改回）。
+    // 节流 0.5s/模块，避免本函数被 layout 高频调用时刷出成百个定时器。
+    if (isSlider12 && compactNow) {
+        NSTimeInterval nowR = [[NSDate date] timeIntervalSince1970];
+        NSNumber *lastR = objc_getAssociatedObject(moduleView, kERSliderReassertKey);
+        if (!lastR || nowR - lastR.doubleValue > 0.5) {
+            objc_setAssociatedObject(moduleView, kERSliderReassertKey, @(nowR), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            ERNormalizeSliderSurfaces(module);
+            __weak UIViewController *weakModule = module;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.08 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ UIViewController *m = weakModule; if (m) ERNormalizeSliderSurfaces(m); });
         }
     }
 }
