@@ -416,6 +416,15 @@ static const void *kERInitialMasterEnabledKey = &kERInitialMasterEnabledKey;
         alertControllerWithTitle:(name.length ? name : @"开关")
         message:@"需要注销才生效，是否确认要注销?"
         preferredStyle:UIAlertControllerStyleAlert];
+    // 1.2.1-134 · 标题与正文拉开间距（系统默认贴太近，参考 CopyVault 样式）：
+    // 标题 attributed，末尾接一个 2pt 小字号换行段 —— 只抬高约 6pt 的空行，
+    // 视觉上标题与正文之间出现明显呼吸空隙，正文文案不变。
+    NSMutableAttributedString *t = [[NSMutableAttributedString alloc]
+        initWithString:(name.length ? name : @"开关")
+            attributes:@{NSFontAttributeName: [UIFont boldSystemFontOfSize:17.0]}];
+    [t appendAttributedString:[[NSAttributedString alloc]
+        initWithString:@"\n" attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:2.0]}]];
+    [alert setValue:t forKey:@"attributedTitle"];
     [alert addAction:[UIAlertAction actionWithTitle:@"稍后"
         style:UIAlertActionStyleCancel handler:nil]];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定"

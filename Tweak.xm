@@ -36071,6 +36071,17 @@ static void ERSPGScanTick(void) {
         }
         ERSPGDumpSelectors();   // 1.2.0-7 首个 tick dump 一次
         ERSPGAttachIconControllerHook();   // 1.2.1-130 · 类懒加载，挂上为止
+        // 1.2.1-134 · 文件夹列表周期重 dump：此前只在 ctor 后 20s dump 一次，设置页
+        // 「手势管理 → 文件夹」下拉里新增/改名/解散文件夹必须注销才刷新。30s 节流
+        // （tick 5s × 6），枚举开销可忽略；必须放在下方胶囊开关 early-return 之前。
+        {
+            static NSTimeInterval sERSPGFolderDumpLast = 0;
+            NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
+            if (now - sERSPGFolderDumpLast > 30.0) {
+                sERSPGFolderDumpLast = now;
+                ERSPGDumpFolders();
+            }
+        }
         // 页数发布（含首次 respring 后）：变化才写，减少偏好抖动。
         NSInteger cnt = ERSPGProbePageCount();
         if (cnt >= 1) {

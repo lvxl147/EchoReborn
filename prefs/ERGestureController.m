@@ -66,16 +66,20 @@ static void ERGestureWriteValue(NSString *key, NSString *val) {
     notify_post(kERGestureReload.UTF8String);
 }
 
-// 1.2.0-59 · 文件夹显示名：读 Tweak 落盘的 er_folders.plist（ctor 后 20s 生成）
+// 1.2.0-59 · 文件夹显示名：读 Tweak 落盘的 er_folders.plist（1.2.1-134 起 30s 周期重写）
 static NSString *ERGestureFolderName(NSString *fid) {
     @try {
         NSArray<NSDictionary *> *arr = [NSArray arrayWithContentsOfFile:
             @"/var/mobile/Documents/er_folders.plist"];
-        for (NSDictionary *d in arr)
-            if ([d[@"id"] isKindOfClass:[NSString class]] && [d[@"id"] isEqualToString:fid])
-                return d[@"name"] ?: @"文件夹";
+        if (arr) {
+            for (NSDictionary *d in arr)
+                if ([d[@"id"] isKindOfClass:[NSString class]] && [d[@"id"] isEqualToString:fid])
+                    return d[@"name"] ?: @"文件夹";
+            // 1.2.1-134 · 文件在但查无此 id = 桌面上已解散该文件夹
+            return @"已解散";
+        }
     } @catch (__unused NSException *e) {}
-    return @"文件夹";
+    return @"文件夹";   // plist 尚未生成过（未初始化），与「已解散」区分
 }
 
 // 1.2.0-40 · 最后一页是资源库：显示"资源库"而非"第N页"
@@ -467,7 +471,11 @@ static void ERGestureShowDropdown(UIButton *anchor,
 
     // 按钮内部：文字靠左贴 5，右侧给箭头留 5+chevW；箭头独立居中于右侧槽位。
     // custom 按钮不走 UIButtonConfiguration，弃用告警在 -Werror 下需压制。
-    _valueButton.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    // 按钮内部：1.2.1-134 · 文字短于基准宽（如「第2页」）时在文本区内**居中**，
+    // 消除右侧大空白（视觉像左对齐）；达到基准及以上仍贴左 5，维持 5+文本+5 公式。
+    _valueButton.contentHorizontalAlignment =
+        (curTextW < bs.width) ? UIControlContentHorizontalAlignmentCenter
+                              : UIControlContentHorizontalAlignmentLeft;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5.0, 5.0, 5.0, pad + chevW);  // 右内边距 = 5 + 箭头
