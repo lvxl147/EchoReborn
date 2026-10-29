@@ -176,7 +176,7 @@ static void ERMICToggleChanged(id self, SEL _cmd, UISwitch *sender) {
     if (![key isKindOfClass:[NSString class]] || !key.length) return;
     if (![domain isKindOfClass:[NSString class]] || !domain.length) return;
     CFPreferencesSetAppValue((__bridge CFStringRef)key,
-                             (__bridge CFStringRef)(sender.on ? @YES : @NO),
+                             sender.on ? kCFBooleanTrue : kCFBooleanFalse,
                              (__bridge CFStringRef)domain);
     CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
     if ([notify isKindOfClass:[NSString class]] && notify.length)
