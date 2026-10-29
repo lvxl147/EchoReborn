@@ -989,6 +989,29 @@ static void ERGestureEnsureTapOnLabel(UILabel *l) {
 }
 @end
 
+// 1.2.1-139 · CADisplayLink 弱代理：DL 强引用 proxy，proxy 弱引用控制器——
+// 无保留环，控制器dealloc 可安全 invalidate。不用 displayLinkWithBlock:queue:
+//（CI 实锤：Theos iPhoneOS16.5.sdk 头文件没有这个类方法声明）。
+@interface ERGlyphWeakProxy : NSProxy
+- (instancetype)initWithTarget:(id)target;
+@end
+@implementation ERGlyphWeakProxy {
+    __weak id _erTarget;
+}
+- (instancetype)initWithTarget:(id)target {
+    _erTarget = target;
+    return self;
+}
+- (void)forwardInvocation:(NSInvocation *)inv {
+    id t = _erTarget;
+    if (!t) return;
+    [inv invokeWithTarget:t];
+}
+- (NSMethodSignature *)methodSignatureForSelector:(SEL)sel {
+    return [(NSObject *)_erTarget methodSignatureForSelector:sel];
+}
+@end
+
 #pragma mark - 控制器
 
 @implementation ERGestureController {
@@ -1505,12 +1528,10 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
 
 - (void)erGlyphDisplayStart {
     if (!_erGlyphDl) {
-        __weak typeof(self) wself = self;
-        _erGlyphDl = [CADisplayLink displayLinkWithBlock:^(CADisplayLink *dl) {
-            (void)dl;
-            __strong typeof(wself) sself = wself;
-            if (sself) [sself erGlyphDisplayTick];
-        } queue:[NSOperationQueue mainQueue]];
+        // 弱代理为 target：DL 强持 proxy、proxy 弱持 self，无保留环
+        _erGlyphDl = [CADisplayLink displayLinkWithTarget:
+            [[ERGlyphWeakProxy alloc] initWithTarget:self]
+            selector:@selector(erGlyphDisplayTick)];
         _erGlyphDl.preferredFramesPerSecond = 30;   // 30fps 足够，省电
     }
     [_erGlyphDl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
