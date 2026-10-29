@@ -826,14 +826,25 @@ static void ERGestureWidenHeaderLabel(UILabel *l) {
     }
 }
 
-// 1.2.1-136b · ⓘ 从"钉在组头宿主上的按钮"改为"组头标题文字内的字形附件"。
-// 根因（视频实锤）：组头视图跨分组复用，独立按钮钉在宿主里会跟着宿主漂移——
-// 回桌面→回前台重建组头时先闪现在「震动反馈」旁，等同步才归位。
-// 文字附件方案：字形活在 label 文字里，组头复用到别的分组时文字变了字形自然消失，
-// 物理上不可能漂移。返回 YES = 调用后该 label 已带 ⓘ 字形。
-// 注意：helper 类必须定义在 @implementation ERGestureController 之外——
-// ObjC 不允许 @interface/@implementation 嵌套在另一个 @implementation 里
-//（1.2.1-136 CI 实锤：嵌在里面报 missing '@end' + 全部方法 missing context）。
+// 1.2.1-138 · ③颜色回归（用户锁定）：浅色=系统蓝 #007AFF，深色=灰 #8E8E93，
+// 与之前 UIButton 方案观感一致。-136b~137 字形没着色，SF 符号默认渲染成黑色。
+static UIColor *ERGestureInfoTintColor(UILabel *l) {
+    BOOL dark = NO;
+    if (@available(iOS 12.0, *)) {
+        UITraitCollection *tc = l.traitCollection ?: [UITraitCollection currentTraitCollection];
+        dark = (tc.userInterfaceStyle == UIUserInterfaceStyleDark);
+    }
+    return dark
+        ? [UIColor colorWithRed:0x8E / 255.0 green:0x8E / 255.0 blue:0x93 / 255.0 alpha:1.0]
+        : [UIColor colorWithRed:0x00 / 255.0 green:0x7A / 255.0 blue:0xFF / 255.0 alpha:1.0];
+}
+
+// 1.2.1-138 · ②垂直居中（用户实锤太靠上像上标）：-136b 固定下压 1pt，但
+// configurationWithFont 生成的符号实际高度 > 文字高度（13pt 字体符号 ≈15.7pt），
+// 图标中心比文字中心高 2pt 多。改为公式对齐：下压量 = (capHeight − 图标高) ÷ 2，
+// 图标中心对准大写字母中心 = 之前 UIButton 的视觉位置。
+// 验收微调改 ER_INFO_GLYPH_NUDGE：数值越小越往下压（每 1pt 明显）。
+#define ER_INFO_GLYPH_NUDGE 0.0
 static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
     if (!l) return NO;
     NSString *t = l.text ?: @"";
@@ -845,10 +856,12 @@ static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
     UIImage *img = [UIImage systemImageNamed:@"info.circle"
         withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
     if (!img) return NO;
+    if (@available(iOS 13.0, *)) img = [img imageWithTintColor:ERGestureInfoTintColor(l)];
     NSTextAttachment *att = [NSTextAttachment new];
     att.image = img;
-    // 基线对齐：attachment 原点在文字基线上，整体下压一点让 ⓘ 与文字垂直居中
-    att.bounds = CGRectMake(0.0, -1.0, img.size.width, img.size.height);
+    att.bounds = CGRectMake(0.0,
+                            (hfont.capHeight - img.size.height) / 2.0 + ER_INFO_GLYPH_NUDGE,
+                            img.size.width, img.size.height);
     NSMutableAttributedString *as = [[NSMutableAttributedString alloc]
         initWithString:t attributes:@{NSFontAttributeName: hfont}];
     [as appendAttributedString:[[NSAttributedString alloc]
@@ -859,37 +872,110 @@ static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
     return YES;
 }
 
-// 1.2.1-136b · 隐形助手视图：随组头宿主一起被复用，布局瞬间检查同宿主的组头
-// label——是「搜索胶囊」且还没字形就当场补上（事件驱动、零延迟，消灭回前台
-// 约 1 秒的空窗）。被复用到其他分组时静默不动，无任何可见痕迹。
+// 1.2.1-138 · 已带字形 → 拆掉重拼（换色/换位置用），纯文本「搜索胶囊」→ 直接拼。
+// 其他文字（复用后的「震动反馈」、开关行「搜索胶囊手势」）一律不动。
+static void ERGestureRebuildGlyphOnLabel(UILabel *l) {
+    if (!l) return;
+    NSString *t = l.text ?: @"";
+    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
+    if ([t containsString:@"\uFFFC"]) l.text = @"搜索胶囊";   // 拆旧字形再重拼
+    ERGestureApplyGlyphToLabel(l);
+}
+
+// 1.2.1-138 · 点按手势兜挂（helper 布局 / KVO 重拼 / sync 三处共用）
+static void ERGestureEnsureTapOnLabel(UILabel *l) {
+    if (!l) return;
+    l.userInteractionEnabled = YES;
+    BOOL hasTap = NO;
+    for (UIGestureRecognizer *g in l.gestureRecognizers) {
+        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
+    }
+    if (hasTap) return;
+    UIResponder *r = l.nextResponder;
+    while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+    if ([r isKindOfClass:[UIViewController class]]) {
+        [l addGestureRecognizer:[[UITapGestureRecognizer alloc]
+            initWithTarget:r action:@selector(erGroupInfoTapGesture:)]];
+    }
+}
+
+// 1.2.1-136b · 隐形助手视图：随组头宿主一起被复用。
+// 1.2.1-138 · ①灭闪现：之前只在 layoutSubviews 补字形——回前台 PS 重设标题把
+// 富文本清掉后若不再触发布局，就得等 0.1s 定时兜底 → 肉眼可见闪。现在 KVO 盯住
+// label 的 text/attributedText，系统一改文字的同一瞬间（渲染前）同步重拼，同一
+// 次界面刷新内完成，物理上无空窗。_erApplying 防重拼触发 KVO 的自递归。
+// ③颜色：明暗切换 traitCollectionDidChange → 拆掉重拼，颜色即时跟随。
+// 注意：helper 类必须定义在 @implementation ERGestureController 之外——
+// ObjC 不允许 @interface/@implementation 嵌套在另一个 @implementation 里
+//（1.2.1-136 CI 实锤：嵌在里面报 missing '@end' + 全部方法 missing context）。
 @interface ERGHeaderInfoHelper : UIView
 @end
-@implementation ERGHeaderInfoHelper
-- (void)layoutSubviews {
-    [super layoutSubviews];
+@implementation ERGHeaderInfoHelper {
+    __weak UILabel *_erObserved;
+    BOOL _erApplying;
+}
+- (void)erWatchLabel:(UILabel *)l {
+    if (_erObserved == l) return;
+    if (_erObserved) {
+        @try {
+            [_erObserved removeObserver:self forKeyPath:@"text"];
+            [_erObserved removeObserver:self forKeyPath:@"attributedText"];
+        } @catch (NSException *e) { (void)e; }
+    }
+    _erObserved = l;
+    if (l) {
+        @try {
+            [l addObserver:self forKeyPath:@"text" options:0 context:NULL];
+            [l addObserver:self forKeyPath:@"attributedText" options:0 context:NULL];
+        } @catch (NSException *e) { (void)e; _erObserved = nil; }
+    }
+}
+- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
+                          change:(NSDictionary *)change context:(void *)context {
+    (void)change; (void)context;
+    if (_erApplying || object != _erObserved || ![object isKindOfClass:[UILabel class]]) return;
+    if (![keyPath isEqualToString:@"text"] && ![keyPath isEqualToString:@"attributedText"]) return;
+    UILabel *l = (UILabel *)object;
+    _erApplying = YES;
+    ERGestureRebuildGlyphOnLabel(l);
+    ERGestureWidenHeaderLabel(l);
+    ERGestureEnsureTapOnLabel(l);
+    _erApplying = NO;
+}
+- (void)erResyncSibling {
     UILabel *l = nil;
     for (UIView *sub in self.superview.subviews) {
         if ([sub isKindOfClass:[UILabel class]]) { l = (UILabel *)sub; break; }
     }
     if (!l) return;
     NSString *t = l.text ?: @"";
-    // 1.2.1-137：已带字形（含 U+FFFC）也要进来——每帧维持 label 宽度，防截断
+    // 已带字形（含 U+FFFC）也要进来——维持宽度 / 明暗换色重拼
     if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
-    if (ERGestureApplyGlyphToLabel(l)) {
-        ERGestureWidenHeaderLabel(l);
-        l.userInteractionEnabled = YES;
-        BOOL hasTap = NO;
-        for (UIGestureRecognizer *g in l.gestureRecognizers) {
-            if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
-        }
-        if (!hasTap) {
-            UIResponder *r = l.nextResponder;
-            while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
-            if ([r isKindOfClass:[UIViewController class]]) {
-                [l addGestureRecognizer:[[UITapGestureRecognizer alloc]
-                    initWithTarget:r action:@selector(erGroupInfoTapGesture:)]];
-            }
-        }
+    [self erWatchLabel:l];
+    _erApplying = YES;
+    ERGestureRebuildGlyphOnLabel(l);
+    ERGestureWidenHeaderLabel(l);
+    _erApplying = NO;
+    ERGestureEnsureTapOnLabel(l);
+}
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self erResyncSibling];
+}
+- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
+    [super traitCollectionDidChange:previousTraitCollection];
+    if (!previousTraitCollection) return;
+    if (@available(iOS 12.0, *)) {
+        if (self.traitCollection.userInterfaceStyle == previousTraitCollection.userInterfaceStyle) return;
+    } else { return; }
+    [self erResyncSibling];   // 明暗切换 → 拆掉重拼换色
+}
+- (void)dealloc {
+    if (_erObserved) {
+        @try {
+            [_erObserved removeObserver:self forKeyPath:@"text"];
+            [_erObserved removeObserver:self forKeyPath:@"attributedText"];
+        } @catch (NSException *e) { (void)e; }
     }
 }
 @end
@@ -1309,6 +1395,15 @@ static void ERGestureCollectTagViews(UIView *v, NSInteger tag, NSMutableArray<UI
     }
 }
 
+// 1.2.1-138 · 收集表里所有组头宿主（UITableViewHeaderFooterView 及其子类）
+static void ERGestureCollectHeaderHosts(UIView *v, NSMutableArray<UIView *> *out) {
+    if (!v) return;
+    for (UIView *sub in v.subviews) {
+        if ([NSStringFromClass(sub.class) containsString:@"HeaderFooterView"]) [out addObject:sub];
+        ERGestureCollectHeaderHosts(sub, out);
+    }
+}
+
 static void ERGestureSyncGroupInfo(ERGestureController *self) {
     UITableView *tv = ERGestureFindTableView(self.view);
     if (!tv || !tv.window) return;
@@ -1318,29 +1413,25 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
     for (UIView *b in btns) {
         if ([b isKindOfClass:[UIButton class]]) [b removeFromSuperview];
     }
+    // 1.2.1-138 · 隐形助手撒到所有组头宿主：宿主被系统复用给「搜索胶囊」分组时
+    // 助手已经在场（KVO 盯文字 + 布局双保险），不依赖恰好命中的那一个宿主。
+    NSMutableArray<UIView *> *hosts = [NSMutableArray array];
+    ERGestureCollectHeaderHosts(tv, hosts);
+    for (UIView *host in hosts) {
+        UIView *h = [host viewWithTag:7601];
+        if (![h isKindOfClass:[ERGHeaderInfoHelper class]]) {
+            ERGHeaderInfoHelper *nh = [ERGHeaderInfoHelper new];
+            nh.tag = 7601;
+            nh.frame = CGRectZero;
+            nh.userInteractionEnabled = NO;
+            [host addSubview:nh];
+        }
+    }
     UILabel *found = ERGestureFindHeaderLabel(tv);
     if (!found) return;
     ERGestureApplyGlyphToLabel(found);
     ERGestureWidenHeaderLabel(found);   // 1.2.1-137：同步兜底时也维持宽度
-    found.userInteractionEnabled = YES;
-    BOOL hasTap = NO;
-    for (UIGestureRecognizer *g in found.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
-    }
-    if (!hasTap) {
-        [found addGestureRecognizer:[[UITapGestureRecognizer alloc]
-            initWithTarget:self action:@selector(erGroupInfoTapGesture:)]];
-    }
-    // 宿主里没有隐形助手就放一个（随组头复用，布局时零延迟补字形）
-    UIView *host = found.superview;
-    UIView *helper = [host viewWithTag:7601];
-    if (![helper isKindOfClass:[ERGHeaderInfoHelper class]]) {
-        ERGHeaderInfoHelper *h = [ERGHeaderInfoHelper new];
-        h.tag = 7601;
-        h.frame = CGRectZero;
-        h.userInteractionEnabled = NO;
-        [host addSubview:h];
-    }
+    ERGestureEnsureTapOnLabel(found);
 }
 
 // 前台后多节奏同步（0.1/0.3/0.6/1.0s），覆盖 PS 异步重建组头的时机；
