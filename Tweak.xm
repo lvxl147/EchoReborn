@@ -20944,6 +20944,24 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if ([[ERModuleIdentifier(module) lowercaseString] containsString:@"echoreborn.connectivity"]) return;
     CGFloat radius = [self refinedCornerRadiusForModuleView:moduleView];
     if ([self moduleUsesOversizedMediaRadius:module view:moduleView]) radius = EROversizedMediaCornerRadius();
+    // 1.2.1-144 · 白底目标半径改为「跟随玻璃背板」：截图实测实锤——OFF 态玻璃磁贴
+    // 的可见主体是 LGLiveBackdropView（玻璃材质层隐藏），圆角 37.5；ON 白底归一到
+    // refined 31.5 后边线仍比背板方，四角露出背板弧形边（用户对比图实锤）。
+    // 正确目标 = 白底与背板同弧线。找不到背板时退回 refined。
+    CGFloat platterRadius = radius;
+    {
+        NSMutableArray<UIView *> *bq = [NSMutableArray arrayWithObject:moduleView];
+        while (bq.count) {
+            UIView *c = bq.firstObject;
+            [bq removeObjectAtIndex:0];
+            NSString *cn = NSStringFromClass(c.class);
+            if ([cn containsString:@"Backdrop"]) {
+                CGFloat br = c.layer.cornerRadius;
+                if (br >= 8.0 && br <= 60.0) { platterRadius = br; break; }
+            }
+            [bq addObjectsFromArray:c.subviews];
+        }
+    }
     // 1.2.1-140 · 2×1 高亮白底诊断：dump 手电筒模块子树（类名/bounds/圆角/隐藏），
     // 每秒最多 1 条。白底若被下面的扩匹配修中，此日志只用于确认；若仍漏网，
     // 日志直接给出白底真实类名与圆角，下一轮按名精确打击。
@@ -21007,18 +21025,24 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         // 玻璃 kit 自己的背板（LG* / *Glass*，如 LGLiveBackdropView 的 37.5 由
         // 玻璃侧管理）→ 一律归一到 refined。r=0 的布局容器全被下限挡住。
         BOOL glassOwned = [name hasPrefix:@"LG"] || [name containsString:@"Glass"];
-        BOOL roundedPlatter = fillsModule && !glassOwned &&
+        // 1.2.1-144 · 材质层（Material/VisualEffect/Platter 命名）归 refined，不进底板规则
+        BOOL roundedPlatter = fillsModule && !glassOwned && !materialSurface &&
             candidate.layer.cornerRadius >= 8.0 && candidate.layer.cornerRadius <= 45.0;
+        // 1.2.1-144 · 底板类（匿名 UIView 白底/高亮命名底）写 platterRadius=跟随玻璃
+        // 背板弧线（2×1 实测 37.5），否则白底 31.5 比背板方、四角露背板边（用户
+        // 对比图左下角实锤）；磁贴本体与材质层继续写 refined（31.5）。
+        BOOL isPlatter = highlightSurface || roundedPlatter;
+        CGFloat targetR = isPlatter ? platterRadius : radius;
         if (candidate == moduleView || buttonSurface ||
-            (materialSurface && fillsModule) || highlightSurface || roundedPlatter) {
+            (materialSurface && fillsModule) || isPlatter) {
             // 1.0.6-12（第 4 条）：只在圆角真的变化时才赋值。
             //
             // 本函数在 layout / 展开 / 收回路径上被反复调用（一次收回就有 1 + 8 轮全量扫描），
             // 每一轮都会遍历整棵子树。无条件逐层赋值会让 CALayer 判定「几何已变」并重新
             // 生成圆角遮罩、重新提交渲染事务 —— 日志里 layout 交替出现 6ms / 20ms 的锯齿
             // 就是这个开销。改成差量写入后，稳态下这些写入全部变成空操作。
-            if (fabs(candidate.layer.cornerRadius - radius) > 0.01) {
-                candidate.layer.cornerRadius = radius;
+            if (fabs(candidate.layer.cornerRadius - targetR) > 0.01) {
+                candidate.layer.cornerRadius = targetR;
             }
             candidate.layer.cornerCurve = kCACornerCurveContinuous;
             if (candidate == moduleView && !candidate.layer.masksToBounds) candidate.layer.masksToBounds = YES;
