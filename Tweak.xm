@@ -28652,7 +28652,7 @@ static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, doubl
     // 一屏），连按几次就把 60KB 环形缓冲写爆，前面的 OPEN 采样被整段冲掉，只剩尾部
     // 三帧 CLOSE。压到每帧约 8 行后，一次完整操作的所有帧都能留住。
     CGRect screen = win.bounds;
-    NSUInteger onScreenCount = 0;
+    NSUInteger onScreenCount = 0, hiddenCount = 0;
     for (UIViewController *m in ERCollectModuleControllers(overlay)) {
         UIView *v = m.view;
         if (!v) continue;
@@ -28660,9 +28660,12 @@ static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, doubl
         BOOL isSlider = [ident containsString:@"audio"] || [ident containsString:@"Display"]
                      || [ident containsString:@"display"];
         CGRect f = [v convertRect:v.bounds toView:win];
-        BOOL onScreen = CGRectIntersectsRect(f, screen);
-        if (onScreen) onScreenCount++;
-        if (!isSlider && !onScreen) continue;
+        if (CGRectIntersectsRect(f, screen)) onScreenCount++;
+        // 1.2.1-163 · 只记异常：滑块永远记，其余模块只在「被隐藏 / 有透明」时记。
+        // 正常帧就两行，带宽全留给真正要看的那几帧。
+        BOOL anomaly = v.hidden || v.alpha < 0.99 || v.layer.opacity < 0.99;
+        if (anomaly) hiddenCount++;
+        if (!isSlider && !anomaly) continue;
         [sb appendFormat:@"M%@ %@ a=%.2f h=%d lo=%.2f f=%.0f,%.0f,%.0fx%.0f\n",
          isSlider ? @"*" : @" ", ident,
          v.alpha, (int)v.hidden, v.layer.opacity,
@@ -28677,21 +28680,36 @@ static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, doubl
         [q removeObjectAtIndex:0];
         [q addObjectsFromArray:c.subviews];
         if (c == win || c.hidden || c.alpha < 0.05) continue;
+        NSString *cls = NSStringFromClass(c.class);
+        // 状态栏 / 背景模糊这类每帧都有的噪音不记，只留可疑的
+        if ([cls containsString:@"StatusBar"] || [cls containsString:@"Status"]
+            || [cls containsString:@"Backdrop"] || [cls containsString:@"StatusLabel"]) continue;
         CGRect f = [c convertRect:c.bounds toView:win];
         if (CGRectGetWidth(f) < 12.0 || CGRectGetHeight(f) < 12.0) continue;
         if (!CGRectIntersectsRect(f, corner)) continue;
         if (CGRectGetWidth(f) > 380.0 && CGRectGetHeight(f) > 800.0) continue;   // 满屏容器噪音
         hits++;
         [sb appendFormat:@"TL %@ a=%.2f lo=%.2f f=%.0f,%.0f,%.0fx%.0f z=%.1f\n",
-         NSStringFromClass(c.class), c.alpha, c.layer.opacity,
+         cls, c.alpha, c.layer.opacity,
          f.origin.x, f.origin.y, f.size.width, f.size.height, c.layer.zPosition];
     }
-    [sb appendFormat:@"-- onscreen=%lu\n", (unsigned long)onScreenCount];
+    [sb appendFormat:@"-- onscreen=%lu anomalies=%lu\n",
+     (unsigned long)onScreenCount, (unsigned long)hiddenCount];
     ERAppendDebugFile(@"er_exp.txt", sb);
 }
 
 static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag) {
     if (!overlay) return;
+    // 1.2.1-163 · 每轮长按**开始就清空**日志：162 实测用户连按多次，60KB 环形缓冲
+    // 只留下最后一轮的尾部帧（还全是收起后的紧凑态），展开过程的那几帧又被冲掉。
+    // 现在 OPEN 起始清空 → 一轮完整操作（展开 9 帧 + 收起 9 帧）必定完整留存。
+    if ([tag isEqualToString:@"OPEN"]) {
+        NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:@"er_exp.txt"];
+        [@"" writeToFile:path atomically:NO encoding:NSUTF8StringEncoding error:nil];
+        ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+            @"######## CYCLE START t=%.2f id=%@ ########",
+            CACurrentMediaTime(), gERExpandedModuleIdentifier ?: @"-"]);
+    }
     // 保留 161 的密采样，另加 0.60/0.85/1.20 看落定态（②是否到落定才消失）
     double ts[9] = {0.02, 0.08, 0.16, 0.24, 0.36, 0.50, 0.60, 0.85, 1.20};
     for (int i = 0; i < 9; i++) {
