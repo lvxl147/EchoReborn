@@ -21150,17 +21150,32 @@ static void ERAlignSliderFillClips(UIView *root) {
                 if (g) {
                     CGFloat gw = CGRectGetWidth(g.bounds), gh = CGRectGetHeight(g.bounds);
                     CGFloat gr = g.layer.cornerRadius;
-                    if (fabs(w - gw) < 4.0 && h < gh * 0.8 && gr > 4.0) {
-                        CGFloat nr = MIN(gr, h * 0.5);
-                        c.layer.cornerRadius = nr;
-                        c.layer.cornerCurve = kCACornerCurveContinuous;
-                        c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-                        c.clipsToBounds = YES;
-                        if (sERClipLogBudget < 6) {
-                            sERClipLogBudget++;
-                            ERAppendDebugFile(@"er_clip.txt", [NSString stringWithFormat:
-                                @"ER12CLIP %@ %.0fx%.0f r=0->%.1f g=%.0fx%.0f gr=%.1f",
-                                NSStringFromClass(c.class), w, h, nr, gw, gh, gr]);
+                    if (fabs(w - gw) < 4.0 && gr > 4.0) {
+                        // 1.2.1-160 · 展开态补充：157 的规则要求「填充比玻璃矮」（h < gh*0.8），
+                        // 而长按展开后的滑块里，填充容器和玻璃是**同高**的
+                        // （设备 dump 实测 #99 UIView 150x400 r=0 m=1 与 #90 玻璃 150x400 r=75 并列），
+                        // 规则直接跳过 → 展开面板内部的大滑块一直是方角。这正是用户报的
+                        // 「长按音量和亮度里面的圆角不对」。同高时四角全圆，半径取玻璃半径。
+                        BOOL sameHeightFill = (h >= gh * 0.8);
+                        if (sameHeightFill || h < gh * 0.8) {
+                            CGFloat nr = MIN(gr, MIN(w, h) * 0.5);
+                            if (fabs(c.layer.cornerRadius - nr) > 0.01) {
+                                c.layer.cornerRadius = nr;
+                            }
+                            c.layer.cornerCurve = kCACornerCurveContinuous;
+                            if (sameHeightFill) {
+                                c.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
+                                                        kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                            } else {
+                                c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                            }
+                            c.clipsToBounds = YES;
+                            if (sERClipLogBudget < 10) {
+                                sERClipLogBudget++;
+                                ERAppendDebugFile(@"er_clip.txt", [NSString stringWithFormat:
+                                    @"ER12CLIP2 %@ %.0fx%.0f r->%.1f g=%.0fx%.0f gr=%.1f same=%d",
+                                    NSStringFromClass(c.class), w, h, nr, gw, gh, gr, (int)sameHeightFill]);
+                            }
                         }
                     }
                 }
@@ -24424,16 +24439,24 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
     // ERLandscapePresentationActive()（读窗口宽高比）跨状态判断，展开瞬间不可靠。
     BOOL erExpandedNow = (gERExpandedModuleOpen || gERExpandedModuleClosingActive);
     if (identifier.length) {
-        BOOL isSliderDbg = [identifier isEqualToString:@"controlcenter.audio"]
-                        || [identifier containsString:@"controlcenter.audio"]
-                        || [identifier isEqualToString:@"displaymodule"]
-                        || [identifier isEqualToString:@"com.apple.control-center.DisplayModule"];
+        // 160 · 观测面放宽：只要「高度>2」或名字带 audio/display 就留痕。
+        // 159 只按固定名单匹配，结果 er_size.txt 一条都没生成 —— 连 hook 到底
+        // 有没有被调用、标识符到底长什么样都没看见。先拿到真实数据再谈判断。
+        BOOL isSliderDbg = (size.height > 2)
+                        || [identifier containsString:@"audio"]
+                        || [identifier containsString:@"Audio"]
+                        || [identifier containsString:@"isplay"]
+                        || [identifier containsString:@"rightness"];
         if (isSliderDbg) {
-            ERAppendDebugFile(@"er_size.txt", [NSString stringWithFormat:
-                @"SIZE t=%.2f id=%@ land=%d ori=%ld exp=%d req=%lux%lu",
-                CACurrentMediaTime(), identifier, (int)ERLandscapePresentationActive(),
-                (long)orientation, (int)erExpandedNow,
-                (unsigned long)size.width, (unsigned long)size.height]);
+            static NSInteger sERSizeLogBudget = 0;
+            if (sERSizeLogBudget < 120) {
+                sERSizeLogBudget++;
+                ERAppendDebugFile(@"er_size.txt", [NSString stringWithFormat:
+                    @"SIZE t=%.2f id=%@ land=%d ori=%ld exp=%d req=%lux%lu",
+                    CACurrentMediaTime(), identifier, (int)ERLandscapePresentationActive(),
+                    (long)orientation, (int)erExpandedNow,
+                    (unsigned long)size.width, (unsigned long)size.height]);
+            }
         }
     }
     if (gEnabled && !erExpandedNow && ERLandscapePresentationActive() && custom.count < 2 && identifier.length) {
