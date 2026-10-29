@@ -810,6 +810,71 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 
 @end
 
+// 1.2.1-136b · ⓘ 从"钉在组头宿主上的按钮"改为"组头标题文字内的字形附件"。
+// 根因（视频实锤）：组头视图跨分组复用，独立按钮钉在宿主里会跟着宿主漂移——
+// 回桌面→回前台重建组头时先闪现在「震动反馈」旁，等同步才归位。
+// 文字附件方案：字形活在 label 文字里，组头复用到别的分组时文字变了字形自然消失，
+// 物理上不可能漂移。返回 YES = 调用后该 label 已带 ⓘ 字形。
+// 注意：helper 类必须定义在 @implementation ERGestureController 之外——
+// ObjC 不允许 @interface/@implementation 嵌套在另一个 @implementation 里
+//（1.2.1-136 CI 实锤：嵌在里面报 missing '@end' + 全部方法 missing context）。
+static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
+    if (!l) return NO;
+    NSString *t = l.text ?: @"";
+    // 只处理组头本体：精确「搜索胶囊」才拼；已带附件占位符 = 已装过，直接成功。
+    // 其他文字（如开关行「搜索胶囊手势」、复用后的「震动反馈」）一律不动。
+    if ([t containsString:@"\uFFFC"]) return YES;
+    if (![t isEqualToString:@"搜索胶囊"]) return NO;
+    UIFont *hfont = l.font ?: [UIFont systemFontOfSize:13.0];
+    UIImage *img = [UIImage systemImageNamed:@"info.circle"
+        withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
+    if (!img) return NO;
+    NSTextAttachment *att = [NSTextAttachment new];
+    att.image = img;
+    // 基线对齐：attachment 原点在文字基线上，整体下压一点让 ⓘ 与文字垂直居中
+    att.bounds = CGRectMake(0.0, -1.0, img.size.width, img.size.height);
+    NSMutableAttributedString *as = [[NSMutableAttributedString alloc]
+        initWithString:t attributes:@{NSFontAttributeName: hfont}];
+    [as appendAttributedString:[[NSAttributedString alloc]
+        initWithString:@" " attributes:@{NSFontAttributeName: hfont}]];
+    [as appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
+    l.attributedText = as;
+    return YES;
+}
+
+// 1.2.1-136b · 隐形助手视图：随组头宿主一起被复用，布局瞬间检查同宿主的组头
+// label——是「搜索胶囊」且还没字形就当场补上（事件驱动、零延迟，消灭回前台
+// 约 1 秒的空窗）。被复用到其他分组时静默不动，无任何可见痕迹。
+@interface ERGHeaderInfoHelper : UIView
+@end
+@implementation ERGHeaderInfoHelper
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    UILabel *l = nil;
+    for (UIView *sub in self.superview.subviews) {
+        if ([sub isKindOfClass:[UILabel class]]) { l = (UILabel *)sub; break; }
+    }
+    if (!l) return;
+    NSString *t = l.text ?: @"";
+    if (![t isEqualToString:@"搜索胶囊"]) return;   // 复用到其他分组：静默不动
+    if (ERGestureApplyGlyphToLabel(l)) {
+        l.userInteractionEnabled = YES;
+        BOOL hasTap = NO;
+        for (UIGestureRecognizer *g in l.gestureRecognizers) {
+            if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
+        }
+        if (!hasTap) {
+            UIResponder *r = l.nextResponder;
+            while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+            if ([r isKindOfClass:[UIViewController class]]) {
+                [l addGestureRecognizer:[[UITapGestureRecognizer alloc]
+                    initWithTarget:r action:@selector(erGroupInfoTapGesture:)]];
+            }
+        }
+    }
+}
+@end
+
 #pragma mark - 控制器
 
 @implementation ERGestureController
@@ -1224,68 +1289,6 @@ static void ERGestureCollectTagViews(UIView *v, NSInteger tag, NSMutableArray<UI
         ERGestureCollectTagViews(sub, tag, out);
     }
 }
-
-// 1.2.1-136b · ⓘ 从"钉在组头宿主上的按钮"改为"组头标题文字内的字形附件"。
-// 根因（视频实锤）：组头视图跨分组复用，独立按钮钉在宿主里会跟着宿主漂移——
-// 回桌面→回前台重建组头时先闪现在「震动反馈」旁，等同步才归位。
-// 文字附件方案：字形活在 label 文字里，组头复用到别的分组时文字变了字形自然消失，
-// 物理上不可能漂移。返回 YES = 调用后该 label 已带 ⓘ 字形。
-static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
-    if (!l) return NO;
-    NSString *t = l.text ?: @"";
-    // 只处理组头本体：精确「搜索胶囊」才拼；已带附件占位符 = 已装过，直接成功。
-    // 其他文字（如开关行「搜索胶囊手势」、复用后的「震动反馈」）一律不动。
-    if ([t containsString:@"\uFFFC"]) return YES;
-    if (![t isEqualToString:@"搜索胶囊"]) return NO;
-    UIFont *hfont = l.font ?: [UIFont systemFontOfSize:13.0];
-    UIImage *img = [UIImage systemImageNamed:@"info.circle"
-        withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
-    if (!img) return NO;
-    NSTextAttachment *att = [NSTextAttachment new];
-    att.image = img;
-    // 基线对齐：attachment 原点在文字基线上，整体下压一点让 ⓘ 与文字垂直居中
-    att.bounds = CGRectMake(0.0, -1.0, img.size.width, img.size.height);
-    NSMutableAttributedString *as = [[NSMutableAttributedString alloc]
-        initWithString:t attributes:@{NSFontAttributeName: hfont}];
-    [as appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@" " attributes:@{NSFontAttributeName: hfont}]];
-    [as appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
-    l.attributedText = as;
-    return YES;
-}
-
-// 1.2.1-136b · 隐形助手视图：随组头宿主一起被复用，布局瞬间检查同宿主的组头
-// label——是「搜索胶囊」且还没字形就当场补上（事件驱动、零延迟，消灭回前台
-// 约 1 秒的空窗）。被复用到其他分组时静默不动，无任何可见痕迹。
-@interface ERGHeaderInfoHelper : UIView
-@end
-@implementation ERGHeaderInfoHelper
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    UILabel *l = nil;
-    for (UIView *sub in self.superview.subviews) {
-        if ([sub isKindOfClass:[UILabel class]]) { l = (UILabel *)sub; break; }
-    }
-    if (!l) return;
-    NSString *t = l.text ?: @"";
-    if (![t isEqualToString:@"搜索胶囊"]) return;   // 复用到其他分组：静默不动
-    if (ERGestureApplyGlyphToLabel(l)) {
-        l.userInteractionEnabled = YES;
-        BOOL hasTap = NO;
-        for (UIGestureRecognizer *g in l.gestureRecognizers) {
-            if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
-        }
-        if (!hasTap) {
-            UIResponder *r = l.nextResponder;
-            while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
-            if ([r isKindOfClass:[UIViewController class]]) {
-                [l addGestureRecognizer:[[UITapGestureRecognizer alloc]
-                    initWithTarget:r action:@selector(erGroupInfoTapGesture:)]];
-            }
-        }
-    }
-}
-@end
 
 static void ERGestureSyncGroupInfo(ERGestureController *self) {
     UITableView *tv = ERGestureFindTableView(self.view);
