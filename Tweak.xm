@@ -21086,6 +21086,90 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 // 到底是哪个视图、用什么画的（view.backgroundColor / layer.backgroundColor /
 // layer.contents / 子层），这些问题必须**无过滤**才能回答。
 // 这里改成直接写文件，一次把整棵树摊平（最多 400 个节点），用 SFTP 拉回来。
+// 1.2.1-156 · 值填充裁剪容器归一。
+//
+// 155 的全树落盘找到了两个此前所有 dump 都漏掉的视图（因为 r=0 被过滤规则丢掉）：
+//   紧凑  UIView 75x55  @(0,108)   r=0  m=1  父=_CCUIBaseSliderContentView
+//   展开  UIView 150x184 @(140,482) r=0  m=1
+// 两者共同特征：开着裁剪（m=1）但半径是 0，宽度等于滑块宽，底边对齐 —— 这就是
+// 白色值填充的裁剪容器。半径 0 + 裁剪 = 填充永远被裁成方角，无论外层玻璃多圆。
+//
+// 识别规则刻意收窄，避免误伤按钮的圆形底座：
+//   宽度 ≈ 最近祖先玻璃的宽（±4），且高度 < 玻璃高 * 0.8
+//   60x60 的按钮底座因 h=60 不小于 60*0.8 而被排除。
+static void ERAlignSliderFillClips(UIView *root) {
+    if (!root) return;
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:root];
+    NSUInteger guard = 0;
+    static NSInteger sERClipLogBudget = 0;
+    while (q.count && guard++ < 900) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        if (c.layer.masksToBounds && c.layer.cornerRadius < 1.0) {
+            CGFloat w = CGRectGetWidth(c.bounds), h = CGRectGetHeight(c.bounds);
+            if (w > 30.0 && h > 8.0) {
+                UIView *g = nil;
+                for (UIView *a = c.superview; a; a = a.superview) {
+                    if ([a isKindOfClass:[LGLiveBackdropView class]]) { g = a; break; }
+                }
+                if (g) {
+                    CGFloat gw = CGRectGetWidth(g.bounds), gh = CGRectGetHeight(g.bounds);
+                    CGFloat gr = g.layer.cornerRadius;
+                    if (fabs(w - gw) < 4.0 && h < gh * 0.8 && gr > 4.0) {
+                        CGFloat nr = MIN(gr, h * 0.5);
+                        c.layer.cornerRadius = nr;
+                        c.layer.cornerCurve = kCACornerCurveContinuous;
+                        c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                        c.clipsToBounds = YES;
+                        if (sERClipLogBudget < 6) {
+                            sERClipLogBudget++;
+                            ERSliderDbgMirrorIn([NSString stringWithFormat:
+                                @"ER12CLIP %@ %.0fx%.0f r=0->%.1f g=%.0fx%.0f gr=%.1f",
+                                NSStringFromClass(c.class), w, h, nr, gw, gh, gr]);
+                        }
+                    }
+                }
+            }
+        }
+        [q addObjectsFromArray:c.subviews];
+    }
+}
+
+static void ERFixExpandedSliderPanel(UIViewController *panel) {
+    if (!panel.view) return;
+    ERAlignSliderFillClips(panel.view);
+    CGFloat pw = CGRectGetWidth(panel.view.bounds), ph = CGRectGetHeight(panel.view.bounds);
+    if (pw < 400.0 || ph < 600.0) return;
+    // 1.2.1-156 · 诊断：面板背景视图里到底有没有遮挡层。
+    // 155 的树里 #3 CCUIContentModuleBackgroundView 是 430x932 / bg=w0.00,a0.00
+    // 且 sub=1，但那个子视图没有出现在导出里 —— 如果它是被隐藏的 UIVisualEffectView，
+    // 那「亮度模块漏着」就是它被藏起来了，恢复它即可，不需要新增任何视觉层。
+    static NSInteger sERPanelLogBudget = 0;
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:panel.view];
+    NSUInteger guard = 0;
+    while (q.count && guard++ < 500) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        NSString *cn = NSStringFromClass(c.class);
+        if ([cn isEqualToString:@"CCUIContentModuleBackgroundView"] &&
+            CGRectGetWidth(c.bounds) > 400.0) {
+            if (sERPanelLogBudget < 4) {
+                sERPanelLogBudget++;
+                NSMutableString *kids = [NSMutableString string];
+                for (UIView *k in c.subviews) {
+                    [kids appendFormat:@"%@(a=%.2f h=%d r=%.1f) ", NSStringFromClass(k.class), k.alpha, (int)k.hidden, k.layer.cornerRadius];
+                }
+                ERSliderDbgMirrorIn([NSString stringWithFormat:
+                    @"ER12PANELBG b=%.0fx%.0f a=%.2f h=%d r=%.1f sub=%lu kids=[%@]",
+                    CGRectGetWidth(c.bounds), CGRectGetHeight(c.bounds), c.alpha,
+                    (int)c.hidden, c.layer.cornerRadius, (unsigned long)c.subviews.count,
+                    kids.length ? kids : @"none"]);
+            }
+        }
+        [q addObjectsFromArray:c.subviews];
+    }
+}
+
 static void ERDumpSliderTreeToFileAt(UIViewController *module, NSString *name) {
     if (!gEnabled || !module.view) {
         ERSliderDbgMirrorIn([NSString stringWithFormat:@"ER12TREE %@ 前置不满足 g=%d view=%@",
@@ -21269,6 +21353,9 @@ static void ERNormalizeSliderSurfaces(UIViewController *module) {
         }
         [matQ addObjectsFromArray:c.subviews];
     }
+
+    // 3.5) 值填充裁剪容器归一（1.2.1-156 · 紧凑态）
+    ERAlignSliderFillClips(moduleView);
 
     // 4) 复核留痕：0.4s 后再读一次材质圆角，确认没有被原生改回
     static NSTimeInterval sERPostLogLast = 0.0;
@@ -28574,11 +28661,26 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     {
         __weak UIViewController *weakOverlay = overlay;
         __weak UIViewController *weakExpanded = expandedController;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.55 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *ov = weakOverlay;
+            UIViewController *p1 = ov.presentedViewController ?: weakExpanded;
+            if (p1) ERFixExpandedSliderPanel(p1);
+        });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.90 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             UIViewController *ov = weakOverlay;
             UIViewController *panel = ov.presentedViewController ?: weakExpanded;
-            if (panel) ERDumpSliderTreeToFileAt(panel, @"er_slider_expanded");
+            if (panel) {
+                ERFixExpandedSliderPanel(panel);
+                ERDumpSliderTreeToFileAt(panel, @"er_slider_expanded");
+            }
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.60 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *ov = weakOverlay;
+            UIViewController *p3 = ov.presentedViewController ?: weakExpanded;
+            if (p3) ERFixExpandedSliderPanel(p3);
         });
     }
 }
