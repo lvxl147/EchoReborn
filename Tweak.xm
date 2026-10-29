@@ -21195,6 +21195,17 @@ static void ERFixExpandedSliderPanel(UIViewController *panel) {
         NSString *cn = NSStringFromClass(c.class);
         if ([cn isEqualToString:@"CCUIContentModuleBackgroundView"] &&
             CGRectGetWidth(c.bounds) > 400.0) {
+            // 1.2.1-158 · 实测 0.55s 时 BG a=1.00，0.90s 时变成 a=0.00 ——
+            // 被某条路径（原生收起预演或我们的隐藏逻辑）设成了全透明。
+            // 面板背景一旦透明，整块面板就没有遮罩，下面的亮度/音量模块会
+            // 原样露出来（用户报的「亮度模块漏着」）。展开态强制恢复。
+            CGFloat beforeA = c.alpha;
+            if (beforeA < 0.99 || c.hidden) {
+                c.alpha = 1.0;
+                c.hidden = NO;
+            }
+            ERAppendDebugFile(@"er_panelbg.txt", [NSString stringWithFormat:
+                @"BG 430x932 alpha %.2f->%.2f", beforeA, c.alpha]);
             if (sERPanelLogBudget < 4) {
                 sERPanelLogBudget++;
                 NSMutableString *kids = [NSMutableString string];
@@ -28728,6 +28739,12 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
             UIViewController *ov = weakOverlay;
             UIViewController *p3 = ov.presentedViewController ?: weakExpanded;
             if (p3) ERFixExpandedSliderPanel(p3);
+        });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.60 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            UIViewController *ov = weakOverlay;
+            UIViewController *p4 = ov.presentedViewController ?: weakExpanded;
+            if (p4) ERFixExpandedSliderPanel(p4);
         });
     }
 }
