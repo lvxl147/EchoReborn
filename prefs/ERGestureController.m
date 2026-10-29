@@ -810,6 +810,22 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 
 @end
 
+// 1.2.1-137 · 组头 label 宽度按原始四字文本固定，拼上「空格+ⓘ」后内容变宽而
+// frame 不变 → 截断成「搜索胶...」（用户截图实锤，字形与点击都正常只是宽度不够）。
+// 把 label 拉宽到内容实际宽度；helper 每帧调用维持，防系统复用布局改回去。
+static void ERGestureWidenHeaderLabel(UILabel *l) {
+    if (!l) return;
+    NSString *t = l.text ?: @"";
+    if (![t containsString:@"\uFFFC"]) return;   // 只管已拼字形的组头
+    CGSize need = [l sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
+    CGRect f = l.frame;
+    CGFloat wantW = need.width + 2.0;
+    if (f.size.width + 0.5 < wantW) {
+        f.size.width = wantW;
+        l.frame = f;
+    }
+}
+
 // 1.2.1-136b · ⓘ 从"钉在组头宿主上的按钮"改为"组头标题文字内的字形附件"。
 // 根因（视频实锤）：组头视图跨分组复用，独立按钮钉在宿主里会跟着宿主漂移——
 // 回桌面→回前台重建组头时先闪现在「震动反馈」旁，等同步才归位。
@@ -839,6 +855,7 @@ static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
         initWithString:@" " attributes:@{NSFontAttributeName: hfont}]];
     [as appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
     l.attributedText = as;
+    ERGestureWidenHeaderLabel(l);   // 1.2.1-137：拼宽了内容就要拉宽 frame，否则截断
     return YES;
 }
 
@@ -856,8 +873,10 @@ static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
     }
     if (!l) return;
     NSString *t = l.text ?: @"";
-    if (![t isEqualToString:@"搜索胶囊"]) return;   // 复用到其他分组：静默不动
+    // 1.2.1-137：已带字形（含 U+FFFC）也要进来——每帧维持 label 宽度，防截断
+    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
     if (ERGestureApplyGlyphToLabel(l)) {
+        ERGestureWidenHeaderLabel(l);
         l.userInteractionEnabled = YES;
         BOOL hasTap = NO;
         for (UIGestureRecognizer *g in l.gestureRecognizers) {
@@ -1302,6 +1321,7 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
     UILabel *found = ERGestureFindHeaderLabel(tv);
     if (!found) return;
     ERGestureApplyGlyphToLabel(found);
+    ERGestureWidenHeaderLabel(found);   // 1.2.1-137：同步兜底时也维持宽度
     found.userInteractionEnabled = YES;
     BOOL hasTap = NO;
     for (UIGestureRecognizer *g in found.gestureRecognizers) {
