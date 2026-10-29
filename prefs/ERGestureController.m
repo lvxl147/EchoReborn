@@ -1183,14 +1183,18 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
 
 // 1.2.0-77 · ⓘ 挂到组头「搜索胶囊」右侧（用户指定位置）。PS 的组头是
 // UITableViewHeaderFooterView 里的 UILabel，直接扫描找到后处理。
-// 1.2.1-136 · 改 hasPrefix：ⓘ 以文本附件拼进标题后 label.text 会带附件占位符，
-// 精确等值比较会失配导致重复安装。
+// 1.2.1-136 · 匹配规则=「精确 '搜索胶囊'」或「搜索胶囊+附件占位符」。绝不能用
+// hasPrefix —— 开关行标题「搜索胶囊手势」会被误匹配，ⓘ 贴到开关名上（用户实锤）。
 // 递归找组头 label（静态函数避免 block 保留环）
 static UILabel *ERGestureFindHeaderLabel(UIView *v) {
     if (!v) return nil;
     for (UIView *sub in v.subviews) {
-        if ([sub isKindOfClass:[UILabel class]] &&
-            [((UILabel *)sub).text hasPrefix:@"搜索胶囊"]) return (UILabel *)sub;
+        if ([sub isKindOfClass:[UILabel class]]) {
+            NSString *t = ((UILabel *)sub).text ?: @"";
+            if ([t isEqualToString:@"搜索胶囊"] ||
+                ([t hasPrefix:@"搜索胶囊"] && [t containsString:@"\uFFFC"]))
+                return (UILabel *)sub;
+        }
         UILabel *deeper = ERGestureFindHeaderLabel(sub);
         if (deeper) return deeper;
     }
@@ -1221,40 +1225,81 @@ static void ERGestureCollectTagViews(UIView *v, NSInteger tag, NSMutableArray<UI
     }
 }
 
-// 1.2.1-136 · ⓘ 从"钉在组头宿主上的按钮"改为"组头标题文字内的字形附件"。
+// 1.2.1-136b · ⓘ 从"钉在组头宿主上的按钮"改为"组头标题文字内的字形附件"。
 // 根因（视频实锤）：组头视图跨分组复用，独立按钮钉在宿主里会跟着宿主漂移——
-// 回桌面→回前台重建组头时先闪现在「震动反馈」旁，等 0.3s 同步才归位。
+// 回桌面→回前台重建组头时先闪现在「震动反馈」旁，等同步才归位。
 // 文字附件方案：字形活在 label 文字里，组头复用到别的分组时文字变了字形自然消失，
-// 物理上不可能漂移；点击整段标题弹出说明（-134 起遗留的旧按钮在本版一并清除）。
-static void ERGestureSyncGroupInfo(ERGestureController *self) {
-    UITableView *tv = ERGestureFindTableView(self.view);
-    if (!tv || !tv.window) return;
-    // 清陈旧：-135 及更早版本钉进组头宿主的独立按钮，升级后清除一次
-    NSMutableArray<UIView *> *btns = [NSMutableArray array];
-    ERGestureCollectTagViews(tv, 7601, btns);
-    for (UIView *b in btns) [b removeFromSuperview];
-    UILabel *found = ERGestureFindHeaderLabel(tv);
-    if (!found) return;
-    // 已带附件（text 末尾是附件占位符 U+FFFC）就不重复拼，避免字形越拼越多
-    if ([found.text containsString:@"\uFFFC"]) {
-        if (!found.userInteractionEnabled) found.userInteractionEnabled = YES;
-        return;
-    }
-    UIFont *hfont = found.font ?: [UIFont systemFontOfSize:13.0];
+// 物理上不可能漂移。返回 YES = 调用后该 label 已带 ⓘ 字形。
+static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
+    if (!l) return NO;
+    NSString *t = l.text ?: @"";
+    // 只处理组头本体：精确「搜索胶囊」才拼；已带附件占位符 = 已装过，直接成功。
+    // 其他文字（如开关行「搜索胶囊手势」、复用后的「震动反馈」）一律不动。
+    if ([t containsString:@"\uFFFC"]) return YES;
+    if (![t isEqualToString:@"搜索胶囊"]) return NO;
+    UIFont *hfont = l.font ?: [UIFont systemFontOfSize:13.0];
     UIImage *img = [UIImage systemImageNamed:@"info.circle"
         withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
-    if (!img) return;
+    if (!img) return NO;
     NSTextAttachment *att = [NSTextAttachment new];
     att.image = img;
     // 基线对齐：attachment 原点在文字基线上，整体下压一点让 ⓘ 与文字垂直居中
     att.bounds = CGRectMake(0.0, -1.0, img.size.width, img.size.height);
     NSMutableAttributedString *as = [[NSMutableAttributedString alloc]
-        initWithString:found.text attributes:@{NSFontAttributeName: hfont}];
+        initWithString:t attributes:@{NSFontAttributeName: hfont}];
     [as appendAttributedString:[[NSAttributedString alloc]
         initWithString:@" " attributes:@{NSFontAttributeName: hfont}]];
     [as appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
-    found.attributedText = as;
-    found.userInteractionEnabled = YES;   // label 默认不响应触摸
+    l.attributedText = as;
+    return YES;
+}
+
+// 1.2.1-136b · 隐形助手视图：随组头宿主一起被复用，布局瞬间检查同宿主的组头
+// label——是「搜索胶囊」且还没字形就当场补上（事件驱动、零延迟，消灭回前台
+// 约 1 秒的空窗）。被复用到其他分组时静默不动，无任何可见痕迹。
+@interface ERGHeaderInfoHelper : UIView
+@end
+@implementation ERGHeaderInfoHelper
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    UILabel *l = nil;
+    for (UIView *sub in self.superview.subviews) {
+        if ([sub isKindOfClass:[UILabel class]]) { l = (UILabel *)sub; break; }
+    }
+    if (!l) return;
+    NSString *t = l.text ?: @"";
+    if (![t isEqualToString:@"搜索胶囊"]) return;   // 复用到其他分组：静默不动
+    if (ERGestureApplyGlyphToLabel(l)) {
+        l.userInteractionEnabled = YES;
+        BOOL hasTap = NO;
+        for (UIGestureRecognizer *g in l.gestureRecognizers) {
+            if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
+        }
+        if (!hasTap) {
+            UIResponder *r = l.nextResponder;
+            while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
+            if ([r isKindOfClass:[UIViewController class]]) {
+                [l addGestureRecognizer:[[UITapGestureRecognizer alloc]
+                    initWithTarget:r action:@selector(erGroupInfoTapGesture:)]];
+            }
+        }
+    }
+}
+@end
+
+static void ERGestureSyncGroupInfo(ERGestureController *self) {
+    UITableView *tv = ERGestureFindTableView(self.view);
+    if (!tv || !tv.window) return;
+    // 清陈旧：-135 及更早版本钉进组头宿主的独立按钮（只清 UIButton，helper 保留）
+    NSMutableArray<UIView *> *btns = [NSMutableArray array];
+    ERGestureCollectTagViews(tv, 7601, btns);
+    for (UIView *b in btns) {
+        if ([b isKindOfClass:[UIButton class]]) [b removeFromSuperview];
+    }
+    UILabel *found = ERGestureFindHeaderLabel(tv);
+    if (!found) return;
+    ERGestureApplyGlyphToLabel(found);
+    found.userInteractionEnabled = YES;
     BOOL hasTap = NO;
     for (UIGestureRecognizer *g in found.gestureRecognizers) {
         if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
@@ -1263,13 +1308,25 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
         [found addGestureRecognizer:[[UITapGestureRecognizer alloc]
             initWithTarget:self action:@selector(erGroupInfoTapGesture:)]];
     }
+    // 宿主里没有隐形助手就放一个（随组头复用，布局时零延迟补字形）
+    UIView *host = found.superview;
+    UIView *helper = [host viewWithTag:7601];
+    if (![helper isKindOfClass:[ERGHeaderInfoHelper class]]) {
+        ERGHeaderInfoHelper *h = [ERGHeaderInfoHelper new];
+        h.tag = 7601;
+        h.frame = CGRectZero;
+        h.userInteractionEnabled = NO;
+        [host addSubview:h];
+    }
 }
 
-// 前台后分两次同步（0.3/0.8s），覆盖 PS 异步重建组头的时机
+// 前台后多节奏同步（0.1/0.3/0.6/1.0s），覆盖 PS 异步重建组头的时机；
+// 有隐形助手在，绝大多数帧在布局瞬间就补齐，这里只是兜底。
 - (void)erScheduleGroupInfoSync {
     __weak typeof(self) wself = self;
-    for (NSInteger i = 0; i < 2; i++) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((i ? 0.8 : 0.3) * NSEC_PER_SEC)),
+    for (NSInteger i = 0; i < 4; i++) {
+        NSTimeInterval d = (i == 0) ? 0.1 : (i == 1) ? 0.3 : (i == 2) ? 0.6 : 1.0;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             __strong typeof(wself) sself = wself;
             if (!sself) return;
@@ -1285,7 +1342,9 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
     UILabel *l = (UILabel *)tap.view;
     if (![l isKindOfClass:[UILabel class]]) return;
     NSString *t = l.text ?: @"";
-    if (![t hasPrefix:@"搜索胶囊"]) return;
+    // 严格匹配：精确「搜索胶囊」或已带 ⓘ 字形（U+FFFC）。
+    // 不能 hasPrefix —— 否则开关行「搜索胶囊手势」复用同一 label 时会误弹。
+    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"搜索胶囊"
         message:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发。"
         preferredStyle:UIAlertControllerStyleAlert];
