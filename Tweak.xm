@@ -6692,6 +6692,8 @@ static BOOL ERIdentifierIsSlider12(NSString *identifier) {
            [lower containsString:@"volumemodule"];
 }
 
+static void ERAppendDebugFile(NSString *name, NSString *line);   // 定义在 21124，此处前向声明
+
 static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewController *expandingController) {
     if (!overlay) return;
     // 1.2.1-148 · 147 实测失效：按 identifier 匹配 expanding 时，滑块模块在
@@ -6733,6 +6735,12 @@ static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewControll
         m.view.alpha = 0.0;
         m.view.layer.opacity = 0.0;
         if (!alreadyMarked) gERHiddenSiblingCount++;
+        // 161 · 留痕：谁在什么时候被我们压掉（含亮度这个滑块兄弟）
+        ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+            @"SIBHIDE t=%.2f id=%@ cls=%@ f=%.0fx%.0f",
+            CACurrentMediaTime(), ERModuleIdentifier(m) ?: @"-",
+            NSStringFromClass(target.class),
+            CGRectGetWidth(target.bounds), CGRectGetHeight(target.bounds)]);
     }
 }
 
@@ -6744,6 +6752,12 @@ static void ERRRestoreMarkedHiddenViews(UIView *root) {
         UIView *c = q.firstObject;
         [q removeObjectAtIndex:0];
         if ([objc_getAssociatedObject(c, kERExpansionSiblingHiddenKey) boolValue]) {
+            // 161 · 留痕：恢复时机。若这条出现在「收起动画还没结束」的时间窗里，
+            // 那就是②「亮度模块露着」和③「左上角闪」的直接元凶。
+            ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+                @"SIBRESTORE t=%.2f cls=%@ exp=%d close=%d",
+                CACurrentMediaTime(), NSStringFromClass(c.class),
+                (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive]);
             c.hidden = NO;
             c.alpha = 1.0;
             c.layer.opacity = 1.0;
@@ -14656,6 +14670,15 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
 
 - (void)updatePagedModuleVisibilityForOverlay:(UIViewController *)overlay showAdjacent:(BOOL)showAdjacent {
     if (!overlay || gERExpandedModuleOpen) return;
+    // 161 · 写入方留痕：本函数会给每个模块写 layer.opacity（0 或 1）。
+    // 它在收起期（gERExpandedModuleClosingActive）**没有**门，是②③的头号嫌疑：
+    // 收起动画还没结束就把模块 opacity 写回 1.0 = 亮度模块在面板淡出途中被点亮。
+    if (gERExpandedModuleClosingActive) {
+        ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+            @"VIS enter t=%.2f close=%d adj=%d cur=%lu",
+            CACurrentMediaTime(), (int)gERExpandedModuleClosingActive,
+            (int)showAdjacent, (unsigned long)gERCurrentPage]);
+    }
     [self layoutOwnedDuplicateModulesForOverlay:overlay];
     for (UIViewController *module in ERCollectModuleControllers(overlay)) {
         NSString *identifier = ERModuleIdentifier(module);
@@ -21150,32 +21173,19 @@ static void ERAlignSliderFillClips(UIView *root) {
                 if (g) {
                     CGFloat gw = CGRectGetWidth(g.bounds), gh = CGRectGetHeight(g.bounds);
                     CGFloat gr = g.layer.cornerRadius;
-                    if (fabs(w - gw) < 4.0 && gr > 4.0) {
-                        // 1.2.1-160 · 展开态补充：157 的规则要求「填充比玻璃矮」（h < gh*0.8），
-                        // 而长按展开后的滑块里，填充容器和玻璃是**同高**的
-                        // （设备 dump 实测 #99 UIView 150x400 r=0 m=1 与 #90 玻璃 150x400 r=75 并列），
-                        // 规则直接跳过 → 展开面板内部的大滑块一直是方角。这正是用户报的
-                        // 「长按音量和亮度里面的圆角不对」。同高时四角全圆，半径取玻璃半径。
-                        BOOL sameHeightFill = (h >= gh * 0.8);
-                        if (sameHeightFill || h < gh * 0.8) {
-                            CGFloat nr = MIN(gr, MIN(w, h) * 0.5);
-                            if (fabs(c.layer.cornerRadius - nr) > 0.01) {
-                                c.layer.cornerRadius = nr;
-                            }
-                            c.layer.cornerCurve = kCACornerCurveContinuous;
-                            if (sameHeightFill) {
-                                c.layer.maskedCorners = kCALayerMinXMinYCorner | kCALayerMaxXMinYCorner |
-                                                        kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-                            } else {
-                                c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
-                            }
-                            c.clipsToBounds = YES;
-                            if (sERClipLogBudget < 10) {
-                                sERClipLogBudget++;
-                                ERAppendDebugFile(@"er_clip.txt", [NSString stringWithFormat:
-                                    @"ER12CLIP2 %@ %.0fx%.0f r->%.1f g=%.0fx%.0f gr=%.1f same=%d",
-                                    NSStringFromClass(c.class), w, h, nr, gw, gh, gr, (int)sameHeightFill]);
-                            }
+                    // 1.2.1-161 · 回退 160：放宽成「同高也按四角全圆」后，紧凑态竖条的
+                    // 填充被写成了白圆（用户截图实锤：外面反而坏了）。整块恢复 157 原判据。
+                    if (fabs(w - gw) < 4.0 && h < gh * 0.8 && gr > 4.0) {
+                        CGFloat nr = MIN(gr, h * 0.5);
+                        c.layer.cornerRadius = nr;
+                        c.layer.cornerCurve = kCACornerCurveContinuous;
+                        c.layer.maskedCorners = kCALayerMinXMaxYCorner | kCALayerMaxXMaxYCorner;
+                        c.clipsToBounds = YES;
+                        if (sERClipLogBudget < 6) {
+                            sERClipLogBudget++;
+                            ERAppendDebugFile(@"er_clip.txt", [NSString stringWithFormat:
+                                @"ER12CLIP %@ %.0fx%.0f r=0->%.1f g=%.0fx%.0f gr=%.1f",
+                                NSStringFromClass(c.class), w, h, nr, gw, gh, gr]);
                         }
                     }
                 }
@@ -28626,6 +28636,59 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     }
 }
 
+// ===== 1.2.1-161 · 展开/收起瞬间取证（纯观测，不改任何行为） =====
+// 背景：②「长按音量时底部亮度模块露着」和 ③「返回后左上角闪残影」都是**瞬态**，
+// 稳态 dump（0.55s 之后）看不到 —— 之前 05:30 那次 dump 里亮度模块 alpha=0、面板
+// 背景 a=1.00 全屏，一切"正常"，但用户肉眼确实看到了。所以必须把动画前 0.5 秒
+// 逐帧拍下来：谁在什么时候被写成 alpha/opacity 多少。
+static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, double dt) {
+    if (!overlay.view) return;
+    UIWindow *win = overlay.view.window ?: overlay.view;
+    NSMutableString *sb = [NSMutableString string];
+    [sb appendFormat:@"== %@ dt=%.2f exp=%d close=%d ===\n", tag, dt,
+                     (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive];
+    for (UIViewController *m in ERCollectModuleControllers(overlay)) {
+        UIView *v = m.view;
+        if (!v) continue;
+        CGRect f = [v convertRect:v.bounds toView:win];
+        [sb appendFormat:@"M %@ a=%.2f h=%d lo=%.2f f=%.0f,%.0f,%.0fx%.0f z=%.1f\n",
+         ERModuleIdentifier(m) ?: NSStringFromClass(m.class),
+         v.alpha, (int)v.hidden, v.layer.opacity,
+         f.origin.x, f.origin.y, f.size.width, f.size.height, v.layer.zPosition];
+    }
+    // 左上角残影候选：窗口坐标 (0,0,200,200) 内有面积、可见的视图
+    CGRect corner = CGRectMake(0, 0, 200, 200);
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:win];
+    NSUInteger guard = 0, hits = 0;
+    while (q.count && guard++ < 5000 && hits < 12) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        [q addObjectsFromArray:c.subviews];
+        if (c == win || c.hidden || c.alpha < 0.05) continue;
+        CGRect f = [c convertRect:c.bounds toView:win];
+        if (CGRectGetWidth(f) < 12.0 || CGRectGetHeight(f) < 12.0) continue;
+        if (!CGRectIntersectsRect(f, corner)) continue;
+        if (CGRectGetWidth(f) > 380.0 && CGRectGetHeight(f) > 800.0) continue;   // 满屏容器噪音
+        hits++;
+        [sb appendFormat:@"TL %@ a=%.2f lo=%.2f f=%.0f,%.0f,%.0fx%.0f z=%.1f\n",
+         NSStringFromClass(c.class), c.alpha, c.layer.opacity,
+         f.origin.x, f.origin.y, f.size.width, f.size.height, c.layer.zPosition];
+    }
+    ERAppendDebugFile(@"er_exp.txt", sb);
+}
+
+static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag) {
+    if (!overlay) return;
+    double ts[7] = {0.02, 0.06, 0.10, 0.16, 0.24, 0.34, 0.50};
+    for (int i = 0; i < 7; i++) {
+        double dt = ts[i];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(dt * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            ERDumpExpansionFrame(overlay, tag, dt);
+        });
+    }
+}
+
 %hook CCUIModularControlCenterOverlayViewController
 
 - (void)moduleCollectionViewController:(id)collection willOpenExpandedModule:(id)module {
@@ -28637,6 +28700,8 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
         return;
     }
     UIViewController *overlay = (UIViewController *)(id)self;
+    // 161 · 取证：展开动画前 0.5 秒逐帧采样（OPEN）
+    ERScheduleExpansionSamples(overlay, @"OPEN");
     // Never begin an expansion on top of stale transition state from an
     // earlier one that didn't finish its choreography.
     if (!gERExpandedModuleOpen &&
@@ -28899,6 +28964,8 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     UIViewController *containerController = [container isKindOfClass:[UIViewController class]] ? (UIViewController *)container : expandedController;
     if (overlay) ERApplyExpansionPageGeometrySync(overlay);
     gERExpandedModuleClosingActive = YES;
+    // 161 · 取证：收起动画前 0.5 秒逐帧采样（CLOSE），专抓③左上角残影
+    ERScheduleExpansionSamples(overlay, @"CLOSE");
     if (overlay && !gERControlCenterPresented) {
         [[EchoRebornCoordinator shared] animateOwnedDuplicateHostForOverlay:overlay presented:NO];
     } else if (overlay) {
