@@ -6186,6 +6186,15 @@ static void ERMirrorLogLine(NSString *line) {
     ERMirrorRingUpdate(@"ERLogMirror", line, 60, 12000);
 }
 
+// 1.2.1-141 · 2×1 高亮白底诊断专用环：不受 gERLoggingEnabled 门控——用户设备
+// 日志总开关是关的，-140 的 ER2X1DBG 一条都没落盘。独立键 ER2X1DbgMirror
+//（8 行 / 12KB），SSH 拉 com.strive.echoreborn.preferences plist 即可读。
+static void ER2X1DbgMirrorIn(NSString *line) {
+    if (!line.length) return;
+    NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
+    ERMirrorRingUpdate(@"ER2X1DbgMirror", stamped, 8, 12000);
+}
+
 static void ERMirrorDiagLine(NSString *line) {
     if (!gERLoggingEnabled || !line.length) return;
     NSString *stamped = [NSString stringWithFormat:@"%@ %@", ERLogTimestamp(), line];
@@ -20957,6 +20966,9 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                 [dq addObjectsFromArray:c.subviews];
             }
             ERLogInfo(@"ER2X1DBG r=%.1f %@", radius, [rows componentsJoinedByString:@" | "]);
+            // 1.2.1-141 · 绕过日志总开关的专用镜像环（用户设备 gERLoggingEnabled=NO）
+            ER2X1DbgMirrorIn([NSString stringWithFormat:@"ER2X1DBG r=%.1f %@",
+                              radius, [rows componentsJoinedByString:@" | "]]);
         }
     }
     // The platter-return animation targets the container's stored compact
