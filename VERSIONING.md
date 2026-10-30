@@ -510,3 +510,25 @@
   ③ 补偿量升级：优先用实测压低量 drift=layoutWinY-baseline（开环单次读取，layoutWinY 已剥离自身 ty，无反馈回路不发散；夹取 [0,44]）；drift≤2pt 时退回旧常量 23.5 兜底
 - QABTN-COMP 日志增加 capsule/drift 字段，装机后可凭日志复核
 - 版本 1.2.1-3 / 1002103
+
+## 1.2.1-174.1 · 对 -4 改动的逐项二分实验，第 1 格：只加 D4 横屏钳制
+- 背景：用户裁决「既然 1.2.1-3 正常、1.2.1-4 出问题，就把 -4 的改动拆成 N 次，一次验一项」。
+  这条线不是最终版，是**定位实验**：基线固定为 1.2.1-3，每版只加一项 -4 的改动。
+- 基线严格性：整棵树逐字节取自 1.2.1-3（commit 60599794，302 个文件，逐个校验 git blob sha 全等），
+  不带 172 的任何文件（Soko 回到 1.2.1-3 的 21 个 Swift 文件，不是 172 的 ObjC 1.1.0 版）。
+- -4 的改动被拆成 4 个可独立验证单元（原 5 项，D5 日志路径经用户拍板剔除）：
+  D1 ERCollectModuleControllers 缓存命中时活性校验（view.superview == nil 即丢弃）
+  D2 normalizePagedLayoutForOverlay 入口强制失效缓存
+  D3 缩水防御（页数变少时重试一次）
+  D4 横屏 slider 1×3 → 1×2 钳制（两处 hook 同源）
+- 顺序刻意把 D1 放最后：D1/D2/D3 都是围着 1.2.1-1 的 BFS 缓存打的补丁，D1 的判据在
+  CCUI 呈现/重挂载期间会误杀（superview 短暂为 nil 属正常），是头号嫌疑。
+- 本版（174.1）只做 D4，改动 +23 行 / 两处 hook：
+  moduleLayoutSizeForContentModuleContext: 与 layoutView:layoutRectForSubview: 各一处；
+  判据 gEnabled && ERLandscapePresentationActive() && 无自定义尺寸 && 高度 > 2；
+  用户显式自定义过尺寸的（gERCustomSizes 命中）完全尊重。
+- 预期：竖屏行为与 1.2.1-3 完全一致；只有横屏音量/亮度从 1×3 变 1×2。
+- 版本号规则（用户定）：修复一项 +0.1 → 1.2.1-174.1 / 174.2 / 174.3 / 174.4。
+  CFBundleVersion 公式同步改为 (…+revision)*10+sub，否则 174.1 会大于 175 被判成降级：
+  1.2.1-173 → 10202730，1.2.1-174 → 10202740，1.2.1-174.1 → 10202741，1.2.1-175 → 10202750。
+- 版本 1.2.1-174.1 / 10202741（commit 1dcd78febd）
