@@ -6693,6 +6693,7 @@ static BOOL ERIdentifierIsSlider12(NSString *identifier) {
 }
 
 static void ERAppendDebugFile(NSString *name, NSString *line);   // 定义在 21124，此处前向声明
+static NSString *ERIdentifierFromObject(id object);             // 定义在 6831，此处前向声明
 
 // 1.2.1-164 · 视图树里到底有没有滑块：identifier 拿不到时的兜底判据。
 // 161/163 实测 SIBHIDE 零条 —— 展开瞬间 expandingController 的 identifier 为 nil，
