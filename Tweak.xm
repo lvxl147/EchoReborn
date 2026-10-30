@@ -6693,6 +6693,14 @@ static BOOL ERIdentifierIsSlider12(NSString *identifier) {
 }
 
 static void ERAppendDebugFile(NSString *name, NSString *line);   // 定义在 21124，此处前向声明
+// 1.2.1-172 · 自建展开/收起过渡编排的总开关。
+// 170 实测确认：长按**任何**有内容的模块（含投屏）都会闪，说明问题不在滑块专属逻辑，
+// 而在这套自建过渡里 —— ERFreezeExpandedModuleForDismissal 收起时把模块的活视图
+// alpha 设 0、用快照顶上，再由 ERCompleteGenericExpansionDismissalIfReady 恢复；
+// 只要恢复那一步的任一条件没满足，活视图就一直停在 0，表现为「闪一下」。
+// 172 先整体关掉，回到系统原生过渡（= -3 的行为：不跟 UIKit 抢），验证猜测。
+static BOOL gERCustomExpansionChoreography = NO;
+
 // 1.2.1-170 · 模块登记表（弱引用）：收集、压制节拍、取证共用同一份。
 static NSHashTable *gERModuleRegistry = nil;
 static NSString *ERIdentifierFromObject(id object);             // 定义在 6831，此处前向声明
@@ -26428,8 +26436,8 @@ static void ERConfigureExpandedConnectivityChild(UIViewController *child) {
         sourceMaterial.alpha = materialAlpha;
         sourceMaterial.layer.opacity = materialLayerOpacity;
     }];
-    UIView *snapshot = sourceSuperview ? ERWindowCropSnapshotView(sourceView) : nil;
-    if (!snapshot && sourceSuperview) snapshot = ERCompositedSnapshotView(sourceView);
+    UIView *snapshot = (gERCustomExpansionChoreography && sourceSuperview) ? ERWindowCropSnapshotView(sourceView) : nil;
+    if (!snapshot && gERCustomExpansionChoreography && sourceSuperview) snapshot = ERCompositedSnapshotView(sourceView);
     if (snapshot) {
         ERDiscardExpansionSourceSnapshot();
         ERDiscardExpansionDismissalSnapshot();
@@ -27554,7 +27562,7 @@ static void ERInstallModuleTapFeedback(UIView *host) {
 - (void)_animateDismissalIsInterruption:(BOOL)interruption {
     UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
     UIViewController *presented = overlay.presentedViewController;
-    BOOL usesGenericTransition = !ERUsesSpecializedExpansionTransition(presented);
+    BOOL usesGenericTransition = gERCustomExpansionChoreography && !ERUsesSpecializedExpansionTransition(presented);
     NSUInteger transitionGeneration = 0;
     if (usesGenericTransition) {
         ERResetGenericExpansionDismissal();
