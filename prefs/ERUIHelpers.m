@@ -364,6 +364,8 @@ static const void *kERInitialMasterEnabledKey = &kERInitialMasterEnabledKey;
         self.navigationItem.rightBarButtonItem = nil;
         return;
     }
+    // 1.2.1-133 · 值变动即弹注销提醒（确定=立即注销；稍后=保留导航栏重启按钮）。
+    [self erPresentRespringAlertForSwitchName:@"启动"];
     if (self.navigationItem.rightBarButtonItem) return;
 
     UIImage *image = [UIImage systemImageNamed:@"arrow.clockwise"];
@@ -399,6 +401,47 @@ static const void *kERInitialMasterEnabledKey = &kERInitialMasterEnabledKey;
     const char *arguments[] = { path, NULL };
     pid_t pid = 0;
     posix_spawn(&pid, path, NULL, NULL, (char *const *)arguments, environ);
+}
+
+// ---------------------------------------------------------------------------
+// 1.2.1-133 · 注销提醒弹窗 —— 全局唯一实现，五个开关共用：
+//   界面优化「启动」（setMasterEnabled 内接入）/ 液态玻璃「启用液态玻璃」/
+//   液态玻璃卡片「灵动岛」/ iOS27 Siri「启用」/ 系统增强「隐藏灵动岛」
+//   （后四者 plist 的 set 指到 setRespringToggle:specifier:）。
+// 样式参考用户提供截图：标题=开关名（specifier label），正文固定文案，
+// 「稍后」=仅关弹窗不注销，「确定」=红色、立即 sbreload。
+// ---------------------------------------------------------------------------
+- (void)erPresentRespringAlertForSwitchName:(NSString *)name {
+    UIAlertController *alert = [UIAlertController
+        alertControllerWithTitle:(name.length ? name : @"开关")
+        message:@"需要注销才生效，是否确认要注销?"
+        preferredStyle:UIAlertControllerStyleAlert];
+    // 1.2.1-134 · 标题与正文拉开间距（系统默认贴太近，参考 CopyVault 样式）：
+    // 标题 attributed，末尾接一个 2pt 小字号换行段 —— 只抬高约 6pt 的空行，
+    // 视觉上标题与正文之间出现明显呼吸空隙，正文文案不变。
+    NSMutableAttributedString *t = [[NSMutableAttributedString alloc]
+        initWithString:(name.length ? name : @"开关")
+            attributes:@{NSFontAttributeName: [UIFont boldSystemFontOfSize:17.0]}];
+    [t appendAttributedString:[[NSAttributedString alloc]
+        initWithString:@"\n" attributes:@{NSFontAttributeName: [UIFont systemFontOfSize:2.0]}]];
+    [alert setValue:t forKey:@"attributedTitle"];
+    [alert addAction:[UIAlertAction actionWithTitle:@"稍后"
+        style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"确定"
+        style:UIAlertActionStyleDestructive
+        handler:^(UIAlertAction *action) {
+            (void)action;   // -Werror：显式消费未用参数（__unused 不能贴在 block 参数上）
+            [self respring];
+        }]];
+    [self presentViewController:alert animated:YES completion:nil];
+}
+
+// 通用接入点：写值照旧（PostNotification 照常发），随后按开关名弹注销提醒。
+- (void)setRespringToggle:(id)value specifier:(PSSpecifier *)specifier {
+    [self setPreferenceValue:value specifier:specifier];
+    NSString *name = [specifier propertyForKey:@"label"];
+    if (![name isKindOfClass:[NSString class]] || !name.length) name = specifier.name;
+    [self erPresentRespringAlertForSwitchName:name];
 }
 
 @end

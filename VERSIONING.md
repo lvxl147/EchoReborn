@@ -753,3 +753,24 @@
 - 修法：state==0（面板已不可见，无视觉跳变）时就移除 ERDismissFade 并恢复 opacity=1，
   下次打开第一帧就有内容；state==2 colRestore 保留作双保险；淡出 0.2 → 0.15。
 - 版本 1.2.1-174.23（commit 9b7f399b）
+
+## 1.2.1-174.24 · 第四批①：模块表面归一体系整批移植（当前验证版）
+- 观感清单（用户定）：1×2 滑块、2×1 高亮白底、液态玻璃高亮圆角。Soko 留最后，长按里面暂不管。
+- 考古发现：-131~-165 在 VERSIONING 是空号，但源码注释留有碎片——其中 -159 揭示当年
+  也做过「1.2.1-3 干净、1.2.1-4 起坏」的二分实验，凶手就是横屏钳制（我们抄的 D4 缺了
+  -159 的后半段展开期让路）。
+- 修法（整批移植，不拆 hunk——三项观感长在同一个「表面归一」体系里）：
+  ① applyTransitionRadiusToModule: 圆角 walker 整函数替换为 172 版（365 行）：
+     -140 高亮白底归一 / -144 白底半径跟随玻璃背板 37.5 / -146 填充面标记重认 /
+     -147 兄弟滑块标记 / -154 只写半径不开裁剪等于没写（「首次打开不生效、长按返回
+     后才恢复」的确切机制：首次走 walker 只写 radius，返回路径走 ERNormalize 开了
+     masksToBounds——两条路径必须一致）。
+  ② ERNormalizeSliderSurfaces（-150，1×2 滑块表面归一，可独立重复调用）。
+  ③ ERAlignSliderFillClips（滑块填充裁剪对齐）/ ERDumpSliderTreeToFile×2。
+  ④ ERRestoreSiblingSliderModules（-147）+ ERRestoreMarkedHiddenViews（三 R 拼写，
+     不看控制器的恢复路径）。
+  ⑤ 诊断环 ERSliderDbgMirrorIn + ERMirrorRingUpdate（ERSliderDbgMirror 键 24 行）。
+  ⑥ D4 两处钳制加展开期让路 erExpandedNow（-159）。
+- 首轮 CI 缺符号（ERRestoreMarkedHiddenViews / ERAppendDebugFile / gERHiddenSiblingCount），
+  补齐后二轮通过。
+- 版本 1.2.1-174.24（commit 569e47ce）
