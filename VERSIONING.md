@@ -774,3 +774,16 @@
 - 首轮 CI 缺符号（ERRestoreMarkedHiddenViews / ERAppendDebugFile / gERHiddenSiblingCount），
   补齐后二轮通过。
 - 版本 1.2.1-174.24（commit 569e47ce）
+
+## 1.2.1-174.25 · 第四批②：设置页三项交互增强（当前验证版）
+- 174.24 实测：1×2 / 2×1 / 液态玻璃高亮圆角全部正常 ✔。
+- 设置页在 -131~-172 期间的变化全部为 UX 增强（四个 plist 键集合与 -3 无差异，
+  无新增开关），整文件替换三个 .m：
+  ① ERUIHelpers：需注销才生效的开关切换时弹「需要注销才生效，是否确认要注销?」
+     → 启动 / 稍后。
+  ② ERModuleIconSwitchCell：cell 直接写偏好 + PostNotification 实时生效。
+  ③ ERGestureController：手势分组信息实时同步（文件夹改名/解散自动跟随、
+     分组信息可点、KVO + tick + 兄弟页同步、弱目标代理）。
+  ERShortcutController / ERSystemEnhanceController / ERLinkController / 四个 plist
+  与 -3 一致，不替换。
+- 版本 1.2.1-174.25（commit 506940dc）

@@ -3,7 +3,6 @@
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-#import <notify.h>
 
 // ---------------------------------------------------------------------------
 // 「模块管理」七行的外观：图标在左，标题居中，开关在右（基类默认位置）
@@ -29,10 +28,6 @@ static const CGFloat kERMICLeadingInset = 16.0;
 static const CGFloat kERMICIconGap = 8.0;
 static const CGFloat kERMICTrailingInset = 16.0;
 
-// 1.2.1-134 · 兜底开关的关联键：specifier（键值来源）+ 自建开关实例
-static const void *kERMICSpecifierKey = &kERMICSpecifierKey;
-static const void *kERMICFallbackSwitchKey = &kERMICFallbackSwitchKey;
-
 static UISwitch *ERMICFindSwitch(UIView *root) {
     if (!root) return nil;
     for (UIView *subview in root.subviews) {
@@ -43,67 +38,12 @@ static UISwitch *ERMICFindSwitch(UIView *root) {
     return nil;
 }
 
-// 1.2.1-134 · 兜底自建开关：基类（运行期 PSSwitchCell 子类）没建出 UISwitch 时，
-// 按 specifier 的 key/defaults 自己建、自己接线 —— 读写偏好 + PostNotification，
-// 与原生行为等价。此前查不到开关只打一条诊断日志就放弃，模块管理右侧开关消失时整行不可操作。
-static UISwitch *ERMICFallbackSwitch(UITableViewCell *cell) {
-    UISwitch *existing = objc_getAssociatedObject(cell, kERMICFallbackSwitchKey);
-    if (existing) return existing;
-    PSSpecifier *spec = objc_getAssociatedObject(cell, kERMICSpecifierKey);
-    if (!spec) return nil;
-    NSString *key = [spec propertyForKey:@"key"];
-    NSString *domain = [spec propertyForKey:@"defaults"];
-    if (![key isKindOfClass:[NSString class]] || !key.length) return nil;
-    if (![domain isKindOfClass:[NSString class]] || !domain.length) return nil;
-
-    UISwitch *toggle = [[UISwitch alloc] init];
-    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
-    id val = CFBridgingRelease(CFPreferencesCopyAppValue((__bridge CFStringRef)key,
-                                                         (__bridge CFStringRef)domain));
-    toggle.on = val ? [val boolValue] : [[spec propertyForKey:@"default"] boolValue];
-    [toggle addTarget:cell action:@selector(ermicsToggleChanged:)
-     forControlEvents:UIControlEventValueChanged];
-    objc_setAssociatedObject(cell, kERMICFallbackSwitchKey, toggle, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    [cell.contentView addSubview:toggle];
-    return toggle;
-}
-
-// 行复用/刷新时把兜底开关状态同步到当前行的偏好值（程序赋值不触发 ValueChanged）
-static void ERMICSyncFallbackSwitch(UITableViewCell *cell) {
-    UISwitch *toggle = objc_getAssociatedObject(cell, kERMICFallbackSwitchKey);
-    PSSpecifier *spec = objc_getAssociatedObject(cell, kERMICSpecifierKey);
-    if (!toggle || !spec) return;
-    NSString *key = [spec propertyForKey:@"key"];
-    NSString *domain = [spec propertyForKey:@"defaults"];
-    if (![key isKindOfClass:[NSString class]] || !key.length) return;
-    if (![domain isKindOfClass:[NSString class]] || !domain.length) return;
-    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
-    id val = CFBridgingRelease(CFPreferencesCopyAppValue((__bridge CFStringRef)key,
-                                                         (__bridge CFStringRef)domain));
-    BOOL on = val ? [val boolValue] : [[spec propertyForKey:@"default"] boolValue];
-    if (toggle.on != on) toggle.on = on;
-}
-
 static void ERMICApplyLayout(UITableViewCell *cell) {
     if (!cell) return;
 
-    // 1.2.1-134 · 开关取用顺序：已有兜底开关 → 基类建的开关；两者都在（行复用后
-    // 基类又建了一个）时丢弃兜底、回归基类，避免双开关。都没有 → 现场自建兜底。
-    UISwitch *fallback = objc_getAssociatedObject(cell, kERMICFallbackSwitchKey);
-    UISwitch *base = ERMICFindSwitch(cell.contentView) ?: ERMICFindSwitch(cell);
-    UISwitch *toggle = nil;
-    if (fallback && base && base != fallback) {
-        [fallback removeFromSuperview];
-        objc_setAssociatedObject(cell, kERMICFallbackSwitchKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        toggle = base;
-    } else if (fallback) {
-        toggle = fallback;
-    } else {
-        toggle = base;
-    }
-    if (!toggle) toggle = ERMICFallbackSwitch(cell);
+    UISwitch *toggle = ERMICFindSwitch(cell.contentView) ?: ERMICFindSwitch(cell);
     if (!toggle) {
-        // 一次性诊断：连兜底都建不出来（specifier 缺 key/defaults）才走到这里
+        // 1.2.0-9 · 一次性诊断：开关压根没建出来还是被挪走了
         static BOOL sERMICDiagOnce = NO;
         if (!sERMICDiagOnce) {
             sERMICDiagOnce = YES;
@@ -165,24 +105,6 @@ static void ERMICApplyLayout(UITableViewCell *cell) {
     }
 }
 
-// 1.2.1-134 · 兜底开关的值变化：写 specifier 的 key/defaults + 发 PostNotification，
-// 与原生 PSSwitchCell 的写入链路等价。
-static void ERMICToggleChanged(id self, SEL _cmd, UISwitch *sender) {
-    PSSpecifier *spec = objc_getAssociatedObject(self, kERMICSpecifierKey);
-    if (!spec || !sender) return;
-    NSString *key = [spec propertyForKey:@"key"];
-    NSString *domain = [spec propertyForKey:@"defaults"];
-    NSString *notify = [spec propertyForKey:@"PostNotification"];
-    if (![key isKindOfClass:[NSString class]] || !key.length) return;
-    if (![domain isKindOfClass:[NSString class]] || !domain.length) return;
-    CFPreferencesSetAppValue((__bridge CFStringRef)key,
-                             sender.on ? kCFBooleanTrue : kCFBooleanFalse,
-                             (__bridge CFStringRef)domain);
-    CFPreferencesAppSynchronize((__bridge CFStringRef)domain);
-    if ([notify isKindOfClass:[NSString class]] && notify.length)
-        notify_post(notify.UTF8String);
-}
-
 static void ERMICLayoutSubviews(id self, SEL _cmd) {
     if (gERMICSuperLayout) ((void (*)(id, SEL))gERMICSuperLayout)(self, _cmd);
     ERMICApplyLayout((UITableViewCell *)self);
@@ -195,10 +117,6 @@ static void ERMICRefreshCell(id self, SEL _cmd, PSSpecifier *specifier) {
         UIImage *icon = [specifier propertyForKey:@"iconImage"];
         if (icon) ((UITableViewCell *)self).imageView.image = icon;
     } @catch (__unused NSException *e) {}
-    // 1.2.1-134 · 记住本行 specifier（兜底开关的键值来源），并同步兜底开关状态
-    objc_setAssociatedObject((UITableViewCell *)self, kERMICSpecifierKey,
-                             specifier, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    ERMICSyncFallbackSwitch((UITableViewCell *)self);
     ERMICApplyLayout((UITableViewCell *)self);
     [(UITableViewCell *)self setNeedsLayout];
 }
@@ -226,9 +144,6 @@ void EREnsureModuleIconSwitchCellClassInstalled(void) {
         class_addMethod(cellClass, @selector(refreshCellContentsWithSpecifier:),
                         (IMP)ERMICRefreshCell, "v@:@");
     }
-    // 1.2.1-134 · 兜底开关的值变化回调（加在本运行期类上）
-    class_addMethod(cellClass, @selector(ermicsToggleChanged:),
-                    (IMP)ERMICToggleChanged, "v@:@");
     objc_registerClassPair(cellClass);
 }
 
