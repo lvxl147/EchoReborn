@@ -560,3 +560,20 @@
 - 预期：不闪；翻页点大概率回不来（D1 只覆盖「命中了但已 detach」，覆盖不到「缓存未失效但集合已变」，
   后者正是 D2 解决的范围）。这一版的意义是确认 D1/D3 是否也带闪，以及 D2 能否被更窄的时机替代。
 - 版本 1.2.1-174.4 / 10202744（commit cba554f7ec）
+
+## 1.2.1-174.5 · 定稿版：1.2.1-3 全树 + D4 + 只修翻页点（D1/D2/D3/D5 全删）
+- 用户裁决：D1/D2/D3 只为翻页点而存在，其中 D1、D2 自带闪烁，D3 触发条件几乎碰不到；
+  D5 只是日志。四项全部不要。翻页点单独修。
+- 翻页点的新解法（关键：不动模块收集，所以不会闪）：
+  链条是「收集缩水 → highestPage 变小 → gERPageCount 掉到 1 →
+  updatePageIndicatorsForOverlay 的 host.hidden = (gERPageCount <= 1) 藏掉整排圆点」。
+  原实现用「本次收集到的模块」反推页数，视图一抖动页数就抖。
+  新增 ERStaticHighestPage()：只读持久化布局表（gERNativeLayoutRects 与 gERCustomOrigins），
+  按 ERStoredOriginForIdentifier 取用户存的位置算最高页，在 highestPage 后兜底。
+  全程零写入、零失效、零重收 —— 从机制上排除闪烁。
+- 相对 1.2.1-3 的全部差异：D4 横屏钳制（+23 行）、ERStaticHighestPage（+21 行）、
+  highestPage 兜底（+2 行）、版本串同步。没有别的。
+- 判读：① 不闪 → 闪烁与翻页点彻底解耦，D1/D2 永久不要；② 翻页点在 → 翻页点定稿；
+  ③ 翻页点仍不在 → 说明静态表本身也拿不到页（首次呈现前 gERNativeLayoutRects 为空），
+  下一手改为「按 enabledModuleIdentifiers 的配置空间 origin 算页」，仍不碰收集。
+- 版本 1.2.1-174.5 / 10202745（commit c0ce5d7da9）
