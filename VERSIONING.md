@@ -617,3 +617,18 @@
   收起中(3)/已收起(0) 清 scrub/位移/dragging 票根；setCurrentPage animated 补 0.22s token 清标志；
   pagePanned / pageIndicatorPanned 记录手势存活与活动时间戳。
 - 版本 1.2.1-174.12（commit 1ecb57cb）
+
+## 1.2.1-174.13 · 第二批①：治「落位后弹一下」（-28 + -29，当前验证版）
+- 第一批实测（用户）：① 点翻页点 已解决 ② 状态带消失 已解决
+  ③ 落位还是有弹 ④ 长按圆点后内容还是会消失 —— 三四两项的真凶不在 -17~-24。
+- ③ 的真凶：-28/-29。用户当时 509 帧录屏逐帧取证：落位动画结束后静止约 0.2s，
+  单帧离散跳变 ≈8pt（= kERRestingModuleOffset），不是动画过冲而是延迟写入。
+  链条：拖拽期 applyPageTransform 因 transitionActive 跳过基线恢复 → 外层主滚动
+  （ERNativeScrollViewForOverlay）offset 被手指带偏 → 落位后 snap 窗口
+  （0/0.08/0.24/0.42s）里无条件的 setContentOffset(baseline) 一次性修正 8pt。
+  内层 CCUIModuleCollectionView 实测零漂移（SNAPZ 零条），两层都要钉。
+- 三层修法：① ERPinNativePagerScroll 拖拽 Began 禁用内层集合滚动，4 处收尾恢复
+  （两个落位 completion / scrub-TAP 收尾 / CC 收起清场）；② ERPinMainNativeScrollLight
+  拖拽 Changed 每帧把外层 offset 贴回基线（差值 >0.25 才写，摊进跟手过程，snap 写变 no-op）；
+  ③ ERClampNativeScrollViewForOverlay 对 nativePager 的归零写改差值 >0.5 才写。
+- 版本 1.2.1-174.13（commit d64e1e50）
