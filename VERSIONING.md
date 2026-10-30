@@ -743,3 +743,13 @@
   forwards）+ 写 model 0 包进禁隐式事务；③state==2 恢复 colRestore、state==0 兜底恢复。
 - 缓落（-60 actionForLayer 否决）下一版单独做。
 - 版本 1.2.1-174.22（commit 3947ac6a）
+
+## 1.2.1-174.23 · 残影调优 + 治「打开 CC 内容延迟」（当前验证版）
+- 174.22 实测：残影消失 ✔、2/3/4 全正常；两个新输入：①淡出 0.3s 太慢（用户裁决改 0.15）；
+  ②新 bug：打开 CC 要 1-3 秒内容才出现（录屏实锤）。
+- 打开延迟根因：收起时 collection.opacity 被 ERDismissFade 写 0，state==0 兜底还「确保 0」；
+  下次打开要等 state==2 的 colRestore 才恢复可见 —— 呈现动画期间内容是透明的，
+  state 回调有多迟就空多久。
+- 修法：state==0（面板已不可见，无视觉跳变）时就移除 ERDismissFade 并恢复 opacity=1，
+  下次打开第一帧就有内容；state==2 colRestore 保留作双保险；淡出 0.2 → 0.15。
+- 版本 1.2.1-174.23（commit 9b7f399b）
