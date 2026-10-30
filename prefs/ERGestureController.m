@@ -451,13 +451,12 @@ static void ERGestureShowDropdown(UIButton *anchor,
     // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
     // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
     // 1.2.0-77 · 用户实测 -76 的 4/3/4 观感不好，整体退回 -75 几何（pad6/+1 补偿）。
-    CGFloat pad = 6.0;
+    CGFloat pad = 5.0;   // 1.2.1-174.27 · -131/-132：所有间距统一 5
     // 1.2.1-174.27 · 下拉框布局整段替换为 1.2.1-172 终态（-131 自适应 + -132 基准宽
     // + -133 箭头对齐 + -134 居中，四轮迭代融合、不可拆分）：
     // 1.2.1-131 · 收起态下拉框自适应：框宽 = 5 + 文本宽 + 5 + 箭头宽 + 5，
     // 文字一多框就随大；所有间距统一 5（左5 / 文字↔箭头5 / 箭头↔右5）。
     // 不再用全局最宽文本定宽（-75 的"统一宽"需求，本轮改为按各自值伸缩）。
-    CGFloat pad = 5.0;
     NSString *curText = [_valueButton titleForState:UIControlStateNormal] ?: @"";
     CGSize ts = [curText sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
     CGFloat curTextW = ts.width;
