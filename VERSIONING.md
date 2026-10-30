@@ -716,3 +716,17 @@
   collection 属面板层级，随面板自然退场，不动。
 - 跳过：-43 zPosition（-44 证伪）、-44 僵尸 overlay（-45 证伪）、-46/-47 去重（见上）。
 - 版本 1.2.1-174.20（commit 53456c61）
+
+## 1.2.1-174.21 · 残影①单独版（-48，当前验证版）
+- 174.20 实测：**模块残留回退**。-49 的「内容层统一淡出」是嫌疑人：
+  ERDismissFade 用 fillMode=forwards + removedOnCompletion=NO 常驻动画，
+  且直接把 collection.layer.opacity 写 0 —— 若下一次呈现的 state==2 恢复没跑到
+  （快速开合、时序竞争）或与 174.18 自愈交替（自愈拉回 1、动画 presentation 仍是 0），
+  内容层就停在可见性错乱态。
+- 本版撤掉 -49 全部三处（colRestore 恢复段 / state3 淡出动画 / state0 兜底），
+  只保留 -48 的副本层第一时间隐藏（dupHost 181052 / qaHost 181000 / 圆点 host）。
+  collection 的淡出交还给 CCUI 自己的收起动画。
+- 残留风险：若内容层磁贴的桌面残留仍在，说明 -49 方向（内容层淡出）是对的但
+  实现方式（常驻 forwards 动画 + 直写 opacity 0）不对，需要换实现（例如
+  removeOnCompletion=YES + completion 里切 0，或交给 CCUI 的隐藏链）。
+- 版本 1.2.1-174.21（commit 3309f869）
