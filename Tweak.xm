@@ -6693,6 +6693,8 @@ static BOOL ERIdentifierIsSlider12(NSString *identifier) {
 }
 
 static void ERAppendDebugFile(NSString *name, NSString *line);   // 定义在 21124，此处前向声明
+// 1.2.1-170 · 模块登记表（弱引用）：收集、压制节拍、取证共用同一份。
+static NSHashTable *gERModuleRegistry = nil;
 static NSString *ERIdentifierFromObject(id object);             // 定义在 6831，此处前向声明
 
 // 1.2.1-164 · 视图树里到底有没有滑块：identifier 拿不到时的兜底判据。
@@ -6782,12 +6784,29 @@ static NSInteger gERContainerKeeperGen = 0;
 __attribute__((unused)) static void ERStartContainerKeeper(UIViewController *overlay, UIViewController *expanding) {
     if (!overlay) return;
     NSInteger gen = ++gERContainerKeeperGen;
-    for (int i = 1; i <= 24; i++) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * i * NSEC_PER_SEC)),
+    for (int i = 1; i <= 20; i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * i * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             if (gen != gERContainerKeeperGen) return;
             if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) return;
             ERHideCompactModuleContainers(overlay, expanding);
+            // 1.2.1-170 · 每拍记录「三个高发模块」的真实状态，回答一个此前无法回答的问题：
+            // 我们的 hidden/alpha 到底有没有生效、又是在哪一拍被谁翻回来的。
+            // 只记 audio / Display / nowplaying 三个，每拍 3 行，20 拍共 60 行。
+            for (UIViewController *m in gERModuleRegistry.allObjects) {
+                if (!m.isViewLoaded) continue;
+                NSString *ident = ERModuleIdentifier(m);
+                if (!ident.length) continue;
+                NSString *lower = ident.lowercaseString;
+                if (!([lower containsString:@"audio"] || [lower containsString:@"display"] ||
+                      [lower containsString:@"nowplaying"])) continue;
+                UIView *v = m.viewIfLoaded;
+                if (!v) continue;
+                ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+                    @"KEEP i=%d id=%@ a=%.2f h=%d lo=%.2f win=%d f=%.0fx%.0f",
+                    i, ident, v.alpha, (int)v.hidden, v.layer.opacity,
+                    (int)(v.window != nil), CGRectGetWidth(v.bounds), CGRectGetHeight(v.bounds)]);
+            }
         });
     }
 }
@@ -9693,6 +9712,8 @@ static void ERSliderReadoutTick(UIView *slider, float value) {
     ERSliderReadoutBegin(slider);
 }
 
+// 1.2.1-170 · 模块登记表的**定义**在文件前部（ERAppendDebugFile 前向声明之后），
+// 因为压制节拍在 6780 附近就要用它。
 static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root) {
     if (!root) return @[];
     NSMutableArray *result = [NSMutableArray array];
@@ -9752,14 +9773,13 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
     // 修法：维护一份弱引用登记表，非展开期持续登记；展开期把「登记过、视图仍在同一个
     // 窗口里」的模块补回结果。窗口相同这一条保证补回来的确实是屏幕上真实存在的模块，
     // 不是上一次会话的幽灵。
-    static NSHashTable *sERModuleRegistry = nil;
-    if (!sERModuleRegistry) sERModuleRegistry = [NSHashTable weakObjectsHashTable];
+    if (!gERModuleRegistry) gERModuleRegistry = [NSHashTable weakObjectsHashTable];
     NSUInteger addedFromRegistry = 0;
     if (!erCollectExpansionWindow) {
-        for (UIViewController *m in result) [sERModuleRegistry addObject:m];
+        for (UIViewController *m in result) [gERModuleRegistry addObject:m];
     } else {
         UIWindow *win = root.view.window;
-        for (UIViewController *m in sERModuleRegistry.allObjects) {
+        for (UIViewController *m in gERModuleRegistry.allObjects) {
             if ([result containsObject:m]) continue;
             if (!m.isViewLoaded) continue;
             UIView *v = m.viewIfLoaded;
@@ -21298,13 +21318,26 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 // （几千字符）会把环占满，ER12CLIP / ER12PANELBG 根本留不下来 —— 156 就是这样
 // 一条都没读到。关键结论改走独立文件，不受环长度限制。
 static void ERAppendDebugFile(NSString *name, NSString *line) {
+    // 1.2.1-170 · 改为真正的追加写。
+    // 旧实现是「读全文件 → appendFormat → 原子重写」，两路并发（主线程 dump +
+    // 装配/回调节拍）会互相覆盖：169 实测整份只活下来最后一帧、COLLECT 一条不剩，
+    // 160~168 的多轮结论都可能被这个缺陷污染过。
+    // 现在用 fopen("a") 的 O_APPEND 语义，单次小写入是原子的，不再互相冲掉。
     NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
-    NSMutableString *cur = [NSMutableString stringWithContentsOfFile:path
-                                                            encoding:NSUTF8StringEncoding
-                                                               error:nil];
-    if (!cur || cur.length > 60000) cur = [NSMutableString string];
-    [cur appendFormat:@"%@\n", line];
-    [cur writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    const char *cpath = path.fileSystemRepresentation;
+    if (!cpath) return;
+    FILE *fp = fopen(cpath, "a");
+    if (!fp) return;
+    fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    if (size > 400000) {          // 超限就重开截断，避免无限增长
+        fclose(fp);
+        fp = fopen(cpath, "w");
+        if (!fp) return;
+    }
+    NSString *out = [line stringByAppendingString:@"\n"];
+    fputs(out.UTF8String, fp);
+    fclose(fp);
 }
 
 static void ERAlignSliderFillClips(UIView *root) {
@@ -29051,6 +29084,9 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
         // （CONTHIDE n=49 kept=0，每拍都把 49 个容器全压一遍），证明可见的东西
         // 不是活着的模块容器，重压只是在做无用功。容器压制退回 165 的尺寸判断。
         ERHideCompactModuleContainers(overlay, nil);
+        // 1.2.1-170 · 重新启用节拍（这次带状态取证）：每 0.15s 一拍、共 20 拍，
+        // 既重压一次，也把三个高发模块的 a/h/lo 记下来。
+        ERStartContainerKeeper(overlay, expandingVC);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, nil); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.70 * NSEC_PER_SEC)),
