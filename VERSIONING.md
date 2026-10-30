@@ -577,3 +577,43 @@
   ③ 翻页点仍不在 → 说明静态表本身也拿不到页（首次呈现前 gERNativeLayoutRects 为空），
   下一手改为「按 enabledModuleIdentifiers 的配置空间 origin 算页」，仍不碰收集。
 - 版本 1.2.1-174.5 / 10202745（commit c0ce5d7da9）
+
+## 1.2.1-174.8 · 清洁版：删诊断
+- 174.7 实测通过（翻页点回来、模块不闪、横屏 1×2），-1 ~ -16 的答案抄完。
+- 本版只删诊断：ERPagerDiagOpen/Closed 两个偏好键、updates/installs 计数、
+  installPagingOnOverlay 里的计数。修复逻辑一行不动。
+- 版本 1.2.1-174.8（commit 6e8616ec）
+
+## 1.2.1-174.9 · 第一批①：A1 点翻页点不再等 0.5 秒
+- pageIndicatorTouchDown: 删掉 beginInteractivePageTransition + updateInteractivePageTransition。
+  旧实现在按下瞬间就进 scrub：heldScale 0.26s 入场缩放 + 圆点切 scrub 大间距 + 松手 0.30s settle，
+  合计约 0.5s 才跳页。现在按下只做 ERReassertNativeScrollClampForOverlay，
+  纯点击走 pageIndicatorTapped: 的 setCurrentPage:animated:YES（0.22s）；真拖拽仍走 scrub。
+- 版本 1.2.1-174.9（commit 0209cbba）
+
+## 1.2.1-174.10 · 第一批②：A2 状态带伪隐藏免疫
+- 现象：点模块收起后顶部状态区（时间/信号/电量）消失 2-3 秒。
+- 根因（1.2.1-19 栈实锤）：写 alpha 0 的是 ControlCenterUI 自己的 UIView 动画，完成块淡回时事件链已断。
+- ERBandAlphaFixOnce：对 CCUISensorAttribution* / CCUIStatusBar swizzle setAlpha:（先 class_addMethod
+  给子类落自己的实现，不碰 UIView 本体），非合法场景 1→0 当场顶回 1.0；
+  合法场景（展开/收尾/编辑/翻页/收起）放行。ERApplyBandAlphaFix 找 CCUIHeaderPocketView、
+  给子视图装观测并把已卡 0 的点回 1（限流 0.4s）。
+- 调用点：updateTopFadeForOverlay 开头 + didChangePresentationState 的 state!=0 分支。
+- 另在展开前 / 折叠收尾两处强制熄 top fade 并清 scrub/transition 标志（fade 的 frame 正好盖住状态带）。
+- CFBundleVersion 公式改成两位 sub：174.10 → 102027410（一位只能容到 .9，.10 会与 175 撞号）。
+- 版本 1.2.1-174.10（commit 2875fcd5）
+
+## 1.2.1-174.11 · 第一批③：A4 跨页落位去过冲
+- 两处 pop 关键帧 0.90 → 1.025 → 1.0（1.025 是写死的过冲）改单调 0.92 → 1.0 的 CABasicAnimation，
+  grid 与 module 各一处；两处 settle 曲线 EaseInEaseOut → EaseOut。
+- 版本 1.2.1-174.11（commit 54d76b39）
+
+## 1.2.1-174.12 · 第一批④：A3 翻页不变量自愈（当前验证版）
+- 现象：长按翻页点拖动 / 超长滑动后，模块 layer.opacity 停 0（能点看不见，要注销）、
+  页面悬停过冲位、状态带卡 alpha 0。三症同根：手势结束事件丢失。
+- 修法：不猜事件，改成每 0.25s 校验一组恒真的不变量 —— A 标志 / B 位移 m42 = base - page*span /
+  C 当前页模块可见性 / D collection 亮度，任一为假就走 finishInteractivePageTransition 单一出口收敛。
+- 配套：手指存活门（触摸数归零优先于 state）+ 0.45s 闲置门；呈现落定后 0.45s forced 强制自检；
+  收起中(3)/已收起(0) 清 scrub/位移/dragging 票根；setCurrentPage animated 补 0.22s token 清标志；
+  pagePanned / pageIndicatorPanned 记录手势存活与活动时间戳。
+- 版本 1.2.1-174.12（commit 1ecb57cb）
