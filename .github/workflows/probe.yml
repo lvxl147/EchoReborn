@@ -1,5 +1,0 @@
-name: probe
-on:/n  push:/n    branches: [main]
-    paths: [.github/workflows/probe.yml]
-jobs:/n  hello:/n    runs-on: ubuntu-latest
-    steps:/n      - run: echo probe-ok
