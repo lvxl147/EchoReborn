@@ -6721,14 +6721,21 @@ static void ERRRestoreMarkedHiddenViews(UIView *root);
 // ERCollectModuleControllers 的幽灵过滤剔除，所以「按模块控制器遍历」根本够不到它。
 // 这里直接扫窗口树里的容器实例：凡是**紧凑尺寸**的容器一律压掉，只留展开面板
 // （展开时容器被撑到 430x932，尺寸判据天然区分）。
-static void ERHideCompactModuleContainers(UIViewController *overlay) {
+// 1.2.1-167 · 容器压制的两个修正（同一原理：按视图树压，不看控制器列表）。
+// 165 的漏洞：`if (w > 380.0 || h > 380.0) continue;` 用尺寸判断「谁是展开面板」。
+// 长按音量时亮度被拉成宽面板（w≈430）→ 命中这一句被放过；而 0.70/1.20 的补压
+// 用的是同一函数，同样放过 → 亮度整段露着（②）。166 已证明这与模块列表判据无关
+// （列表里根本没有 DisplayModule，压不到它是另一回事）。
+// 现在改为「谁包含正在展开的那个视图，就放过谁」，尺寸不再参与判断。
+static void ERHideCompactModuleContainers(UIViewController *overlay, UIViewController *expanding) {
     if (!overlay) return;
     // 只在展开/收起窗口内动手：否则会把整个控制中心的模块全部藏掉。
     if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) return;
     UIView *root = overlay.view.window ?: overlay.view;
     if (!root) return;
+    UIView *expandingView = expanding.view;
     NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:root];
-    NSUInteger guard = 0, hit = 0;
+    NSUInteger guard = 0, hit = 0, kept = 0;
     while (q.count && guard++ < 8000) {
         UIView *c = q.firstObject;
         [q removeObjectAtIndex:0];
@@ -6736,18 +6743,52 @@ static void ERHideCompactModuleContainers(UIViewController *overlay) {
         if (![NSStringFromClass(c.class) isEqualToString:@"CCUIContentModuleContainerView"]) continue;
         CGFloat w = CGRectGetWidth(c.bounds), h = CGRectGetHeight(c.bounds);
         if (w < 1.0 || h < 1.0) continue;
-        if (w > 380.0 || h > 380.0) continue;          // 展开面板本体，跳过
+        if (expandingView) {
+            // 正在展开的那个容器（含它的祖先/后代）一律放过，其余全部压住。
+            if ([expandingView isDescendantOfView:c] || [c isDescendantOfView:expandingView]) {
+                kept++;
+                continue;
+            }
+            // 满屏容器是展开面板的宿主，压掉会连面板一起消失 —— 只放过这一种。
+            CGFloat winW = CGRectGetWidth(root.bounds), winH = CGRectGetHeight(root.bounds);
+            if (winW > 1.0 && winH > 1.0 &&
+                w >= winW * 0.95 && h >= winH * 0.95) {
+                kept++;
+                continue;
+            }
+        } else if (w > 380.0 || h > 380.0) {
+            // 收起期拿不到控制器实例时，退回 165 的尺寸判断，避免把收回中的面板压掉。
+            continue;
+        }
         objc_setAssociatedObject(c, kERExpansionSiblingHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         c.hidden = YES;
         c.alpha = 0.0;
         c.layer.opacity = 0.0;
         hit++;
     }
-    if (hit) {
+    if (hit || kept) {
         ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
-            @"CONTHIDE t=%.2f n=%lu exp=%d close=%d",
-            CACurrentMediaTime(), (unsigned long)hit,
+            @"CONTHIDE t=%.2f n=%lu kept=%lu exp=%d close=%d",
+            CACurrentMediaTime(), (unsigned long)hit, (unsigned long)kept,
             (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive]);
+    }
+}
+
+// 1.2.1-167 · 跟随式压制：163 实测 0.50→0.60s 那一帧 CCUI 会把所有模块的可见性
+// 自己重置回 1.00（展开动画落定），此后我们只补压到 1.20s 就收手，剩下整段展开
+// 时间无人看守 → 亮度又露出来。这里在展开期间每 0.12s 重压一次，最多 24 拍
+// （≈2.9s），展开结束时由代际号立即失效。
+static NSInteger gERContainerKeeperGen = 0;
+static void ERStartContainerKeeper(UIViewController *overlay, UIViewController *expanding) {
+    if (!overlay) return;
+    NSInteger gen = ++gERContainerKeeperGen;
+    for (int i = 1; i <= 24; i++) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.12 * i * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (gen != gERContainerKeeperGen) return;
+            if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) return;
+            ERHideCompactModuleContainers(overlay, expanding);
+        });
     }
 }
 
@@ -28964,13 +29005,16 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
         UIViewController *expandingVC = expandedController;
         if (!expandingVC && [module isKindOfClass:[UIViewController class]]) expandingVC = (UIViewController *)module;
         ERHideSiblingSliderModules(overlay, expandingVC);
-        ERHideCompactModuleContainers(overlay);
+        ERHideCompactModuleContainers(overlay, expandingVC);
+        // 1.2.1-167 · 三个定点补压保留，另加「跟随式」重压（每 0.12s，共 24 拍），
+        // 专门对付 CCUI 在 0.60s 落定时自己把可见性重置回来的那一下。
+        ERStartContainerKeeper(overlay, expandingVC);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, expandingVC); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.70 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, expandingVC); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, expandingVC); });
     }
     // 1.2.1-154 · 展开面板全树落盘。用户实测：长按返回后紧凑态圆角已恢复，
     // 但「长按里面」的仍然没修 —— 说明展开面板是另一棵树，得单独看。
@@ -29108,14 +29152,17 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
         UIViewController *closingVC = expandedController;
         if (!closingVC && [module isKindOfClass:[UIViewController class]]) closingVC = (UIViewController *)module;
         ERHideSiblingSliderModules(overlay, closingVC);
-        ERHideCompactModuleContainers(overlay);
+        // 167 · 收起期撤销「跟随式压制」，并把压制退回 165 的尺寸判断（传 nil），
+        // 保证紧凑模块能按时回来。
+        gERContainerKeeperGen++;
+        ERHideCompactModuleContainers(overlay, nil);
         double rs[4] = {0.08, 0.16, 0.26, 0.38};
         for (int i = 0; i < 4; i++) {
             double d = rs[i];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 ERHideSiblingSliderModules(overlay, closingVC);
-                ERHideCompactModuleContainers(overlay);
+                ERHideCompactModuleContainers(overlay, nil);
             });
         }
         // 兜底：1.0s 后若已不在展开/收起态却没恢复（didClose 漏跑），强制恢复，
