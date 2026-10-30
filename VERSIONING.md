@@ -678,3 +678,19 @@
   （上溯到 overlay.view）存在 alpha/opacity/hidden 异常。命中就把整条链拉回 1.0
   （CATransaction 禁隐式动画）并落 CCVIS-HEAL，本轮不再走 finish 收敛。
 - 版本 1.2.1-174.17（commit 8beb4d6f）
+
+## 1.2.1-174.18 · 第二批⑥：自愈逐行照抄 -38（174.17 无效的根因修复，当前验证版）
+- 174.17 实测仍消失。核查 -38 源码发现两个错误：
+  ① **触发判据写反**：-38 的触发面是「任一命中即触发」——模块全不可见、collection 隐藏、
+     面板本体透明三种都算异常态（消失可能是「祖先层被藏」而模块自身 opacity 正常）。
+     174.17 写成「至少一个模块自身可见才动手」，恰好在最需要自愈的场景永不触发。
+  ② **挂载点缺失**：核查发现 174.12 插入 A3 时 ERHeaderPocketWatchdogSample 函数整体缺失
+     （ERScheduleHeaderPocketWatchdog 与 ERStartHeaderPocketWatchdog 都在，唯独中间的
+     sample 丢了）—— 看门狗每 tick 只跑 reconcile，从不跑采样自愈。这是一个从 174.12
+     起就存在的暗伤。
+- 修法：ERDumpInvisibilityScene 逐行照抄 -38 —— 正常态（total>0 且 visible>0 且
+  collection/overlay 都可见）零成本早退；异常态把 collection 本体 + 首个任意模块到
+  overlay 的祖先链全部拉回 1.0（CATransaction 禁隐式动画），再 applyPageTransform +
+  updatePagedModuleVisibilityForOverlay 重申。挂载点 = ERScheduleHeaderPocketWatchdog
+  tick 内 ERReconcilePagerIfNeeded 之后（0.25s 一拍，无前置门）。
+- 版本 1.2.1-174.18（commit dc409336）
