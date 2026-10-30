@@ -6712,6 +6712,45 @@ static BOOL ERViewTreeLooksLikeSlider(UIView *root) {
     return NO;
 }
 
+static void ERRRestoreMarkedHiddenViews(UIView *root);
+
+// 1.2.1-165 · 按**容器层**收掉所有紧凑模块（治②的正确层次）。
+// 164 实测：SIBHIDE 确实跑了、隐藏的是 module.view 层，但亮度依旧露着 —— 因为
+// CCUIContentModuleContainerView 自带材质背景与投影，藏内层等于没藏（153 已经
+// 踩过一次）。更要命的是：收起期亮度模块的视图已离开 window，被
+// ERCollectModuleControllers 的幽灵过滤剔除，所以「按模块控制器遍历」根本够不到它。
+// 这里直接扫窗口树里的容器实例：凡是**紧凑尺寸**的容器一律压掉，只留展开面板
+// （展开时容器被撑到 430x932，尺寸判据天然区分）。
+static void ERHideCompactModuleContainers(UIViewController *overlay) {
+    if (!overlay) return;
+    // 只在展开/收起窗口内动手：否则会把整个控制中心的模块全部藏掉。
+    if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) return;
+    UIView *root = overlay.view.window ?: overlay.view;
+    if (!root) return;
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:root];
+    NSUInteger guard = 0, hit = 0;
+    while (q.count && guard++ < 8000) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        [q addObjectsFromArray:c.subviews];
+        if (![NSStringFromClass(c.class) isEqualToString:@"CCUIContentModuleContainerView"]) continue;
+        CGFloat w = CGRectGetWidth(c.bounds), h = CGRectGetHeight(c.bounds);
+        if (w < 1.0 || h < 1.0) continue;
+        if (w > 380.0 || h > 380.0) continue;          // 展开面板本体，跳过
+        objc_setAssociatedObject(c, kERExpansionSiblingHiddenKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        c.hidden = YES;
+        c.alpha = 0.0;
+        c.layer.opacity = 0.0;
+        hit++;
+    }
+    if (hit) {
+        ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+            @"CONTHIDE t=%.2f n=%lu exp=%d close=%d",
+            CACurrentMediaTime(), (unsigned long)hit,
+            (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive]);
+    }
+}
+
 static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewController *expandingController) {
     if (!overlay) return;
     // 1.2.1-148 · 147 实测失效：按 identifier 匹配 expanding 时，滑块模块在
@@ -6806,6 +6845,9 @@ static void ERRestoreSiblingSliderModules(UIViewController *overlay) {
     // 1.2.1-153 · 兜底：直接全树扫标记，不依赖 controller 收集。
     // 抑制层上提到 CCUIContentModuleContainerView 之后，一旦这条路径漏掉，
     // 亮度模块就会被永久隐藏 —— 必须有一条不看控制器的恢复路径。
+    // 165 · 164 又加了「按窗口树压容器」的路径，那里压的容器未必挂在 overlay.view 下，
+    // 所以从窗口根再扫一遍。
+    ERRRestoreMarkedHiddenViews(overlay.view.window ?: overlay.view);
     ERRRestoreMarkedHiddenViews(overlay.view);
     for (UIViewController *m in ERCollectModuleControllers(overlay)) {
         ERRRestoreMarkedHiddenViews(m.view);
@@ -28902,12 +28944,13 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
         UIViewController *expandingVC = expandedController;
         if (!expandingVC && [module isKindOfClass:[UIViewController class]]) expandingVC = (UIViewController *)module;
         ERHideSiblingSliderModules(overlay, expandingVC);
+        ERHideCompactModuleContainers(overlay);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.70 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay); });
     }
     // 1.2.1-154 · 展开面板全树落盘。用户实测：长按返回后紧凑态圆角已恢复，
     // 但「长按里面」的仍然没修 —— 说明展开面板是另一棵树，得单独看。
@@ -29045,12 +29088,14 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
         UIViewController *closingVC = expandedController;
         if (!closingVC && [module isKindOfClass:[UIViewController class]]) closingVC = (UIViewController *)module;
         ERHideSiblingSliderModules(overlay, closingVC);
+        ERHideCompactModuleContainers(overlay);
         double rs[4] = {0.08, 0.16, 0.26, 0.38};
         for (int i = 0; i < 4; i++) {
             double d = rs[i];
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 ERHideSiblingSliderModules(overlay, closingVC);
+                ERHideCompactModuleContainers(overlay);
             });
         }
         // 兜底：1.0s 后若已不在展开/收起态却没恢复（didClose 漏跑），强制恢复，
