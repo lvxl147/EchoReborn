@@ -6075,6 +6075,22 @@ static void ERLogMessage(NSString *level, NSString *format, ...) {
 // ERLogInfo/ERLogWarn/ERLogError are declared at the top of the file; the
 // early preview clean-up needs them before this point.
 
+// 1.2.1-173 · Soko（1.1.0 ObjC 重写版）的跨 TU 日志出口。
+// Soko 的 .m 都是独立编译单元，拿不到本文件的 static ERLogRecord，所以走一个
+// C 链接的全局函数（声明在 Soko/SokoLog.h）。本文件按 ObjC++ 编译，必须写
+// extern "C"，否则名字被修饰、Soko 侧链接不到（报 _ERSokoLog undefined）。
+// 本版只做转发，不带 1.2.1-68 的早鸟缓冲（那是为「开关还没读出来」服务的，
+// 本次是行为验证版，不需要那段复杂度）。
+extern "C" void ERSokoLog(NSString *format, ...) {
+    if (!gERLoggingEnabled) return;
+    va_list args;
+    va_start(args, format);
+    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    if (!message.length) return;
+    ERLogRecord(@"INFO", [@"soko " stringByAppendingString:message]);
+}
+
 // Key operations: what happened, to which module, and with what outcome.
 static void ERLogOperation(NSString *operation, NSString *identifier, BOOL success, NSString *detail) {
     if (!gERLoggingEnabled) return;
