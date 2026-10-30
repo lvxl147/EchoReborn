@@ -66,20 +66,16 @@ static void ERGestureWriteValue(NSString *key, NSString *val) {
     notify_post(kERGestureReload.UTF8String);
 }
 
-// 1.2.0-59 · 文件夹显示名：读 Tweak 落盘的 er_folders.plist（1.2.1-134 起 30s 周期重写）
+// 1.2.0-59 · 文件夹显示名：读 Tweak 落盘的 er_folders.plist（ctor 后 20s 生成）
 static NSString *ERGestureFolderName(NSString *fid) {
     @try {
         NSArray<NSDictionary *> *arr = [NSArray arrayWithContentsOfFile:
             @"/var/mobile/Documents/er_folders.plist"];
-        if (arr) {
-            for (NSDictionary *d in arr)
-                if ([d[@"id"] isKindOfClass:[NSString class]] && [d[@"id"] isEqualToString:fid])
-                    return d[@"name"] ?: @"文件夹";
-            // 1.2.1-134 · 文件在但查无此 id = 桌面上已解散该文件夹
-            return @"已解散";
-        }
+        for (NSDictionary *d in arr)
+            if ([d[@"id"] isKindOfClass:[NSString class]] && [d[@"id"] isEqualToString:fid])
+                return d[@"name"] ?: @"文件夹";
     } @catch (__unused NSException *e) {}
-    return @"文件夹";   // plist 尚未生成过（未初始化），与「已解散」区分
+    return @"文件夹";
 }
 
 // 1.2.0-40 · 最后一页是资源库：显示"资源库"而非"第N页"
@@ -408,7 +404,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     // 1.2.0-56 · 左内边距 10→3（用户拍板"就差一点点"）：文本可用宽度 +7pt，
     // 「第10/12/13页」完整显示；右侧与箭头槽不动。
-    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 5, 5, 19);  // 1.2.1-131 · 右内边距=5+箭头；layout 内按实际文本再定宽
+    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 3, 5, 10);
 #pragma clang diagnostic pop
     [_valueButton addTarget:self action:@selector(_erValueTapped)
            forControlEvents:UIControlEventTouchUpInside];
@@ -452,40 +448,33 @@ static void ERGestureShowDropdown(UIButton *anchor,
     self.detailTextLabel.hidden = YES;
 
     CGFloat chevW = 14.0;
-    // 1.2.1-131 · 收起态下拉框自适应：框宽 = 5 + 文本宽 + 5 + 箭头宽 + 5，
-    // 文字一多框就随大；所有间距统一 5（左5 / 文字↔箭头5 / 箭头↔右5）。
-    // 不再用全局最宽文本定宽（-75 的"统一宽"需求，本轮改为按各自值伸缩）。
-    CGFloat pad = 5.0;
-    NSString *curText = [_valueButton titleForState:UIControlStateNormal] ?: @"";
-    CGSize ts = [curText sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
-    CGFloat curTextW = ts.width;
-    // 1.2.1-132 · 基准宽 = 「第12页」版（5+文本+5+箭头+5）：比它短的值（1~2 个字）
-    // 不缩窄，一律用基准宽；比它长的值按自身文本放大（右缘固定、自然向左伸）。
-    // 上限 260 仍保留，防极端超长文件夹名。
-    CGSize bs = [@"第12页" sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
-    CGFloat btnW = 5.0 + curTextW + 5.0 + chevW + 5.0;
-    btnW = MIN(MAX(btnW, 5.0 + bs.width + 5.0 + chevW + 5.0), 260.0);
+    // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
+    // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
+    // 1.2.0-77 · 用户实测 -76 的 4/3/4 观感不好，整体退回 -75 几何（pad6/+1 补偿）。
+    CGFloat pad = 6.0;
+    // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本定宽，不随各自值伸缩。
+    // 1.2.0-75 · 用户需求：收起态要能完整显示 4 个字——测量基准加 4 字样例
+    //（较 3 字基准加宽约一个字宽 ~15pt），按钮内部结构（pad/箭头槽位）不动。
+    static CGFloat sERMaxTSW = 0.0;
+    if (sERMaxTSW < 1.0) {
+        UIFont *f = _valueButton.titleLabel.font;
+        CGSize t1 = [@"第10页" sizeWithAttributes:@{NSFontAttributeName: f}];
+        CGSize t2 = [@"无动作" sizeWithAttributes:@{NSFontAttributeName: f}];
+        CGSize t3 = [@"乌贼软件" sizeWithAttributes:@{NSFontAttributeName: f}];   // 4 字基准
+        sERMaxTSW = MAX(MAX(t1.width, t2.width), t3.width);
+    }
+    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 6.0, 72.0), 216.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
 
-    // 按钮内部：文字靠左贴 5，右侧给箭头留 5+chevW；箭头独立居中于右侧槽位。
-    // custom 按钮不走 UIButtonConfiguration，弃用告警在 -Werror 下需压制。
-    // 按钮内部：1.2.1-134 · 文字短于基准宽（如「第2页」）时在文本区内**居中**，
-    // 消除右侧大空白（视觉像左对齐）；达到基准及以上仍贴左 5，维持 5+文本+5 公式。
-    _valueButton.contentHorizontalAlignment =
-        (curTextW < bs.width) ? UIControlContentHorizontalAlignmentCenter
-                              : UIControlContentHorizontalAlignmentLeft;
+    // 按钮内部：文字居左（pad 起，titleEdgeInsets 右侧给箭头让位），箭头独立居中于右侧槽位。
+    // custom 按钮不走 UIButtonConfiguration，弃用告警在 -Werror 下需压制（contentEdgeInsets 同款）。
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5.0, 5.0, 5.0, pad + chevW);  // 右内边距 = 5 + 箭头
-    // 1.2.1-132 · 删除 setTitleEdgeInsets 右14：contentEdgeInsets 已把文字挡在箭头区外，
-    // 再扣一次会把文字标签压窄 14pt → 四字名截断成「投…财」+ 19pt 空白。
-    // 现在文本框严格贴字（零内空白），左5 / 文字↔箭头5 / 箭头↔右5。
+    [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
 #pragma clang diagnostic pop
-    // 1.2.1-133 · 箭头墨迹在槽内居中自带约 2pt 符号内空白，整体左移 2pt，
-    // 让「文字↔箭头」的视觉间距 = 5（槽位 14 与间距公式不变）。
-    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 - 2.0, btnH / 2.0);   // 箭头右留 5
+    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);   // 1.2.0-77 · 退回 -75（恢复 +1）
     CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);
@@ -810,220 +799,9 @@ static void ERGSwitchWrite(NSString *key, BOOL val) {
 
 @end
 
-// 1.2.1-139 · 字形构建时的明暗标记（关联对象挂在 label 上）：每帧自检拿它和
-// 当前明暗比对，不一致=颜色过时（控制中心切深色后 apply 早退不换色的实锤根因）。
-static char sERGlyphDarkKey;
-
-// 1.2.1-137 · 组头 label 宽度按原始四字文本固定，拼上「空格+ⓘ」后内容变宽而
-// frame 不变 → 截断成「搜索胶...」（用户截图实锤，字形与点击都正常只是宽度不够）。
-// 把 label 拉宽到内容实际宽度；helper 每帧调用维持，防系统复用布局改回去。
-static void ERGestureWidenHeaderLabel(UILabel *l) {
-    if (!l) return;
-    NSString *t = l.text ?: @"";
-    if (![t containsString:@"\uFFFC"]) return;   // 只管已拼字形的组头
-    CGSize need = [l sizeThatFits:CGSizeMake(CGFLOAT_MAX, CGFLOAT_MAX)];
-    CGRect f = l.frame;
-    CGFloat wantW = need.width + 2.0;
-    if (f.size.width + 0.5 < wantW) {
-        f.size.width = wantW;
-        l.frame = f;
-    }
-}
-
-// 1.2.1-138 · ③颜色回归（用户锁定）：浅色=系统蓝 #007AFF，深色=灰 #8E8E93，
-// 与之前 UIButton 方案观感一致。-136b~137 字形没着色，SF 符号默认渲染成黑色。
-static UIColor *ERGestureInfoTintColor(UILabel *l) {
-    BOOL dark = NO;
-    if (@available(iOS 12.0, *)) {
-        UITraitCollection *tc = l.traitCollection ?: [UITraitCollection currentTraitCollection];
-        dark = (tc.userInterfaceStyle == UIUserInterfaceStyleDark);
-    }
-    return dark
-        ? [UIColor colorWithRed:0x8E / 255.0 green:0x8E / 255.0 blue:0x93 / 255.0 alpha:1.0]
-        : [UIColor colorWithRed:0x00 / 255.0 green:0x7A / 255.0 blue:0xFF / 255.0 alpha:1.0];
-}
-
-// 1.2.1-138 · ②垂直居中（用户实锤太靠上像上标）：-136b 固定下压 1pt，但
-// configurationWithFont 生成的符号实际高度 > 文字高度（13pt 字体符号 ≈15.7pt），
-// 图标中心比文字中心高 2pt 多。改为公式对齐：下压量 = (capHeight − 图标高) ÷ 2，
-// 图标中心对准大写字母中心 = 之前 UIButton 的视觉位置。
-// 验收微调改 ER_INFO_GLYPH_NUDGE：数值越小越往下压（每 1pt 明显）。
-#define ER_INFO_GLYPH_NUDGE 0.0
-static BOOL ERGestureApplyGlyphToLabel(UILabel *l) {
-    if (!l) return NO;
-    NSString *t = l.text ?: @"";
-    // 只处理组头本体：精确「搜索胶囊」才拼；已带附件占位符 = 已装过，直接成功。
-    // 其他文字（如开关行「搜索胶囊手势」、复用后的「震动反馈」）一律不动。
-    if ([t containsString:@"\uFFFC"]) return YES;
-    if (![t isEqualToString:@"搜索胶囊"]) return NO;
-    UIFont *hfont = l.font ?: [UIFont systemFontOfSize:13.0];
-    UIImage *img = [UIImage systemImageNamed:@"info.circle"
-        withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
-    if (!img) return NO;
-    if (@available(iOS 13.0, *)) img = [img imageWithTintColor:ERGestureInfoTintColor(l)];
-    NSTextAttachment *att = [NSTextAttachment new];
-    att.image = img;
-    att.bounds = CGRectMake(0.0,
-                            (hfont.capHeight - img.size.height) / 2.0 + ER_INFO_GLYPH_NUDGE,
-                            img.size.width, img.size.height);
-    NSMutableAttributedString *as = [[NSMutableAttributedString alloc]
-        initWithString:t attributes:@{NSFontAttributeName: hfont}];
-    [as appendAttributedString:[[NSAttributedString alloc]
-        initWithString:@" " attributes:@{NSFontAttributeName: hfont}]];
-    [as appendAttributedString:[NSAttributedString attributedStringWithAttachment:att]];
-    l.attributedText = as;
-    if (@available(iOS 12.0, *)) {
-        objc_setAssociatedObject(l, &sERGlyphDarkKey,
-            @(l.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark),
-            OBJC_ASSOCIATION_RETAIN);
-    }
-    ERGestureWidenHeaderLabel(l);   // 1.2.1-137：拼宽了内容就要拉宽 frame，否则截断
-    return YES;
-}
-
-// 1.2.1-138 · 已带字形 → 拆掉重拼（换色/换位置用），纯文本「搜索胶囊」→ 直接拼。
-// 其他文字（复用后的「震动反馈」、开关行「搜索胶囊手势」）一律不动。
-static void ERGestureRebuildGlyphOnLabel(UILabel *l) {
-    if (!l) return;
-    NSString *t = l.text ?: @"";
-    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
-    if ([t containsString:@"\uFFFC"]) l.text = @"搜索胶囊";   // 拆旧字形再重拼
-    ERGestureApplyGlyphToLabel(l);
-}
-
-// 1.2.1-138 · 点按手势兜挂（helper 布局 / KVO 重拼 / sync 三处共用）
-static void ERGestureEnsureTapOnLabel(UILabel *l) {
-    if (!l) return;
-    l.userInteractionEnabled = YES;
-    BOOL hasTap = NO;
-    for (UIGestureRecognizer *g in l.gestureRecognizers) {
-        if ([g isKindOfClass:[UITapGestureRecognizer class]]) { hasTap = YES; break; }
-    }
-    if (hasTap) return;
-    UIResponder *r = l.nextResponder;
-    while (r && ![r isKindOfClass:[UIViewController class]]) r = r.nextResponder;
-    if ([r isKindOfClass:[UIViewController class]]) {
-        [l addGestureRecognizer:[[UITapGestureRecognizer alloc]
-            initWithTarget:r action:@selector(erGroupInfoTapGesture:)]];
-    }
-}
-
-// 1.2.1-136b · 隐形助手视图：随组头宿主一起被复用。
-// 1.2.1-138 · ①灭闪现：之前只在 layoutSubviews 补字形——回前台 PS 重设标题把
-// 富文本清掉后若不再触发布局，就得等 0.1s 定时兜底 → 肉眼可见闪。现在 KVO 盯住
-// label 的 text/attributedText，系统一改文字的同一瞬间（渲染前）同步重拼，同一
-// 次界面刷新内完成，物理上无空窗。_erApplying 防重拼触发 KVO 的自递归。
-// ③颜色：明暗切换 traitCollectionDidChange → 拆掉重拼，颜色即时跟随。
-// 注意：helper 类必须定义在 @implementation ERGestureController 之外——
-// ObjC 不允许 @interface/@implementation 嵌套在另一个 @implementation 里
-//（1.2.1-136 CI 实锤：嵌在里面报 missing '@end' + 全部方法 missing context）。
-@interface ERGHeaderInfoHelper : UIView
-@end
-@implementation ERGHeaderInfoHelper {
-    __weak UILabel *_erObserved;
-    BOOL _erApplying;
-}
-- (void)erWatchLabel:(UILabel *)l {
-    if (_erObserved == l) return;
-    if (_erObserved) {
-        @try {
-            [_erObserved removeObserver:self forKeyPath:@"text"];
-            [_erObserved removeObserver:self forKeyPath:@"attributedText"];
-        } @catch (NSException *e) { (void)e; }
-    }
-    _erObserved = l;
-    if (l) {
-        @try {
-            [l addObserver:self forKeyPath:@"text" options:0 context:NULL];
-            [l addObserver:self forKeyPath:@"attributedText" options:0 context:NULL];
-        } @catch (NSException *e) { (void)e; _erObserved = nil; }
-    }
-}
-- (void)observeValueForKeyPath:(NSString *)keyPath ofObject:(id)object
-                          change:(NSDictionary *)change context:(void *)context {
-    (void)change; (void)context;
-    if (_erApplying || object != _erObserved || ![object isKindOfClass:[UILabel class]]) return;
-    if (![keyPath isEqualToString:@"text"] && ![keyPath isEqualToString:@"attributedText"]) return;
-    UILabel *l = (UILabel *)object;
-    _erApplying = YES;
-    ERGestureRebuildGlyphOnLabel(l);
-    ERGestureWidenHeaderLabel(l);
-    ERGestureEnsureTapOnLabel(l);
-    _erApplying = NO;
-}
-- (void)erResyncSibling {
-    UILabel *l = nil;
-    for (UIView *sub in self.superview.subviews) {
-        if ([sub isKindOfClass:[UILabel class]]) { l = (UILabel *)sub; break; }
-    }
-    if (!l) return;
-    NSString *t = l.text ?: @"";
-    // 已带字形（含 U+FFFC）也要进来——维持宽度 / 明暗换色重拼
-    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
-    [self erWatchLabel:l];
-    _erApplying = YES;
-    ERGestureRebuildGlyphOnLabel(l);
-    ERGestureWidenHeaderLabel(l);
-    _erApplying = NO;
-    ERGestureEnsureTapOnLabel(l);
-}
-- (void)layoutSubviews {
-    [super layoutSubviews];
-    [self erResyncSibling];
-}
-- (void)traitCollectionDidChange:(UITraitCollection *)previousTraitCollection {
-    [super traitCollectionDidChange:previousTraitCollection];
-    if (!previousTraitCollection) return;
-    if (@available(iOS 12.0, *)) {
-        if (self.traitCollection.userInterfaceStyle == previousTraitCollection.userInterfaceStyle) return;
-    } else { return; }
-    [self erResyncSibling];   // 明暗切换 → 拆掉重拼换色
-}
-- (void)dealloc {
-    if (_erObserved) {
-        @try {
-            [_erObserved removeObserver:self forKeyPath:@"text"];
-            [_erObserved removeObserver:self forKeyPath:@"attributedText"];
-        } @catch (NSException *e) { (void)e; }
-    }
-}
-@end
-
-// 1.2.1-139 · CADisplayLink 弱代理：DL 强引用 proxy，proxy 弱引用控制器——
-// 无保留环，控制器dealloc 可安全 invalidate。不用 displayLinkWithBlock:queue:
-//（CI 实锤：Theos iPhoneOS16.5.sdk 头文件没有这个类方法声明）。
-@interface ERGlyphWeakProxy : NSProxy
-- (instancetype)initWithTarget:(id)target;
-@end
-@implementation ERGlyphWeakProxy {
-    __weak id _erTarget;
-}
-- (instancetype)initWithTarget:(id)target {
-    _erTarget = target;
-    return self;
-}
-- (void)forwardInvocation:(NSInvocation *)inv {
-    id t = _erTarget;
-    if (!t) return;
-    [inv invokeWithTarget:t];
-}
-- (NSMethodSignature *)methodSignatureForSelector:(SEL)sel {
-    return [(NSObject *)_erTarget methodSignatureForSelector:sel];
-}
-@end
-
 #pragma mark - 控制器
 
-@implementation ERGestureController {
-    // 1.2.1-139 · 每帧自检（灭闪+颜色实时）：KVO/布局回调都可能被系统绕过——
-    // PS 重设标题不一定走常规 setter、trait 从 window 向下传播顺序不定（助手可能
-    // 先于 label 拿到新模式，用旧 trait 重拼出旧颜色）。回调通知是"可能丢的"，
-    // 每帧检查是确定性的：字形在不在 / 颜色标记和当前明暗一致吗 / 宽度够不够，
-    // 不对当场修（同帧/次帧完成，30fps 自检上限 33ms，肉眼不可见）。
-    CADisplayLink *_erGlyphDl;
-    __weak UITableView *_erGlyphTv;
-    __weak UILabel *_erGlyphLabel;
-}
+@implementation ERGestureController
 
 // ---- 1.2.0-3 · 自带崩溃记录器 ----
 // 设备上 CrashReporter 目录不存在（系统 .ips 一个都拿不到），"点手势管理闪退"
@@ -1374,38 +1152,16 @@ __attribute__((constructor)) static void ERGPrefsBundleBootstrap(void) {
                 (unsigned long)self.specifiers.count);
     // 1.2.0-7：页面标题与入口行文字统一为「手势管理」（只改显示文字）。
     self.title = @"手势管理";
-    // 1.2.1-135 · 回桌面→回前台时 PS 复用组头，ⓘ 需要同步（弱引用静态槽位 +
-    // dispatch_once 常驻观察者，控制器销毁自动失效，无保留环）。
-    static __weak ERGestureController *sERGGestureActive = nil;
-    sERGGestureActive = self;
-    static dispatch_once_t sERGGestureActiveTok;
-    dispatch_once(&sERGGestureActiveTok, ^{
-        [[NSNotificationCenter defaultCenter]
-            addObserverForName:UIApplicationDidBecomeActiveNotification
-            object:nil queue:[NSOperationQueue mainQueue]
-            usingBlock:^(NSNotification *note) {
-                (void)note;   // -Werror：__unused 不能贴 block 参数
-                ERGestureController *c = sERGGestureActive;
-                if (!c || !c.view.window) return;
-                [c erScheduleGroupInfoSync];
-            }];
-    });
 }
 
 // 1.2.0-77 · ⓘ 挂到组头「搜索胶囊」右侧（用户指定位置）。PS 的组头是
-// UITableViewHeaderFooterView 里的 UILabel，直接扫描找到后处理。
-// 1.2.1-136 · 匹配规则=「精确 '搜索胶囊'」或「搜索胶囊+附件占位符」。绝不能用
-// hasPrefix —— 开关行标题「搜索胶囊手势」会被误匹配，ⓘ 贴到开关名上（用户实锤）。
+// UITableViewHeaderFooterView 里的 UILabel，直接扫描找到后挂小按钮。
 // 递归找组头 label（静态函数避免 block 保留环）
 static UILabel *ERGestureFindHeaderLabel(UIView *v) {
     if (!v) return nil;
     for (UIView *sub in v.subviews) {
-        if ([sub isKindOfClass:[UILabel class]]) {
-            NSString *t = ((UILabel *)sub).text ?: @"";
-            if ([t isEqualToString:@"搜索胶囊"] ||
-                ([t hasPrefix:@"搜索胶囊"] && [t containsString:@"\uFFFC"]))
-                return (UILabel *)sub;
-        }
+        if ([sub isKindOfClass:[UILabel class]] &&
+            [((UILabel *)sub).text isEqualToString:@"搜索胶囊"]) return (UILabel *)sub;
         UILabel *deeper = ERGestureFindHeaderLabel(sub);
         if (deeper) return deeper;
     }
@@ -1424,132 +1180,35 @@ static UITableView *ERGestureFindTableView(UIView *v) {
     return nil;
 }
 
-// 1.2.1-135 · 组头 ⓘ 同步（原"装一次就不动"改为"每次同步"）：UITableView 组头视图
-// 跨分组复用，回桌面→回前台后原宿主可能被复用给别的分组（实测 ⓘ 漂到「震动反馈」
-// 旁边且下移）。同步三步：①清陈旧（宿主已非「搜索胶囊」组头的 ⓘ 全部摘除）
-// ②补缺失（当前「搜索胶囊」组头上没有就按原规则装）③重定位（跟随 label 当前 frame）。
-static void ERGestureCollectTagViews(UIView *v, NSInteger tag, NSMutableArray<UIView *> *out) {
-    if (!v) return;
-    for (UIView *sub in v.subviews) {
-        if (sub.tag == tag) [out addObject:sub];
-        ERGestureCollectTagViews(sub, tag, out);
-    }
-}
-
-// 1.2.1-138 · 收集表里所有组头宿主（UITableViewHeaderFooterView 及其子类）
-static void ERGestureCollectHeaderHosts(UIView *v, NSMutableArray<UIView *> *out) {
-    if (!v) return;
-    for (UIView *sub in v.subviews) {
-        if ([NSStringFromClass(sub.class) containsString:@"HeaderFooterView"]) [out addObject:sub];
-        ERGestureCollectHeaderHosts(sub, out);
-    }
-}
-
-static void ERGestureSyncGroupInfo(ERGestureController *self) {
+static void ERGestureInstallGroupInfo(ERGestureController *self) {
     UITableView *tv = ERGestureFindTableView(self.view);
     if (!tv || !tv.window) return;
-    // 清陈旧：-135 及更早版本钉进组头宿主的独立按钮（只清 UIButton，helper 保留）
-    NSMutableArray<UIView *> *btns = [NSMutableArray array];
-    ERGestureCollectTagViews(tv, 7601, btns);
-    for (UIView *b in btns) {
-        if ([b isKindOfClass:[UIButton class]]) [b removeFromSuperview];
-    }
-    // 1.2.1-138 · 隐形助手撒到所有组头宿主：宿主被系统复用给「搜索胶囊」分组时
-    // 助手已经在场（KVO 盯文字 + 布局双保险），不依赖恰好命中的那一个宿主。
-    NSMutableArray<UIView *> *hosts = [NSMutableArray array];
-    ERGestureCollectHeaderHosts(tv, hosts);
-    for (UIView *host in hosts) {
-        UIView *h = [host viewWithTag:7601];
-        if (![h isKindOfClass:[ERGHeaderInfoHelper class]]) {
-            ERGHeaderInfoHelper *nh = [ERGHeaderInfoHelper new];
-            nh.tag = 7601;
-            nh.frame = CGRectZero;
-            nh.userInteractionEnabled = NO;
-            [host addSubview:nh];
-        }
-    }
+    ERGPrefsLog(@"group info install begin");
     UILabel *found = ERGestureFindHeaderLabel(tv);
-    if (!found) return;
-    ERGestureApplyGlyphToLabel(found);
-    ERGestureWidenHeaderLabel(found);   // 1.2.1-137：同步兜底时也维持宽度
-    ERGestureEnsureTapOnLabel(found);
+    if (!found) { ERGPrefsLog(@"group info label not found"); return; }
+    UIView *host = found.superview ?: tv;
+    if ([host viewWithTag:7601]) return;   // 已装过
+    UIButton *btn = [UIButton buttonWithType:UIButtonTypeSystem];
+    btn.tag = 7601;
+    // 1.2.0-80 · 用户反馈 ⓘ 偏大：按组头文字字号生成 SF Symbol（文字同高）
+    UIFont *hfont = found.font ?: [UIFont systemFontOfSize:13.0];
+    UIImage *img = [UIImage systemImageNamed:@"info.circle"
+        withConfiguration:[UIImageSymbolConfiguration configurationWithFont:hfont]];
+    if (!img) img = [UIImage imageNamed:@"info.circle"];
+    [btn setImage:img forState:UIControlStateNormal];
+    btn.tintColor = ERGDynamic([UIColor colorWithWhite:1.0 alpha:0.55],
+                               [UIColor colorWithRed:0.25 green:0.55 blue:1.00 alpha:1.0]);
+    [btn addTarget:self action:@selector(erGroupInfoTapped)
+      forControlEvents:UIControlEventTouchUpInside];
+    CGFloat side = ceil(hfont.lineHeight);
+    btn.frame = CGRectMake(CGRectGetMaxX(found.frame) + 3.0,   // 1.2.0-81 · 用户反馈间距减半 6→3
+                           CGRectGetMidY(found.frame) - side / 2.0, side, side);
+    [host addSubview:btn];
+    ERGPrefsLog(@"group info install ok frame=%@ host=%@",
+                NSStringFromCGRect(btn.frame), NSStringFromClass(object_getClass(host)));
 }
 
-// 前台后多节奏同步（0.1/0.3/0.6/1.0s），覆盖 PS 异步重建组头的时机；
-// 有隐形助手在，绝大多数帧在布局瞬间就补齐，这里只是兜底。
-- (void)erScheduleGroupInfoSync {
-    __weak typeof(self) wself = self;
-    for (NSInteger i = 0; i < 4; i++) {
-        NSTimeInterval d = (i == 0) ? 0.1 : (i == 1) ? 0.3 : (i == 2) ? 0.6 : 1.0;
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{
-            __strong typeof(wself) sself = wself;
-            if (!sself) return;
-            @try { ERGestureSyncGroupInfo(sself); } @catch (NSException *e) {
-                ERGPrefsLog(@"group info sync threw: %@", e);
-            }
-        });
-    }
-}
-
-// 1.2.1-139 · 每帧自检回调（页面可见期间 30fps）：只在状态不对时动手，其余帧
-// 只是两次字符串比较，开销可忽略。
-- (void)erGlyphDisplayTick {
-    if (!self.view.window) return;
-    UITableView *tv = _erGlyphTv;
-    if (!tv.window) {
-        tv = ERGestureFindTableView(self.view);
-        _erGlyphTv = tv;
-    }
-    if (!tv) return;
-    UILabel *l = _erGlyphLabel;
-    NSString *t = l.text ?: @"";
-    // 缓存的 label 不再是「搜索胶囊」组头（被复用/重建）→ 重找
-    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) {
-        l = ERGestureFindHeaderLabel(tv);
-        _erGlyphLabel = l;
-        t = l.text ?: @"";
-    }
-    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
-    BOOL dark = NO;
-    if (@available(iOS 12.0, *)) {
-        dark = (l.traitCollection.userInterfaceStyle == UIUserInterfaceStyleDark);
-    }
-    NSNumber *built = objc_getAssociatedObject(l, &sERGlyphDarkKey);
-    if (![t containsString:@"\uFFFC"] || built == nil || built.boolValue != dark) {
-        // 缺字形（系统重设过标题）/ 颜色过时（明暗切了）→ 拆旧重拼
-        if ([t containsString:@"\uFFFC"]) l.text = @"搜索胶囊";
-        ERGestureApplyGlyphToLabel(l);
-        ERGestureEnsureTapOnLabel(l);
-    } else {
-        ERGestureWidenHeaderLabel(l);
-    }
-}
-
-- (void)erGlyphDisplayStart {
-    if (!_erGlyphDl) {
-        // 弱代理为 target：DL 强持 proxy、proxy 弱持 self，无保留环
-        _erGlyphDl = [CADisplayLink displayLinkWithTarget:
-            [[ERGlyphWeakProxy alloc] initWithTarget:self]
-            selector:@selector(erGlyphDisplayTick)];
-        _erGlyphDl.preferredFramesPerSecond = 30;   // 30fps 足够，省电
-    }
-    [_erGlyphDl addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
-}
-
-- (void)erGlyphDisplayStop {
-    [_erGlyphDl invalidate];
-    _erGlyphDl = nil;
-}
-
-- (void)erGroupInfoTapGesture:(UITapGestureRecognizer *)tap {
-    // 1.2.1-136 · 组头复用后手势仍留在 label 上：点到的不是「搜索胶囊」就不弹
-    UILabel *l = (UILabel *)tap.view;
-    if (![l isKindOfClass:[UILabel class]]) return;
-    NSString *t = l.text ?: @"";
-    // 严格匹配：精确「搜索胶囊」或已带 ⓘ 字形（U+FFFC）。
-    // 不能 hasPrefix —— 否则开关行「搜索胶囊手势」复用同一 label 时会误弹。
-    if (![t isEqualToString:@"搜索胶囊"] && ![t containsString:@"\uFFFC"]) return;
+- (void)erGroupInfoTapped {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"搜索胶囊"
         message:@"开启后，桌面搜索胶囊支持四向滑动快速跳页，单击搜索不受影响。手放在胶囊中心附近朝一个方向滑，滑够「触发范围」距离会震动提示，松手后跳到对应页；「无动作」保持系统默认行为。「手势区域」= 起手判定区向四周外扩的距离（0~60pt，默认 20），外扩矩形内（含四角）任意点起手都可触发。"
         preferredStyle:UIAlertControllerStyleAlert];
@@ -1560,23 +1219,19 @@ static void ERGestureSyncGroupInfo(ERGestureController *self) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     ERGPrefsLog(@"viewWillAppear (group info scheduled)");
-    // 1.2.1-135 · 进本页即请求 SpringBoard 重 dump 文件夹列表（近实时：
-    // 新增/改名/解散的文件夹，点开下拉立刻可见），30s 周期 dump 降级为兜底。
-    notify_post("com.strive.echoreborn/DumpFolders");
     // 组头延迟出现（PS 异步构建）；-80 实锤异常已修，1 秒才显示是定时器太晚 → 调回 0.25/0.6s
-    [self erScheduleGroupInfoSync];
-    // 1.2.1-139 · 每帧自检：灭回前台闪现 + 明暗切换颜色实时跟随
-    [self erGlyphDisplayStart];
-}
-
-- (void)viewWillDisappear:(BOOL)animated {
-    [super viewWillDisappear:animated];
-    // 1.2.1-139 · 页面不可见就停表，零常驻开销
-    [self erGlyphDisplayStop];
-}
-
-- (void)dealloc {
-    [_erGlyphDl invalidate];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
+            ERGPrefsLog(@"group info install threw: %@", e);
+        }
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        @try { ERGestureInstallGroupInfo(self); } @catch (NSException *e) {
+            ERGPrefsLog(@"group info install threw(2): %@", e);
+        }
+    });
 }
 
 @end

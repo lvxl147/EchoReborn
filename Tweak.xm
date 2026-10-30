@@ -468,6 +468,11 @@ static const void *kEREditGridBaseOriginKey = &kEREditGridBaseOriginKey;
 // 1.0.6-9（第 1 条）：编辑网格对齐探针的去重状态。
 static const void *kEREditGridProbeStateKey = &kEREditGridProbeStateKey;
 static const void *kERRemoveButtonKey = &kERRemoveButtonKey;
+// 1.2.1-1 · 编辑模式降负的帧级跳过缓存 key
+static const void *kERModuleLastChromeFrameKey = &kERModuleLastChromeFrameKey;
+static const void *kERModuleLastChromeStateKey = &kERModuleLastChromeStateKey;
+static const void *kERAddControlLastBoundsKey = &kERAddControlLastBoundsKey;
+static const void *kERAddControlLastInsetsKey = &kERAddControlLastInsetsKey;
 static const void *kERRemoveModuleViewKey = &kERRemoveModuleViewKey;
 static const void *kERDragPreviewTargetKey = &kERDragPreviewTargetKey;
 static const void *kERDragProxyKey = &kERDragProxyKey;
@@ -554,8 +559,6 @@ static const void *kERPageIndicatorPanKey = &kERPageIndicatorPanKey;
 static const void *kERPageIndicatorCountKey = &kERPageIndicatorCountKey;
 static const void *kERPageIndicatorDraggingKey = &kERPageIndicatorDraggingKey;
 static const void *kERPagerStartPageKey = &kERPagerStartPageKey;
-// 1.2.1-173 · A3（自 1.2.1-24 移植）：pocket 看门狗代数票根，保证同一时刻只有一条链。
-static const void *kERHeaderPocketWatchdogKey = &kERHeaderPocketWatchdogKey;
 static const void *kERPagerSuppressedGesturesKey = &kERPagerSuppressedGesturesKey;
 static const void *kERPagerNativeScrollViewKey = &kERPagerNativeScrollViewKey;
 static const void *kERPagerNativeOffsetKey = &kERPagerNativeOffsetKey;
@@ -4188,6 +4191,39 @@ static CGFloat gERQABtnCompensationLandscape = 23.5;   // 横屏：胶囊在场�
 static CGFloat gERQABtnCompensationPortrait  = 23.5;   // 竖屏：同上（初值，按实测各自微调）
 static dispatch_source_t gERQABtnCorrectionTimer = nil;
 
+// 1.2.1-3 · **权限胶囊直接探测**（问题 1 的根因补丁）：
+// 1.0.9-19 的补偿只依赖「host 布局位置被压低 > 8pt」这个间接判据。实测（用户 2026-10-24 反馈）
+// 胶囊出现时 +号/电源仍下移 —— 说明胶囊在场并不总是把 host 压低超过阈值（压低量变小 /
+// 压的是 header pocket 内部其他内容），suppressed 判据漏判。
+// 修复 = 补一条**直接判据**：在窗口树里找隐私指示胶囊视图（类名含 PrivacyIndicator），
+// 可见即视为「胶囊在场」。查找限频 0.5s + 结果缓存，10Hz 定时器无性能压力。
+static BOOL ERViewTreeHasPrivacyCapsule(UIView *root, NSInteger depth) {
+    if (!root || depth > 14) return NO;
+    if (root.hidden || root.alpha <= 0.01) return NO;
+    NSString *cls = NSStringFromClass(root.class);
+    if (cls.length && [cls rangeOfString:@"PrivacyIndicator"].location != NSNotFound) {
+        CGRect winRect = [root convertRect:root.bounds toView:nil];
+        if (!CGRectIsEmpty(winRect)) return YES;
+    }
+    for (UIView *sub in root.subviews) {
+        if (ERViewTreeHasPrivacyCapsule(sub, depth + 1)) return YES;
+    }
+    return NO;
+}
+
+static BOOL ERPrivacyCapsuleVisible(NSArray<UIWindow *> *windows) {
+    static CFTimeInterval er_pcLastProbe = 0.0;
+    static BOOL er_pcLastResult = NO;
+    CFTimeInterval now = CACurrentMediaTime();
+    if (now - er_pcLastProbe < 0.5) return er_pcLastResult;
+    er_pcLastProbe = now;
+    er_pcLastResult = NO;
+    for (UIWindow *window in windows) {
+        if (ERViewTreeHasPrivacyCapsule(window, 0)) { er_pcLastResult = YES; break; }
+    }
+    return er_pcLastResult;
+}
+
 // 把快捷按钮 host 的窗口 Y 钉在「安装时的基线」上：胶囊出现/消失引起的任何漂移，
 // 都用 host.transform 反向抵消（不动约束体系，不会被 Auto Layout 覆盖）。
 // 1.0.9-15 · 在视图树里按文本找系统编辑态的「添加控制项」按钮（返回它的按钮容器）。
@@ -4257,16 +4293,29 @@ static void ERStartQuickAccessPositionCorrection(void) {
                     objc_setAssociatedObject(host, kERQAHostBaselineWinYKey, @(layoutWinY), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
                     baselineNum = @(layoutWinY);
                 }
-                BOOL suppressed = (layoutWinY > baselineNum.doubleValue + 8.0);   // 被压低（胶囊在场等）
-                CGFloat compensation = suppressed
-                    ? (ERLandscapePresentationActive() ? gERQABtnCompensationLandscape : gERQABtnCompensationPortrait)
-                    : 0.0;
+                // 1.2.1-3 · 判据升级（问题 1 修复）：
+                //   ① 阈值 8→4（压低量变小也能捕捉）
+                //   ② 直接探测权限胶囊可见性（ERPrivacyCapsuleVisible），可见即视为在场
+                //   ③ 补偿量优先用「实测压低量」（layoutWinY-baseline，开环一次读取、无累加、
+                //      layoutWinY 计算已剥离自身 ty，无反馈回路，不发散）；压低量太小(<2pt)
+                //      时退回旧常量兜底；总量夹取 [0,44]。
+                BOOL capsuleVisible = ERPrivacyCapsuleVisible(ERAllApplicationWindows());
+                CGFloat drift = MAX(0.0, layoutWinY - baselineNum.doubleValue);
+                BOOL suppressed = (drift > 4.0) || capsuleVisible;
+                CGFloat compensation = 0.0;
+                if (suppressed) {
+                    if (drift > 2.0) {
+                        compensation = MIN(drift, 44.0);
+                    } else {
+                        compensation = MIN(MAX(ERLandscapePresentationActive() ? gERQABtnCompensationLandscape : gERQABtnCompensationPortrait, 0.0), 44.0);
+                    }
+                }
                 CGFloat desiredTy = -compensation;
                 if (fabs(currentTy - desiredTy) > 0.5) {
                     // 只在状态切换时写入（两个取值之间切换），写入走禁用动作 + 移除动画
-                    ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f",
-                              (int)suppressed, compensation, desiredTy,
-                              (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue);
+                    ERLogInfo(@"QABTN-COMP 状态切换 suppressed=%d capsule=%d 补偿=%.1f ty=%.1f landscape=%d layoutWinY=%.1f baseline=%.1f drift=%.1f",
+                              (int)suppressed, (int)capsuleVisible, compensation, desiredTy,
+                              (int)ERLandscapePresentationActive(), layoutWinY, baselineNum.doubleValue, drift);
                     [CATransaction begin];
                     [CATransaction setDisableActions:YES];
                     [host.layer removeAllAnimations];
@@ -5038,7 +5087,7 @@ static void ERStoreOriginForIdentifier(NSString *identifier, NSUInteger column, 
     BOOL landscape = ERLandscapeLayoutActive();
     if (landscape) gERLandscapeOrigins[identifier] = value;
     else gERCustomOrigins[identifier] = value;
-    ERLogInfo(@"LANDSCAPE ver=1.2.1-173 store id=%@ cell={%lu,%lu} ledger=%@",
+    ERLogInfo(@"LANDSCAPE ver=1.2.1-174.1 store id=%@ cell={%lu,%lu} ledger=%@",
               identifier, (unsigned long)column, (unsigned long)absoluteRow,
               landscape ? @"landscape" : @"portrait");
 }
@@ -6075,22 +6124,6 @@ static void ERLogMessage(NSString *level, NSString *format, ...) {
 // ERLogInfo/ERLogWarn/ERLogError are declared at the top of the file; the
 // early preview clean-up needs them before this point.
 
-// 1.2.1-173 · Soko（1.1.0 ObjC 重写版）的跨 TU 日志出口。
-// Soko 的 .m 都是独立编译单元，拿不到本文件的 static ERLogRecord，所以走一个
-// C 链接的全局函数（声明在 Soko/SokoLog.h）。本文件按 ObjC++ 编译，必须写
-// extern "C"，否则名字被修饰、Soko 侧链接不到（报 _ERSokoLog undefined）。
-// 本版只做转发，不带 1.2.1-68 的早鸟缓冲（那是为「开关还没读出来」服务的，
-// 本次是行为验证版，不需要那段复杂度）。
-extern "C" void ERSokoLog(NSString *format, ...) {
-    if (!gERLoggingEnabled) return;
-    va_list args;
-    va_start(args, format);
-    NSString *message = [[NSString alloc] initWithFormat:format arguments:args];
-    va_end(args);
-    if (!message.length) return;
-    ERLogRecord(@"INFO", [@"soko " stringByAppendingString:message]);
-}
-
 // Key operations: what happened, to which module, and with what outcome.
 static void ERLogOperation(NSString *operation, NSString *identifier, BOOL success, NSString *detail) {
     if (!gERLoggingEnabled) return;
@@ -6159,7 +6192,7 @@ static void ERLoadPrefs(void) {
     CFPropertyListRef reloadedLandscape = CFPreferencesCopyAppValue(CFSTR("COSMICLandscapeOrigins"), kERPrefsDomain);
     gERLandscapeOrigins = [(__bridge NSDictionary *)reloadedLandscape mutableCopy] ?: [NSMutableDictionary dictionary];
     if (reloadedLandscape) CFRelease(reloadedLandscape);
-    ERLogInfo(@"LANDSCAPE ver=1.2.1-173 ledger=%lu enabled=%d",
+    ERLogInfo(@"LANDSCAPE ver=1.2.1-174.1 ledger=%lu enabled=%d",
               (unsigned long)gERLandscapeOrigins.count, gERLandscapeLayoutEnabled ? 1 : 0);
     ERLogPrefs();
 
@@ -6285,21 +6318,40 @@ static void ERHapticWithStrength(NSInteger strength) {
     [gTapHapticGenerator impactOccurred];
 }
 
+// 1.2.1-1 · 编辑模式降负（第 3 项）：模块 identifier 代际缓存。
+// identifier 只在模块重建时才会变，但 ERModuleIdentifier 每次都走 2~4 层
+// KVC（moduleIdentifier/_moduleIdentifier/module.contentModuleContext…），
+// 编辑态 display link 每帧 × 每模块都在跑 → 挂关联对象按代际缓存。
+// 代际号 gERModuleListGeneration 在模块集合变化点递增（见 ERCollectModuleControllers）。
+static NSUInteger gERModuleListGeneration = 1;
+static const void *kERIdentifierCacheValKey = &kERIdentifierCacheValKey;
+static const void *kERIdentifierCacheGenKey = &kERIdentifierCacheGenKey;
 static NSString *ERModuleIdentifier(UIViewController *controller) {
+    if (!controller) return nil;
+    NSNumber *cachedGen = objc_getAssociatedObject(controller, kERIdentifierCacheGenKey);
+    NSString *cachedVal = objc_getAssociatedObject(controller, kERIdentifierCacheValKey);
+    if (cachedGen && cachedVal && cachedGen.unsignedIntegerValue == gERModuleListGeneration) return cachedVal;
+    NSString *resolved = nil;
     NSArray<NSString *> *keys = @[@"moduleIdentifier", @"_moduleIdentifier"];
     for (NSString *key in keys) {
         @try {
             id value = [controller valueForKey:key];
-            if ([value isKindOfClass:[NSString class]] && [value length]) return value;
+            if ([value isKindOfClass:[NSString class]] && [value length]) { resolved = value; break; }
         } @catch (__unused NSException *exception) {}
     }
-    @try {
-        id module = [controller valueForKey:@"module"];
-        id context = [module valueForKey:@"contentModuleContext"];
-        id value = [context valueForKey:@"moduleIdentifier"];
-        if ([value isKindOfClass:[NSString class]]) return value;
-    } @catch (__unused NSException *exception) {}
-    return nil;
+    if (!resolved) {
+        @try {
+            id module = [controller valueForKey:@"module"];
+            id context = [module valueForKey:@"contentModuleContext"];
+            id value = [context valueForKey:@"moduleIdentifier"];
+            if ([value isKindOfClass:[NSString class]]) resolved = value;
+        } @catch (__unused NSException *exception) {}
+    }
+    if (resolved) {
+        objc_setAssociatedObject(controller, kERIdentifierCacheValKey, resolved, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(controller, kERIdentifierCacheGenKey, @(gERModuleListGeneration), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
+    return resolved;
 }
 
 static UIViewController *ERModuleControllerForView(UIView *view) {
@@ -9099,8 +9151,27 @@ static void ERSliderReadoutTick(UIView *slider, float value) {
     ERSliderReadoutBegin(slider);
 }
 
+// 1.2.1-1 · 编辑模式降负（第 2 项）：BFS 结果按 overlay 缓存 + 代际失效。
+// 编辑态 display link 每帧对每个 overlay 跑一次全量 BFS（childViewControllers
+// 递归收集），帧率随页数/模块数线性劣化 → 缓存列表，模块集合变化点调
+// ERInvalidateModuleListCache() 递增代际使全部失效。
+static NSMutableDictionary<NSValue *, NSArray<UIViewController *> *> *gERModuleListCache = nil;
+static NSMutableDictionary<NSValue *, NSNumber *> *gERModuleListCacheGen = nil;
+static void ERInvalidateModuleListCache(void) { gERModuleListGeneration++; }
+
 static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController *root) {
     if (!root) return @[];
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        gERModuleListCache = [NSMutableDictionary dictionary];
+        gERModuleListCacheGen = [NSMutableDictionary dictionary];
+    });
+    NSValue *key = [NSValue valueWithNonretainedObject:root];
+    NSNumber *gen = [gERModuleListCacheGen objectForKey:key];
+    if (gen && gen.unsignedIntegerValue == gERModuleListGeneration) {
+        NSArray<UIViewController *> *hit = [gERModuleListCache objectForKey:key];
+        if (hit) return hit;
+    }
     NSMutableArray *result = [NSMutableArray array];
     NSMutableArray *queue = [NSMutableArray arrayWithObject:root];
     while (queue.count) {
@@ -9109,7 +9180,10 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
         if (candidate != root && ERIsModuleController(candidate)) [result addObject:candidate];
         [queue addObjectsFromArray:candidate.childViewControllers];
     }
-    return result;
+    NSArray *frozen = [result copy];
+    [gERModuleListCache setObject:frozen forKey:key];
+    [gERModuleListCacheGen setObject:@(gERModuleListGeneration) forKey:key];
+    return frozen;
 }
 
 static UIViewController *ERModuleControllerMatchingObject(UIViewController *overlay, id object) {
@@ -10238,7 +10312,7 @@ static CGFloat ERGlassRadiusForModuleMaterial(UIView *mat) {
                                  module.layer.cornerRadius, sERSmallModuleRadius, ERGlassPillRadius(mat)];
             if (![objc_getAssociatedObject(module, kERBigCardGlassLogKey) isEqual:npState]) {
                 objc_setAssociatedObject(module, kERBigCardGlassLogKey, npState, OBJC_ASSOCIATION_COPY_NONATOMIC);
-                ERLogInfo(@"BIGGLASS ver=1.2.1-173 module=%@ mat=%.0fx%.0f pill=%.1f", npState, w, h, ERGlassPillRadius(mat));
+                ERLogInfo(@"BIGGLASS ver=1.2.1-174.1 module=%@ mat=%.0fx%.0f pill=%.1f", npState, w, h, ERGlassPillRadius(mat));
             }
             return npRadius;
         }
@@ -10529,14 +10603,14 @@ static void ERHealConnectivityTileGlass(UIView *material, LGLiveBackdropView *gl
         if (since < 0.35 * (double)(tried + 1)) return;
         objc_setAssociatedObject(material, kERGlassHealTriesKey, @(tried + 1), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         [glass applyFilters];
-        ERLogInfo(@"GLASSHEAL ver=1.2.1-173 id=%@ mode=refilter try=%lu attached=%d",
+        ERLogInfo(@"GLASSHEAL ver=1.2.1-174.1 id=%@ mode=refilter try=%lu attached=%d",
                   identifier, (unsigned long)(tried + 1), glass.lgFilterAttached ? 1 : 0);
         return;
     }
     if (since <= 2.5) return;
     objc_setAssociatedObject(material, kERGlassGiveUpKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     LGRemoveGlassFromMaterial(material, kGlassKey);
-    ERLogInfo(@"GLASSHEAL ver=1.2.1-173 id=%@ mode=remove-glass tries=%lu（玻璃不渲染，交还原生材质）",
+    ERLogInfo(@"GLASSHEAL ver=1.2.1-174.1 id=%@ mode=remove-glass tries=%lu（玻璃不渲染，交还原生材质）",
               identifier, (unsigned long)tried);
 }
 
@@ -10598,7 +10672,7 @@ static void ERSyncConnectivityTileGlass(UIView *moduleView, UIView *material, BO
     if (!glass) return;
     if (glass.tag != kERConnectivityTileGlassTag) {
         glass.tag = kERConnectivityTileGlassTag;
-        ERLogInfo(@"OFFGLASS ver=1.2.1-173 id=%@ mode=install r=%.1f",
+        ERLogInfo(@"OFFGLASS ver=1.2.1-174.1 id=%@ mode=install r=%.1f",
                    ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)", radius);
     }
     glass.userInteractionEnabled = NO;
@@ -10677,7 +10751,7 @@ static UIView *EREnsureTileMaterial(UIView *moduleView, NSInteger tag) {
         platter = material;
         // 留一条可验证的记录：src=system 表示用的是系统同款材质，src=blur 表示退回了
         // 合成模糊。两种来源并存时看这一行就能判断命中的是哪条分支。
-        ERLogInfo(@"OFFBGSRC ver=1.2.1-173 id=%@ src=%@",
+        ERLogInfo(@"OFFBGSRC ver=1.2.1-174.1 id=%@ src=%@",
                    ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)", source);
     }
     platter.frame = moduleView.bounds;
@@ -10724,7 +10798,7 @@ static UIView *ERUpgradeTileMaterialIfNeeded(UIView *moduleView, UIView *current
     [current removeFromSuperview];
     if (index == NSNotFound || index > moduleView.subviews.count) index = 0;
     [moduleView insertSubview:material atIndex:index];
-    ERLogInfo(@"OFFBGUPGRADE ver=1.2.1-173 id=%@",
+    ERLogInfo(@"OFFBGUPGRADE ver=1.2.1-174.1 id=%@",
                ERModuleIdentifier(ERModuleControllerForView(moduleView)) ?: @"(nil)");
     return material;
 }
@@ -11144,7 +11218,7 @@ static void ERSyncConnectivityTileChrome(UIView *moduleView) {
         // 一次会话 212 行、单秒峰值 28 行，占全会话日志量的 30%。除第 1 条已把跳变
         // 本身消掉之外，这里再按 1 行/秒封顶。
         if (ERDiagShouldLog(@"OFFBGFIX", 1.0)) {
-            ERLogInfo(@"OFFBGFIX ver=1.2.1-173 id=%@ %@", identifier, state);
+            ERLogInfo(@"OFFBGFIX ver=1.2.1-174.1 id=%@ %@", identifier, state);
         }
     }
 }
@@ -11952,7 +12026,7 @@ static void ERConfigureOddResizedModuleLayout(UIViewController *module) {
         static BOOL warned = NO;
         if (!warned) {
             warned = YES;
-            ERLogInfo(@"LAYOUTGUARD ver=1.2.1-173 reentry=%ld id=%@ (bailing out)",
+            ERLogInfo(@"LAYOUTGUARD ver=1.2.1-174.1 reentry=%ld id=%@ (bailing out)",
                        (long)gERConfigLayoutDepth, ERModuleIdentifier(module) ?: @"(nil)");
         }
         return;
@@ -12262,7 +12336,7 @@ static void ERConfigureOddResizedModuleLayoutInner(UIViewController *module) {
                                 npView ? (objc_getAssociatedObject(npView, kERNowPlayingLayoutModeKey) ?: @"(nil)") : @"(none)"];
         if (![objc_getAssociatedObject(module.view, kERMediaFixLogKey) isEqual:mediaState]) {
             objc_setAssociatedObject(module.view, kERMediaFixLogKey, mediaState, OBJC_ASSOCIATION_COPY_NONATOMIC);
-            ERLogInfo(@"MEDIAFIX ver=1.2.1-173 id=%@ %@", identifier, mediaState);
+            ERLogInfo(@"MEDIAFIX ver=1.2.1-174.1 id=%@ %@", identifier, mediaState);
         }
     } else {
         // Every other module EchoReborn has no bespoke presentation for. Left
@@ -12617,8 +12691,6 @@ static NSUInteger ERDerivedVisiblePageForOverlay(UIViewController *overlay) {
 - (void)beginInteractivePageTransitionForOverlay:(UIViewController *)overlay startPage:(NSUInteger)startPage;
 - (void)updateInteractivePageTransitionForOverlay:(UIViewController *)overlay progress:(CGFloat)progress touchY:(CGFloat)touchY;
 - (void)finishInteractivePageTransitionForOverlay:(UIViewController *)overlay targetPage:(NSUInteger)targetPage;
-// 1.2.1-173 · A3（自 1.2.1-24 移植）：翻页不变量自愈。由看门狗 C 函数回调，须前置声明。
-- (void)erReconcilePagerForOverlay:(UIViewController *)overlay forced:(BOOL)forced;
 - (void)trackControlCenterPresentationGesture:(UIPanGestureRecognizer *)gesture overlay:(UIViewController *)overlay controller:(id)controller;
 - (void)presentationPanDisplayLinkFired:(CADisplayLink *)displayLink;
 - (void)beginPresentationPanDiscoveryForOverlay:(UIViewController *)overlay controller:(id)controller;
@@ -13027,7 +13099,7 @@ static void EREditBadgeApplyGlass(UIButton *badge) {
                        CGRectGetWidth(bubble.frame), CGRectGetHeight(bubble.frame), radius];
     if (![objc_getAssociatedObject(badge, kEREditBadgeGlassStateKey) isEqual:state]) {
         objc_setAssociatedObject(badge, kEREditBadgeGlassStateKey, state, OBJC_ASSOCIATION_COPY_NONATOMIC);
-        ERLogInfo(@"EDITGLASS ver=1.2.1-173 %@", state);
+        ERLogInfo(@"EDITGLASS ver=1.2.1-174.1 %@", state);
     }
 }
 
@@ -13121,13 +13193,13 @@ static CALayer *gERPageSettleProbeLayer = nil;
     CALayer *presentation = (CALayer *)layer.presentationLayer;
     NSTimeInterval elapsed = CACurrentMediaTime() - gERPageSettleProbeStart;
     if (gERPageSettleProbeFrames <= 42) {
-        ERLogInfo(@"SETTLEPROBE ver=1.2.1-173 f=%ld t=%.3f pres=%.1f model=%.1f",
+        ERLogInfo(@"SETTLEPROBE ver=1.2.1-174.1 f=%ld t=%.3f pres=%.1f model=%.1f",
                   (long)gERPageSettleProbeFrames, elapsed,
                   presentation ? presentation.sublayerTransform.m42 : 0.0,
                   layer.sublayerTransform.m42);
     }
     if (gERPageSettleProbeFrames >= 42) {
-        ERLogInfo(@"SETTLEPROBE ver=1.2.1-173 done frames=%ld", (long)gERPageSettleProbeFrames);
+        ERLogInfo(@"SETTLEPROBE ver=1.2.1-174.1 done frames=%ld", (long)gERPageSettleProbeFrames);
         [link invalidate];
         gERPageSettleProbeLink = nil;
         gERPageSettleProbeLayer = nil;
@@ -13665,14 +13737,14 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     if (best.valid && bestIdentifier.length) {
         gERGridAnchorIdentifierByPage[@(tilePage)] = bestIdentifier;
         if (anchorDiag) {
-            ERLogInfo(@"SHORTCUTANCHOR ver=1.2.1-173 tilePage=%lu anchor=%@ anchorPage=%ld anchorRow=%ld dist=%lu frame={%.1f,%.1f,%.0fx%.0f}",
+            ERLogInfo(@"SHORTCUTANCHOR ver=1.2.1-174.1 tilePage=%lu anchor=%@ anchorPage=%ld anchorRow=%ld dist=%lu frame={%.1f,%.1f,%.0fx%.0f}",
                       (unsigned long)tilePage, bestIdentifier, (long)best.page, (long)best.physicalRow,
                       (unsigned long)bestDistance, best.frame.origin.x, best.frame.origin.y,
                       best.frame.size.width, best.frame.size.height);
         }
     } else if (anchorDiag) {
         // 整页（以及所有页）都没有可用的原生模块 —— 只能走 base 回退。这一行就是回退的证据。
-        ERLogInfo(@"SHORTCUTANCHOR ver=1.2.1-173 tilePage=%lu anchor=(none) candidates=%lu",
+        ERLogInfo(@"SHORTCUTANCHOR ver=1.2.1-174.1 tilePage=%lu anchor=(none) candidates=%lu",
                   (unsigned long)tilePage, (unsigned long)modules.count);
     }
     return best;
@@ -13720,7 +13792,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
                                (double)gERPagerInteractiveTranslation];
             if (![erBaseGeoLoggedStates containsObject:state]) {
                 [erBaseGeoLoggedStates addObject:state];
-                ERLogInfo(@"BASEGEO ver=1.2.1-173 %@", state);
+                ERLogInfo(@"BASEGEO ver=1.2.1-174.1 %@", state);
             }
         }
     }
@@ -13894,7 +13966,7 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
             CFTimeInterval now = CACurrentMediaTime();
             if (now - erPerfLastLog > 1.0) {
                 erPerfLastLog = now;
-                ERLogInfo(@"ERPERF ver=1.2.1-173 layout=%.2fms slow=%lu tiles=%lu modules=%lu edit=%d scrub=%d link=%d",
+                ERLogInfo(@"ERPERF ver=1.2.1-174.1 layout=%.2fms slow=%lu tiles=%lu modules=%lu edit=%d scrub=%d link=%d",
                           elapsed * 1000.0, (unsigned long)erPerfSlowCount, (unsigned long)erPerfTileCount,
                           (unsigned long)anchorModules.count, gEditModeActive ? 1 : 0,
                           gERPagerScrubbingActive ? 1 : 0, gEROwnedDuplicateHostDisplayLink ? 1 : 0);
@@ -14248,31 +14320,6 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
         fade = [overlay.view viewWithTag:kERTopFadeTag];
     }
     if (!fade) return;
-    // 1.2.1-173 · A2/A3（自 1.2.1-17 bug 3-C / bug 1 移植）：pager 标志 staleness。
-    // setCurrentPage:animated: 旧实现置 gERPagerTransitionActive=YES 后没有清理路径，
-    // settle 被打断时标志也会残留。残留期间本方法会被 incidental 呈现回调以
-    // alpha=1.0 点亮，而 fade 的 frame (0,0,宽,max(112,safeArea+76)) 正好盖住顶部
-    // 状态带 —— 这是「状态区消失 2-3 秒」的首选温床。
-    // 看门狗：标志为真但 1s 内无任何手势推进（跟手位移 / 圆点拖拽）即视为残留，连标志一起清。
-    // 合法窗口（tap 0.22s、settle ≤0.42s）都小于 1s，不会误伤；跟手悬停与圆点长按算「推进中」。
-    UIView *indicatorHost = [overlay.view viewWithTag:kERPageIndicatorHostTag];
-    BOOL indicatorDragging = indicatorHost ? [objc_getAssociatedObject(indicatorHost, kERPageIndicatorDraggingKey) boolValue] : NO;
-    BOOL gestureInFlight = fabs(gERPagerInteractiveTranslation) > 0.5 || indicatorDragging;
-    BOOL flagsRaw = gERPagerScrubbingActive || gERPagerTransitionActive;
-    static CFTimeInterval staleFlagsSince = 0.0;
-    if (!gERExpandedModuleOpen && flagsRaw && !gestureInFlight) {
-        CFTimeInterval now = CACurrentMediaTime();
-        if (staleFlagsSince <= 0.0) staleFlagsSince = now;
-        if (now - staleFlagsSince > 1.0) {
-            ERLogInfo(@"[FADE] cleared stale pager flags scrub=%d transition=%d after=%.2fs",
-                      (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive, now - staleFlagsSince);
-            gERPagerScrubbingActive = NO;
-            gERPagerTransitionActive = NO;
-            staleFlagsSince = 0.0;
-        }
-    } else {
-        staleFlagsSince = 0.0;
-    }
     BOOL active = !gERExpandedModuleOpen &&
         (gERPagerScrubbingActive || gERPagerTransitionActive || fabs(gERPagerInteractiveTranslation) > 0.5);
     CGFloat target = active ? MIN(1.0, MAX(0.0, alpha)) : 0.0;
@@ -14280,182 +14327,6 @@ static ERGridAnchorRef ERGridAnchorForTilePage(UIViewController *overlay, UIView
     fade.alpha = target;
     CGFloat height = MAX(112.0, overlay.view.safeAreaInsets.top + 76.0);
     fade.frame = CGRectMake(0.0, 0.0, CGRectGetWidth(overlay.view.bounds), height);
-}
-
-// ===== 1.2.1-173 · A2 + A3（自 1.2.1-19 ~ 1.2.1-24 移植，剥掉全部诊断探针） =====
-//
-// 本版重建策略：基底 = 1.2.0-97 纯净树，只回填 A1~A4 四项（真机验证成立的根因），
-// 不携带任何探针/镜像/失败方案。日志一律走 97 已有的 ERLogInfo 通道。
-
-// ---------- A2：状态带「伪隐藏」免疫 ----------
-//
-// 1.2.1-19 的调用栈实锤：把 CCUIHeaderPocketView 里状态带子视图 alpha 打零的，
-// 是 ControlCenterUI 自己的 UIView 动画（淡出 + 完成块淡回，时长 1.5~3.2s），
-// 且在「无模块展开」的常态下发生 —— 用户看到的「状态区消失 2-3 秒」。
-// 修法：swizzle 这两个类的 setAlpha:，在 1→0 且场景不合法时当场顶回 1.0。
-// 合法的隐藏场景（展开中 / 展开收尾 / 编辑 / 翻页 / CC 收起）一律放行，不抢。
-//
-// 安全：setAlpha: 继承自 UIView，直接 method_setImplementation 会写到 UIView 本体
-// 而影响全应用。先 class_addMethod 给子类落一份自己的实现，再替换成观测块。
-static void ERBandAlphaFixOnce(Class cls) {
-    if (!cls) return;
-    static NSMutableSet *gERBandFixSwizzled = nil;
-    static dispatch_once_t onceToken;
-    dispatch_once(&onceToken, ^{ gERBandFixSwizzled = [NSMutableSet set]; });
-    @synchronized (gERBandFixSwizzled) {
-        if ([gERBandFixSwizzled containsObject:cls]) return;
-        [gERBandFixSwizzled addObject:cls];
-    }
-    SEL sel = @selector(setAlpha:);
-    Method superMethod = class_getInstanceMethod(class_getSuperclass(cls), sel);
-    if (!superMethod) return;
-    IMP original = method_getImplementation(superMethod);
-    const char *encoding = method_getTypeEncoding(superMethod);
-    if (!class_addMethod(cls, sel, original, encoding)) {
-        Method own = class_getInstanceMethod(cls, sel);
-        if (!own) return;
-        original = method_getImplementation(own);
-        encoding = method_getTypeEncoding(own);
-    }
-    IMP replacement = imp_implementationWithBlock(^(id self, SEL _cmd, CGFloat alpha) {
-        CGFloat before = ((CGFloat (*)(id, SEL))objc_msgSend)(self, @selector(alpha));
-        BOOL toZero = before > 0.001 && alpha <= 0.001;
-        if (toZero) {
-            BOOL legitimate = !gERControlCenterPresented || gERExpandedModuleOpen ||
-                gERExpandedModuleClosingActive || gEditModeActive ||
-                gERPagerScrubbingActive || gERPagerTransitionActive ||
-                gERControlCenterPresentationState == 3;
-            if (!legitimate) {
-                static CFTimeInterval lastFixLog = 0.0;
-                CFTimeInterval now = CACurrentMediaTime();
-                if (now - lastFixLog > 5.0) {
-                    lastFixLog = now;
-                    ERLogInfo(@"[BANDFIX] %@ forced 0->1", NSStringFromClass([self class]));
-                }
-                ((void (*)(id, SEL, CGFloat))original)(self, sel, 1.0);
-                return;
-            }
-        }
-        ((void (*)(id, SEL, CGFloat))original)(self, sel, alpha);
-    });
-    if (replacement) class_replaceMethod(cls, sel, replacement, encoding);
-}
-
-// ---------- A3：翻页不变量自愈 ----------
-//
-// 1.2.1-21 实测两类卡死共因：手势结束事件丢失（长按拖圆点 / 超长滑动被系统手势
-// 接管）后没人恢复视觉状态 —— 模块 layer.opacity 停在 0（能点但看不见，需 respring）、
-// gERPagerInteractiveTranslation 残留（页面悬停在过冲位）。
-// 1.2.1-24 的结论：不要猜「哪条结束事件丢了」，改成每 tick 校验一组**必须恒真**
-// 的不变量，任一条为假就整盒重建 —— 终态错就一定被拉回，与中间哪条链路断无关。
-static __weak UIGestureRecognizer *gERPagerActiveGesture = nil;
-static CFTimeInterval gERPagerLastActivityTime = 0.0;
-
-static void ERMarkPagerActivity(void) {
-    gERPagerLastActivityTime = CACurrentMediaTime();
-}
-
-static BOOL ERPagerGestureAlive(void) {
-    if (!gERPagerActiveGesture) return NO;
-    // 结束事件可能丢，但「触摸数归零」是系统级的，比 state 更可信。
-    if (gERPagerActiveGesture.numberOfTouches == 0) return NO;
-    UIGestureRecognizerState state = gERPagerActiveGesture.state;
-    return state == UIGestureRecognizerStateBegan || state == UIGestureRecognizerStateChanged;
-}
-
-static BOOL ERPagerIdleStale(void) {
-    if (gERPagerLastActivityTime <= 0.0) {
-        gERPagerLastActivityTime = CACurrentMediaTime();
-        return NO;
-    }
-    // 0.45s：正常落位最长 0.30s settle + 0.22s setCurrentPage，放行它们，
-    // 又能在用户察觉之前收干净（1.5s 的旧窗口实测轮不到）。
-    return (CACurrentMediaTime() - gERPagerLastActivityTime) > 0.45;
-}
-
-// forced —— CC 刚呈现完的那一次强制自检：上一轮会话丢干净的手势链会把
-// 模块 opacity=0 / 悬停位移跨会话带到下一次打开，这里在用户看见之前拉回。
-static void ERReconcilePagerIfNeeded(UIViewController *overlay, BOOL forced) {
-    if (!overlay || !overlay.view || !gERPageCount) return;
-    if (!gERControlCenterPresented) return;
-    if (gERControlCenterPresentationState != 2) return;   // 呈现动画未落定，几何本就在变
-    if (gERExpandedModuleOpen || gEditModeActive || gERDragInProgress) return;
-    if (ERPagerGestureAlive()) return;                    // 手指还在屏上，不抢
-    if (!forced && !ERPagerIdleStale()) return;
-    [[EchoRebornCoordinator shared] erReconcilePagerForOverlay:overlay forced:forced];
-}
-
-static NSUInteger gERHeaderPocketWatchdogGeneration = 0;
-
-static void ERHeaderPocketWatchdogSample(UIViewController *overlay) {
-    if (!overlay.view) return;
-    // 每 tick 一次不变量自愈（内部自带 0.45s 闲置门 + 手指存活门 + 呈现态门）。
-    ERReconcilePagerIfNeeded(overlay, NO);
-    // pocket 只在 overlay 树里做一层 BFS（命中即停），不遍历全树。
-    UIView *pocket = nil;
-    NSMutableArray<UIView *> *queue = [NSMutableArray arrayWithObject:overlay.view];
-    while (queue.count) {
-        UIView *candidate = queue.firstObject;
-        [queue removeObjectAtIndex:0];
-        if ([NSStringFromClass(candidate.class) isEqualToString:@"CCUIHeaderPocketView"]) {
-            pocket = candidate;
-            break;
-        }
-        [queue addObjectsFromArray:candidate.subviews];
-    }
-    if (!pocket) return;
-    for (UIView *child in pocket.subviews) {
-        NSString *name = NSStringFromClass(child.class);
-        if (![name hasPrefix:@"CCUISensorAttribution"] && ![name isEqualToString:@"CCUIStatusBar"]) continue;
-        // 命中即装 setAlpha: 观测（幂等；只给子类落自己的实现，不碰 UIView 本体）。
-        ERBandAlphaFixOnce(child.class);
-        // 已经卡在 0 的状态带：iOS 的「完成块淡回」在结束事件丢失时永不来，
-        // 这里在「完全呈现 + 无展开/编辑/拖动 + 手指已离屏 + 闲置 >0.45s」时点回 1。
-        // 收起中（pres 3）/已收起（0）一律放行系统，避免在收起动画里和系统打架。
-        if (child.alpha <= 0.001 && !child.hidden &&
-            gERControlCenterPresentationState == 2 &&
-            !gERExpandedModuleOpen && !gEditModeActive && !gERDragInProgress &&
-            !ERPagerGestureAlive() && ERPagerIdleStale()) {
-            [child.layer removeAllAnimations];
-            [UIView animateWithDuration:0.2 delay:0.0 options:UIViewAnimationOptionCurveEaseOut animations:^{
-                child.alpha = 1.0;
-            } completion:nil];
-            ERLogInfo(@"[BANDRESTORE] %@ alpha 0->1 (stuck)", name);
-        }
-    }
-}
-
-static void ERScheduleHeaderPocketWatchdog(UIViewController *overlay, NSUInteger generation) {
-    __weak UIViewController *weakOverlay = overlay;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIViewController *strongOverlay = weakOverlay;
-        if (!strongOverlay) return;   // overlay 已析构，链自然终止
-        NSNumber *ticket = objc_getAssociatedObject(strongOverlay, kERHeaderPocketWatchdogKey);
-        if (!ticket || ticket.unsignedIntegerValue != generation) return;   // 已被新一轮取代
-        if (!gERControlCenterPresented || !gEnabled) {
-            objc_setAssociatedObject(strongOverlay, kERHeaderPocketWatchdogKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-            return;
-        }
-        ERHeaderPocketWatchdogSample(strongOverlay);
-        ERScheduleHeaderPocketWatchdog(strongOverlay, generation);
-    });
-}
-
-static void ERStartHeaderPocketWatchdog(UIViewController *overlay) {
-    if (!overlay) return;
-    NSUInteger generation = ++gERHeaderPocketWatchdogGeneration;
-    objc_setAssociatedObject(overlay, kERHeaderPocketWatchdogKey, @(generation), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    ERScheduleHeaderPocketWatchdog(overlay, generation);
-    // 呈现即自检：不等闲置门，呈现落定（state 2）后 0.45s 强制校验一次。
-    __weak UIViewController *weakOverlay = overlay;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        UIViewController *strongOverlay = weakOverlay;
-        if (!strongOverlay) return;
-        if (objc_getAssociatedObject(strongOverlay, kERHeaderPocketWatchdogKey) != nil &&
-            gERControlCenterPresented && gEnabled) {
-            ERReconcilePagerIfNeeded(strongOverlay, YES);
-        }
-    });
 }
 
 - (void)updateOwnedDuplicateHostForOverlay:(UIViewController *)overlay presentationAlpha:(CGFloat)alpha {
@@ -14644,7 +14515,7 @@ static void ERStartHeaderPocketWatchdog(UIViewController *overlay) {
     if (presented) {
         if (gERDismissSuppressDuplicates || gERControlCenterPresentationState == 3 ||
             gERControlCenterPresentationState == 0) {
-            ERLogInfo(@"SHORTCUTEXIT ver=1.2.1-173 reject-presented state=%lu suppress=%d",
+            ERLogInfo(@"SHORTCUTEXIT ver=1.2.1-174.1 reject-presented state=%lu suppress=%d",
                       (unsigned long)gERControlCenterPresentationState,
                       gERDismissSuppressDuplicates ? 1 : 0);
             return;
@@ -14771,7 +14642,7 @@ static void ERStartHeaderPocketWatchdog(UIViewController *overlay) {
         }
     }
     [CATransaction commit];
-    ERLogInfo(@"SHORTCUTEXIT ver=1.2.1-173 force-hide state=%lu presented=%d",
+    ERLogInfo(@"SHORTCUTEXIT ver=1.2.1-174.1 force-hide state=%lu presented=%d",
               (unsigned long)gERControlCenterPresentationState, gERControlCenterPresented ? 1 : 0);
 }
 
@@ -14975,7 +14846,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
                        visible.bounds.origin.y];
     if (lastState && [state isEqualToString:lastState]) return;
     lastState = [state copy];
-    ERLogInfo(@"PAGEGEO ver=1.2.1-173 %@", state);
+    ERLogInfo(@"PAGEGEO ver=1.2.1-174.1 %@", state);
 }
 
 - (void)applyPageTransformToOverlay:(UIViewController *)overlay animated:(BOOL)animated {
@@ -15196,7 +15067,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     slide.duration = duration;
     slide.timingFunction = curve;
     [collectionLayer addAnimation:slide forKey:@"EchoRebornPageSettleSublayerTransform"];
-    ERLogInfo(@"PAGESETTLE ver=1.2.1-173 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration);
+    ERLogInfo(@"PAGESETTLE ver=1.2.1-174.1 from=%.1f to=%.1f dur=%.2f", fromSub.m42, toSub.m42, duration);
     ERStartPageSettleProbe(collectionLayer);
 
     // 1.0.7-17（方案 A，实装）：快捷指令磁贴的宿主层参与同一条落位补间。
@@ -15250,20 +15121,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     gERPagerInteractiveTranslation = 0.0;
     [self updatePageIndicatorsForOverlay:overlay];
     [self applyPageTransformToOverlay:overlay animated:animated];
-    // 1.2.1-173 · A2/A3（自 1.2.1-17 bug 3 第 3 条移植）：animated 分支补 completion 清理。
-    // 旧实现置 gERPagerTransitionActive=YES 后没有任何路径把它清回 NO —— 残留期间
-    // ERInteractivePagingGeometryActive() 恒真、incidental 呈现回调会插入
-    // applyPageTransform / 点亮 top fade（A2「状态区消失」的同源温床）。
-    // 用与 applyPageTransformToOverlay:animated: 同款 token：0.22s 后清标志，
-    // token 被后续动画替换则作废。
-    if (animated) {
-        id transitionToken = objc_getAssociatedObject(overlay, kERPageAnimationTokenKey);
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.22 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (objc_getAssociatedObject(overlay, kERPageAnimationTokenKey) != transitionToken) return;
-            if (!gERPagerScrubbingActive) gERPagerTransitionActive = NO;
-            [self updateTopFadeForOverlay:overlay presentationAlpha:0.0];
-        });
-    }
     if (gPagingEnabled && gERControlCenterPresented && gERControlCenterPresentationState == 2) {
         for (NSNumber *delay in @[@0.0, @0.12, @0.42]) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
@@ -15298,19 +15155,15 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     NSNumber *page = objc_getAssociatedObject(sender, @selector(pageIndicatorTapped:));
     if (!gPagingEnabled || !overlay || !page || gERExpandedModuleOpen || gERPagerTransitionActive) return;
     if (gEditModeActive) return;
-    // 1.2.1-173 · A1（自 1.2.1-17 bug 4 移植）：touch-down 不再进入 scrub 态。
-    // 旧实现在按下瞬间就 beginInteractivePageTransition —— heldScale 0.26s 入场缩放
-    // + indicator 切 scrub 大间距（用户看到「放大」）+ 松手再 0.30s settle，
-    // 合计约 0.5s 才跳页。CC18 用原生 UIPageControl：按下即翻。
-    // 现在 touch-down 只做夹紧重 assert；纯点击走 pageIndicatorTapped: 的
-    // setCurrentPage:animated:YES（0.22s 即翻）；真拖拽仍由 pageIndicatorPanned:
-    // 的 Began 分支进入 scrub，交互不变。
     ERReassertNativeScrollClampForOverlay(overlay);
+    [self beginInteractivePageTransitionForOverlay:overlay startPage:gERCurrentPage];
+    [self updateInteractivePageTransitionForOverlay:overlay
+                                           progress:(CGFloat)page.unsignedIntegerValue
+                                             touchY:CGRectGetMidY(sender.frame)];
 }
 
 - (void)beginInteractivePageTransitionForOverlay:(UIViewController *)overlay startPage:(NSUInteger)startPage {
     if (!gPagingEnabled || !overlay || gERPageCount <= 1 || gERPagerTransitionActive) return;
-    ERMarkPagerActivity();   // 1.2.1-173 · A3：卡死恢复的活动基准
     gERPagerTransitionActive = YES;
     gERPagerInteractiveStartPage = MIN(startPage, gERPageCount - 1);
     gERPagerInteractiveProgress = gERPagerInteractiveStartPage;
@@ -15488,21 +15341,18 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         // deliberately bounded to transform + opacity.
         EREditGridView *grid = gEditModeActive ? [self editGridForPage:candidate overlay:overlay] : nil;
         if (grid) {
-            // 1.2.1-173 · A4（自 1.2.1-24 移植）：原 keyframe 是 0.90 → **1.025** → 1.0，
-            // 那个 1.025 是故意写进去的过冲，每次跨页对每个模块播一遍，读感就是「弹一下」。
-            // 改成单调 0.92 → 1.0 的纯淡入 —— 用户要的不是更强手感，而是不要过冲。
             [grid.layer removeAnimationForKey:@"EchoRebornPagerPopScale"];
             [grid.layer removeAnimationForKey:@"EchoRebornPagerPopFade"];
-            CABasicAnimation *gridScale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-            gridScale.fromValue = @0.92;
-            gridScale.toValue = @1.0;
-            gridScale.duration = 0.18;
+            CAKeyframeAnimation *gridScale = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+            gridScale.values = @[@0.90, @1.025, @1.0];
+            gridScale.keyTimes = @[@0.0, @0.68, @1.0];
+            gridScale.duration = 0.20;
             gridScale.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             [grid.layer addAnimation:gridScale forKey:@"EchoRebornPagerPopScale"];
-            CABasicAnimation *gridFade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-            gridFade.fromValue = @0.10;
-            gridFade.toValue = @1.0;
-            gridFade.duration = 0.16;
+            CAKeyframeAnimation *gridFade = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+            gridFade.values = @[@0.08, @0.86, @1.0];
+            gridFade.keyTimes = @[@0.0, @0.62, @1.0];
+            gridFade.duration = 0.18;
             gridFade.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             [grid.layer addAnimation:gridFade forKey:@"EchoRebornPagerPopFade"];
         }
@@ -15515,19 +15365,18 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
             if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
             if (ERPageForRect(rect) != candidate) continue;
-            // 1.2.1-173 · A4：同上，模块侧的 0.90 → 1.025 → 1.0 过冲去掉，改单调 0.92 → 1.0。
             [module.view.layer removeAnimationForKey:@"EchoRebornPagerPopScale"];
             [module.view.layer removeAnimationForKey:@"EchoRebornPagerPopFade"];
-            CABasicAnimation *scale = [CABasicAnimation animationWithKeyPath:@"transform.scale"];
-            scale.fromValue = @0.92;
-            scale.toValue = @1.0;
-            scale.duration = 0.18;
+            CAKeyframeAnimation *scale = [CAKeyframeAnimation animationWithKeyPath:@"transform.scale"];
+            scale.values = @[@0.90, @1.025, @1.0];
+            scale.keyTimes = @[@0.0, @0.68, @1.0];
+            scale.duration = 0.20;
             scale.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             [module.view.layer addAnimation:scale forKey:@"EchoRebornPagerPopScale"];
-            CABasicAnimation *fade = [CABasicAnimation animationWithKeyPath:@"opacity"];
-            fade.fromValue = @0.10;
-            fade.toValue = @1.0;
-            fade.duration = 0.16;
+            CAKeyframeAnimation *fade = [CAKeyframeAnimation animationWithKeyPath:@"opacity"];
+            fade.values = @[@0.08, @0.86, @1.0];
+            fade.keyTimes = @[@0.0, @0.62, @1.0];
+            fade.duration = 0.18;
             fade.timingFunction = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
             [module.view.layer addAnimation:fade forKey:@"EchoRebornPagerPopFade"];
         }
@@ -15572,7 +15421,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
 
 - (void)finishInteractivePageTransitionForOverlay:(UIViewController *)overlay targetPage:(NSUInteger)targetPage {
     if (!overlay) return;
-    ERMarkPagerActivity();   // 1.2.1-173 · A3：收尾也刷新活动（settle 进行中不算闲置）
     ERReassertNativeScrollClampForOverlay(overlay);
     gERPagerInteractiveBeganTime = 0.0;
     NSUInteger target = MIN(targetPage, gERPageCount - 1);
@@ -15648,72 +15496,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     }];
 }
 
-- (void)erReconcilePagerForOverlay:(UIViewController *)overlay forced:(BOOL)forced {
-    if (!overlay.view || !gERPageCount) return;
-    UIViewController *collection = [self moduleCollectionControllerInOverlay:overlay];
-    if (!collection.view) return;
-    CALayer *collectionLayer = collection.view.layer;
-    // 我们自己的落位动画还在跑 —— CA 保证 completion 一定会来，别抢。
-    if ([collectionLayer animationForKey:@"EchoRebornPageSettleSublayerTransform"] ||
-        [collectionLayer animationForKey:@"EchoRebornPageSettleTransform"]) {
-        ERMarkPagerActivity();
-        return;
-    }
-    NSValue *baseValue = objc_getAssociatedObject(collection.view, kEROriginalSublayerTransformKey);
-    CATransform3D base = baseValue ? baseValue.CATransform3DValue : CATransform3DIdentity;
-    CGFloat span = MAX(ERVisualPageSpan(), 1.0);
-    // 不变量 B：页面位移必须 = base - page*span，且跟手位移归零。
-    CGFloat expected = base.m42 - (CGFloat)gERCurrentPage * span;
-    CGFloat actual = collectionLayer.sublayerTransform.m42;
-    BOOL flagsSet = gERPagerScrubbingActive || gERPagerTransitionActive;
-    BOOL displaced = fabs(gERPagerInteractiveTranslation) > 0.01 || fabs(actual - expected) > 1.5;
-    // 不变量 C：当前页模块必须可见（layer.opacity 由 updatePagedModuleVisibility 写 0/1，
-    // kERPageHiddenKey 是它的记账本 —— 两者之一偏差就算错）。
-    NSUInteger mismatch = 0, onPage = 0;
-    for (UIViewController *module in ERCollectModuleControllers(overlay)) {
-        NSString *identifier = ERModuleIdentifier(module);
-        NSValue *nativeValue = identifier.length ? gERNativeLayoutRects[identifier] : nil;
-        if (!nativeValue) continue;
-        CCUILayoutRect rect = {};
-        [nativeValue getValue:&rect];
-        NSArray<NSNumber *> *origin = ERStoredOriginForIdentifier(identifier);
-        if (origin.count >= 2) rect.origin = (CCUILayoutPoint){origin[0].unsignedIntegerValue, origin[1].unsignedIntegerValue};
-        if (ERPageForRect(rect) != gERCurrentPage) continue;
-        onPage++;
-        NSNumber *hidden = objc_getAssociatedObject(module.view, kERPageHiddenKey);
-        if (hidden.boolValue || module.view.layer.opacity <= 0.001) mismatch++;
-    }
-    // 不变量 D：collection 亮度（heldAlphaFactor 卡住时整页灰着）
-    CGFloat baseAlpha = [objc_getAssociatedObject(collection.view, kEROriginalAlphaKey) doubleValue];
-    if (baseAlpha <= 0.001) baseAlpha = 1.0;
-    BOOL dimmed = collection.view.alpha < baseAlpha - 0.02;
-
-    if (!flagsSet && !displaced && !mismatch && !dimmed) {
-        ERMarkPagerActivity();
-        return;   // 终态全对，什么都不做
-    }
-    CGFloat visualPage = (CGFloat)gERCurrentPage - gERPagerInteractiveTranslation / span;
-    NSInteger target = (NSInteger)llround(MIN(MAX(visualPage, 0.0), (CGFloat)gERPageCount - 1.0));
-    if (target < 0) target = 0;
-    ERLogInfo(@"RECON f=%d fl=%d/%d disp=%d vis=%lu/%lu dim=%d pg=%ld->%ld tr=%.1f m42=%.1f/%.1f",
-              (int)forced, (int)gERPagerScrubbingActive, (int)gERPagerTransitionActive,
-              (int)displaced, (unsigned long)mismatch, (unsigned long)onPage, (int)dimmed,
-              (long)gERCurrentPage, (long)target, gERPagerInteractiveTranslation, actual, expected);
-    if (forced) {
-        // 跨会话残留：标志位与票根本身可能就是卡死源头，直接作废，再让 finish 重建终态。
-        gERPagerScrubbingActive = NO;
-        gERPagerTransitionActive = NO;
-        gERPagerInteractiveTranslation = 0.0;
-        gERPagerInteractiveBeganTime = 0.0;
-        UIView *host = [overlay.view viewWithTag:kERPageIndicatorHostTag];
-        objc_setAssociatedObject(host, kERPageIndicatorDraggingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
-    // finish 内部一次做完：清位移 → 当前页可见性 → chrome 复显 → 0.30s 落位
-    // → completion 清标志 + 重建 indicators + 熄 top fade。单一出口，不会打架。
-    [self finishInteractivePageTransitionForOverlay:overlay targetPage:(NSUInteger)target];
-    ERMarkPagerActivity();   // 防止下一 tick 重复触发
-}
-
 - (void)pageIndicatorPanned:(UIPanGestureRecognizer *)gesture {
     UIView *host = gesture.view;
     UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
@@ -15725,7 +15507,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     if (gesture.state == UIGestureRecognizerStateBegan) {
         objc_setAssociatedObject(host, kERPageIndicatorDraggingKey, @YES, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         objc_setAssociatedObject(gesture, kERPagerStartPageKey, @(gERCurrentPage), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        gERPagerActiveGesture = gesture;   // 1.2.1-173 · A3：手指存活判定用
         [self beginInteractivePageTransitionForOverlay:overlay startPage:gERCurrentPage];
         location = [gesture locationInView:host];
         progress = ERPageProgressForScrubY(location.y, kERPageIndicatorScrubStep, gERPageCount);
@@ -15733,7 +15514,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     } else if (gesture.state == UIGestureRecognizerStateChanged) {
         [self updateInteractivePageTransitionForOverlay:overlay progress:progress touchY:location.y];
     } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
-        gERPagerActiveGesture = nil;   // 1.2.1-173 · A3：结束即放手（事件丢了有触摸数归零兜底）
         NSUInteger startPage = [objc_getAssociatedObject(gesture, kERPagerStartPageKey) unsignedIntegerValue];
         NSUInteger target = gesture.state == UIGestureRecognizerStateEnded ? (NSUInteger)llround(MIN((CGFloat)gERPageCount - 1.0, MAX(0.0, progress))) : startPage;
         objc_setAssociatedObject(gesture, kERPagerStartPageKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
@@ -16127,8 +15907,6 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     if (!gPagingEnabled || !overlay || gERPageCount <= 1 ||
         gERExpandedModuleOpen || gERDragInProgress) return;
     if (gesture.state == UIGestureRecognizerStateBegan) {
-        gERPagerActiveGesture = gesture;   // 1.2.1-173 · A3：手指存活判定用
-        ERMarkPagerActivity();
         gERPagerTransitionActive = YES;
         if (gEditModeActive) [self setEditControlsSuppressedForPaging:YES overlay:overlay animated:YES];
         [self updateTopFadeForOverlay:overlay presentationAlpha:1.0];
@@ -16167,15 +15945,12 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     if (gesture.state == UIGestureRecognizerStateChanged) {
         gERCurrentPage = startPage;
         gERPagerInteractiveTranslation = translation.y;
-        ERMarkPagerActivity();   // 1.2.1-173 · A3：拖拽推进即活跃（长按不动靠手指存活门兜住）
         [self applyPageTransformToOverlay:overlay animated:NO];
         [self updateTopFadeForOverlay:overlay presentationAlpha:1.0];
         if (gEditModeActive) [self updateEditControlFramesForOverlay:overlay];
         return;
     }
     if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
-        gERPagerActiveGesture = nil;   // 1.2.1-173 · A3：结束即放手
-        ERMarkPagerActivity();         // settle 进行中不算闲置
         CGPoint velocity = [gesture velocityInView:overlay.view];
         NSInteger target = (NSInteger)startPage;
         if (gesture.state == UIGestureRecognizerStateEnded) {
@@ -16202,10 +15977,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             CGFloat distanceFactor = MIN(1.0, remaining / MAX(ERVisualPageSpan(), 1.0));
             CGFloat velocityFactor = MIN(1.0, releaseVelocity / 1800.0);
             NSTimeInterval duration = MIN(0.42, MAX(0.24, 0.22 + distanceFactor * 0.20 - velocityFactor * 0.10));
-            // 1.2.1-173 · A4（自 1.2.1-24 移植）：EaseInEaseOut 的 in 段是「先慢半拍
-            // 再冲出去」，配上 0.30s 时长读感就是「停顿一下再落下」。EaseOut 让松手
-            // 即刻起步、末段自然减速，与 iOS 原生 scrollView 落位曲线一致。
-            CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+            CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
             [self animatePageSettleForOverlay:overlay duration:duration timingFunction:settleCurve modelChanges:^{
                 gERCurrentPage = (NSUInteger)target;
                 gERPagerInteractiveTranslation = 0.0;
@@ -16255,8 +16027,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
             UIScrollView *settleScrollView = nativeScrollView;
             NSValue *settleOffsetValue = nativeOffsetValue;
             CGPoint settleOffset = nativeOffset;
-            // 1.2.1-173 · A4（自 1.2.1-24 移植）：非编辑态落位同修，去过冲/去迟疑。
-            CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseOut];
+            CAMediaTimingFunction *settleCurve = [CAMediaTimingFunction functionWithName:kCAMediaTimingFunctionEaseInEaseOut];
             [self animatePageSettleForOverlay:overlay duration:duration timingFunction:settleCurve modelChanges:^{
                 gERCurrentPage = (NSUInteger)target;
                 gERPagerInteractiveTranslation = 0.0;
@@ -16450,7 +16221,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
     CGFloat width = ERQuickAccessHostWidth(controller);
     if (widthConstraint && fabs(widthConstraint.constant - width) > 0.5) {
         widthConstraint.constant = width;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 host-width=%.1f", width);
+        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 host-width=%.1f", width);
     }
     CGFloat centerY = ERQuickAccessCenterYOffset(controller);
     // 1.0.1：横向缩进 / 按钮大小 / 字形尺寸也在这里原地刷新。
@@ -16501,7 +16272,7 @@ static void ERLogPageGeometry(NSString *phase, UIViewController *overlay, UIView
         }
     }
     if (anySizeChanged) {
-        ERLogInfo(@"QUICKACCESSGEOM ver=1.2.1-173 inset=%.1f size=%.1f glyph=%.1f", inset, side, glyphSide);
+        ERLogInfo(@"QUICKACCESSGEOM ver=1.2.1-174.1 inset=%.1f size=%.1f glyph=%.1f", inset, side, glyphSide);
     }
 }
 
@@ -16557,14 +16328,14 @@ static CGFloat ERLandscapePillOffset(void) {
                 if (statusBar.count) break;
             }
         }
-        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 fallback hits=%lu", (unsigned long)statusBar.count);
+        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 fallback hits=%lu", (unsigned long)statusBar.count);
     }
     // 1.0.7-25：进入日志（每秒最多一条）—— 用它判断这条链到底有没有被走到。
     static CFTimeInterval chromeEnterLoggedAt = 0.0;
     CFTimeInterval chromeNow = CACurrentMediaTime();
     if (chromeNow - chromeEnterLoggedAt > 1.0) {
         chromeEnterLoggedAt = chromeNow;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 enter landscape=%d active=%d presented=%d state=%lu hits=%lu fallback=%d",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 enter landscape=%d active=%d presented=%d state=%lu hits=%lu fallback=%d",
                    (int)landscape, (int)active, (int)gERControlCenterPresented,
                    (unsigned long)gERControlCenterPresentationState, (unsigned long)statusBar.count,
                    (int)usedFallback);
@@ -16580,7 +16351,7 @@ static CGFloat ERLandscapePillOffset(void) {
     static BOOL statusRiseLogged = NO;
     if (active && !statusRiseLogged) {
         statusRiseLogged = YES;
-        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 statusbar-rise targetTop=%.1f targetCenterY=%.1f hits=%lu",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 statusbar-rise targetTop=%.1f targetCenterY=%.1f hits=%lu",
                    kERLandscapeStatusBarTargetTop, kERLandscapeStatusBarTargetCenterY,
                    (unsigned long)statusBar.count);
     } else if (!active) {
@@ -16818,7 +16589,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
             if (![systemLogged containsObject:key]) {
                 [systemLogged addObject:key];
                 CGRect r = [view convertRect:view.bounds toView:window];
-                ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 system-statusbar cls=%@ rise=%.1f y=%.1f h=%.1f w=%.1f",
+                ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 system-statusbar cls=%@ rise=%.1f y=%.1f h=%.1f w=%.1f",
                            key, kERLandscapeStatusBarFixedRise,
                            CGRectGetMinY(r), CGRectGetHeight(r), CGRectGetWidth(r));
             }
@@ -16862,7 +16633,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
                      CGRectGetMinY(baseRect), rise];
     if (![landscapeChromeRiseLogged containsObject:key]) {
         [landscapeChromeRiseLogged addObject:key];
-        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 rise-plan cls=%@ baseTop=%.1f targetTop=%.1f rise=%.1f h=%.1f",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 rise-plan cls=%@ baseTop=%.1f targetTop=%.1f rise=%.1f h=%.1f",
                    NSStringFromClass(container.class), CGRectGetMinY(baseRect),
                    kERLandscapeStatusBarTargetTop, rise, CGRectGetHeight(baseRect));
     }
@@ -16885,7 +16656,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     UIWindow *window = overlay.view.window;
     CGRect winRect = window ? window.bounds : CGRectZero;
     CGSize screenSize = UIScreen.mainScreen.bounds.size;
-    ERLogInfo(@"CHROMADUMP ver=1.2.1-173 gate=%d win=%.1fx%.1f view=%.1fx%.1f screen=%.1fx%.1f inset(t=%.1f b=%.1f) overlays=%lu matched=%lu",
+    ERLogInfo(@"CHROMADUMP ver=1.2.1-174.1 gate=%d win=%.1fx%.1f view=%.1fx%.1f screen=%.1fx%.1f inset(t=%.1f b=%.1f) overlays=%lu matched=%lu",
                (int)ERLandscapePresentationActive(),
                CGRectGetWidth(winRect), CGRectGetHeight(winRect),
                CGRectGetWidth(overlay.view.bounds), CGRectGetHeight(overlay.view.bounds),
@@ -16895,14 +16666,14 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     // 0.5.19：把窗口清单和被命中的状态栏视图各打一遍。前一次日志证明「状态栏
     // 到底挂在哪个窗口 / 哪个类」是靠类名猜不出来的，这里直接读数。
     for (UIWindow *w in ERAllApplicationWindows()) {
-        ERLogInfo(@"CHROMADUMP ver=1.2.1-173 win cls=%@ y=%.1f h=%.1f w=%.1f lvl=%.1f hid=%d key=%d",
+        ERLogInfo(@"CHROMADUMP ver=1.2.1-174.1 win cls=%@ y=%.1f h=%.1f w=%.1f lvl=%.1f hid=%d key=%d",
                    NSStringFromClass(w.class), CGRectGetMinY(w.frame), CGRectGetHeight(w.frame),
                    CGRectGetWidth(w.frame), w.windowLevel, (int)w.hidden, (int)w.isKeyWindow);
     }
     for (UIView *v in matched) {
         UIWindow *hostWindow = v.window;
         CGRect r = hostWindow ? [v convertRect:v.bounds toView:hostWindow] : v.frame;
-        ERLogInfo(@"CHROMADUMP ver=1.2.1-173 hit cls=%@ y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d win=%@",
+        ERLogInfo(@"CHROMADUMP ver=1.2.1-174.1 hit cls=%@ y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d win=%@",
                    NSStringFromClass(v.class), CGRectGetMinY(r), CGRectGetHeight(r),
                    CGRectGetMinX(r), CGRectGetWidth(r), v.alpha, (int)v.hidden,
                    hostWindow ? NSStringFromClass(hostWindow.class) : @"(nil)");
@@ -16934,7 +16705,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     for (UIView *v in top) {
         if (n++ >= 48) break;
         CGRect r = window ? [v convertRect:v.bounds toView:window] : v.frame;
-        ERLogInfo(@"CHROMADUMP ver=1.2.1-173 top y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d matched=%d cls=%@",
+        ERLogInfo(@"CHROMADUMP ver=1.2.1-174.1 top y=%.1f h=%.1f x=%.1f w=%.1f a=%.2f hid=%d matched=%d cls=%@",
                    CGRectGetMinY(r), CGRectGetHeight(r), CGRectGetMinX(r), CGRectGetWidth(r),
                    v.alpha, (int)v.hidden, (int)[matched containsObject:v], NSStringFromClass(v.class));
     }
@@ -17028,7 +16799,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     for (NSUInteger index = 0; index < found.count && index < 14; index++) {
         [lines addObject:found[index][@"text"]];
     }
-    ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 top-views(窗口坐标 按Y排序)=%@", lines);
+    ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 top-views(窗口坐标 按Y排序)=%@", lines);
 }
 
 // ---------------------------------------------------------------------------
@@ -17075,7 +16846,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
     NSNumber *lastLogged = landscapeChromeLogged[key];
     if (!lastLogged || chromeNow - lastLogged.doubleValue > 2.0) {
         landscapeChromeLogged[key] = @(chromeNow);
-        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
+        ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 class=%@ rise=%.1f frameY=%.1f h=%.1f ty=%.1f winY=%.1f",
                    NSStringFromClass(view.class), rise, CGRectGetMinY(view.frame), CGRectGetHeight(view.frame),
                    view.transform.ty,
                    view.window ? CGRectGetMinY([view convertRect:view.bounds toView:view.window]) : -1.0);
@@ -17083,7 +16854,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
             UIView *alive = weakChrome;
             if (!alive) return;
-            ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-173 verify class=%@ ty=%.1f winY=%.1f",
+            ERLogInfo(@"LANDSCAPECHROME ver=1.2.1-174.1 verify class=%@ ty=%.1f winY=%.1f",
                        NSStringFromClass(alive.class), alive.transform.ty,
                        alive.window ? CGRectGetMinY([alive convertRect:alive.bounds toView:alive.window]) : -1.0);
         });
@@ -17694,7 +17465,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
         panel.transform = CGAffineTransformIdentity;
     } completion:nil];
 
-    ERLogInfo(@"POWERMENU ver=1.2.1-173 presented panel=%.0fx%.0f items=%lu",
+    ERLogInfo(@"POWERMENU ver=1.2.1-174.1 presented panel=%.0fx%.0f items=%lu",
               panelWidth, panelHeight, (unsigned long)itemViews.count);
 }
 
@@ -18163,7 +17934,7 @@ static CGFloat const kERLandscapeStatusBarNativeY = 43.7;
         // 下面那条「第三方插件」重标。
         BOOL isOwnedModule = ERIdentifierIsEchoRebornOwned(identifier);
         if ([lowerIdentifier containsString:@"echoreborn.weather"]) {
-            ERLogInfo(@"WEATHERCAT ver=1.2.1-173 id=%@ category=%@ isTweak=%d owned=%d bundle=%@",
+            ERLogInfo(@"WEATHERCAT ver=1.2.1-174.1 id=%@ category=%@ isTweak=%d owned=%d bundle=%@",
                       identifier, category, isTweak, isOwnedModule, bundlePath);
         }
         BOOL allowsMultiple = ERModuleIdentifierSupportsOwnedDuplicates(identifier);
@@ -18933,7 +18704,7 @@ static void ERLogCaughtException(NSString *where, NSException *exception) {
     NSArray<NSString *> *symbols = exception.callStackSymbols ?: @[];
     NSUInteger count = MIN(symbols.count, (NSUInteger)10);
     NSString *stack = count ? [[symbols subarrayWithRange:NSMakeRange(0, count)] componentsJoinedByString:@" | "] : @"(no symbols)";
-    ERLogInfo(@"ERGUARD ver=1.2.1-173 at=%@ name=%@ reason=%@ stack=%@", where, name, reason, stack);
+    ERLogInfo(@"ERGUARD ver=1.2.1-174.1 at=%@ name=%@ reason=%@ stack=%@", where, name, reason, stack);
 }
 
 // 真正的实现搬到这里，外层只留 @try/@catch。
@@ -19147,6 +18918,7 @@ static void ERActClsProbe(void) {
 }
 
 - (void)addControlSheetDidSelectIdentifier:(NSString *)identifier fromSheet:(UIViewController *)sheet {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     @try {
         [self erAddControlSheetDidSelectIdentifierCore:identifier fromSheet:sheet];
     } @catch (NSException *exception) {
@@ -19174,6 +18946,7 @@ static void ERActClsProbe(void) {
 }
 
 - (void)erRemoveTappedCore:(UIButton *)sender {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     ERHaptic();
     NSString *identifier = objc_getAssociatedObject(sender, @selector(removeTapped:));
     if (!identifier.length) return;
@@ -19269,6 +19042,7 @@ static void ERActClsProbe(void) {
     // hierarchy settles.
     for (NSNumber *delay in @[@0.15, @0.35, @0.65]) {
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            ERInvalidateModuleListCache();  // 1.2.1-1 · 集合重建后失效
             UIViewController *overlay = gOverlayControllers.allObjects.firstObject;
             if (!overlay) return;
             [self installQuickAccessHostOnOverlay:overlay];
@@ -19364,16 +19138,37 @@ static CGFloat EROversizedMediaCornerRadius(void) {
     return isRectangularGridModule ? radius + 4.0 : radius;
 }
 
+// 1.2.1-1 · 编辑模式降负（第 1 项，头号杀手）：
+// 旧实现每帧每模块 new UIBezierPath 环 + new CAShapeLayer 设 layer.mask ——
+// 10~20 个模块 × 60fps = 每秒几百次对象分配 + mask 全量重设，GPU/主线程双杀。
+// 现在：① frame+radius 没变直接 return（编辑态静止时逐帧归零）；② mask 层挂
+// 关联对象复用，只更新 path；③ layer.mask 只在真正变化时赋值。
+static NSMapTable *gERBorderLastFrame = nil;   // border -> 上次布局目标 frame
+static const void *kERBorderMaskLayerKey = &kERBorderMaskLayerKey;
+
 - (void)configureEditingBorder:(UIVisualEffectView *)border moduleFrame:(CGRect)moduleFrame {
     if (!border) return;
-    border.frame = CGRectInset(moduleFrame, -3.5, -3.5);
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{ gERBorderLastFrame = [NSMapTable strongToStrongObjectsMapTable]; });
+    CGRect target = CGRectInset(moduleFrame, -3.5, -3.5);
     CGFloat radius = [self refinedCornerRadiusForSize:moduleFrame.size];
+    NSValue *last = [gERBorderLastFrame objectForKey:border];
+    if (last) {
+        CGRect lastFrame = last.CGRectValue;
+        if (CGRectEqualToRect(lastFrame, target) && border.layer.mask) return;
+    }
+    [gERBorderLastFrame setObject:[NSValue valueWithCGRect:target] forKey:border];
+    border.frame = target;
+    CAShapeLayer *mask = objc_getAssociatedObject(border, kERBorderMaskLayerKey);
+    if (![mask isKindOfClass:[CAShapeLayer class]]) {
+        mask = [CAShapeLayer layer];
+        mask.fillRule = kCAFillRuleEvenOdd;
+        objc_setAssociatedObject(border, kERBorderMaskLayerKey, mask, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    }
     UIBezierPath *ring = [UIBezierPath bezierPathWithRoundedRect:border.bounds cornerRadius:radius + 3.5];
     [ring appendPath:[UIBezierPath bezierPathWithRoundedRect:CGRectInset(border.bounds, 3.5, 3.5) cornerRadius:radius]];
-    CAShapeLayer *mask = [CAShapeLayer layer];
     mask.path = ring.CGPath;
-    mask.fillRule = kCAFillRuleEvenOdd;
-    border.layer.mask = mask;
+    if (border.layer.mask != mask) border.layer.mask = mask;
 }
 
 - (id)labelBlurFilterWithRadius:(CGFloat)radius {
@@ -19857,7 +19652,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         }
     }
     NSString *identifier = module ? ERModuleIdentifier(module) : nil;
-    ERLogInfo(@"TAPHAPTIC ver=1.2.1-173 id=%@", identifier ?: @"(nil)");
+    ERLogInfo(@"TAPHAPTIC ver=1.2.1-174.1 id=%@", identifier ?: @"(nil)");
     if (!gHapticsEnabled || !identifier.length) return;
     // 编辑态 / 已有模块展开 / 拖拽与改尺寸进行中，都不算「点一个普通模块」。
     if (gEditModeActive || gERExpandedModuleOpen || gERDragInProgress || gERResizeInProgress) return;
@@ -19878,7 +19673,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (!supported) return;
     NSInteger strength = ERHapticCurrentStrength();
     ERHapticWithStrength(strength);
-    ERLogInfo(@"TAPHAPTIC-OK ver=1.2.1-173 id=%@ strength=%ld", identifier, (long)strength);
+    ERLogInfo(@"TAPHAPTIC-OK ver=1.2.1-174.1 id=%@ strength=%ld", identifier, (long)strength);
 }
 
 // 观察型 tap 的目标与 delegate 仍挂在这个选择器上（见 ERInstallModuleTapFeedback），
@@ -20130,6 +19925,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (BOOL)applyExplicitGridMoveFrom:(NSString *)sourceID toOrigin:(CCUILayoutPoint)destination onPage:(NSUInteger)page overlay:(UIViewController *)overlay {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     NSValue *sourceValue = gERNativeLayoutRects[sourceID];
     if (!sourceValue) return NO;
     NSMutableDictionary<NSString *, NSValue *> *proposed = ERLayoutForPage(overlay, page, kERMinimumGridRows);
@@ -20175,6 +19971,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (BOOL)applyExplicitGridInsertionFrom:(NSString *)sourceID toOrigin:(CCUILayoutPoint)destination onPage:(NSUInteger)page maxRows:(NSUInteger)maxRows overlay:(UIViewController *)overlay {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     NSValue *sourceValue = gERNativeLayoutRects[sourceID];
     if (!sourceValue || maxRows == 0) return NO;
     NSMutableDictionary<NSString *, NSValue *> *initial = ERLayoutForPage(overlay, page, maxRows);
@@ -21776,7 +21573,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                            gERDragInProgress ? 1 : 0, gERActiveDragModuleIdentifier ?: @"-"];
         if (![objc_getAssociatedObject(overlay, kEREditGridProbeStateKey) isEqual:state]) {
             objc_setAssociatedObject(overlay, kEREditGridProbeStateKey, state, OBJC_ASSOCIATION_COPY_NONATOMIC);
-            ERLogInfo(@"EREDITGRID ver=1.2.1-173 %@", state);
+            ERLogInfo(@"EREDITGRID ver=1.2.1-174.1 %@", state);
         }
     }
 }
@@ -22106,26 +21903,55 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (gERDragInProgress || gERPagerTransitionActive || gERPagerScrubbingActive) return;
     UIButton *addControl = (UIButton *)[overlay.view viewWithTag:kERAddControlButtonTag];
     if (addControl) {
-        // Centered in the blank space between the last module row and the
-        // bottom of the display, sitting just above the home indicator.
-        [addControl sizeToFit];
-        CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
-        CGRect bounds = overlay.view.bounds;
-        // 1.0.6-10（第 4 条）：整体上移 2pt（对应「距底 4 → 6，增加二分之一」）。
-        //
-        // 方向务必注意：origin.y = 高度 − bottomInset − size.height，所以**增大**
-        // bottomInset 才是上移。此前记录里写的「−14 → −16」会得到更小的 bottomInset，
-        // 方向相反、实际是下移 2pt。这里两个分支同时 +2：常规分支 −14 → −12，
-        // 下限分支 16 → 18 —— 无论设备是否命中下限，视觉位移都恰好是 2pt。
-        CGFloat bottomInset = MAX(overlay.view.safeAreaInsets.bottom - 12.0, 18.0);
-        addControl.frame = CGRectMake((CGRectGetWidth(bounds) - size.width) / 2.0, CGRectGetHeight(bounds) - bottomInset - size.height, size.width, size.height);
+        // 1.2.1-1 · 编辑模式降负（第 4 项）：addControl 的 sizeToFit+落位只在
+        // bounds/安全区真的变化时重算，静止帧不再做 measure 一遍。
+        NSValue *lastBounds = objc_getAssociatedObject(addControl, kERAddControlLastBoundsKey);
+        NSValue *lastInsets = objc_getAssociatedObject(addControl, kERAddControlLastInsetsKey);
+        UIEdgeInsets insets = overlay.view.safeAreaInsets;
+        BOOL changed = !lastBounds || !CGRectEqualToRect(lastBounds.CGRectValue, overlay.view.bounds)
+                       || !lastInsets || !UIEdgeInsetsEqualToEdgeInsets(lastInsets.UIEdgeInsetsValue, insets);
+        if (changed) {
+            [addControl sizeToFit];
+            CGSize size = CGSizeMake(CGRectGetWidth(addControl.bounds), 30.0);
+            CGRect bounds = overlay.view.bounds;
+            // 1.0.6-10（第 4 条）：整体上移 2pt（对应「距底 4 → 6，增加二分之一」）。
+            //
+            // 方向务必注意：origin.y = 高度 − bottomInset − size.height，所以**增大**
+            // bottomInset 才是上移。此前记录里写的「−14 → −16」会得到更小的 bottomInset，
+            // 方向相反、实际是下移 2pt。这里两个分支同时 +2：常规分支 −14 → −12，
+            // 下限分支 16 → 18 —— 无论设备是否命中下限，视觉位移都恰好是 2pt。
+            CGFloat bottomInset = MAX(insets.bottom - 12.0, 18.0);
+            addControl.frame = CGRectMake((CGRectGetWidth(bounds) - size.width) / 2.0, CGRectGetHeight(bounds) - bottomInset - size.height, size.width, size.height);
+            objc_setAssociatedObject(addControl, kERAddControlLastBoundsKey, [NSValue valueWithCGRect:overlay.view.bounds], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+            objc_setAssociatedObject(addControl, kERAddControlLastInsetsKey, [NSValue valueWithUIEdgeInsets:insets], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
     }
+    // 1.2.1-1 · 编辑模式降负（第 5 项）：每帧的 frame/hidden/alpha 写入包进
+    // 禁隐式动画的事务——既省掉每帧隐式动画的调度，也防止抖动。
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
     for (UIViewController *module in ERCollectModuleControllers(overlay)) {
+        if (!module.view) continue;
         if ((gERDragInProgress && module.view == gERActiveDragModuleView) ||
             (gERResizeInProgress && module.view == gERActiveResizeModuleView)) continue;
         UIButton *remove = objc_getAssociatedObject(module.view, kERRemoveButtonKey);
         UIButton *resize = objc_getAssociatedObject(module.view, kERResizeButtonKey);
         CGRect moduleFrame = [module.view convertRect:module.view.bounds toView:overlay.view];
+        // 1.2.1-1 · 编辑模式降负（第 3 项）：帧级快速跳过——模块 frame 与 chrome
+        // 状态位（抑制/边框开关/删除钮开关/当前页）都没变时，本模块整段跳过。
+        // 只比 frame 不够：gEREditChromeSuppressedForPaging 等开关变化时 frame 不动，
+        // 但 hidden/alpha 必须跟上。
+        NSUInteger chromeState = (gEREditChromeSuppressedForPaging ? 1u : 0u)
+                               | (gModuleBordersEnabled ? 2u : 0u)
+                               | (gRemovalButtonsEnabled ? 4u : 0u)
+                               | ((gERCurrentPage & 0xFFu) << 3);
+        NSValue *lastFrameValue = objc_getAssociatedObject(module.view, kERModuleLastChromeFrameKey);
+        NSNumber *lastState = objc_getAssociatedObject(module.view, kERModuleLastChromeStateKey);
+        if (lastFrameValue && lastState
+            && CGRectEqualToRect(lastFrameValue.CGRectValue, moduleFrame)
+            && lastState.unsignedIntegerValue == chromeState) continue;
+        objc_setAssociatedObject(module.view, kERModuleLastChromeFrameKey, [NSValue valueWithCGRect:moduleFrame], OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        objc_setAssociatedObject(module.view, kERModuleLastChromeStateKey, @(chromeState), OBJC_ASSOCIATION_RETAIN_NONATOMIC);
         // Borders live with their module wrapper and are naturally clipped by
         // the moving collection. Remove/resize controls live on overlay.view,
         // so explicitly cull them when their owner is outside the viewport;
@@ -22146,6 +21972,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (resize) resize.hidden = !ownerVisible || ![self moduleIdentifierSupportsResizing:identifier];
         [self positionEditControlsForModuleView:module.view overlay:overlay overlayFrame:moduleFrame];
     }
+    [CATransaction commit];
 }
 
 - (void)editChromeDisplayLinkFired:(__unused CADisplayLink *)displayLink {
@@ -22180,6 +22007,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (void)setEditing:(BOOL)editing {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     if (!gEnabled) editing = NO;
     if (editing && gERExpandedModuleOpen) return;
     NSUInteger editTransitionGeneration = ++gEREditTransitionGeneration;
@@ -22218,6 +22046,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
 }
 
 - (void)dismissEditingImmediately {
+    ERInvalidateModuleListCache();  // 1.2.1-1 · 模块集合变化 → BFS/identifier 缓存失效
     if (!gEditModeActive) return;
     ++gEREditTransitionGeneration;
     gEREditTransitionActive = NO;
@@ -22568,6 +22397,19 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
     if (identifier.length && !gERBaseLayoutSizes[identifier]) gERBaseLayoutSizes[identifier] = [NSValue value:&size withObjCType:@encode(CCUILayoutSize)];
     NSArray<NSNumber *> *custom = gERCustomSizes[identifier];
     if (custom.count >= 2) size = (CCUILayoutSize){custom[0].unsignedIntegerValue, custom[1].unsignedIntegerValue};
+    // 1.2.1-174.1 · D4（自 1.2.1-4 移植，本实验只加这一项）：横屏下音量/亮度被拉成 1×3。
+    // 原生布局引擎在横屏态会把 slider 类模块给到 3 行高（1.0.9-2x 时代就有
+    // 「拖拽时 1×3 强改回 2」的补丁佐证）；折行逻辑只改 origin 不改 size，3 行高
+    // 直接体现在最终布局上。这里对无自定义尺寸的 slider 类模块在横屏态钳制 1×2；
+    // 用户显式自定义过尺寸的（gERCustomSizes 命中）完全尊重用户。
+    if (gEnabled && ERLandscapePresentationActive() && custom.count < 2 && identifier.length) {
+        BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
+                           || [identifier containsString:@"controlcenter.audio"]
+                           || [identifier isEqualToString:@"com.apple.mediaremote.controlcenter.audio"]
+                           || [identifier isEqualToString:@"displaymodule"]
+                           || [identifier isEqualToString:@"com.apple.control-center.DisplayModule"];
+        if (isSliderModule && size.height > 2) size.height = 2;
+    }
     return size;
 }
 
@@ -22587,6 +22429,15 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
         if (customOrigin.count >= 2) rect.origin = (CCUILayoutPoint){customOrigin[0].unsignedIntegerValue, customOrigin[1].unsignedIntegerValue};
         NSArray<NSNumber *> *customSize = gERCustomSizes[identifier];
         if (customSize.count >= 2) rect.size = (CCUILayoutSize){customSize[0].unsignedIntegerValue, customSize[1].unsignedIntegerValue};
+        // 1.2.1-174.1 · D4 同源钳制（与 moduleLayoutSizeForContentModuleContext: 一致）：
+        // 横屏下 slider 类模块无自定义尺寸时高度钳到 2 行，杜绝 1×3。
+        if (gEnabled && ERLandscapePresentationActive() && customSize.count < 2 && rect.size.height > 2) {
+            BOOL isSliderModule = [identifier isEqualToString:@"controlcenter.audio"]
+                               || [identifier containsString:@"controlcenter.audio"]
+                               || [identifier isEqualToString:@"displaymodule"]
+                               || [identifier isEqualToString:@"com.apple.control-center.DisplayModule"];
+            if (isSliderModule) rect.size.height = 2;
+        }
         if (gEnabled) {
             // page / localRow 必须在本行改写 origin.y 之前算：此刻
             // rect.origin.y 仍是配置空间里的「page*8 + localRow」。
@@ -22777,7 +22628,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
             NSString *stateKey = [NSString stringWithFormat:@"state/%.0f", ERGridVisibleWidth()];
             if (![landscapeLogged containsObject:stateKey]) {
                 [landscapeLogged addObject:stateKey];
-                ERLogInfo(@"LANDSCAPE ver=1.2.1-173 cw=%.1f visibleW=%.1f cols=%lu stride=%lu blockRows=%lu blockCols=%lu",
+                ERLogInfo(@"LANDSCAPE ver=1.2.1-174.1 cw=%.1f visibleW=%.1f cols=%lu stride=%lu blockRows=%lu blockCols=%lu",
                            containerWidth, ERGridVisibleWidth(),
                            (unsigned long)(kERLandscapeBlockColumns * 2),
                            (unsigned long)ERLayoutPageStrideRows(),
@@ -22787,7 +22638,7 @@ static void ERDiagEditConnectivityModule(UIViewController *module) {
                                    containerHeight, windowInsets.top, windowInsets.bottom];
             if (![landscapeLogged containsObject:stateVKey]) {
                 [landscapeLogged addObject:stateVKey];
-                ERLogInfo(@"LANDSCAPEV ver=1.2.1-173 h=%.1f top=%.1f bot=%.1f extent=%.1f shift=%.1f",
+                ERLogInfo(@"LANDSCAPEV ver=1.2.1-174.1 h=%.1f top=%.1f bot=%.1f extent=%.1f shift=%.1f",
                            containerHeight, windowInsets.top, windowInsets.bottom,
                            (CGFloat)kERLandscapeBlockRows * kERGridStep - kERGridGap, verticalShift);
             }
@@ -24987,27 +24838,6 @@ static void ERInstallModuleTapFeedback(UIView *host) {
     }
     NSUInteger chromeGeneration = ++gERPresentationChromeGeneration;
     gERControlCenterPresentationState = state;
-    // 1.2.1-173 · A3（自 1.2.1-24 移植）：收起中(3)/已收起(0) 立刻清翻页交互残留。
-    // 现场实锤：长按翻页点拖拽结束后 0.5s 内 CC 进入收起，若 scrub 标志 / 跟手位移 /
-    // dragging 票根跨收起存活，下一轮呈现就带着脏状态起步（磁贴 opacity 0 / 位移残留 /
-    // chrome 隐藏）。这里是第一道防线，呈现后的强制自检是第二道。
-    if (state == 0 || state == 3) {
-        if (gERPagerScrubbingActive || gERPagerTransitionActive ||
-            fabs(gERPagerInteractiveTranslation) > 0.01) {
-            ERLogInfo(@"DISM-CLEAN s=%lu scrub=%d tr=%d itr=%.1f",
-                      (unsigned long)state, (int)gERPagerScrubbingActive,
-                      (int)gERPagerTransitionActive, gERPagerInteractiveTranslation);
-        }
-        gERPagerActiveGesture = nil;
-        gERPagerScrubbingActive = NO;
-        gERPagerTransitionActive = NO;
-        gERPagerInteractiveTranslation = 0.0;
-        gERPagerInteractiveBeganTime = 0.0;
-        UIViewController *dismissOverlay = ERFindOverlayController([controller isKindOfClass:[UIViewController class]] ? (UIViewController *)controller : gOverlayControllers.allObjects.firstObject);
-        if (!dismissOverlay) dismissOverlay = gOverlayControllers.allObjects.firstObject;
-        UIView *indicatorHost = dismissOverlay ? [dismissOverlay.view viewWithTag:kERPageIndicatorHostTag] : nil;
-        if (indicatorHost) objc_setAssociatedObject(indicatorHost, kERPageIndicatorDraggingKey, nil, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-    }
     if (gEnabled && !gERExpandedModuleOpen) {
         if (state == 3 && gEditModeActive && !gERDragInProgress) {
             ERHaptic();
@@ -25061,10 +24891,6 @@ static void ERInstallModuleTapFeedback(UIView *host) {
     if ([controller isKindOfClass:[UIViewController class]]) overlay = ERFindOverlayController((UIViewController *)controller);
     if (!overlay) overlay = gOverlayControllers.allObjects.firstObject;
     if (overlay) {
-        // 1.2.1-173 · A3（自 1.2.1-17/24 移植）：呈现即启动 pocket 看门狗。
-        // 0.25s 一拍校验翻页不变量（滞后=一拍+0.45s 闲置门），并救回卡在 alpha 0 的状态带。
-        // 每次呈现回调代数 +1，旧链下一拍自断，保证同时只有一条链；收起时链自然终止。
-        if (state != 0) ERStartHeaderPocketWatchdog(overlay);
         if (state != 0) {
             if (gPagingEnabled && !gERPresentationPanGesture) {
                 [[EchoRebornCoordinator shared] beginPresentationPanDiscoveryForOverlay:overlay controller:self];
@@ -26605,14 +26431,6 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     if (gEditModeActive) [coordinator dismissEditingImmediately];
     if (expandedController) [coordinator applyResizedPresentationToModule:expandedController];
     [coordinator setQuickAccessButtonsHidden:YES forOverlay:overlay animated:YES];
-    // 1.2.1-173 · A2（自 1.2.1-17 bug 1 第 2 条移植）：展开前强制熄 top fade 并清翻页标志。
-    // fade 的 frame (0,0,宽,max(112,safeArea+76)) 正好盖住 HeaderPocket 里的状态带；
-    // 残留的 transition/scrubbing 标志会让 incidental 呈现回调在展开期间把 fade 以
-    // alpha 1.0 点亮 → 状态区消失 2-3 秒。展开态本就不该有翻页标志，这里显式收敛，
-    // 不依赖看门狗的事后清理。
-    gERPagerScrubbingActive = NO;
-    gERPagerTransitionActive = NO;
-    [coordinator updateTopFadeForOverlay:overlay presentationAlpha:0.0];
     %orig;
     if (openingConnectivity) {
         __weak UIViewController *weakOverlay = overlay;
@@ -26685,13 +26503,7 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
         if (!revealActive) pageIndicators.alpha = pageIndicators.hidden ? 0.0 : 1.0;
     }
     [coordinator setQuickAccessButtonsHidden:(gEditModeActive || !gERControlCenterPresented) forOverlay:overlay animated:!ERExpandedChromeRevealActive()];
-    // 1.2.1-173 · A2（自 1.2.1-17 bug 1 第 2 条移植）：折叠收尾强制熄 fade + 清翻页标志。
-    // 旧代码在 CC 仍呈现时以 alpha=1.0 调本方法；此刻 gERExpandedModuleOpen 刚置 NO，
-    // 若翻页标志残留，fade 会被点亮盖住状态带，直到某次 settle completion 才熄 ——
-    // 正是「状态区消失 2-3 秒」。折叠后没有翻页活动，直接归零。
-    gERPagerScrubbingActive = NO;
-    gERPagerTransitionActive = NO;
-    [coordinator updateTopFadeForOverlay:overlay presentationAlpha:0.0];
+    [coordinator updateTopFadeForOverlay:overlay presentationAlpha:gERControlCenterPresented ? 1.0 : 0.0];
     [coordinator animateOwnedDuplicateHostForOverlay:overlay presented:gERControlCenterPresented];
     for (UIViewController *candidate in ERCollectModuleControllers(overlay)) {
         [coordinator applyRefinedLookToModule:candidate];
@@ -26709,7 +26521,7 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
     // 材质 + 圆角 + 白底，是整条路径上唯一的重活，且跑在主线程、正好压在折叠动画
     // 收尾的那一帧上（ERPERF 里紧随其后出现过 layout=16.30ms，刚好一帧）。
     // 先量出来再决定是减负还是挪到下一帧，不盲改。
-    ERLogInfo(@"COLLAPSECHROME ver=1.2.1-173 modules=%lu cost=%.2fms",
+    ERLogInfo(@"COLLAPSECHROME ver=1.2.1-174.1 modules=%lu cost=%.2fms",
               (unsigned long)ERCollectModuleControllers(overlay).count,
               (CACurrentMediaTime() - erCollapseChromeStart) * 1000.0);
     [coordinator updatePageIndicatorsForOverlay:overlay];
@@ -26815,7 +26627,7 @@ static void ERRestoreCompactMediaLayout(UIViewController *overlay, id sourceObje
 //   …/dualcam.state.installed  = 按钮已装上
 // 之前连续五个版本都在盲猜，就是因为相机沙盒写不进日志、没有这条分界线。
 static void ERDualCamHeartbeat(__unused CFNotificationCenterRef center, __unused void *observer, CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
-    ERLogInfo(@"DUALCAM-SIGNAL ver=1.2.1-173 name=%@", (__bridge NSString *)name);
+    ERLogInfo(@"DUALCAM-SIGNAL ver=1.2.1-174.1 name=%@", (__bridge NSString *)name);
 }
 
 static void ERPrefsChanged(__unused CFNotificationCenterRef center, __unused void *observer, __unused CFStringRef name, __unused const void *object, __unused CFDictionaryRef userInfo) {
@@ -29132,7 +28944,7 @@ static void ERQuickAddDumpCountSurface(id obj, NSString *tag) {
         }
     }
     free(methods);
-    ERLogInfo(@"QUICKADD ver=1.2.1-173 surface[%@] %@ methods(%lu)=%@",
+    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 surface[%@] %@ methods(%lu)=%@",
               tag, NSStringFromClass(cls), (unsigned long)methodHits.count, methodHits);
 
     unsigned int ivarCount = 0;
@@ -29151,7 +28963,7 @@ static void ERQuickAddDumpCountSurface(id obj, NSString *tag) {
         }
     }
     free(ivars);
-    ERLogInfo(@"QUICKADD ver=1.2.1-173 surface[%@] %@ ivars(%lu)=%@",
+    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 surface[%@] %@ ivars(%lu)=%@",
               tag, NSStringFromClass(cls), (unsigned long)ivarHits.count, ivarHits);
 }
 
@@ -29170,7 +28982,7 @@ static NSString *ERQuickAddFolderSubtitle(id folderIcon, id model, NSString *dis
         for (id source in sources) {
             total = ERQuickAddCountViaKeyList(source, keys, &hit);
             if (total > 0) {
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 subtitle key=%@ count=%ld", hit, total);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 subtitle key=%@ count=%ld", hit, total);
                 return [NSString stringWithFormat:@"%lu个应用程序", (unsigned long)total];
             }
         }
@@ -29178,7 +28990,7 @@ static NSString *ERQuickAddFolderSubtitle(id folderIcon, id model, NSString *dis
         for (id source in sources) {
             total = ERQuickAddCountViaKVCNumbers(source, @[@"iconCount", @"numberOfIcons"], &hit);
             if (total > 0) {
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 subtitle kvc=%@ count=%ld", hit, total);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 subtitle kvc=%@ count=%ld", hit, total);
                 return [NSString stringWithFormat:@"%lu个应用程序", (unsigned long)total];
             }
         }
@@ -29189,24 +29001,24 @@ static NSString *ERQuickAddFolderSubtitle(id folderIcon, id model, NSString *dis
                                            @[@"cells", @"icons", @"iconLists", @"allIcons", @"numberOfIcons", @"iconCount"],
                                            &hit);
             if (total > 0) {
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 subtitle via %@ count=%ld", hit, total);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 subtitle via %@ count=%ld", hit, total);
                 return [NSString stringWithFormat:@"%lu个应用程序", (unsigned long)total];
             }
         }
         // D. 模型侧
         total = ERQuickAddCountViaModel(model, folderIcon, displayName, &hit);
         if (total > 0) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 subtitle via %@ count=%ld", hit, total);
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 subtitle via %@ count=%ld", hit, total);
             return [NSString stringWithFormat:@"%lu个应用程序", (unsigned long)total];
         }
         // E. 全部落空 → 转储计数面，供下一次照实机数据精确实现
         if (folder) ERQuickAddDumpCountSurface(folder, @"folder");
         ERQuickAddDumpCountSurface(folderIcon, @"folderIcon");
         if (model) ERQuickAddDumpCountSurface(model, @"model");
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 subtitle: no count readable (folder=%@, name=%@)",
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 subtitle: no count readable (folder=%@, name=%@)",
                   folder ? NSStringFromClass([folder class]) : @"nil", displayName ?: @"");
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 subtitle EXC %@ -- %@", e.name, e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 subtitle EXC %@ -- %@", e.name, e.reason);
     }
     return @"文件夹";
 }
@@ -29262,20 +29074,20 @@ static void ERQuickAddRenameFolder(id folder, NSString *name) {
             if (!sig || sig.numberOfArguments < 3) continue;
             if (strcmp([sig getArgumentTypeAtIndex:2], @encode(id)) != 0) continue;
             ((void (*)(id, SEL, id))objc_msgSend)(folder, sel, name);
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 rename via %@ → %@", selName, name);
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 rename via %@ → %@", selName, name);
             return;
         } @catch (NSException *e) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 rename EXC %@ -- %@", selName, e.reason);
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 rename EXC %@ -- %@", selName, e.reason);
         }
     }
     @try {
         [folder setValue:name forKey:@"displayName"];
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 rename via kvc displayName → %@", name);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 rename via kvc displayName → %@", name);
         return;
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 rename kvc EXC %@ -- %@", e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 rename kvc EXC %@ -- %@", e.reason);
     }
-    ERLogInfo(@"QUICKADD ver=1.2.1-173 rename: no usable api on %@",
+    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 rename: no usable api on %@",
               NSStringFromClass([folder class]));
 }
 
@@ -29305,7 +29117,7 @@ static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon, NSString *folderName
                 }
             }
             free(methods);
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 new-folder api-dump cls=%@ hits=%@",
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 new-folder api-dump cls=%@ hits=%@",
                       NSStringFromClass([target class]), hits);
             for (NSString *name in hits) {
                 SEL sel = NSSelectorFromString(name);
@@ -29317,7 +29129,7 @@ static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon, NSString *folderName
                     inv.selector = sel;
                     [inv setArgument:&icons atIndex:2];
                     [inv invokeWithTarget:target];
-                    ERLogInfo(@"QUICKADD ver=1.2.1-173 new-folder via %@ %@",
+                    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 new-folder via %@ %@",
                               NSStringFromClass([target class]), name);
                     // 创建成功 → 差集找新文件夹 → 按用户输入的名字重命名
                     NSArray *afterFolders = ERQuickAddSnapshotFolderIcons();
@@ -29325,7 +29137,7 @@ static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon, NSString *folderName
                     for (id item in afterFolders) {
                         if (![beforeFolders containsObject:item]) [fresh addObject:item];
                     }
-                    ERLogInfo(@"QUICKADD ver=1.2.1-173 new-folder diff fresh=%lu",
+                    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 new-folder diff fresh=%lu",
                               (unsigned long)fresh.count);
                     for (id freshIcon in fresh) {
                         id folder = [freshIcon respondsToSelector:@selector(folder)]
@@ -29334,14 +29146,14 @@ static void ERQuickAddCreateFolderAndMoveIcon(SBIcon *icon, NSString *folderName
                     }
                     return;
                 } @catch (NSException *e) {
-                    ERLogInfo(@"QUICKADD ver=1.2.1-173 new-folder EXC %@ -- %@", e.name, e.reason);
+                    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 new-folder EXC %@ -- %@", e.name, e.reason);
                 }
             }
         }
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 new-folder: no usable api on %lu target(s)",
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 new-folder: no usable api on %lu target(s)",
                   (unsigned long)targets.count);
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 new-folder EXC %@ -- %@", e.name, e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 new-folder EXC %@ -- %@", e.name, e.reason);
     }
 }
 
@@ -29871,7 +29683,7 @@ static UIWindow *gERQuickAddSheetWindow = nil;
     host.rootViewController = self;
     gERQuickAddSheetWindow = host;
     [host makeKeyAndVisible];
-    ERLogInfo(@"QUICKADD ver=1.2.1-173 sheet window scene=%@ level=%.1f key=%d",
+    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 sheet window scene=%@ level=%.1f key=%d",
               scene ? NSStringFromClass(scene.class) : @"(nil)", host.windowLevel, (int)host.isKeyWindow);
 }
 
@@ -30126,7 +29938,7 @@ static UIImage *ERQuickAddCaptureDesktopImage(void) {
             [below addObject:w];
         }
         if (!below.count) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 desktop snapshot: no whitelisted window below level 100");
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 desktop snapshot: no whitelisted window below level 100");
             return nil;
         }
         [below sortUsingComparator:^NSComparisonResult(UIWindow *a, UIWindow *b) {
@@ -30150,15 +29962,15 @@ static UIImage *ERQuickAddCaptureDesktopImage(void) {
                                  afterScreenUpdates:NO];
                     [captured addObject:NSStringFromClass([window class])];
                 } @catch (NSException *e) {
-                    ERLogInfo(@"QUICKADD ver=1.2.1-173 desktop snapshot EXC %@ -- %@", e.name, e.reason);
+                    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 desktop snapshot EXC %@ -- %@", e.name, e.reason);
                 }
             }
         }];
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 desktop snapshot: %lu window(s) %@ -> %@",
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 desktop snapshot: %lu window(s) %@ -> %@",
                   (unsigned long)captured.count, captured, NSStringFromCGSize(image.size));
         return captured.count ? image : nil;
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 desktop snapshot EXC %@ -- %@", e.name, e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 desktop snapshot EXC %@ -- %@", e.name, e.reason);
         return nil;
     }
 }
@@ -30187,7 +29999,7 @@ static UIImage *ERQuickAddBlurredImage(UIImage *image, CGFloat radius) {
         CGImageRelease(cg);
         return blurred ?: image;
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 blur EXC %@ -- %@", e.name, e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 blur EXC %@ -- %@", e.name, e.reason);
         return image;
     }
 }
@@ -30218,7 +30030,7 @@ static void ERQuickAddHideMenuOverlays(void) {
             }
             for (UIView *sub in v.subviews) [stack addObject:sub];
         }
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 hide menu overlays: %lu view(s)", (unsigned long)hiddenCount);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 hide menu overlays: %lu view(s)", (unsigned long)hiddenCount);
         if (hiddenCount > 0) {
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
@@ -30229,7 +30041,7 @@ static void ERQuickAddHideMenuOverlays(void) {
             });
         }
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 hide overlays EXC %@ -- %@", e.name, e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 hide overlays EXC %@ -- %@", e.name, e.reason);
     }
 }
 
@@ -30261,7 +30073,7 @@ static void ERQuickAddProbeMenuSelectorsOn(id target, NSString *tag) {
             }
         }
         free(methods);
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 menu-surface[%@] %@ all=%lu %@",
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu-surface[%@] %@ all=%lu %@",
                   tag, clsName, (unsigned long)hits.count, hits);
     }
     unsigned int count = 0;
@@ -30277,9 +30089,9 @@ static void ERQuickAddProbeMenuSelectorsOn(id target, NSString *tag) {
         if (![target respondsToSelector:sel]) continue;
         @try {
             ((void (*)(id, SEL))objc_msgSend)(target, sel);
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 menu-dismiss try %@ -%@", clsName, name);
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu-dismiss try %@ -%@", clsName, name);
         } @catch (NSException *e) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 menu-dismiss EXC %@ -%@ %@", clsName, name, e.reason);
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu-dismiss EXC %@ -%@ %@", clsName, name, e.reason);
         }
     }
     free(methods);
@@ -30292,7 +30104,7 @@ static void ERQuickAddDismissContextMenu(id iconView) {
             for (id interaction in view.interactions) {
                 if ([interaction isKindOfClass:[UIContextMenuInteraction class]]) {
                     [(UIContextMenuInteraction *)interaction dismissMenu];
-                    ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu dismissed via UIContextMenuInteraction on %@",
+                    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu dismissed via UIContextMenuInteraction on %@",
                               NSStringFromClass([view class]));
                     view = nil;
                     break;
@@ -30302,7 +30114,7 @@ static void ERQuickAddDismissContextMenu(id iconView) {
             view = view.superview;
         }
     } @catch (NSException *e) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu EXC(interaction) %@ -- %@", e.name, e.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu EXC(interaction) %@ -- %@", e.name, e.reason);
     }
     for (NSString *key in @[@"contextMenuInteraction", @"_contextMenuInteraction",
                             @"contextMenuController", @"_contextMenuController",
@@ -30315,22 +30127,22 @@ static void ERQuickAddDismissContextMenu(id iconView) {
         @try {
             if ([obj isKindOfClass:[UIContextMenuInteraction class]]) {
                 [(UIContextMenuInteraction *)obj dismissMenu];
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu dismissed via kvc %@", key);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu dismissed via kvc %@", key);
                 continue;
             }
             if ([obj respondsToSelector:@selector(dismissMenu)]) {
                 ((void (*)(id, SEL))objc_msgSend)(obj, @selector(dismissMenu));
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu dismissed via %@ -dismissMenu", key);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu dismissed via %@ -dismissMenu", key);
                 continue;
             }
             if ([obj respondsToSelector:@selector(dismissViewControllerAnimated:completion:)]) {
                 ((void (*)(id, SEL, BOOL, id))objc_msgSend)(obj, @selector(dismissViewControllerAnimated:completion:), YES, nil);
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu dismissed via %@ dismissViewController", key);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu dismissed via %@ dismissViewController", key);
                 continue;
             }
             ERQuickAddProbeMenuSelectorsOn(obj, [@"kvc:" stringByAppendingString:key]);
         } @catch (NSException *e) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu EXC(kvc %@) %@ -- %@", key, e.name, e.reason);
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu EXC(kvc %@) %@ -- %@", key, e.name, e.reason);
         }
     }
     @try {
@@ -30341,7 +30153,7 @@ static void ERQuickAddDismissContextMenu(id iconView) {
                 NSString *cls = NSStringFromClass([presented class]) ?: @"";
                 if ([cls containsString:@"Menu"]) {
                     [presented dismissViewControllerAnimated:YES completion:nil];
-                    ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu dismissed via presented %@", cls);
+                    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu dismissed via presented %@", cls);
                     return;
                 }
                 vc = presented;
@@ -30361,7 +30173,7 @@ static void ERQuickAddDismissContextMenu(id iconView) {
                                            @"SBIconController");
         }
     } @catch (__unused NSException *e) {}
-    ERLogInfo(@"QUICKADD ver=1.2.1-173 context menu: probes done");
+    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 context menu: probes done");
 }
 
 static void ERQuickAddPresentRenameDialog(void (^onConfirm)(NSString *name)) {
@@ -30382,7 +30194,7 @@ static void ERQuickAddPresentRenameDialog(void (^onConfirm)(NSString *name)) {
     host.rootViewController = renameVC;
     gERQuickAddRenameWindow = host;
     [host makeKeyAndVisible];
-    ERLogInfo(@"QUICKADD ver=1.2.1-173 rename dialog window level=%.1f key=%d scene=%@",
+    ERLogInfo(@"QUICKADD ver=1.2.1-174.1 rename dialog window level=%.1f key=%d scene=%@",
               host.windowLevel, (int)host.isKeyWindow,
               scene ? NSStringFromClass(scene.class) : @"(none)");
 }
@@ -30393,7 +30205,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         ERQuickAddDismissContextMenu(iconView);
         SBIcon *icon = [iconView respondsToSelector:@selector(icon)] ? ((SBIcon *(*)(id, SEL))objc_msgSend)(iconView, @selector(icon)) : nil;
         if (!icon) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 picker: icon view has no icon");
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 picker: icon view has no icon");
             return;
         }
         id controller = ((id (*)(id, SEL))objc_msgSend)(%c(SBIconController), @selector(sharedInstance));
@@ -30404,7 +30216,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
         }
         if (!model) model = [controller valueForKey:@"iconModel"];
         if (!model) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 picker: no icon model");
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 picker: no icon model");
             return;
         }
         id root = [model respondsToSelector:@selector(rootFolder)] ? ((id (*)(id, SEL))objc_msgSend)(model, @selector(rootFolder)) : nil;
@@ -30479,7 +30291,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                 [folderIcons addObject:item];
             }
         }
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 picker: %lu folder(s) via %@",
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 picker: %lu folder(s) via %@",
                   (unsigned long)folderIcons.count, via);
         if (!folderIcons.count) {
             UIAlertController *empty = [UIAlertController alertControllerWithTitle:@"添加到文件夹"
@@ -30551,7 +30363,7 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                                 if ([name containsString:@"Folder"] || [name containsString:@"addIcon"]) [hits addObject:name];
                             }
                             free(methods);
-                            ERLogInfo(@"QUICKADD ver=1.2.1-173 api-dump cls=%@ count=%u hits=%@",
+                            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 api-dump cls=%@ count=%u hits=%@",
                                        NSStringFromClass([candidate class]), methodCount, hits);
                         }
                     }
@@ -30579,21 +30391,21 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
                                 if (sig.numberOfArguments > 4) { BOOL open = NO; [inv setArgument:&open atIndex:4]; }
                                 if (sig.numberOfArguments > 5) { id completion = nil; [inv setArgument:&completion atIndex:5]; }
                                 [inv invokeWithTarget:candidate];
-                                ERLogInfo(@"QUICKADD ver=1.2.1-173 moved via %@ %@ into %@",
+                                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 moved via %@ %@ into %@",
                                            NSStringFromClass([candidate class]), name, rowTitle);
                                 invoked = YES;
                                 break;
                             } @catch (NSException *e) {
-                                ERLogInfo(@"QUICKADD ver=1.2.1-173 move EXC %@ via %@ %@",
+                                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 move EXC %@ via %@ %@",
                                            e.reason, NSStringFromClass([candidate class]), name);
                             }
                         }
                         if (invoked) break;
                     }
-                    if (!invoked) ERLogInfo(@"QUICKADD ver=1.2.1-173 move: no target/selector on %lu candidate(s)",
+                    if (!invoked) ERLogInfo(@"QUICKADD ver=1.2.1-174.1 move: no target/selector on %lu candidate(s)",
                                             (unsigned long)targets.count);
             } @catch (NSException *exception) {
-                ERLogInfo(@"QUICKADD ver=1.2.1-173 move EXC %@ -- %@", exception.name, exception.reason);
+                ERLogInfo(@"QUICKADD ver=1.2.1-174.1 move EXC %@ -- %@", exception.name, exception.reason);
             }
         };
         UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
@@ -30606,13 +30418,13 @@ static void ERQuickAddShowPickerForIconView(id iconView) {
             }
         }
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 picker host=%@ folders=%lu",
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 picker host=%@ folders=%lu",
                   presenter ? NSStringFromClass(presenter.class) : @"(nil)",
                   (unsigned long)folderList.count);
         // 1.0.7-31：放进更高层级的窗口 —— 面板盖在 dock 上面（而不是绕开它）。
         [sheet presentOverDock];
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 picker EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 picker EXC %@ -- %@", exception.name, exception.reason);
     }
 }
 
@@ -31178,11 +30990,11 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         if (!loggedLookup) {
             loggedLookup = YES;
             if (quickActions) {
-                ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 quickactions=%@ super=%@",
+                ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 quickactions=%@ super=%@",
                            NSStringFromClass(quickActions.class),
                            NSStringFromClass(quickActions.superview.class));
             } else {
-                ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 quickactions NOT found in %@",
+                ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 quickactions NOT found in %@",
                            NSStringFromClass(view.class));
             }
         }
@@ -31235,7 +31047,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     if (!loggedPlacement) {
         loggedPlacement = YES;
         CGRect qaRect = quickActions ? [quickActions convertRect:quickActions.bounds toView:host] : CGRectZero;
-        ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 place host=%@ screen=%.0fx%.0f y=%.1f viaQA=%d qa={%.0f,%.0f,%.0fx%.0f} safe=%.0f",
+        ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 place host=%@ screen=%.0fx%.0f y=%.1f viaQA=%d qa={%.0f,%.0f,%.0fx%.0f} safe=%.0f",
                    NSStringFromClass(host.class), screenW, screenH, centerY, (int)usedQuickActions,
                    qaRect.origin.x, qaRect.origin.y, qaRect.size.width, qaRect.size.height, safeBottom);
     }
@@ -31402,7 +31214,7 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
                             CGRectGetWidth(w.bounds), CGRectGetHeight(w.bounds),
                             w.hidden ? @"hid" : @"vis", w.isKeyWindow ? @" key" : @""]];
     }
-    ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 dump windows=%@", windows);
+    ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 dump windows=%@", windows);
 
     NSMutableArray<NSString *> *controllerNames = [NSMutableArray array];
     UIViewController *controlRoot = self.coverSheetController;
@@ -31416,7 +31228,7 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
             if (controller.presentedViewController) [queue addObject:controller.presentedViewController];
         }
     }
-    ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 dump vcs=%@", controllerNames);
+    ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 dump vcs=%@", controllerNames);
 
     if (!root) return;
     UIWindow *window = root.window;
@@ -31435,7 +31247,7 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
         }
         if (candidate.subviews.count) [queue addObjectsFromArray:candidate.subviews];
     }
-    ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 dump widget-sized views(窗口坐标)=%@", entries);
+    ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 dump widget-sized views(窗口坐标)=%@", entries);
 }
 
 - (void)applySystemNowPlayingHiddenInRoot:(UIView *)root {
@@ -31449,7 +31261,7 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
         if (targets.count) {
             NSMutableArray<NSString *> *names = [NSMutableArray array];
             for (UIView *view in targets) [names addObject:NSStringFromClass(view.class)];
-            ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 system-nowplaying targets=%@", names);
+            ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 system-nowplaying targets=%@", names);
         }
         if (!targets.count) {
             [self dumpSystemNowPlayingDiagnosticsInRoot:root];
@@ -31465,7 +31277,7 @@ static BOOL ERMusicViewLooksLikeNowPlayingBar(UIView *view) {
     for (UIView *view in targets) {
         if (view.hidden == shouldHide) continue;
         view.hidden = shouldHide;
-        ERLogInfo(@"MUSICCAPSULE ver=1.2.1-173 system-nowplaying %@ (cls=%@)",
+        ERLogInfo(@"MUSICCAPSULE ver=1.2.1-174.1 system-nowplaying %@ (cls=%@)",
                    shouldHide ? @"hidden" : @"restored", NSStringFromClass(view.class));
     }
 }
@@ -31712,10 +31524,10 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         item.localizedTitle = name;
         NSMutableArray *list = [items mutableCopy] ?: [NSMutableArray array];
         [list insertObject:item atIndex:0];
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 injected(app) name=%@ total=%lu", name, (unsigned long)list.count);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 injected(app) name=%@ total=%lu", name, (unsigned long)list.count);
         return list;
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 inject(app) EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 inject(app) EXC %@ -- %@", exception.name, exception.reason);
         return items;
     }
 }
@@ -31741,10 +31553,10 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         item.localizedTitle = name;
         NSMutableArray *list = [items mutableCopy] ?: [NSMutableArray array];
         [list insertObject:item atIndex:0];
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 injected(view) name=%@", name);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 injected(view) name=%@", name);
         return list;
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 inject(view) EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 inject(view) EXC %@ -- %@", exception.name, exception.reason);
         return items;
     }
 }
@@ -31783,7 +31595,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         CFTimeInterval quickAddNow = CACurrentMediaTime();
         if (quickAddNow - quickAddMenuLoggedAt > 1.0) {
             quickAddMenuLoggedAt = quickAddNow;
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 menu-hook orig=%d enabled=%d name=%@",
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu-hook orig=%d enabled=%d name=%@",
                        original ? 1 : 0,
                        ERPreferenceBool(@"QuickAdd.Enabled", NO) ? 1 : 0,
                        ERQuickAddActionName());
@@ -31809,7 +31621,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
         // **硬闸门**：identifier 必须原样带回。取不到就什么都不做 —— 宁可这次
         // 菜单少一行，也绝不再把 SpringBoard 送进安全模式（代价完全不对称）。
         if (!identifier || ![(id)original.class respondsToSelector:make]) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 menu skipped (identifier=%@ factory=%d)",
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu skipped (identifier=%@ factory=%d)",
                       identifier ? @"ok" : @"nil",
                       [(id)original.class respondsToSelector:make] ? 1 : 0);
             return original;
@@ -31858,14 +31670,14 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
                                                                  identifier, preview, wrapped);
         // 最后一道保险：回来的必须是真配置，否则退回原样。
         if (![rebuilt isKindOfClass:[UIContextMenuConfiguration class]]) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 menu rejected: rebuilt=%@",
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu rejected: rebuilt=%@",
                       rebuilt ? NSStringFromClass([rebuilt class]) : @"nil");
             return original;
         }
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 menu injected name=%@", name);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu injected name=%@", name);
         return rebuilt;
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 menu EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 menu EXC %@ -- %@", exception.name, exception.reason);
         return original;
     }
 }
@@ -31880,7 +31692,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
     @try {
         if ([shortcut isKindOfClass:%c(SBSApplicationShortcutItem)] &&
             [shortcut.type isEqualToString:kERQuickAddItemType]) {
-            ERLogInfo(@"QUICKADD ver=1.2.1-173 activated");
+            ERLogInfo(@"QUICKADD ver=1.2.1-174.1 activated");
             // 1.0.8-23：与菜单路径一致 —— 即时隐藏菜单 + 立即弹面板（不再延迟）
             SBIconView *strongView = iconView;
             ERQuickAddHideMenuOverlays();
@@ -31889,7 +31701,7 @@ static void ERMusicPrefsChangedCallback(CFNotificationCenterRef center, void *ob
             return;   // 自己的动作不交给系统
         }
     } @catch (NSException *exception) {
-        ERLogInfo(@"QUICKADD ver=1.2.1-173 activate EXC %@ -- %@", exception.name, exception.reason);
+        ERLogInfo(@"QUICKADD ver=1.2.1-174.1 activate EXC %@ -- %@", exception.name, exception.reason);
     }
     %orig;
 }
@@ -34413,11 +34225,26 @@ static BOOL ERSPGSCOShouldBlock(id self) {
     return YES;
 }
 
+// 1.2.1-2 · 自毒免疫：广谱扫描曾把「继承方法的 orig」存成了我们自己的 hook
+// （子类 S 的 class_getInstanceMethod 拿到的是已挂钩父类的 IMP），LookupOrig
+// 查到后调自己 → 无限递归 → 栈溢出 SIGSEGV（.ips SpringBoard-2026-10-24-124602
+// 实锤：490 层同帧递归 + stringByAppendingFormat，d0/d1 = impactOccurredWithIntensity:）。
+// 修法①：查到的 IMP 是我们任何 hook 自身 → 跳过该条目继续向父类找。
+static void ERSPGSysHaptHook1(id self, SEL _cmd);
+static void ERSPGSysHaptHook2(id self, SEL _cmd, CGFloat i);
+static void ERSPGSysHaptHook3(id self, SEL _cmd, NSInteger t);
+static BOOL ERSPGSCOImpIsOwn(IMP p) {
+    return p == (IMP)ERSPGSCOOff1 || p == (IMP)ERSPGSCOOff2
+        || p == (IMP)ERSPGSysHaptHook1 || p == (IMP)ERSPGSysHaptHook2 || p == (IMP)ERSPGSysHaptHook3;
+}
 static IMP ERSPGSCOLookupOrig(id self, SEL _cmd) {
     Class c = object_getClass(self);
     while (c) {
         NSValue *ov = gERSPGSCOOrig[[NSStringFromClass(c) stringByAppendingFormat:@"#%@", NSStringFromSelector(_cmd)]];
-        if (ov) return (IMP)ov.pointerValue;
+        if (ov) {
+            IMP p = (IMP)ov.pointerValue;
+            if (!ERSPGSCOImpIsOwn(p)) return p;
+        }
         c = class_getSuperclass(c);
     }
     return NULL;
@@ -34447,6 +34274,8 @@ static void ERSPGAttachSCOHook(Class cls) {
     for (int i = 0; i < 2; i++) {
         Method m = class_getInstanceMethod(cls, items[i].sel);
         IMP orig = m ? method_getImplementation(m) : NULL;
+        // 1.2.1-2 · 修法②：orig 已是我们 hook（纯继承自已挂钩父类）→ 不存不挂
+        if (orig && ERSPGSCOImpIsOwn(orig)) continue;
         NSString *key = [cn stringByAppendingFormat:@"#%@", NSStringFromSelector(items[i].sel)];
         if (orig && !gERSPGSCOOrig[key])
             gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
@@ -34545,6 +34374,8 @@ static void ERSPGAttachSysHaptHooks(void) {
             Method m = class_getInstanceMethod(c, it[k].sel);
             if (!m) continue;
             IMP orig = method_getImplementation(m);
+            // 1.2.1-2 · 修法③：同款防御——orig 是自己 hook（继承自已挂钩父类）→ 跳过
+            if (ERSPGSCOImpIsOwn(orig)) continue;
             NSString *key = [n stringByAppendingFormat:@"#%@", NSStringFromSelector(it[k].sel)];
             if (!gERSPGSCOOrig[key]) gERSPGSCOOrig[key] = [NSValue valueWithPointer:(void *)orig];
             if (!class_addMethod(c, it[k].sel, it[k].imp, it[k].types))
@@ -35408,11 +35239,11 @@ static BOOL erDIBackboarddMap = NO;          // DNL 的 layerClass 一次性放�
     %init(ERDynamicIslandFrontRef);
     // 1.0.9-68 · 诊断：确认这个 %ctor 是否被执行（之前合并进去的初始化日志为 0，需先证明它跑了）
     ERBootLog(@"1-CTOR-ENTRY");
-    ERLogInfo(@"ER-CTOR-START ver=1.2.1-173 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
+    ERLogInfo(@"ER-CTOR-START ver=1.2.1-174.1 proc=%@", NSProcessInfo.processInfo.processName ?: @"?");
     // 1.0.9-7 · APPSW-PROBE：iOS 26 开合动画依赖的三个私有类在不在（0/1）。
     // 不在 → 该 hook 组整体跳过（不崩），日志里能一眼看出该往哪个类适配。
     ERStartQuickAccessPositionCorrection();   // 1.0.9-16 · 无条件启动（host 只创建一次，不能只依赖安装路径）
-    ERLogInfo(@"APPSW-PROBE ver=1.2.1-173 zoom=%d crossfade=%d snapshot=%d",
+    ERLogInfo(@"APPSW-PROBE ver=1.2.1-174.1 zoom=%d crossfade=%d snapshot=%d",
               objc_getClass("SBFullscreenZoomView") != nil,
               objc_getClass("SBCrossfadeView") != nil,
               objc_getClass("SBReusableSnapshotItemContainer") != nil);

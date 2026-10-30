@@ -10,7 +10,7 @@
 			<key>footerText</key>
 			<string>隐藏灵动岛：开关打开后，灵动岛空闲（无活动）时收成系统原生小感叹号 Pill，有活动时恢复正常系统状态；关闭则为系统原状。与液态玻璃效果相互独立。</string>
 			<key>label</key>
-			<string>上岛配置</string>
+			<string>灵动岛</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -29,8 +29,6 @@
 			<string>LiquidifyHideDynamicIslandEnabled</string>
 			<key>label</key>
 			<string>隐藏灵动岛</string>
-			<key>set</key>
-			<string>setRespringToggle:specifier:</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -92,7 +90,7 @@
 			<key>cell</key>
 			<string>PSGroupCell</string>
 			<key>label</key>
-			<string>天气模块</string>
+			<string>天气模块城市选择</string>
 		</dict>
 		<dict>
 			<key>cell</key>
@@ -140,7 +138,7 @@
 			<key>footerText</key>
 			<string>隐藏系统自带的那块锁屏音乐组件（iOS 17 上属于 MediaRemoteUI / MRU 系，封面 + 歌名 + 播放键那一块）。开启后锁屏不会再出现系统音乐条，避免和本插件自己的音乐胶囊重复显示。这一项与「底部组件 → 音乐胶囊」的总开关互不影响：只想藏系统的、不放自己的胶囊也可以。</string>
 			<key>label</key>
-			<string>锁屏隐藏</string>
+			<string>锁屏音乐</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -166,54 +164,6 @@
 			<key>label</key>
 			<string>隐藏系统锁屏音乐</string>
 		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>erIcon</key>
-			<string>bell.slash</string>
-			<key>erIconColor</key>
-			<string>orange</string>
-			<key>erIconSymbols</key>
-			<array>
-				<string>bell.slash</string>
-				<string>text.badge.xmark</string>
-				<string>bell</string>
-			</array>
-			<key>key</key>
-			<string>SystemEnhance.HideLockScreenNCText</string>
-			<key>label</key>
-			<string>隐藏锁屏通知中心文字</string>
-		</dict>
-		<dict>
-			<key>PostNotification</key>
-			<string>com.strive.echoreborn/ReloadPrefs</string>
-			<key>cell</key>
-			<string>PSSwitchCell</string>
-			<key>default</key>
-			<false/>
-			<key>defaults</key>
-			<string>com.strive.echoreborn.preferences</string>
-			<key>erIcon</key>
-			<string>arrow.up.to.line</string>
-			<key>erIconColor</key>
-			<string>teal</string>
-			<key>erIconSymbols</key>
-			<array>
-				<string>arrow.up.to.line</string>
-				<string>hand.draw</string>
-				<string>arrow.up</string>
-			</array>
-			<key>key</key>
-			<string>SystemEnhance.HideSwipeToUnlockText</string>
-			<key>label</key>
-			<string>隐藏锁屏滑动解锁文字</string>
-		</dict>
 
 		<!-- 1.2.0-84 · 注销设置项：注销跳过锁屏直接回桌面（本版仅 UI，功能下版接）。位置：锁屏音乐卡片与录屏设置之间 -->
 		<dict>
@@ -222,7 +172,7 @@
 			<key>footerText</key>
 			<string>开启后，注销将跳过锁屏界面，直接进入桌面（功能将在后续版本生效）。</string>
 			<key>label</key>
-			<string>注销设置</string>
+			<string>注销设置项</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -288,7 +238,7 @@
 			<key>footerText</key>
 			<string>开启后，长按主屏幕上的任意图标，快捷菜单顶部会出现一行「添加到文件夹」：点选手机上已有的文件夹即可把该图标移入。下面的名称设置决定这一行显示的文字。下方三个滑块分别调整卡片外的压暗、卡片内的压暗与卡片内的模糊程度，全部可调，默认值即推荐效果。「背景色值」滑块与「背景色」色板控制卡片玻璃底的染色（透明度与色相，默认灰蓝），自定义可直接填 R,G,B。</string>
 			<key>label</key>
-			<string>长按桌面</string>
+			<string>长按桌面快速添加</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>
@@ -505,7 +455,7 @@
 			<key>footerText</key>
 			<string>仿 iOS 26 的应用打开/关闭动画：从被点图标的中心缩放展开、关闭时收起。实现思路参考 26Anim（com.ngkhoi.26anim），只作用于 SpringBoard；若系统私有类不存在则自动跳过，不会造成崩溃。</string>
 			<key>label</key>
-			<string>开合动效</string>
+			<string>iOS 26 开合动画</string>
 		</dict>
 		<dict>
 			<key>PostNotification</key>

@@ -2576,13 +2576,12 @@ static NSArray<NSDictionary *> *ERLinkSymbolCategories(NSArray<NSString *> *dire
 
     switch (indexPath.section == 0 ? indexPath.row : 4) {
         case 0: {
-            // 第1行：类型（只读；替换/改名/改图标 任一暂存都提示待保存）。
+            // 第1行：类型（只读；替换暂存时预览新类型）。
             cell.textLabel.text = @"类型";
             NSDictionary *typeEntry = (_pendingReplaceSet && _pendingReplace) ? _pendingReplace : entry;
-            NSString *typeText = ERLinkTypeDisplay(typeEntry);
-            BOOL pending = _pendingReplaceSet || _pendingName.length || _pendingSymbolSet;
-            cell.detailTextLabel.text = pending
-                ? [NSString stringWithFormat:@"%@（待保存）", typeText] : typeText;
+            cell.detailTextLabel.text = ERLinkTypeDisplay(typeEntry);
+            if (_pendingReplaceSet && _pendingReplace) cell.detailTextLabel.text =
+                [NSString stringWithFormat:@"%@（待保存）", ERLinkTypeDisplay(typeEntry)];
             cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
             cell.accessoryType = UITableViewCellAccessoryNone;
             cell.selectionStyle = UITableViewCellSelectionStyleNone;

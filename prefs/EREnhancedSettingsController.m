@@ -21,10 +21,6 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"增强设置";
-    // 1.2.1-134 · 「启动」开关已搬进本页 —— 初值捕获必须在这里做一次（幂等）。
-    // 此前只在根页调用，本页永远拿不到初值 → setMasterEnabled 的 needsRespring
-    // 恒为 NO → 注销提醒弹窗与导航栏重启按钮都不出现（用户实锤"弹窗没有生效"）。
-    [self erStoreInitialMasterEnabled];
     // 为本页带 erIcon/erIconColor 的 specifier 注入彩色圆角图标，并注册兜底重挂。
     [self erActivateIconRefresh];
 }

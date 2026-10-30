@@ -1217,7 +1217,7 @@ static void sendPowerToSpringBoard(float level) {
     CFStringRef erDomain = CFSTR("com.yourcompany.liquidsiri.prefs");
     CFPreferencesAppSynchronize(erDomain);
     NSNumber *enabledValue = CFBridgingRelease(CFPreferencesCopyAppValue(CFSTR("enabled"), erDomain));
-    BOOL isEnabled = enabledValue ? enabledValue.boolValue : NO;   // 1.2.1-132 · 缺键=默认关
+    BOOL isEnabled = enabledValue ? enabledValue.boolValue : YES;
     if (isEnabled) {
         %init;
     }
