@@ -6694,6 +6694,23 @@ static BOOL ERIdentifierIsSlider12(NSString *identifier) {
 
 static void ERAppendDebugFile(NSString *name, NSString *line);   // 定义在 21124，此处前向声明
 
+// 1.2.1-164 · 视图树里到底有没有滑块：identifier 拿不到时的兜底判据。
+// 161/163 实测 SIBHIDE 零条 —— 展开瞬间 expandingController 的 identifier 为 nil，
+// 且模块视图已被撑成全屏（宽<120 的尺寸兜底也落空），函数直接 return。
+static BOOL ERViewTreeLooksLikeSlider(UIView *root) {
+    if (!root) return NO;
+    NSMutableArray<UIView *> *q = [NSMutableArray arrayWithObject:root];
+    NSUInteger guard = 0;
+    while (q.count && guard++ < 400) {
+        UIView *c = q.firstObject;
+        [q removeObjectAtIndex:0];
+        NSString *n = NSStringFromClass(c.class);
+        if ([n containsString:@"SliderView"] || [n containsString:@"ContinuousSlider"]) return YES;
+        [q addObjectsFromArray:c.subviews];
+    }
+    return NO;
+}
+
 static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewController *expandingController) {
     if (!overlay) return;
     // 1.2.1-148 · 147 实测失效：按 identifier 匹配 expanding 时，滑块模块在
@@ -6701,19 +6718,35 @@ static void ERHideSiblingSliderModules(UIViewController *overlay, UIViewControll
     // mediaControls 的模块），函数直接 return，一次都没压过。
     // 改为按**控制器实例**判定：只压「属于滑块模块且不是正在展开的那个控制器」
     // 的视图，其它模块一行不碰。判定滑块用 identifier ∪ 尺寸（宽<120 且高>120）。
-    if (!expandingController) return;
-    BOOL expandingIsSlider = ERIdentifierIsSlider12(ERModuleIdentifier(expandingController)) ||
-        (CGRectGetWidth(expandingController.view.bounds) < 120.0 &&
-         CGRectGetHeight(expandingController.view.bounds) > 120.0);
-    if (!expandingIsSlider) return;
+    // 1.2.1-164 · 允许 expandingController = nil（收起期调用点常常拿不到实例）。
+    // 这时退化为「压掉除全屏那个之外的所有滑块」——全屏的那个正是正在收回的面板本身。
+    BOOL noExpandingRef = (expandingController == nil);
+    NSString *expandingIdent = nil;
+    if (!noExpandingRef) {
+        expandingIdent = ERModuleIdentifier(expandingController);
+        if (!expandingIdent.length) expandingIdent = ERIdentifierFromObject(expandingController);
+        BOOL expandingIsSlider = ERIdentifierIsSlider12(expandingIdent) ||
+            ERViewTreeLooksLikeSlider(expandingController.view) ||
+            (CGRectGetWidth(expandingController.view.bounds) < 120.0 &&
+             CGRectGetHeight(expandingController.view.bounds) > 120.0);
+        if (!expandingIsSlider) {
+            ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+                @"SIB-SKIP t=%.2f id=%@ b=%.0fx%.0f",
+                CACurrentMediaTime(), expandingIdent ?: @"-",
+                CGRectGetWidth(expandingController.view.bounds),
+                CGRectGetHeight(expandingController.view.bounds)]);
+            return;
+        }
+    }
     for (UIViewController *m in ERCollectModuleControllers(overlay)) {
-        if (m == expandingController) continue;
+        if (expandingController && m == expandingController) continue;
+        if (noExpandingRef && CGRectGetWidth(m.view.bounds) > 380.0) continue;   // 正在收回的面板本体
         NSString *ident = ERModuleIdentifier(m);
         BOOL sliderByIdent = ERIdentifierIsSlider12(ident);
         BOOL sliderBySize = CGRectGetWidth(m.view.bounds) < 120.0 &&
                             CGRectGetHeight(m.view.bounds) > 120.0;
         if (!sliderByIdent && !sliderBySize) continue;
-        if ([m.view isDescendantOfView:expandingController.view]) continue;
+        if (expandingController && [m.view isDescendantOfView:expandingController.view]) continue;
         // 1.2.1-153 · 148 只藏了 module.view，实测「还能看见」——说明可见的东西
         // 不在这一层。容器 CCUIContentModuleContainerView 自带背景与投影，藏内层
         // 等于没藏。这里把抑制层上提到容器，模块视图本身一并压。
@@ -28689,8 +28722,13 @@ static void ERDumpExpansionFrame(UIViewController *overlay, NSString *tag, doubl
         if (!CGRectIntersectsRect(f, corner)) continue;
         if (CGRectGetWidth(f) > 380.0 && CGRectGetHeight(f) > 800.0) continue;   // 满屏容器噪音
         hits++;
-        [sb appendFormat:@"TL %@ a=%.2f lo=%.2f f=%.0f,%.0f,%.0fx%.0f z=%.1f\n",
-         cls, c.alpha, c.layer.opacity,
+        // 1.2.1-164 · 加上「它到底画不画东西」：空容器不算残影，只有真有子视图 /
+        // 有位图 / 有不透明背景的，才是肉眼能看到的那一块。
+        BOOL draws = (c.subviews.count > 0) ||
+                     (c.layer.contents != nil) ||
+                     (c.backgroundColor && CGColorGetAlpha(c.backgroundColor.CGColor) > 0.05);
+        [sb appendFormat:@"TL %@ a=%.2f lo=%.2f s=%lu draw=%d f=%.0f,%.0f,%.0fx%.0f z=%.1f\n",
+         cls, c.alpha, c.layer.opacity, (unsigned long)c.subviews.count, (int)draws,
          f.origin.x, f.origin.y, f.size.width, f.size.height, c.layer.zPosition];
     }
     [sb appendFormat:@"-- onscreen=%lu anomalies=%lu\n",
@@ -28998,6 +29036,31 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
     gERExpandedModuleClosingActive = YES;
     // 161 · 取证：收起动画前 0.5 秒逐帧采样（CLOSE），专抓③左上角残影
     ERScheduleExpansionSamples(overlay, @"CLOSE");
+    // 1.2.1-164 · 治②：收起一开始，系统会把**所有**模块的 alpha 一次性拉回 1.00
+    // （163 实测：OPEN 0.50 anomalies=47 → OPEN 0.60 anomalies=0，46 个模块同一帧全亮）。
+    // 那一刻面板还在收缩没让位，整片磁贴（含底部亮度）就露出来了。
+    // 这里在收起窗口内持续把兄弟滑块压回去，直到 didClose 才恢复。
+    {
+        UIViewController *closingVC = expandedController;
+        if (!closingVC && [module isKindOfClass:[UIViewController class]]) closingVC = (UIViewController *)module;
+        ERHideSiblingSliderModules(overlay, closingVC);
+        double rs[4] = {0.08, 0.16, 0.26, 0.38};
+        for (int i = 0; i < 4; i++) {
+            double d = rs[i];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                ERHideSiblingSliderModules(overlay, closingVC);
+            });
+        }
+        // 兜底：1.0s 后若已不在展开/收起态却没恢复（didClose 漏跑），强制恢复，
+        // 避免亮度模块被永久隐藏（153 吃过这个亏）。
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) {
+                ERRestoreSiblingSliderModules(overlay);
+            }
+        });
+    }
     if (overlay && !gERControlCenterPresented) {
         [[EchoRebornCoordinator shared] animateOwnedDuplicateHostForOverlay:overlay presented:NO];
     } else if (overlay) {
