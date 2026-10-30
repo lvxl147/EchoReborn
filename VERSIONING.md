@@ -845,3 +845,15 @@
 - 功能实现（Tweak.xm 钩子 = -124 ERSafeApply / -125 IMP 直调 / -129 最终形态）在批 B，
   本版开关切了没反应是预期。
 - 版本 1.2.1-174.29（commit 810f5998）
+
+## 1.2.1-174.30 · 第四批④·批 B：-123 功能实现（当前验证版）
+- 基底 = 174.29（批 A 设置面）。Tweak.xm 整段移植 -122~-129 最终形态 436 行：
+  -124 ERSafeApply（只动本类自己的实现，绝不碰父类 UIView 全局实现）；
+  -125 钩子内禁止属性赋值、可见性一律保存的原 IMP 直调（防无限递归）；
+  -129 滑动解锁最终形态（无条件隐藏已知 ivar label + 遍历任何带文本的视图，
+  jikan ivar 路线 17.2.1 不存在已弃用）；偏好 1s 缓存定时器（钩子内不读 cfprefsd）；
+  %ctor 主队列异步安装 ERNCTextInstall(0) + ERSwipeTextInstall()。
+  覆盖四类：NCNotificationListSectionHeaderView / NCNotificationListCoalescingHeaderCell /
+  SBUICallToActionLabel / CSTeachableMomentsContainerView，全运行时
+  method_setImplementation（懒加载类安全）。
+- 版本 1.2.1-174.30（commit 5115c526）
