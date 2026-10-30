@@ -730,3 +730,16 @@
   实现方式（常驻 forwards 动画 + 直写 opacity 0）不对，需要换实现（例如
   removeOnCompletion=YES + completion 里切 0，或交给 CCUI 的隐藏链）。
 - 版本 1.2.1-174.21（commit 3309f869）
+
+## 1.2.1-174.22 · 第三批收尾：残影②淡出回归（安全写法）+ 自愈打架根修（当前验证版）
+- 174.21 实测：模块残留消失 ✔、但桌面磁贴仍在 → 淡出方向是对的，174.20 的翻车是实现方式。
+- 174.20 「模块残留」的真正机理：-49 淡出把 collection.opacity 写 0，而 174.18 的自愈
+  （ERDumpInvisibilityScene）在收起期间（state 3）还在跑——看门狗 tick 终止条件是
+  state==0，state3 时 tick 继续——自愈看到 colVanished 就把容器拉回 1，与淡出互相拉锯：
+  自愈赢 = 磁贴留在桌面（残留），淡出赢 = 正常消失。-38 原版没这问题，因为 -38 时代
+  还没有 -49 的淡出，两者从未共存过。
+- 修法三处：①自愈加呈现态门槛 state!=2 直接 return（收起中/已收起的容器隐藏是合法的，
+  自愈不该碰）；②淡出改安全写法：removedOnCompletion=YES 播完自动移除（不再常驻
+  forwards）+ 写 model 0 包进禁隐式事务；③state==2 恢复 colRestore、state==0 兜底恢复。
+- 缓落（-60 actionForLayer 否决）下一版单独做。
+- 版本 1.2.1-174.22（commit 3947ac6a）
