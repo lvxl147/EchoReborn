@@ -694,3 +694,25 @@
   updatePagedModuleVisibilityForOverlay 重申。挂载点 = ERScheduleHeaderPocketWatchdog
   tick 内 ERReconcilePagerIfNeeded 之后（0.25s 一拍，无前置门）。
 - 版本 1.2.1-174.18（commit dc409336）
+
+## 1.2.1-174.19 · 幽灵模块去重（已作废回退）
+- state==2 按「identifier 优先，空则类名」去重。实测引入**周期性模块闪烁**：
+  类名键会把同名多实例模块（快捷指令/连接类等 identifier 为空的组合）误判为重复，
+  每次呈现摘除 → CCUI 重挂 → 再摘除。174.18 无此问题。已回退；幽灵模块线放弃
+  （当前基底有静态页数兜底，页数不膨胀，无该症状）。
+- 版本 1.2.1-174.19（commit 719155f6）
+
+## 1.2.1-174.20 · 第三批：残影双修（-48/-49，当前验证版）
+- 症状①：CC 面板退出后磁贴在桌面停留 0.5-1s（-48）。我方常驻副本层
+  （duplicate host 181052 / 快捷区 host 181000 / 圆点 host）的隐藏动作挂在
+  「同步窗口」里，收起时窗口已结束无人执行 = 副本比面板多活 0.5-1s。
+- 症状②：页码越大停留越久（-49）。亮度等系统模块由 CCUI 自渲染跟随面板退场，
+  其余磁贴内容层 opacity 恒 1、收起动画期间无人淡出，按模块排队的延迟清理
+  逐页跑完才消失。
+- 修法：DISM-CLEAN（state 3/0）——state 3 时 collection.layer 以 0.2s
+  ERDismissFade 统一淡出（fillMode forwards），state 0 兜底切 0；
+  同一事务里隐藏三个副本层。state==2 呈现完成显式恢复 collection opacity=1
+  （移除 ERDismissFade），放在任何自愈之前避免与 174.18 自愈打架。
+  collection 属面板层级，随面板自然退场，不动。
+- 跳过：-43 zPosition（-44 证伪）、-44 僵尸 overlay（-45 证伪）、-46/-47 去重（见上）。
+- 版本 1.2.1-174.20（commit 53456c61）
