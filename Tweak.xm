@@ -9665,11 +9665,20 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
     // 窗口/未加载）全部出局，页数/圆点/可见性回归真实。
     static NSInteger sERCollectPhantomCount = -1;
     NSInteger phantoms = 0;
+    // 1.2.1-166 · 单一变量实验：展开/收起窗口内，撤掉「视图必须在窗口里」这条判据。
+    // 依据：版本二分 -3 干净 / -4 出问题，而 -4 四类改动里唯一能影响可见性的
+    // 就是「按视图挂载状态过滤模块列表」这一条（当时是缓存活性校验 view.superview，
+    // 1.2.1-60 升级成了这里的 view.window 硬过滤）。164 实测已证：收起期亮度模块
+    // 根本不在本列表里 → 压制函数物理上够不到它 → 它自己留在 a=1.00（②露着）。
+    // 只改这一个变量：展开/收起期退回「isViewLoaded 即可」。算页数/翻页点走的
+    // 是非展开期路径，判据完全不变（避免 -4 那次的翻页点回归）。
+    BOOL erCollectExpansionWindow = (gERExpandedModuleOpen || gERExpandedModuleClosingActive);
     while (queue.count) {
         UIViewController *candidate = queue.firstObject;
         [queue removeObjectAtIndex:0];
         if (candidate != root && ERIsModuleController(candidate)) {
-            BOOL alive = candidate.isViewLoaded && candidate.view.window != nil;
+            BOOL alive = candidate.isViewLoaded &&
+                         (erCollectExpansionWindow || candidate.view.window != nil);
             if (alive) {
                 [result addObject:candidate];
             } else {
@@ -9682,6 +9691,17 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
         sERCollectPhantomCount = phantoms;
         ERPagerTrace([NSString stringWithFormat:@"COLLECT-GHOST n=%ld kept=%lu",
                       (long)phantoms, (unsigned long)result.count]);
+    }
+    // 166 · 留痕：只在展开/收起窗口内记，且仅在数量变化时写一行，确认列表是否真的变长。
+    if (erCollectExpansionWindow) {
+        static NSUInteger sERCollectLastKeptExp = (NSUInteger)-1;
+        if (sERCollectLastKeptExp != result.count) {
+            sERCollectLastKeptExp = result.count;
+            ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
+                @"COLLECT t=%.2f kept=%lu ghost=%ld exp=%d close=%d",
+                CACurrentMediaTime(), (unsigned long)result.count, (long)phantoms,
+                (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive]);
+        }
     }
     return result;
 }

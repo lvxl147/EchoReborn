@@ -1399,3 +1399,13 @@ App 返回桌面后缓存帧是切换前的旧值 → shouldBegin 直接 NO → 
 ③ SBIconController viewDidAppear: → 立即 ERSPGScanTick()（类懒加载，每 tick 重试挂上）
 ④ 首次 tick 从 respring 后 8s 提前到 1s
 轮询（5s）退化为兜底，不再是唯一入口。
+
+## 1.2.1-166（2026-10-30）· 单一变量：撤销展开/收起期的「模块必须在窗口里」判据
+- 依据：版本二分铁证 -3 干净 / -4 出问题，且 1.2.1 之前确认无此问题。-4 四类改动里
+  唯一能影响可见性的是「按视图挂载状态过滤模块列表」（当时为缓存活性校验 view.superview，
+  1.2.1-60 升级为 ERCollectModuleControllers 内的 view.window 硬过滤）。
+- 164 实测：收起期亮度模块不在该列表内 → 压制函数物理够不到 → 自行留在 a=1.00（问题②）。
+- 本版只改一个变量：展开/收起窗口内 alive = isViewLoaded（不判 window）；
+  非展开期（算页数/翻页点）判据完全不变，避免 -4 那次的翻页点回归。
+- 留痕：COLLECT t= kept= ghost= exp= close=（仅展开/收起期、仅数量变化时写一行）。
+- 版本 1.2.1-166
