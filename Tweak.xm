@@ -6779,7 +6779,7 @@ static void ERHideCompactModuleContainers(UIViewController *overlay, UIViewContr
 // 时间无人看守 → 亮度又露出来。这里在展开期间每 0.12s 重压一次，最多 24 拍
 // （≈2.9s），展开结束时由代际号立即失效。
 static NSInteger gERContainerKeeperGen = 0;
-static void ERStartContainerKeeper(UIViewController *overlay, UIViewController *expanding) {
+__attribute__((unused)) static void ERStartContainerKeeper(UIViewController *overlay, UIViewController *expanding) {
     if (!overlay) return;
     NSInteger gen = ++gERContainerKeeperGen;
     for (int i = 1; i <= 24; i++) {
@@ -27224,12 +27224,17 @@ static void ERInstallModuleTapFeedback(UIView *host) {
             // 呈现路径，state 2 不一定到 —— 内容层就停在已压暗状态，再叠上为消残影
             // 加的快照，就成了用户报的「亮度模块漏着 + 返回左上角闪烁」。
             // 模块自己的进出场由 CCUI 管，这里让路。
-            // 1.2.1-159 · 单变量纪律：本守卫（下面 moduleExpansionActive）暂时下线。
-            // 版本二分已实锤回归起点=1.2.1-4（-3 干净），而本段淡出是 1.2.1-49 才加的，
-            // 时间上不可能是问题起点。为避免「到底是尺寸钳制还是本守卫修好的」混淆，
-            // 本轮先把门恒置 NO（= 恢复 159 之前的行为），只验证尺寸钳制一处。
-            // 若装机后仍有残留，160 再把它打开单独验。
-            BOOL moduleExpansionActive = NO;
+            // 1.2.1-168 · 把守卫接回真实状态。
+            // 159 当时为了「只验横屏尺寸钳制」这一条单变量，把它恒置 NO，并注明
+            // 「若装机后仍有残留，160 再把它打开单独验」—— 但 160 因为白圆副作用
+            // 被整版回退，此后 161~167 都没再打开过。于是从 159 到现在，
+            // 每次收起都会把 moduleCollection 内容层永久淡到 0（fillMode=forwards），
+            // 而模块长按走的是另一条呈现路径、等不到 state 2 的还原 →
+            // 内容层停在压暗状态 + 快照叠加 = 用户报的「亮度漏着 / 左上角闪」。
+            // 判定用三个来源的并集：展开中、收起中、以及仍持有被藏活视图（快照期）。
+            BOOL moduleExpansionActive = (gERExpandedModuleOpen ||
+                                          gERExpandedModuleClosingActive ||
+                                          gERExpansionHiddenLiveViews.count > 0);
             if (state == 3 && colFade && colFade.view.layer.opacity > 0.01 && !moduleExpansionActive) {
                 // 收起动画启动：内容层 0.2s 统一淡出（跟随面板，允许动画）
                 CABasicAnimation *fadeOut = [CABasicAnimation animationWithKeyPath:@"opacity"];
@@ -29005,16 +29010,16 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
         UIViewController *expandingVC = expandedController;
         if (!expandingVC && [module isKindOfClass:[UIViewController class]]) expandingVC = (UIViewController *)module;
         ERHideSiblingSliderModules(overlay, expandingVC);
-        ERHideCompactModuleContainers(overlay, expandingVC);
-        // 1.2.1-167 · 三个定点补压保留，另加「跟随式」重压（每 0.12s，共 24 拍），
-        // 专门对付 CCUI 在 0.60s 落定时自己把可见性重置回来的那一下。
-        ERStartContainerKeeper(overlay, expandingVC);
+        // 1.2.1-168 · 167 的「跟随式重压」下线：实测每 0.12s 重压 24 拍仍无变化
+        // （CONTHIDE n=49 kept=0，每拍都把 49 个容器全压一遍），证明可见的东西
+        // 不是活着的模块容器，重压只是在做无用功。容器压制退回 165 的尺寸判断。
+        ERHideCompactModuleContainers(overlay, nil);
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.25 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, expandingVC); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, nil); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.70 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, expandingVC); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, nil); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.20 * NSEC_PER_SEC)),
-                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, expandingVC); });
+                       dispatch_get_main_queue(), ^{ ERHideSiblingSliderModules(overlay, expandingVC); ERHideCompactModuleContainers(overlay, nil); });
     }
     // 1.2.1-154 · 展开面板全树落盘。用户实测：长按返回后紧凑态圆角已恢复，
     // 但「长按里面」的仍然没修 —— 说明展开面板是另一棵树，得单独看。
