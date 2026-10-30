@@ -101,7 +101,7 @@ static void ERSystemLog(NSString *format, ...) {
 
             // 1.0.8-25：plist 装载失败时的代码兜底也要与 plist 逐项对齐，
             // 否则新加的「长按桌面快速添加」分组（3 个外观滑块）会只在 plist 正常时才出现。
-            PSSpecifier *qaGroup = [PSSpecifier groupSpecifierWithName:@"长按桌面快速添加"];
+            PSSpecifier *qaGroup = [PSSpecifier groupSpecifierWithName:@"长按桌面"];
             [qaGroup setProperty:@"开启后，长按主屏幕上的任意图标，快捷菜单顶部会出现一行「添加到文件夹」：点选手机上已有的文件夹即可把该图标移入。下面的名称设置决定这一行显示的文字。下方三个滑块分别调整卡片外的压暗、卡片内的压暗与卡片内的模糊程度，全部可调，默认值即推荐效果。"
                         forKey:@"footerText"];
             [specs addObject:qaGroup];

@@ -787,3 +787,21 @@
   ERShortcutController / ERSystemEnhanceController / ERLinkController / 四个 plist
   与 -3 一致，不替换。
 - 版本 1.2.1-174.25（commit 506940dc）
+
+## 1.2.1-174.27 · 第四批③：-130 桌面胶囊手势 + -131 三处 UI 微调（当前验证版）
+- 174.26（ERUIHelpers 单独）实测：无残影 ✔、但弹窗没出现——触发弹窗的 plist set→
+  setRespringToggle 映射是 -133 加的，只换 ERUIHelpers 无人调用。二分走完前半，
+  用户裁决跳过二分、按版本分批抄，基底回到 174.24。
+- **-130（Tweak.xm SPG 段 4 处）**：①shouldBegin 起手闸门实时帧校正 + 外扩矩形判定
+  （旧值来自 App 切换前，回桌面头 5~15s 每次都被判死）②ConfigurePill 拆分
+  ConfigurePillEx(pill,immediate) + 类级 didMoveToWindow 钩（新胶囊实例进窗口就地
+  挂载，跳过帧防抖）+ SBIconController viewDidAppear 钩（ERSPGAttachIconControllerHook，
+  ScanTick 类懒加载挂上为止）③ctor 首次 tick 8s→1s，轮询退化为兜底。
+- **-131（prefs）**：快捷指令空态文案去「的」字；手势下拉框布局段整段替换为 172 终态
+  （-131 自适应 + -132 基准宽 + -133 箭头对齐 + -134 居中——四轮迭代融合不可拆）。
+  下拉框间距 6→5（-131 间距全 5）。
+- 不带：-132 四项默认值变更（界面优化/液态玻璃/iOS27 Siri 默认关——行为变更单列）、
+  -133 弹窗（需 plist set 映射 + 控制器接入，待批）、-135~139 组头ⓘ/文件夹实时（待批）。
+- CI 两轮修正：-130 区块尾部误带 ERSPGDumpSelectors/gERSPGDumped 重定义；下拉框段
+  pad 变量与函数既有声明冲突（复用并 6→5）。
+- 版本 1.2.1-174.27（commit 2bccbef3）
