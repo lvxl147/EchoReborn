@@ -29229,23 +29229,21 @@ static void ERScheduleExpansionSamples(UIViewController *overlay, NSString *tag)
     {
         UIViewController *closingVC = expandedController;
         if (!closingVC && [module isKindOfClass:[UIViewController class]]) closingVC = (UIViewController *)module;
-        ERHideSiblingSliderModules(overlay, closingVC);
-        // 167 · 收起期撤销「跟随式压制」，并把压制退回 165 的尺寸判断（传 nil），
-        // 保证紧凑模块能按时回来。
+        (void)closingVC;   // 171 · 收起期已不压制，保留取值只为不打断原有结构
+        // 1.2.1-171 · **收起期不再压制**（163/164 那段整体移除）。
+        //
+        // 170 的单轮实测（er_exp.txt，含每 0.15s 三模块状态）把时间线钉死了：
+        //   收起 0.26s  DisplayModule f=134,530,75x163 a=1.00 h=0  ← CCUI 已正确还原成胶囊
+        //   收起 0.32s  DisplayModule a=0.00 h=1                    ← 我们的压制把它藏了
+        //   收起 1.00s  DisplayModule a=1.00 h=0                    ← 我们的兜底又放回来
+        // 也就是说：CCUI 自己处理得完全正确，是 164 加的「收起期也压制」在还原之后
+        // 又把这批模块藏了约 0.7 秒再放回 —— 用户看到的三块同时消失又出现（③闪）
+        // 就是这么来的。亮度/音量/正在播放正是这段代码的目标集合，完全吻合。
+        // 这也解释了「-3 正常」：-3 里根本没有任何压制代码，不与 CCUI 抢。
+        //
+        // 现在收起期只做一件事：丢弃我们的标记与恢复兜底，把控制权还给 CCUI。
         gERContainerKeeperGen++;
-        ERHideCompactModuleContainers(overlay, nil);
-        double rs[4] = {0.08, 0.16, 0.26, 0.38};
-        for (int i = 0; i < 4; i++) {
-            double d = rs[i];
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(d * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{
-                ERHideSiblingSliderModules(overlay, closingVC);
-                ERHideCompactModuleContainers(overlay, nil);
-            });
-        }
-        // 兜底：1.0s 后若已不在展开/收起态却没恢复（didClose 漏跑），强制恢复，
-        // 避免亮度模块被永久隐藏（153 吃过这个亏）。
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.45 * NSEC_PER_SEC)),
                        dispatch_get_main_queue(), ^{
             if (!gERExpandedModuleOpen && !gERExpandedModuleClosingActive) {
                 ERRestoreSiblingSliderModules(overlay);
