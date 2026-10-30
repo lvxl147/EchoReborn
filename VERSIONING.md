@@ -655,3 +655,26 @@
   压制所有非我方 pan；这样既覆盖 CCUI 收起 pan，又不碰窗口层系统手势（小白条）。
   pagePanned 改用该函数；圆点 scrub Began 压制、Ended 立即恢复（否则收起手势一直关着）。
 - 版本 1.2.1-174.15（commit 174fa912）
+
+## 1.2.1-174.16 · 第二批④：治「落位后弹一下」（-30 探针 + -31，已验证通过）
+- 174.13 实测无效，说明「8pt 漂移」假设只解释了一部分。-30 的探针给了真答案：
+  落位后 pres/model 全程零背离（动画干净），但外层滚动 offset 在静止期 -114 ↔ -139
+  来回拉锯 25pt —— 我们的基线是 overlay 一生只抓一次的安装时值 -114，而 CCUI 每次呈现
+  把合法静止位设成 -139（合法 inset）。两边各写各的。CC18 无此问题，单写入者架构无对抗。
+- 修法：① didChangePresentationState 的 state==2 分支作废外层基线三件套
+  （offset / bounds / inset），下次 EREnsure 重新捕获 CCUI 稳定后的静止位；
+  ② **删掉 174.13 的 ERPinMainNativeScrollLight** —— 它每帧把 offset 写回过期基线，
+  正是拉锯的另一端（这也是 174.13 无效甚至可能加剧的原因）。
+- 用户实测：**不弹了**。
+- 版本 1.2.1-174.16（commit 147278b2）
+
+## 1.2.1-174.17 · 第二批⑤：长按圆点后内容消失（-38 容器可见性自愈，当前验证版）
+- 60 条 CCVIS 实锤：消失时**模块自身 alpha/opacity 一切正常**，被写 0 的是分页内容容器
+  —— collection 与其父层 alpha/opacity 双 0，没有恢复路径，只能注销。
+- 1.2.1-23 的不变量 C/D 只查当前页模块与 collection 自己，查不到「父层被写 0」，
+  所以 A3 的自愈一直在「看起来正常」的状态下放弃。
+- 修法：ERHealVanishedContainer 在每次 reconcile 开头检测，两条同时满足才动手：
+  ① 至少一个模块自身可见（证明内容本该显示）；② collection 或其祖先链
+  （上溯到 overlay.view）存在 alpha/opacity/hidden 异常。命中就把整条链拉回 1.0
+  （CATransaction 禁隐式动画）并落 CCVIS-HEAL，本轮不再走 finish 收敛。
+- 版本 1.2.1-174.17（commit 8beb4d6f）
