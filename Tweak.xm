@@ -9733,14 +9733,51 @@ static NSArray<UIViewController *> *ERCollectModuleControllers(UIViewController 
         ERPagerTrace([NSString stringWithFormat:@"COLLECT-GHOST n=%ld kept=%lu",
                       (long)phantoms, (unsigned long)result.count]);
     }
-    // 166 · 留痕：只在展开/收起窗口内记，且仅在数量变化时写一行，确认列表是否真的变长。
+    // 1.2.1-169 · **恢复 -3 的语义**：展开期补回被 CCUI 摘出控制器树的模块。
+    //
+    // 已确认的事实链（166/167 两版日志实测）：
+    //   · 长按展开期，亮度 / 音量 / 正在播放 三个模块**根本不在 overlay 的
+    //     childViewControllers 树里**（日志里 46 个模块齐全，唯独 DisplayModule 缺席）；
+    //   · 166 已经豁免了 view.window 判据，它仍然缺席 → 与「挂载状态过滤」无关，
+    //     是树结构本身就够不到。
+    //   · 因此 147/153/164/165/167 所有「按列表压制」的尝试全部无效 —— 压不到不存在的东西。
+    //
+    // 而 -3 是干净的：那时 ERCollectModuleControllers 带一层按代际失效的缓存，
+    // 展开期不做失效 → 返回的是**陈旧但完整**的列表；`normalizePagedLayoutForOverlay`
+    // （resettle 时跑）拿到全量集合，重算出的页面布局是对的。
+    // -4 在 normalize 入口加了 `ERInvalidateModuleListCache()` 强制失效 → 拿到残缺集合
+    // → 布局按残缺集合重算 → 这三个模块被重新摆出来 / 留下残影。这就是版本边界。
+    // 现在缓存被整体删掉了，等于永远拿残缺集合，比 -4 更彻底。
+    //
+    // 修法：维护一份弱引用登记表，非展开期持续登记；展开期把「登记过、视图仍在同一个
+    // 窗口里」的模块补回结果。窗口相同这一条保证补回来的确实是屏幕上真实存在的模块，
+    // 不是上一次会话的幽灵。
+    static NSHashTable *sERModuleRegistry = nil;
+    if (!sERModuleRegistry) sERModuleRegistry = [NSHashTable weakObjectsHashTable];
+    NSUInteger addedFromRegistry = 0;
+    if (!erCollectExpansionWindow) {
+        for (UIViewController *m in result) [sERModuleRegistry addObject:m];
+    } else {
+        UIWindow *win = root.view.window;
+        for (UIViewController *m in sERModuleRegistry.allObjects) {
+            if ([result containsObject:m]) continue;
+            if (!m.isViewLoaded) continue;
+            UIView *v = m.viewIfLoaded;
+            if (!v) continue;
+            if (win && v.window && v.window != win) continue;   // 别的窗口/别的会话，丢弃
+            [result addObject:m];
+            addedFromRegistry++;
+        }
+    }
+    // 166/169 · 留痕：只在展开/收起窗口内记，且仅在数量变化时写一行。
     if (erCollectExpansionWindow) {
         static NSUInteger sERCollectLastKeptExp = (NSUInteger)-1;
         if (sERCollectLastKeptExp != result.count) {
             sERCollectLastKeptExp = result.count;
             ERAppendDebugFile(@"er_exp.txt", [NSString stringWithFormat:
-                @"COLLECT t=%.2f kept=%lu ghost=%ld exp=%d close=%d",
-                CACurrentMediaTime(), (unsigned long)result.count, (long)phantoms,
+                @"COLLECT t=%.2f kept=%lu reg=%lu ghost=%ld exp=%d close=%d",
+                CACurrentMediaTime(), (unsigned long)result.count,
+                (unsigned long)addedFromRegistry, (long)phantoms,
                 (int)gERExpandedModuleOpen, (int)gERExpandedModuleClosingActive]);
         }
     }
