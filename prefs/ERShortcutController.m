@@ -635,7 +635,7 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     if (rows.count == 0) {
         // 1.1.8-18 · 空状态引导去点右上角的「添加」——那个按钮在主页上，
         // 所以这句话也只能放在主页说。
-        cell.textLabel.text = @"点击右上角添加的快捷指令";
+        cell.textLabel.text = @"点击右上角添加快捷指令";
         cell.textLabel.textColor = UIColor.secondaryLabelColor;
         cell.detailTextLabel.text = nil;
         cell.accessoryType = UITableViewCellAccessoryNone;
@@ -697,9 +697,8 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     NSString *uuid = rows[(NSUInteger)indexPath.row][@"uuid"];
     if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
     [self.visibleUUIDs removeObject:uuid];
-    // 1.2.1-174.33 · 左滑删除补解绑槽位：原版只移出显示列表，槽位绑定
-    // ShortcutSlotAssignments 不清 → CC 磁贴残留且可点击、注销后数量回退
-    // （全删回退到旧基线）。解绑模式与信息页「删除快捷指令」一致。
+    // 1.2.1-174.34 · 左滑删除补解绑槽位：原版只移出显示列表，槽位绑定
+    // ShortcutSlotAssignments 不清 → CC 磁贴残留可点击、注销后数量回退旧基线。
     {
         NSMutableDictionary<NSString *, NSString *> *updated = [NSMutableDictionary dictionary];
         id stored = (__bridge_transfer id)CFPreferencesCopyAppValue(

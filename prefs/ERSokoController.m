@@ -76,11 +76,10 @@ static NSString *const kSokoReload = @"com.strive.echoreborn/ReloadPrefs";
     NSString *key = [specifier propertyForKey:@"key"];
     if (![key length]) return;
 
-    CFStringRef domain = (__bridge CFStringRef)[self erDomainForSpecifier:specifier];
-    CFPreferencesSetAppValue((__bridge CFStringRef)key,
-                             (__bridge CFPropertyListRef)value,
-                             domain);
-    CFPreferencesAppSynchronize(domain);
+    // 1.2.1-91 · 与 tweak 侧统一用 NSUserDefaults(suiteName:)，避免两套 API 读到不同缓存
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:[self erDomainForSpecifier:specifier]];
+    [defaults setObject:value forKey:key];
+    [defaults synchronize];
 
     NSString *note = [specifier propertyForKey:@"PostNotification"];
     if ([note length]) notify_post(note.UTF8String);
@@ -88,12 +87,22 @@ static NSString *const kSokoReload = @"com.strive.echoreborn/ReloadPrefs";
 
 #pragma mark - 重置动作（删 key 回落默认，并广播重载）
 
+// 1.2.1-85 · 重置 = 归 0，不是"删键"。
+// 删键在 Soko 语义里等于"这张壁纸没设置过"= 顶部（-507），于是重置后组件跳到顶部。
 - (void)resetWidgetOffset {
-    [self erRemoveKeys:@[@"soko_widgetOffset"]];
+    [self erWriteOffset:0.0 forKey:@"soko_widgetOffset"];
 }
 
 - (void)resetNotificationOffset {
-    [self erRemoveKeys:@[@"soko_notificationOffset"]];
+    [self erWriteOffset:0.0 forKey:@"soko_notificationOffset"];
+}
+
+- (void)erWriteOffset:(double)value forKey:(NSString *)key {
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:kSokoSuite];
+    [defaults setDouble:value forKey:key];
+    [defaults synchronize];
+    notify_post(kSokoReload.UTF8String);
+    [self reloadSpecifiers];
 }
 
 // 1.0.9-166/167 · 操作按钮（锁屏手电筒/相机）横向缩进：开关 + 滑块一并回落默认

@@ -56,9 +56,9 @@
 			<key>key</key>
 			<string>soko_widgetOffset</string>
 			<key>default</key>
-			<real>-18</real>
+			<real>0</real>
 			<key>min</key>
-			<real>-120</real>
+			<real>-510</real>
 			<key>max</key>
 			<real>120</real>
 			<key>height</key>
@@ -74,7 +74,7 @@
 			<key>cell</key>
 			<string>PSButtonCell</string>
 			<key>label</key>
-			<string>重置控件偏移</string>
+			<string>重置组件偏移</string>
 			<key>action</key>
 			<string>resetWidgetOffset</string>
 		</dict>
@@ -111,7 +111,7 @@
 			<key>key</key>
 			<string>soko_notificationOffset</string>
 			<key>default</key>
-			<real>60</real>
+			<real>0</real>
 			<key>min</key>
 			<real>-120</real>
 			<key>max</key>

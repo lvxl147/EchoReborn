@@ -408,7 +408,7 @@ static void ERGestureShowDropdown(UIButton *anchor,
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
     // 1.2.0-56 · 左内边距 10→3（用户拍板"就差一点点"）：文本可用宽度 +7pt，
     // 「第10/12/13页」完整显示；右侧与箭头槽不动。
-    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 3, 5, 10);
+    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5, 5, 5, 19);  // 1.2.1-131 · 右内边距=5+箭头；layout 内按实际文本再定宽
 #pragma clang diagnostic pop
     [_valueButton addTarget:self action:@selector(_erValueTapped)
            forControlEvents:UIControlEventTouchUpInside];
@@ -452,33 +452,40 @@ static void ERGestureShowDropdown(UIButton *anchor,
     self.detailTextLabel.hidden = YES;
 
     CGFloat chevW = 14.0;
-    // 1.2.0-17 · 用户再反馈按钮宽一点都显多（截图标红左段空白）：内边距 10→6、
-    // 右侧留位 12→6，整按钮约收窄 14pt，仍完整容纳「第10页/无动作」。
-    // 1.2.0-77 · 用户实测 -76 的 4/3/4 观感不好，整体退回 -75 几何（pad6/+1 补偿）。
-    CGFloat pad = 6.0;
-    // 1.2.0-13 · 统一宽度：所有下拉框按最宽值文本定宽，不随各自值伸缩。
-    // 1.2.0-75 · 用户需求：收起态要能完整显示 4 个字——测量基准加 4 字样例
-    //（较 3 字基准加宽约一个字宽 ~15pt），按钮内部结构（pad/箭头槽位）不动。
-    static CGFloat sERMaxTSW = 0.0;
-    if (sERMaxTSW < 1.0) {
-        UIFont *f = _valueButton.titleLabel.font;
-        CGSize t1 = [@"第10页" sizeWithAttributes:@{NSFontAttributeName: f}];
-        CGSize t2 = [@"无动作" sizeWithAttributes:@{NSFontAttributeName: f}];
-        CGSize t3 = [@"乌贼软件" sizeWithAttributes:@{NSFontAttributeName: f}];   // 4 字基准
-        sERMaxTSW = MAX(MAX(t1.width, t2.width), t3.width);
-    }
-    CGFloat btnW = MIN(MAX(sERMaxTSW + pad * 2 + chevW + 6.0, 72.0), 216.0);
+    // 1.2.1-131 · 收起态下拉框自适应：框宽 = 5 + 文本宽 + 5 + 箭头宽 + 5，
+    // 文字一多框就随大；所有间距统一 5（左5 / 文字↔箭头5 / 箭头↔右5）。
+    // 不再用全局最宽文本定宽（-75 的"统一宽"需求，本轮改为按各自值伸缩）。
+    CGFloat pad = 5.0;
+    NSString *curText = [_valueButton titleForState:UIControlStateNormal] ?: @"";
+    CGSize ts = [curText sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
+    CGFloat curTextW = ts.width;
+    // 1.2.1-132 · 基准宽 = 「第12页」版（5+文本+5+箭头+5）：比它短的值（1~2 个字）
+    // 不缩窄，一律用基准宽；比它长的值按自身文本放大（右缘固定、自然向左伸）。
+    // 上限 260 仍保留，防极端超长文件夹名。
+    CGSize bs = [@"第12页" sizeWithAttributes:@{NSFontAttributeName: _valueButton.titleLabel.font}];
+    CGFloat btnW = 5.0 + curTextW + 5.0 + chevW + 5.0;
+    btnW = MIN(MAX(btnW, 5.0 + bs.width + 5.0 + chevW + 5.0), 260.0);
     CGFloat btnH = 30.0;
     CGFloat btnX = self.contentView.bounds.size.width - btnW - self.contentView.layoutMargins.right;
     _valueButton.frame = CGRectMake(btnX, (h - btnH) / 2.0, btnW, btnH);
 
-    // 按钮内部：文字居左（pad 起，titleEdgeInsets 右侧给箭头让位），箭头独立居中于右侧槽位。
-    // custom 按钮不走 UIButtonConfiguration，弃用告警在 -Werror 下需压制（contentEdgeInsets 同款）。
+    // 按钮内部：文字靠左贴 5，右侧给箭头留 5+chevW；箭头独立居中于右侧槽位。
+    // custom 按钮不走 UIButtonConfiguration，弃用告警在 -Werror 下需压制。
+    // 按钮内部：1.2.1-134 · 文字短于基准宽（如「第2页」）时在文本区内**居中**，
+    // 消除右侧大空白（视觉像左对齐）；达到基准及以上仍贴左 5，维持 5+文本+5 公式。
+    _valueButton.contentHorizontalAlignment =
+        (curTextW < bs.width) ? UIControlContentHorizontalAlignmentCenter
+                              : UIControlContentHorizontalAlignmentLeft;
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
-    [_valueButton setTitleEdgeInsets:UIEdgeInsetsMake(0, 0, 0, chevW)];
+    _valueButton.contentEdgeInsets = UIEdgeInsetsMake(5.0, 5.0, 5.0, pad + chevW);  // 右内边距 = 5 + 箭头
+    // 1.2.1-132 · 删除 setTitleEdgeInsets 右14：contentEdgeInsets 已把文字挡在箭头区外，
+    // 再扣一次会把文字标签压窄 14pt → 四字名截断成「投…财」+ 19pt 空白。
+    // 现在文本框严格贴字（零内空白），左5 / 文字↔箭头5 / 箭头↔右5。
 #pragma clang diagnostic pop
-    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 + 1.0, btnH / 2.0);   // 1.2.0-77 · 退回 -75（恢复 +1）
+    // 1.2.1-133 · 箭头墨迹在槽内居中自带约 2pt 符号内空白，整体左移 2pt，
+    // 让「文字↔箭头」的视觉间距 = 5（槽位 14 与间距公式不变）。
+    _chevron.center = CGPointMake(btnW - pad - chevW / 2.0 - 2.0, btnH / 2.0);   // 箭头右留 5
     CGFloat textX = left + 27 + 12;
     CGFloat textW = _valueButton.frame.origin.x - textX - 8;
     _title.frame = CGRectMake(textX, 0, MAX(textW, 40), h);

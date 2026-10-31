@@ -18,7 +18,7 @@
 			<key>cell</key>
 			<string>PSSwitchCell</string>
 			<key>default</key>
-			<true/>
+			<false/>
 			<key>defaults</key>
 			<string>com.strive.echoreborn.preferences</string>
 			<key>erIcon</key>
@@ -30,7 +30,7 @@
 			<key>label</key>
 			<string>启动</string>
 			<key>set</key>
-			<string>setMasterEnabled:specifier:</string>
+			<string>setRespringToggle:specifier:</string>
 		</dict>
 		<dict>
 			<key>cell</key>
