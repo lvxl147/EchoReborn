@@ -860,3 +860,18 @@
 
 <!-- rerun trigger 2026-10-31 02:10 -->
 - **已装机（经 lvxl456 fork 构建通道）**。用户实测：174.24 零残影 40 分钟、174.29 零残影一整晚 —— 批 A 设置面无毒。批 B（锁屏隐藏钩子）待用户验两开关 + 残影复查。
+
+## 1.2.1-174.31 · 第四批⑥：组头ⓘ（-134~-139 最终形态，当前验证版）
+- 174.30 实测：两开关功能正常、无残影 → 批 B（锁屏隐藏钩子）无毒。-122~-129 线收口。
+- **CI 额度确认恢复**（11-1 UTC 重置后 lvxl147 通道一次通过）。
+- 内容（prefs/ERGestureController.m 单文件，从 172 版逐 hunk 精准应用，跳过下拉框块）：
+  ①ERGestureFolderName「已解散」区分（-134 配套）；
+  ②viewWillAppear notify_post DumpFolders（文件夹下拉近实时）+ 多节奏同步调度 +
+  erGlyphDisplayStart/Stop 30fps 自检（页面不可见停表零开销）+ viewWillDisappear/dealloc；
+  ③-helper 块整段（字形构建 5 函数 + ERGHeaderInfoHelper 类 KVO/兄弟同步/明暗跟随 +
+  ERGlyphWeakProxy 防保留环）；④viewDidLoad 回前台观察者（弱引用槽位 + dispatch_once）；
+  ⑤FindHeaderLabel 匹配改「精确匹配或带附件占位符」（-136：hasPrefix 会误贴开关行）；
+  ⑥InstallGroupInfo → ERGestureSyncGroupInfo 三步同步（清陈旧→补缺失→重定位，
+  治ⓘ漂移到「震动反馈」——组头跨分组复用的实锤）。旧独立按钮由清陈旧逻辑移除。
+- 构建通道：lvxl147 原通道（额度已恢复）。
+- 版本 1.2.1-174.31（commit 7b3e336b）
