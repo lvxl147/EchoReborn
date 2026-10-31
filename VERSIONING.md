@@ -1434,3 +1434,13 @@ App 返回桌面后缓存帧是切换前的旧值 → shouldBegin 直接 NO → 
   补回结果；窗口一致性过滤保证补回的是屏幕真实存在的模块。
 - 留痕：COLLECT kept=/reg=/ghost=
 - 版本 1.2.1-169
+
+## 1.2.1-174.36 · 快捷指令删除同步 v2 + 基地纠偏（当前验证版）
+- **用户实测重大纠偏**：174.33/34/35 的构建树不完整——只同步了 Tweak.xm+prefs，
+  Soko/modules/LiquidGlass/LiquidSiri 等子项目仍是 -3 旧版（「完整版 soko 都是新版」
+  实锤）。本轮从 172 commit（d79e9797）tarball **全量恢复源码树**（Soko 新版/
+  LiquidGlassKit/LiquidSiri/modules 全收），_push174 推送基线同步从 -3 切到 172。
+- 修复（同 174.35 v2，重新应用到干净 172 树）：①prefs 左滑删除补解绑槽位；
+  ②Tweak ERShortcutSyncToVisible（绑定向真源全量对齐，幂等）；③ERPrefsChanged 挂载
+  + state==2 兜底；④系统级模块列表对齐（saveEnabledModuleIdentifiers:）。
+- 版本 1.2.1-174.36（commit 623a096b）
