@@ -49,12 +49,15 @@ EchoReborn_FILES = Tweak.xm \
                 GlassKit/LGGlassKit.x \
                 GlassKit/LGLiveBackdropView.m \
                 GlassKit/LGGlassLog.m \
-                Soko/Soko.S \
-                Soko/Soko.swift \
-                $(wildcard Soko/Hooks/*.swift) \
-                $(wildcard Soko/SokoLayout/*.swift) \
-                $(wildcard Soko/Support/*.swift) \
-                $(wildcard Soko/Shared/*/*.swift) \
+                Soko/Soko.x \
+                $(wildcard Soko/SokoCompatibility/*.m) \
+                $(wildcard Soko/SokoDockCoordinator/*.m) \
+                $(wildcard Soko/SokoDockGeometry/*.m) \
+                $(wildcard Soko/SokoPosterLayout/*.m) \
+                $(wildcard Soko/SokoPosterModel/*.m) \
+                $(wildcard Soko/SokoRuntime/*.m) \
+                Soko/SokoPreferences.m \
+                Soko/SokoFileLog.m \
                 LiquidSiri/Tweak.x \
                 LiquidSiri/SwiftUIWave/Models/SiriWave.swift \
                 LiquidSiri/SwiftUIWave/Views/SupportLine.swift \
@@ -77,8 +80,9 @@ EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage Core
 EchoReborn_PRIVATE_FRAMEWORKS = ControlCenterServices SpringBoardUIServices
 EchoReborn_CFLAGS = -fobjc-arc -Wno-nullability-completeness -Wno-deprecated-declarations \
                  -Wno-unused-variable -Wno-unused-function
-# Soko and LiquidSiri are Swift 5 sources; one -swift-version for the whole
-# instance. The generated ObjC header is now EchoReborn-Swift.h (see Tweak.x).
+# 1.2.1-68: Soko 已改为 ObjC/Logos（上游 1.1.0），Swift 只剩 LiquidSiri ——
+# 仍然保留 -swift-version 5（一个 target 一个 Swift 版本）。
+# The generated ObjC header is now EchoReborn-Swift.h (see Tweak.x).
 EchoReborn_SWIFTFLAGS = -swift-version 5
 
 # 0.4.0: the LiquidAss render server is vendored. This second instance hooks
@@ -172,9 +176,13 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 # 快捷指令不显示」的结构性原因。源码取自 CCAster 真实 0.5.6.24（commit b939d0d9ce）。
 SUBPROJECTS += modules prefs slot-modules
 
-# Soko (lock-screen widget/notification placement, from waruhachi/Soko 1.0.0-rc.1)
+# Soko (lock-screen widget/notification placement, from waruhachi/Soko 1.1.0 —
+# 2026-10-26 上游用 Objective-C + Logos 整体重写，Swift 版对应的是 1.0.0-rc.3)
 # and LiquidSiri (iOS 27 style glass Siri orb, from Thijs2004/LiquidSiri v1.1.2)
 # are compiled straight into EchoReborn.dylib - see the note above EchoReborn_FILES.
+# 1.2.1-68：Soko 的 Swift 源（Soko.S / *.swift）已全部删除，改由 ObjC 源编入；
+# Soko/Soko.plist 是上游 filter 的留档，**不生效**（Theos 只认根 EchoReborn.plist），
+# 真正的进程清单见根 plist（1.2.1-68 起多了 PosterKit / MercuryPoster）。
 # The .deb therefore ships exactly two dylibs again: EchoReborn.dylib and
 # EchoRebornBackboardd.dylib.  Their settings pages are drawn by EchoRebornPrefs (see
 # prefs/).  EchoReborn keeps its own domain "com.strive.echoreborn.preferences"

@@ -511,397 +511,926 @@
 - QABTN-COMP 日志增加 capsule/drift 字段，装机后可凭日志复核
 - 版本 1.2.1-3 / 1002103
 
-## 1.2.1-174.1 · 对 -4 改动的逐项二分实验，第 1 格：只加 D4 横屏钳制
-- 背景：用户裁决「既然 1.2.1-3 正常、1.2.1-4 出问题，就把 -4 的改动拆成 N 次，一次验一项」。
-  这条线不是最终版，是**定位实验**：基线固定为 1.2.1-3，每版只加一项 -4 的改动。
-- 基线严格性：整棵树逐字节取自 1.2.1-3（commit 60599794，302 个文件，逐个校验 git blob sha 全等），
-  不带 172 的任何文件（Soko 回到 1.2.1-3 的 21 个 Swift 文件，不是 172 的 ObjC 1.1.0 版）。
-- -4 的改动被拆成 4 个可独立验证单元（原 5 项，D5 日志路径经用户拍板剔除）：
-  D1 ERCollectModuleControllers 缓存命中时活性校验（view.superview == nil 即丢弃）
-  D2 normalizePagedLayoutForOverlay 入口强制失效缓存
-  D3 缩水防御（页数变少时重试一次）
-  D4 横屏 slider 1×3 → 1×2 钳制（两处 hook 同源）
-- 顺序刻意把 D1 放最后：D1/D2/D3 都是围着 1.2.1-1 的 BFS 缓存打的补丁，D1 的判据在
-  CCUI 呈现/重挂载期间会误杀（superview 短暂为 nil 属正常），是头号嫌疑。
-- 本版（174.1）只做 D4，改动 +23 行 / 两处 hook：
-  moduleLayoutSizeForContentModuleContext: 与 layoutView:layoutRectForSubview: 各一处；
-  判据 gEnabled && ERLandscapePresentationActive() && 无自定义尺寸 && 高度 > 2；
-  用户显式自定义过尺寸的（gERCustomSizes 命中）完全尊重。
-- 预期：竖屏行为与 1.2.1-3 完全一致；只有横屏音量/亮度从 1×3 变 1×2。
-- 版本号规则（用户定）：修复一项 +0.1 → 1.2.1-174.1 / 174.2 / 174.3 / 174.4。
-  CFBundleVersion 公式同步改为 (…+revision)*10+sub，否则 174.1 会大于 175 被判成降级：
-  1.2.1-173 → 10202730，1.2.1-174 → 10202740，1.2.1-174.1 → 10202741，1.2.1-175 → 10202750。
-- 版本 1.2.1-174.1 / 10202741（commit 1dcd78febd）
+## 1.2.1-4（2026-10-24 下午）—— 翻页点消失回归修复 + 横屏 slider 钳制 + 日志落盘根治
+- 用户实测反馈：①1.2.1-3 胶囊补偿仍不生效（+号/电源仍下移）②右侧竖排翻页点消失（回归）
+- 翻页点根因：1.2.1-1 的 ERCollectModuleControllers 缓存失效点只覆盖编辑路径 7 个变化点，
+  CC 重开/provider 重建等非编辑路径改了模块集合却没失效 → normalizePagedLayoutForOverlay
+  拿到陈旧缩水列表 → highestPage 缩水 → gERPageCount=1 → updatePageIndicatorsForOverlay
+  的 host.hidden（gERPageCount<=1）把翻页点整体隐藏
+- 修复三层：①缓存命中时活性校验（任一 controller.view.superview 为空即丢弃重收）
+  ②normalizePagedLayoutForOverlay 入口强制失效（低频路径必须新鲜）③缩水防御重试一次
+- 问题 2 保守钳制：横屏态无自定义尺寸的 slider 类模块（audio/displaymodule）高度钳 2 行，
+  两处 hook 同步钳制（moduleLayoutSizeForContentModuleContext: + layoutView:layoutRectForSubview:）；
+  用户自定义过尺寸的完全尊重。等日志实锤后再精修
+- 日志落盘根治：实测 SpringBoard 写 /var/mobile/Library/Logs/EchoReborn 一直失败
+  （目录需 root 预建）→ echoreborn.log 从未落盘过。写失败自动切 /var/mobile/Documents/echoreborn.log
+  备用路径（Documents 已验证可写）；ERLogPath 智能选择存在的文件
+- 1.2.1-3 复盘：代码确认已上设备（QABTN-COMP/capsule=%d 以 UTF-16 存在 dylib，之前
+  ASCII 搜索误判为旧包）。补偿仍不生效待日志（capsule=/drift= 字段）实锤后精修
+- 版本 1.2.1-4 / 1002104
 
-## 1.2.1-174.2 · 二分实验第 2 格：174.1 + D2 normalize 强制失效
-- 相对 174.1 只加一处（照抄 1.2.1-4 原文两行）：normalizePagedLayoutForOverlay 入口先
-  ERInvalidateModuleListCache() 再重收集一次，保证这条低频路径（rebuild / resettle）拿到新鲜模块列表。
-- 为什么它是嫌疑：它强制丢弃缓存重收，而重收走的是 BFS + 活性判据；CCUI 在呈现/重挂载期间
-  状态本就在变，强制重收可能收进半挂载的模块，也可能收到比上次更少的集合 → 页数缩水。
-- 不含：D3 缩水重试、D1 模块活性校验（这两个在 174.3 / 174.4 才加）。
-- 实测（174.1）：竖屏与 1.2.1-3 一致（翻页点问题本来就在）；横屏音量/亮度不再拉成 1×3；
-  **长按模块不闪** —— 说明闪烁不是 1.2.1-3 基底问题，也不是 D4 引入的，嫌疑推到 D1/D2/D3 或更后。
-- 版本 1.2.1-174.2 / 10202742（commit 691571829d）
+## 1.2.1-5（2026-10-24 傍晚）—— 偏好用户域断链兜底（重大，解释「设置了不生效」悬案）
+- 1.2.1-4 实测：翻页点回来 ✔；日志两条路径仍无文件 → 收敛出根因：
+  **SpringBoard 以 root 运行，CFPreferencesGetAppBooleanValue 按 root 用户域找
+  /var/root/Library/Preferences/…（不存在）→ valid=false → 直接走代码 fallback**。
+  设置面板（mobile）写的 /var/mobile/Library/Preferences/… 从没被 tweak 读到过！
+- 自洽验证：所有「默认 YES」开关碰巧正常（fallback 掩盖断链）；所有「默认 NO」开关
+  （LoggingEnabled）从未生效。历史上一批「设置了不生效」疑案同源
+- 修复：ERPreferenceBool/String/Double 三入口加文件兜底——CFPreferences 读不到时
+  解析 /var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist
+  （ERLoadPrefs 时解析一次缓存 gERPrefsFileFallback，绕过 cfprefsd）
+- 效果：LoggingEnabled 即刻生效 → echoreborn.log（Documents 备用路径）开始落盘
+  → QABTN-COMP 的 capsule=/drift= 实测数据到手 → 胶囊下移问题精修
+- 版本 1.2.1-5 / 1002105
 
-## 1.2.1-174.3 · 二分实验第 3 格：174.2 + D3 缩水重试（含 D2，已作废未装机）
-- 相对 174.2 只加缩水防御：收集后 modules.count < 2 而 gERNativeLayoutRects.count >= 2 时，
-  失效再收一次。
-- 未装机即被 174.4 取代（用户 174.2 实测已定位到 D2 有毒，第 3 格失去意义）。
-- 版本 1.2.1-174.3 / 10202743（commit 860f5433）
+## 1.2.1-6（2026-10-24 傍晚）—— 日志落盘决定性诊断
+- 1.2.1-5 装机后日志仍未出现（root 域手动写 LoggingEnabled=True + killall cfprefsd + respring 也不行）
+- 推论已无法远程验证（设备无 ps/lsof，SSH 间歇超时）→ 改为让 tweak 自曝：
+  ERLoadPrefs 尾部无条件写 /var/mobile/Documents/er_diag.txt（folderlog 同款已验证可写通道），
+  内容：CF 读值/文件兜底读值/flag 终值/两路径 W_OK/三位置实写探针结果
+- 一版拿到全部答案，er_diag.txt 出现即读
+- 版本 1.2.1-6 / 1002106
 
-## 1.2.1-174.4 · 二分实验第 4 格：D4 + D3 + D1，剥掉 D2（当前验证版）
-- 174.2 实测定性（用户）：对比 174.1，**模块闪 + 翻页点回来了**，只有这两个变化。
-  两条同时出现，指向同一段代码——D2 每次进 normalizePagedLayoutForOverlay 都强制失效重收：
-  ① 重收让缓存必然新鲜 → 页数算对 → 翻页点回来；
-  ② 重收期间模块视图在半挂载状态下被重新枚举/重排 → 模块闪。
-  也就是说 1.2.1-4 当年「一手治好翻页点、一手引入闪烁」，两件事是同一行引起的。
-- 本版动作：删 D2（normalize 入口的 ERInvalidateModuleListCache + 重收集），保留 D3、加 D1。
-  D1 = ERCollectModuleControllers 缓存命中后抽查 module.view.superview，任一 detach 即失效重收。
-- 预期：不闪；翻页点大概率回不来（D1 只覆盖「命中了但已 detach」，覆盖不到「缓存未失效但集合已变」，
-  后者正是 D2 解决的范围）。这一版的意义是确认 D1/D3 是否也带闪，以及 D2 能否被更窄的时机替代。
-- 版本 1.2.1-174.4 / 10202744（commit cba554f7ec）
+## 1.2.1-7（1002107）· 诊断通道改版：cfprefsd 通道
+- **1.2.1-6 实测结论（重大）**：装机后用户确认 CC 功能全部正常 → ctor 在跑、ERLoadPrefs 在跑，但 er_diag.txt 依然不出现 → **SpringBoard 沙盒拦截一切 writeToFile/fopen**（Documents、Accessibility、三个探针全静默失败）。同时解开了"BOOT 日志零输出"悬案：/var/mobile/Library/Accessibility 目录不存在 + fopen 被拦，ERBootLog 从未成功过。
+- **通道佐证**：tweak 的 ModuleGridOrigins 经 CFPreferencesSetAppValue 写 root 域偏好且跨 respring 持久化（用户自定义布局一直有效）→ cfprefsd 写盘通道必然通。
+- 修复：诊断全文写入 CFPreferences 键 `ERDiagText`（root 域 plist，SSH root 可读）；另补写 /var/root/er_diag.txt、/var/tmp/er_diag.txt、/var/root/Library/Preferences/er_diag.txt 三路径兜底。
+- ERBootLog 补 createDirectoryAtPath（Accessibility 目录历史上不存在）。
+- 新增用户反馈（待修）：编辑模式下 32 个圆钮有些对不齐。
 
-## 1.2.1-174.5 · 定稿版：1.2.1-3 全树 + D4 + 只修翻页点（D1/D2/D3/D5 全删）
-- 用户裁决：D1/D2/D3 只为翻页点而存在，其中 D1、D2 自带闪烁，D3 触发条件几乎碰不到；
-  D5 只是日志。四项全部不要。翻页点单独修。
-- 翻页点的新解法（关键：不动模块收集，所以不会闪）：
-  链条是「收集缩水 → highestPage 变小 → gERPageCount 掉到 1 →
-  updatePageIndicatorsForOverlay 的 host.hidden = (gERPageCount <= 1) 藏掉整排圆点」。
-  原实现用「本次收集到的模块」反推页数，视图一抖动页数就抖。
-  新增 ERStaticHighestPage()：只读持久化布局表（gERNativeLayoutRects 与 gERCustomOrigins），
-  按 ERStoredOriginForIdentifier 取用户存的位置算最高页，在 highestPage 后兜底。
-  全程零写入、零失效、零重收 —— 从机制上排除闪烁。
-- 相对 1.2.1-3 的全部差异：D4 横屏钳制（+23 行）、ERStaticHighestPage（+21 行）、
-  highestPage 兜底（+2 行）、版本串同步。没有别的。
-- 判读：① 不闪 → 闪烁与翻页点彻底解耦，D1/D2 永久不要；② 翻页点在 → 翻页点定稿；
-  ③ 翻页点仍不在 → 说明静态表本身也拿不到页（首次呈现前 gERNativeLayoutRects 为空），
-  下一手改为「按 enabledModuleIdentifiers 的配置空间 origin 算页」，仍不碰收集。
-- 版本 1.2.1-174.5 / 10202745（commit c0ce5d7da9）
+## 1.2.1-8（1002108）· cfprefsd 日志镜像
+- 1.2.1-7 诊断全文到手（经 ERDiagText 偏好键，实锤 cfprefsd 通道可用）：
+  - CF LoggingEnabled valid=1 value=1 → **不存在用户域断链**，SpringBoard 即 mobile 用户，-5 的断链理论推翻（兜底无害，fileFallback keys=0 因 SpringBoard 沙盒读不了该 1.6MB 文件）
+  - gERLoggingEnabled=1、两目录 W_OK=1、两探针 fileExistsAtPath=YES
+  - **但全盘 find 无探针文件** → SpringBoard 文件写入"进程内成功但不落盘"（roothide 虚拟化），文件日志通道永久不可靠
+- 修复：ERLogAppendLines 顶部镜像日志尾部（60 行/12KB 环形）到 CFPreferences 键 ERLogMirror，SSH 读 mobile 域 plist 即得运行日志（含 QABTN-COMP）
+- 后续：读 ERLogMirror → 精修胶囊下移
 
-## 1.2.1-174.8 · 清洁版：删诊断
-- 174.7 实测通过（翻页点回来、模块不闪、横屏 1×2），-1 ~ -16 的答案抄完。
-- 本版只删诊断：ERPagerDiagOpen/Closed 两个偏好键、updates/installs 计数、
-  installPagingOnOverlay 里的计数。修复逻辑一行不动。
-- 版本 1.2.1-174.8（commit 6e8616ec）
+## 1.2.1-9（1002109）· QABTN 专用镜像 + 基线胶囊门控
+- 1.2.1-8 实测：日志镜像通道工作正常，抓到 QACORR 心跳（host=1 hostWinY=69.2 baseline=69.2 ty=-9.0）——补偿状态机在跑（drift=9 被精确抵消），但 COMP 状态切换行被 DI-TREE（一次 38 行）冲出 60 行窗口
+- 修复①：QABTN 专用偏好镜像键 ERQAMirror（12 行环形，COMP 切换/心跳/BASELINE 事件全走它），SSH 读 mobile 域 plist 即得，永不被冲掉
+- 修复②（胶囊下移候选根因）：基线采集加胶囊门控——tweak 启动瞬间若胶囊在场，首帧 layoutWinY 已是压低态，min-ever 启发式会把压低值钉成基线 → 永远欠补偿（用户看到的"胶囊出现就下移"）。现在胶囊在场时推迟立基线，BASELINE-SET/DEFER 事件也进镜像
 
-## 1.2.1-174.9 · 第一批①：A1 点翻页点不再等 0.5 秒
-- pageIndicatorTouchDown: 删掉 beginInteractivePageTransition + updateInteractivePageTransition。
-  旧实现在按下瞬间就进 scrub：heldScale 0.26s 入场缩放 + 圆点切 scrub 大间距 + 松手 0.30s settle，
-  合计约 0.5s 才跳页。现在按下只做 ERReassertNativeScrollClampForOverlay，
-  纯点击走 pageIndicatorTapped: 的 setCurrentPage:animated:YES（0.22s）；真拖拽仍走 scrub。
-- 版本 1.2.1-174.9（commit 0209cbba）
+## 1.2.1-10（1002110）· 几何跟随（对标 CC18，胶囊下移终极方案）
+- **1.2.1-9 复现实锤**：用户复现全程 capsule=0 → 类名含 PrivacyIndicator 的探测在 iOS 17 从未命中，直接判据形同虚设；且回看日志 SBSystemApertureContainerView 宽度在 166（灵动岛）/125.3（胶囊态）间切换
+- **CC18 逆向结论**：它的按钮全是原生 CC 模块体系成员（CCUIRoundButton/CCUIButtonModuleView），住在不被胶囊推挤的模块网格里，所以"永远不动"
+- **方案废掉基线/drift/胶囊探测整套状态机，改为几何跟随**：锚 = CCUIContentModuleContainerView（日志实测胶囊在场时 Y 恒定），host 目标 Y = 锚窗口 Y + 固定偏移（首次见面用剥离 ty 的布局 Y 标定一次，之后冻结）；差值仍用 transform.ty 承载；锚不可见时冻结不猜
+- 心跳改记 anchorY/offset；OFFSET-SET / FOLLOW 事件进 ERQAMirror
+- 用户已确认方案（成功率评估 85-90%，失败模式温和：锚丢失=按钮静止）
 
-## 1.2.1-174.10 · 第一批②：A2 状态带伪隐藏免疫
-- 现象：点模块收起后顶部状态区（时间/信号/电量）消失 2-3 秒。
-- 根因（1.2.1-19 栈实锤）：写 alpha 0 的是 ControlCenterUI 自己的 UIView 动画，完成块淡回时事件链已断。
-- ERBandAlphaFixOnce：对 CCUISensorAttribution* / CCUIStatusBar swizzle setAlpha:（先 class_addMethod
-  给子类落自己的实现，不碰 UIView 本体），非合法场景 1→0 当场顶回 1.0；
-  合法场景（展开/收尾/编辑/翻页/收起）放行。ERApplyBandAlphaFix 找 CCUIHeaderPocketView、
-  给子视图装观测并把已卡 0 的点回 1（限流 0.4s）。
-- 调用点：updateTopFadeForOverlay 开头 + didChangePresentationState 的 state!=0 分支。
-- 另在展开前 / 折叠收尾两处强制熄 top fade 并清 scrub/transition 标志（fade 的 frame 正好盖住状态带）。
-- CFBundleVersion 公式改成两位 sub：174.10 → 102027410（一位只能容到 .9，.10 会与 175 撞号）。
-- 版本 1.2.1-174.10（commit 2875fcd5）
+## 1.2.1-11（1002111）· 绝对钉死（1.2.1-10 跟随方案的实证修正）
+- **1.2.1-10 复现实锤**：胶囊出现时 CC 面板整体下移——锚容器 +25.8pt（410.4→436.2），host 被跟着带到 winY 69.2→86.0（+16.8）。跟随任何原生视图都会被带着走，"永不动"的唯一几何解释 = **窗口绝对坐标恒定**
+- 方案：目标 = 每方向冻结常量窗口 Y（REF，首次见面标定；胶囊紧凑态在场时推迟标定），ty = REF − layout 反向抵消，夹取 [-60,60]
+- 新胶囊几何探针 ERCapsuleCompactPresent：SBSystemApertureContainerView 宽度 ∈ (100,160) = 紧凑态（实证：166↔125.3 切换），类名探测 iOS 17 失效后的可靠替代
+- 心跳改记 ref/compact；REF-SET/REF-DEFER/PIN 事件进 ERQAMirror
 
-## 1.2.1-174.11 · 第一批③：A4 跨页落位去过冲
-- 两处 pop 关键帧 0.90 → 1.025 → 1.0（1.025 是写死的过冲）改单调 0.92 → 1.0 的 CABasicAnimation，
-  grid 与 module 各一处；两处 settle 曲线 EaseInEaseOut → EaseOut。
-- 版本 1.2.1-174.11（commit 54d76b39）
+## 1.2.1-12（1002112）· REF 标定稳定性门
+- **1.2.1-11 实测失控**：REF 在 CC 开场动画途中被标成瞬态值（layout=95），layout 落到真实值后 ty 一路加到 60 上限，按钮被推下 60pt——100ms 定时器采到了动画中间帧
+- 修复：标定要求连续 3 帧布局几乎相同（300ms 静止）才允许；胶囊紧凑态在场照旧推迟
 
-## 1.2.1-174.12 · 第一批④：A3 翻页不变量自愈（当前验证版）
-- 现象：长按翻页点拖动 / 超长滑动后，模块 layer.opacity 停 0（能点看不见，要注销）、
-  页面悬停过冲位、状态带卡 alpha 0。三症同根：手势结束事件丢失。
-- 修法：不猜事件，改成每 0.25s 校验一组恒真的不变量 —— A 标志 / B 位移 m42 = base - page*span /
-  C 当前页模块可见性 / D collection 亮度，任一为假就走 finishInteractivePageTransition 单一出口收敛。
-- 配套：手指存活门（触摸数归零优先于 state）+ 0.45s 闲置门；呈现落定后 0.45s forced 强制自检；
-  收起中(3)/已收起(0) 清 scrub/位移/dragging 票根；setCurrentPage animated 补 0.22s token 清标志；
-  pagePanned / pageIndicatorPanned 记录手势存活与活动时间戳。
-- 版本 1.2.1-174.12（commit 1ecb57cb）
+## 1.2.1-13（1002113）· 双 REF 破死锁
+- **1.2.1-12 复现实锤（死锁）**：ERQAMirror 12 条全是 REF-DEFER layout=95.0——用户打开 CC 时绿点（权限胶囊紧凑态）常在场（相机/麦克风使用中），标定门永远拒绝标定 → REF 从未生成 → ty=0 无任何补偿 → 按钮停在压低态。且 layout=95 连续通过 3 帧稳定门，证明 95 就是绿点在场时的稳定布局值（无绿点约 69，差 ≈26pt）
+- 方案：**双 REF**——绿点在场/不在场是两个稳定布局态，各自冻结一个 REF（竖/横 × 有/无绿点共 4 键，associated object）；当前状态用哪个 REF 就钉哪个。1.2.1-12 的"胶囊在场拒绝标定"取消，两种状态都允许标定（仍受 3 帧稳定门约束）
+- 事件：NORMAL-REF-SET / CAPSULE-REF-SET / PIN 进 ERQAMirror；心跳 ref 字段同样按绿点状态选
 
-## 1.2.1-174.13 · 第二批①：治「落位后弹一下」（-28 + -29，当前验证版）
-- 第一批实测（用户）：① 点翻页点 已解决 ② 状态带消失 已解决
-  ③ 落位还是有弹 ④ 长按圆点后内容还是会消失 —— 三四两项的真凶不在 -17~-24。
-- ③ 的真凶：-28/-29。用户当时 509 帧录屏逐帧取证：落位动画结束后静止约 0.2s，
-  单帧离散跳变 ≈8pt（= kERRestingModuleOffset），不是动画过冲而是延迟写入。
-  链条：拖拽期 applyPageTransform 因 transitionActive 跳过基线恢复 → 外层主滚动
-  （ERNativeScrollViewForOverlay）offset 被手指带偏 → 落位后 snap 窗口
-  （0/0.08/0.24/0.42s）里无条件的 setContentOffset(baseline) 一次性修正 8pt。
-  内层 CCUIModuleCollectionView 实测零漂移（SNAPZ 零条），两层都要钉。
-- 三层修法：① ERPinNativePagerScroll 拖拽 Began 禁用内层集合滚动，4 处收尾恢复
-  （两个落位 completion / scrub-TAP 收尾 / CC 收起清场）；② ERPinMainNativeScrollLight
-  拖拽 Changed 每帧把外层 offset 贴回基线（差值 >0.25 才写，摊进跟手过程，snap 写变 no-op）；
-  ③ ERClampNativeScrollViewForOverlay 对 nativePager 的归零写改差值 >0.5 才写。
-- 版本 1.2.1-174.13（commit d64e1e50）
+## 1.2.1-14（1002114）· 单 REF 重标定 + 1s 稳定门（-13 实锤失败后的回退）
+- **1.2.1-13 复现实锤（双 REF 全错）**：镜像实录 `compact=1` 常驻、`ref=111.0 ty=60.0`——
+  ① CC 打开时灵动岛自动收紧成 125.33 紧凑态让位，compact 探针恒真，与绿点无关，双 REF 选错分支；
+  ② REF=111.0 是 CC 动画中途瞬态，骗过 300ms 稳定门；真实稳态 layout=26，desiredTy=85 撞 60 上限，
+  等于补偿逻辑自己把按钮推下 60pt，比不补偿更糟；③ 用户确认无绿点时按钮也下移，压低源识别整体失败
+- 方案：① 放弃 compact 分支与双 REF，回退每方向单 REF；② CC 关闭即清 REF，下次打开重标定
+  （清除放在离屏判断之前，否则永远带上次的 REF）；③ 稳定门 3 帧→10 帧（≈1s），排除动画暂停瞬态；
+  ④ 新增灵动岛容器原始宽度探针 ERApertureContainerWidth + STATE 宽度跳变事件，用真实几何对齐
+  「胶囊出现」与 layout 位移；心跳补记 layout/apertureW/host 类名；ERQAMirror 环 12→24 行
 
-## 1.2.1-174.14 · 第二批②：末页悬停 / 末页下滑收起（-32/-33/-40）
-- 174.13（内层 pin + 外层逐帧贴基线）实测：**还是弹**，功能无退化 → 漂移假设只解释了一部分。
-- 删三处让位（都应该让给「翻页手势」而不是原生滚动）：
-  ① shouldBegin 的底部 92pt 让位区；
-  ② 末页上拂让位（vy<0 且已在末页）——用户裁决「滑动不该收起，收起只靠小白条」；
-  ③ 斜率拒绝（垂直 > 水平×1.12 才认）——斜滑应原地回弹，不该交给原生滚动。
-- shouldReceiveTouch 里底部 92pt 的同源一份一并删除。
-- 新增主滚动 scrollEnabled = NO **常驻**（-40）。174.13 只在拖拽期禁、松手恢复，
-  而 8pt 跳发生在落位之后 —— 常驻禁滚后外层 offset 只由我们写，这是治弹的第二个候选。
-- 编辑态（kEREditDismissPanKey）的 92pt 底部护栏保留不动。
-- 版本 1.2.1-174.14（commit 39ff5a33）
+## 1.2.1-15（1002115）· 重构起步：回退 1.2.1-2 基底 + 三项修复移植
+- **重构决策（用户批准）**：-3~-14 权限胶囊线六版全败，根因 = 操作按钮 host 挂在
+  CCUIHeaderPocketView（CC 顶部 chrome 容器），权限胶囊出现时 chrome 让位下移按钮被带走；
+  检测-补偿路线三重失败（类名探测 iOS 17 失效 / 灵动岛宽度探针恒真 / REF 被动画瞬态污染），
+  且补偿反噬（-13 ty 撞 60 上限反推下 60pt）。用户拍板：回退稳定版打底，操作按钮后续重构
+  re-parent 进原生模块网格容器（对标 CC18 成员身份，随系统布局）
+- 本版 = git aaacbb675a（1.2.1-2）为基底，只移植三项已验证修复，胶囊补偿链全部不带入：
+  ① 横屏音量/亮度 1×3 钳制（-4，slider 类模块横屏高度钳 2 行，尊重自定义尺寸）
+  ② 翻页点消失回归修复（-4，模块列表缓存活性校验 + normalize 入口强制失效双重防御）
+  ③ ERBootLog 目录创建（-7）
+- 下一步（1.2.1-16 规划）：installQuickAccessHostOnOverlay: 挂载点从 CCUIHeaderPocketView
+  改到原生模块网格容器，删除旧开环补偿全链
 
-## 1.2.1-174.15 · 第二批③：长按圆点后 CC 整体消失（-37/-39，当前验证版）
-- 现象：长按圆点上下拖一段松手，内容移出但 CC 面板还在（看不见、能点击）。
-- 实锤（-37 追踪环）：scrub 正常结束后 WATCHDOG-STOP pres=0 state=0 ovlA=1.00
-  —— scrub 尾态被 CCUI 收起手势解读，收起动画卡在中间。
-- 根因：pagePanned 有压制收起 pan，**圆点 scrub 路径从来没压过**；
-  且压制范围只到 overlay 子树不够（-39），CCUI 的收起 pan 挂在子树外。
-- 修法：ERSuppressCCPans —— 从 overlay 上溯到「窗口的直接子视图」（CC 整体容器）再 BFS
-  压制所有非我方 pan；这样既覆盖 CCUI 收起 pan，又不碰窗口层系统手势（小白条）。
-  pagePanned 改用该函数；圆点 scrub Began 压制、Ended 立即恢复（否则收起手势一直关着）。
-- 版本 1.2.1-174.15（commit 174fa912）
+## 1.2.1-16（1002116）· 基线再纠正：还原 1.2.0-97 + 保留手势修复
+- **用户实锤**：控制中心一系列 bug 的源头是 1.2.1-1 的「编辑模式降负」五项优化（BFS 缓存/代际失效/帧级跳过/mask 复用/CATransaction），要全部还原；1.2.1-2 的手势崩溃修复要保留
+- 本版 = git aaf0d9766a（1.2.0-97）为基底（-1 优化零残留，已 grep 验证），移植三件事：
+  ① 1.2.1-2 手势自毒免疫三修法（ERSPGSCOImpIsOwn + LookupOrig 跳过自身 IMP + AttachSCOHook/广谱扫描不存不挂）——防 490 层递归栈爆
+  ② 横屏音量/亮度 1×3 钳制（自 -4，slider 类模块横屏高度钳 2 行）
+  ③ ERBootLog 建目录（自 -7）
+- 不带入：-1 全部优化、-3~-15 胶囊补偿线、翻页点缓存活性校验（依赖 -1 缓存基础设施，随优化一起还原后自然 moot）
+- 待办：操作按钮重构（host 离开 CCUIHeaderPocketView 顶部 chrome，进原生模块网格）在稳定基线验证后另版进行
 
-## 1.2.1-174.16 · 第二批④：治「落位后弹一下」（-30 探针 + -31，已验证通过）
-- 174.13 实测无效，说明「8pt 漂移」假设只解释了一部分。-30 的探针给了真答案：
-  落位后 pres/model 全程零背离（动画干净），但外层滚动 offset 在静止期 -114 ↔ -139
-  来回拉锯 25pt —— 我们的基线是 overlay 一生只抓一次的安装时值 -114，而 CCUI 每次呈现
-  把合法静止位设成 -139（合法 inset）。两边各写各的。CC18 无此问题，单写入者架构无对抗。
-- 修法：① didChangePresentationState 的 state==2 分支作废外层基线三件套
-  （offset / bounds / inset），下次 EREnsure 重新捕获 CCUI 稳定后的静止位；
-  ② **删掉 174.13 的 ERPinMainNativeScrollLight** —— 它每帧把 offset 写回过期基线，
-  正是拉锯的另一端（这也是 174.13 无效甚至可能加剧的原因）。
-- 用户实测：**不弹了**。
-- 版本 1.2.1-174.16（commit 147278b2）
+## 1.2.1-17（1002117）· 控制中心 4 项 CC bug 修复（方案先行，用户审核「开始吧」）
+- **bug 4（翻页点点击放大 + 0.5s 延迟才跳页，代码级实锤）**：根因 = `pageIndicatorTouchDown:` 按下即 `beginInteractivePageTransitionForOverlay:` → heldScale 0.26s 入场缩放 + indicator 切 scrub 大间距（"放大"）→ 松手 finishInteractive 再 0.30s settle，合计 ~0.5s。修复：touch-down 删除 beginInteractive/updateInteractive 两调用，只留 haptic + 夹紧重assert；纯点击走 `pageIndicatorTapped:` 的 `setCurrentPage:animated:YES`（0.22s 即翻，对齐 CC18 原生 UIPageControl「按下即翻」）；真拖拽仍由 pageIndicatorPanned: Began 进 scrub，交互不变
+- **bug 2（末页还能上翻 2 排且可悬停，应过半圆弹回）双路径修复**：① `gestureRecognizerShouldBegin:` 末页上拂一律拒绝 pager 改判据 —— 仅 velocity.y < -400（快速上拂）放行原生收起 CC，慢拖收回 pager 所有权；② `pagePanned:` 边界阻尼从线性 0.24 改为渐近橡皮筋 `span*0.5*(1-1/(1+over/span))`（渐近上限 = 半个圆 = span×0.5，与用户"超过半圆弹回"的要求一致），按实时页位逐帧钳制（旧码只按 startPage 判边界）；③ 手势 Began 无条件全树 `ERClampNativeScrollViewForOverlay`（旧码要求 nativeScrollView && nativeBaseline 双满足）；④ 两个 Ended 分支 delta==0 且 |translation|>0.5 时 settleCurve 换 spring（0.34,1.42,0.64,1.0）回弹
+- **bug 3（每页滑动落位弹跳：向上一下再落下）三修 + 一看门狗**：① `animatePageSettleForOverlay:` 起点与屏幕对齐 —— 呈现层与模型 |Δm42|>1pt 时先 removeAllAnimations + setDisableActions 把模型对齐到呈现值再补间（治「以模型作起点 = 第一帧跳位」）；② swipe Ended 原生 offset 回写从 completion 移入 modelChanges 第一帧（与页面跳转同帧）；③ `setCurrentPage:animated:` 补 token 校验的 0.22s completion 清理 `gERPagerTransitionActive`（旧版置位后无任何清理路径）；④ `updateTopFadeForOverlay:` 加 staleness 看门狗：标志为真但 >1s 无手势推进（|translation|>0.5 或圆点 dragging）即清残留（合法窗口 tap 0.22s/settle ≤0.42s+0.42s snap 均 <1s 不误伤，跟手悬停与圆点长按算推进中）
+- **bug 1（竖屏点不收起 CC 的模块 → 红框状态区消失 2-3 秒，静态考古未实锤，诊断+稳健化同修）**：首选嫌疑 = top fade（frame (0,0,宽,max(112,safeArea+76)) 正好盖住 HeaderPocket 状态带）被残留翻页标志以 alpha 1.0 点亮。修复：① bug 3 的第 3/4 条先拆公共温床（已完成）；② `willOpenExpandedModule:`/`didCloseExpandedModule:` 强制熄 fade（presentationAlpha:0.0）+ 清 gERPagerTransitionActive/ScrubbingActive；③ 新增诊断三件套 —— updateTopFadeForOverlay: 逐变日志 `[FADE] target=/active/scrub/transition/tr/expanded` + HeaderPocket 看门狗（CC 呈现时 0.5s 独立采样 fade/pocket/子视图 alpha·hidden，仅签名变化落 `[POCKET]` 日志，代数票根防多链、收起自断）+ 复用 PAGEGEO/PAGESETTLE 探针。装机复现后回传 [FADE]/[POCKET] 日志，若写入点不在这两处，按日志出 -18 定点清除
+- 参照系：cc18_dylib.extracted 字符串考古实锤 CC18 = 原生 UIPageControl（即点即翻）/ 真 overlayScrollView 末页占位页 + 回弹 / spring 落位，②③④ 目标行为即「原生 scrollview 分页感」
+- 方案文档：PLAN_1.2.1-17.md（根因带行号、改法、风险、批次）。风险项：bug 2 边界手势（装机后专项验证末页慢拖回弹 + 首页下拉阻尼 + 末页底部快速上拂收起 CC 三条既有行为）
 
-## 1.2.1-174.17 · 第二批⑤：长按圆点后内容消失（-38 容器可见性自愈，当前验证版）
-- 60 条 CCVIS 实锤：消失时**模块自身 alpha/opacity 一切正常**，被写 0 的是分页内容容器
-  —— collection 与其父层 alpha/opacity 双 0，没有恢复路径，只能注销。
-- 1.2.1-23 的不变量 C/D 只查当前页模块与 collection 自己，查不到「父层被写 0」，
-  所以 A3 的自愈一直在「看起来正常」的状态下放弃。
-- 修法：ERHealVanishedContainer 在每次 reconcile 开头检测，两条同时满足才动手：
-  ① 至少一个模块自身可见（证明内容本该显示）；② collection 或其祖先链
-  （上溯到 overlay.view）存在 alpha/opacity/hidden 异常。命中就把整条链拉回 1.0
-  （CATransaction 禁隐式动画）并落 CCVIS-HEAL，本轮不再走 finish 收敛。
-- 版本 1.2.1-174.17（commit 8beb4d6f）
+## 1.2.1-18（1002118）· cfprefsd 日志镜像通道恢复（bug 1 诊断数据救援）
+- **背景实锤链**：1.2.1-7 发现 SpringBoard 文件写入「进程内成功但不落盘」（roothide 虚拟化）→ 1.2.1-8 建立 CFPreferences 镜像键 `ERLogMirror`（60 行/12KB 环）并经 SSH 从 mobile 域 plist 读出验证可用 → 1.2.1-16 回退 1.2.0-97 基底时把镜像通道一并还原掉 → 1.2.1-17 装机后用户复现 bug 1，诊断数据全丢
+- **1.2.1-17 复现失败实机复盘（2026-10-25 凌晨）**：
+  - 复现后 SSH 实锤：`/var/mobile/Library/Logs/EchoReborn/` 目录在盘（03:05 创建）但 `echoreborn.log` 不存在；plist 里昨日 23:06 的 `ERDiagText` 探针记录显示直接写 `er_probe.txt` 返回 `ok=1`（进程内成功）——该文件同样不在磁盘上。「进程内成功但不落盘」二次实锤；目录创建能落盘、文件内容不落盘
+  - 短会话丢失实锤：`ERLogRecord` 每 8 条才刷盘（kERLogFlushInterval=8），复现会话通常 < 8 条，缓冲区只活在 SpringBoard 内存里
+  - unified log 通道不可用：设备无 `log` 二进制（/usr/bin/log 不存在，sudo PATH 亦无）；NSLog 回落只在写文件真失败时触发，而本次写入「成功」故无 NSLog
+  - CFPreferences 通道可用性实锤：`Diag.ctor` = 2026-10-24 19:19:11 +0000（= 03:19:11 CST，respring 后插件构造时间）经 SSH 从 plist 读出，新鲜有效；plist 跨重启保留昨日镜像键（ERLogMirror 尾 60 行 23:43、ERQAMirror、ERDiagText）
+  - 设备时间线：03:01 userspace respring 装机 1.2.1-17 → 03:16 前后用户竖屏点「锁定」模块复现 bug 1 → 03:19:11 再度 userspace respring（kern.boottime 10-23 18:04 内核未动，backboardd/SpringBoard PID 联动变为 32092/32094），复现数据随内存缓冲区丢失。respring 触发方待用户确认（手动 or 自动）
+- **本版修复**：恢复双环 cfprefsd 镜像（`ERMirrorRingUpdate` 通用实现，按行入环保持行数语义）：
+  - `ERLogMirror`：全部日志尾 60 行（12KB 上限），`ERLogRecord` 逐行镜像（不再等 8 条刷盘），短会话不再丢
+  - `ERPocketMirror`：仅 `[FADE]`/`[POCKET]` 尾 16 行（4KB 上限），诊断时序永远在手（1.2.1-9 教训：通用 60 行窗口会被批量日志（一次 38 行）冲出，专用环保证 bug 1 的诊断时序）
+  - 已知权衡：plist 域已达 ~2MB（ShortcutCatalog 带 1.6MB 图标 PNG），逐行同步 = 每行一次 cfprefsd 全域重写；实测复现会话行数 20-100 量级可接受，若出现写放大问题下一版合并写
+  - 读取方式：SSH 下载 `/var/mobile/Library/Preferences/com.strive.echoreborn.preferences.plist` 后 plistlib 解析（该设备 plutil -p/-extract 对大 plist 报 keypath 错，下载解析最稳）
+- 诊断站点接入（1.2.1-17 已建，本版接入镜像）：[FADE] stale 清理 / [FADE] target 逐变 / [POCKET] 看门狗签名变化，版本串 ver=1.2.1-18
+- 装机后复现流程：竖屏 → 拉开 CC 不收起 → 点「锁定」等模块 → SSH 拉 plist 的 ERPocketMirror + ERLogMirror → 定位状态带被谁打零
 
-## 1.2.1-174.18 · 第二批⑥：自愈逐行照抄 -38（174.17 无效的根因修复，当前验证版）
-- 174.17 实测仍消失。核查 -38 源码发现两个错误：
-  ① **触发判据写反**：-38 的触发面是「任一命中即触发」——模块全不可见、collection 隐藏、
-     面板本体透明三种都算异常态（消失可能是「祖先层被藏」而模块自身 opacity 正常）。
-     174.17 写成「至少一个模块自身可见才动手」，恰好在最需要自愈的场景永不触发。
-  ② **挂载点缺失**：核查发现 174.12 插入 A3 时 ERHeaderPocketWatchdogSample 函数整体缺失
-     （ERScheduleHeaderPocketWatchdog 与 ERStartHeaderPocketWatchdog 都在，唯独中间的
-     sample 丢了）—— 看门狗每 tick 只跑 reconcile，从不跑采样自愈。这是一个从 174.12
-     起就存在的暗伤。
-- 修法：ERDumpInvisibilityScene 逐行照抄 -38 —— 正常态（total>0 且 visible>0 且
-  collection/overlay 都可见）零成本早退；异常态把 collection 本体 + 首个任意模块到
-  overlay 的祖先链全部拉回 1.0（CATransaction 禁隐式动画），再 applyPageTransform +
-  updatePagedModuleVisibilityForOverlay 重申。挂载点 = ERScheduleHeaderPocketWatchdog
-  tick 内 ERReconcilePagerIfNeeded 之后（0.25s 一拍，无前置门）。
-- 版本 1.2.1-174.18（commit dc409336）
+## 1.2.1-19（1002119）· bug 1 写入方追踪（setAlpha: 运行时观测 + 状态上下文）
+- **1.2.1-18 装机复现实锤（2026-10-25 03:57-03:58，用户竖屏 CC 不收起点屏幕方向锁定模块）**：
+  - 每次点击触发一轮「状态带消失 → 自行恢复」，消失持续 1.56 / 2.09 / 2.60 / 3.16 秒（与用户「消失 2-3 秒」吻合）
+  - **掉落物实锤**：`SensorAttrib`/`StatusBar` 两个 pocket 直接子视图 alpha 1→0（hidden 保持 0），**pocket 本体 alpha 保持 1、top fade 全程熄灭（fade=0.00/1）**——fade 假设彻底排除
+  - 另观测到 pocket 子视图顺序翻转（StatusBar 被移到最顶 → 我们的 host 被 13246 行 bringSubviewToFront 抢回），与掉落无因果关系
+  - 静态逐一排除：setHeaderChromeHiddenForScrubbing（藏 pocket 本体，本体没掉）/ willOpen·didCloseExpandedModule（不写 alpha）/ ERSuppressHeaderPocketMaterial（只藏 MTMaterialView+发丝线）/ 横屏 chrome 全家（只写 transform 且复现为竖屏）/ ERExpandedChromeRevealActive（窗口 0.65s 与变动延迟不符）
+- **本版诊断**（不改行为，纯观测）：
+  - `ERSwizzleBandAlphaTraceOnce`：看门狗采样命中 `CCUISensorAttribution*`/`CCUIStatusBar` 时对其 swizzle `setAlpha:`（幂等）。安全细节：setAlpha: 大概率继承自 UIView，直接 method_setImplementation 会改到 UIView 本体影响全应用 —— 先 class_addMethod 给子类落自己的实现（已覆盖则取子类 IMP 作原实现），再 class_replaceMethod 换观测块，块内直调原 IMP，行为不变只观测
+  - alpha 反转点（1→0 / 0→1）落 `[BAND]` 日志：类名 + 前后 alpha + hidden + **调用栈前 8 帧**（NSThread 栈最新在前，前 8 帧即直接调用链）—— 一次复现指名写入方
+  - [POCKET] 签名追加运行时状态上下文 `st=scrub/tr/exp/edit/pres`，掉落瞬间的系统状态直接可读
+  - ERPocketMirror 环扩到 24 行 / 6KB（[BAND] 栈行 ~400B/条，16 行装不下一轮完整复现）
+  - 版本串 ver=1.2.1-19
+- 装机后复现流程不变：竖屏 → CC 不收起 → 点模块 → SSH 拉 ERPocketMirror，读 [BAND] 栈顶帧定位写入方
 
-## 1.2.1-174.19 · 幽灵模块去重（已作废回退）
-- state==2 按「identifier 优先，空则类名」去重。实测引入**周期性模块闪烁**：
-  类名键会把同名多实例模块（快捷指令/连接类等 identifier 为空的组合）误判为重复，
-  每次呈现摘除 → CCUI 重挂 → 再摘除。174.18 无此问题。已回退；幽灵模块线放弃
-  （当前基底有静态页数兜底，页数不膨胀，无该症状）。
-- 版本 1.2.1-174.19（commit 719155f6）
+## 1.2.1-20（1002120）· bug 1 修复：伪隐藏当场顶回（[BAND] 栈帧实锤写入方是 iOS 自己）
+- **1.2.1-19 装机实锤（2026-10-25 04:46-04:47）**：[BAND] 运行时栈帧指名写入方 —— **ControlCenterUI（iOS 自己）**，路径为 UIView 动画：淡出动画块里 `setAlpha:0`，完成块里 `setAlpha:1` 恢复（栈帧 7 = `__UIVIEW_IS_EXECUTING_ANIMATION_COMPLETION_BLOCK__`）；hide 时长 1.5-3.2s = 该动画时长。抓到两条触发路径：动画路径（CCUI+84284→142680→151520→151964→UIKit 动画机制→154640→90280）与 dispatch_async 路径（libdispatch→162424→135148→53844→142028）。发生条件：竖屏 CC 不收起、点模块（含切换类的「锁定」）、**无模块展开态**（st=exp0 pres2 scrub0）——伪隐藏
+- **本版修复**：`setAlpha:` swizzle 里对伪隐藏当场顶回 —— 合法隐藏场景不抢（模块展开中 / 展开收尾中 / 翻页擦刷 scrub·transition / 编辑态 / CC 收起中 state==3 / CC 已收起），其余（CC 呈现中且无展开无擦刷）一律 `original(setAlpha:, 1.0)` 并 return：iOS 随之设置的淡出动画变成 1→1 空操作，完成块的淡回也无害，状态带不再可见地消失。修复落 `[BANDFIX]` 日志（5s 限一条，带栈）；合法Transition 仍落 `[BAND]`（带 legit 标志）
+- 保留观测：swizzle / [BAND] / [POCKET] 状态上下文全部保留，若修复后仍有异常（如 [BANDFIX] 高频 = 隐藏成环）可继续定位
+- 装机验证流程：竖屏 → CC 不收起 → 点「锁定」等模块 → 确认状态带不消失 → SSH 拉 ERPocketMirror 看 [BANDFIX] 命中
 
-## 1.2.1-174.20 · 第三批：残影双修（-48/-49，当前验证版）
-- 症状①：CC 面板退出后磁贴在桌面停留 0.5-1s（-48）。我方常驻副本层
-  （duplicate host 181052 / 快捷区 host 181000 / 圆点 host）的隐藏动作挂在
-  「同步窗口」里，收起时窗口已结束无人执行 = 副本比面板多活 0.5-1s。
-- 症状②：页码越大停留越久（-49）。亮度等系统模块由 CCUI 自渲染跟随面板退场，
-  其余磁贴内容层 opacity 恒 1、收起动画期间无人淡出，按模块排队的延迟清理
-  逐页跑完才消失。
-- 修法：DISM-CLEAN（state 3/0）——state 3 时 collection.layer 以 0.2s
-  ERDismissFade 统一淡出（fillMode forwards），state 0 兜底切 0；
-  同一事务里隐藏三个副本层。state==2 呈现完成显式恢复 collection opacity=1
-  （移除 ERDismissFade），放在任何自愈之前避免与 174.18 自愈打架。
-  collection 属面板层级，随面板自然退场，不动。
-- 跳过：-43 zPosition（-44 证伪）、-44 僵尸 overlay（-45 证伪）、-46/-47 去重（见上）。
-- 版本 1.2.1-174.20（commit 53456c61）
+## 1.2.1-21（1002121）· bug 4 新问题修复（翻页卡死恢复）+ bug 2 悬停同根修复 + 镜像环卫生
+- **用户四测反馈（2026-10-25 05:25，1.2.1-20）**：① bug 1 已解决；② bug 2 末页有回弹但滑动手势过长依旧悬停；③ bug 3 落位弹跳依旧；④ bug 4 点击已解决，但**长按拖动翻页点后模块内容整体不可见**（只剩状态栏/翻页点/操作按钮），模块可点击，需 respring 恢复
+- **bug 4 新问题根因实锤（1.2.1-20 镜像环现场数据）**：用户 05:27 测试会话里，翻页点 scrub 周期（17.081→19.836→22.248）结束后只有标志位被 staleness 看门狗清掉（22.248 [FADE] flags=0），**`finishInteractivePageTransitionForOverlay:` 的恢复痕迹缺失**——结束事件在长按场景丢失，模块停在 `layer.opacity=0`（14221 行写的属性，**不挡触摸** = 「能点击但看不见」）。同时 [BAND] 显示伪隐藏分类正确（全程 legit=1，零 [BANDFIX]），bug 1 修复确认有效
+- **本版修复（三处，bug 2 悬停同根一并修）**：
+  1. `pageIndicatorPanned:` **结束态优先于门控**：scrub 进行中但门控此刻不满足（长按误触编辑/拖动、overlay 被换）时，旧代码直接 return 导致收尾永走不完；现在用 Began 时存的 overlay 票根（kERPagerOverlayKey）补走 `finishInteractivePageTransitionForOverlay:`，无论门控
+  2. **翻页卡死安全网** `ERRecoverStuckPagerIfNeeded`（挂 pocket 看门狗，2s 节流）：翻页完全空闲时若发现页面位移残留（gERPagerInteractiveTranslation ≠ 0，= bug 2 末页悬停）或当前页模块仍被裁隐藏（= bug 4 不可见），走 finishInteractive 落回视觉页，位移与可见性一并恢复——不再需要 respring。落 `[PAGERRECOVER]` 日志
+  3. **镜像环卫生**：DI-GEO/DI-TREE 布局几何转储不再进 ERLogMirror 环（一次 CC 布局几十条把 60 行环冲爆，PAGESETTLE/PAGEGEO/[PAGER] 全被挤出——这正是 bug 3 拿不到落位数据的原因）
+- bug 3（落位弹跳）：本版先保证数据通道（PAGESETTLE 行能留在环里），下次复现拿 from/to/dur 序列后定点修
+- 装机验证：① 长按拖动翻页点 → 模块应立即恢复可见（[PAGERRECOVER] 命中）；② 末页超长上滑 → 松手应回弹不悬停；③ 普通翻页 3-5 次 → 拉 ERLogMirror 看 PAGESETTLE 行
 
-## 1.2.1-174.21 · 残影①单独版（-48，当前验证版）
-- 174.20 实测：**模块残留回退**。-49 的「内容层统一淡出」是嫌疑人：
-  ERDismissFade 用 fillMode=forwards + removedOnCompletion=NO 常驻动画，
-  且直接把 collection.layer.opacity 写 0 —— 若下一次呈现的 state==2 恢复没跑到
-  （快速开合、时序竞争）或与 174.18 自愈交替（自愈拉回 1、动画 presentation 仍是 0），
-  内容层就停在可见性错乱态。
-- 本版撤掉 -49 全部三处（colRestore 恢复段 / state3 淡出动画 / state0 兜底），
-  只保留 -48 的副本层第一时间隐藏（dupHost 181052 / qaHost 181000 / 圆点 host）。
-  collection 的淡出交还给 CCUI 自己的收起动画。
-- 残留风险：若内容层磁贴的桌面残留仍在，说明 -49 方向（内容层淡出）是对的但
-  实现方式（常驻 forwards 动画 + 直写 opacity 0）不对，需要换实现（例如
-  removeOnCompletion=YES + completion 里切 0，或交给 CCUI 的隐藏链）。
-- 版本 1.2.1-174.21（commit 3309f869）
+## 1.2.1-22（1002122）· 卡死恢复重写（不信标志位，信手指+活动时间戳）+ 卡死状态带恢复
+- **1.2.1-21 装机复测实锤（用户 06:05 会话）**：bug 1/2 依旧。镜像环显示翻页点 2.8s 拖拽结束后无 finish 收尾痕迹、无 PAGESETTLE；状态带 06:05:23.579 被打零（legit=1，翻页标志位卡着）后**再无恢复行**——状态带永久卡隐藏。1.2.1-21 的安全网没触发：**它要求「标志位已清」才动作，而标志位本身卡死了**（结束事件丢失 → gERPagerTransitionActive 永停 YES；staleness 看门狗被卡住的 kERPageIndicatorDraggingKey 挡着不触发）
+- **根因统一**：翻页手势结束路径不可靠（长按/超长拖动场景结束事件丢失）→ 标志位卡死 → 状态带卡隐藏（bug 1 复现）+ 页面卡位移（bug 2 悬停）+ 模块卡 opacity 0（bug 4 不可见），三症同根
+- **本版修复**：
+  1. **卡死恢复重写判定基准**（ERRecoverStuckPagerIfNeeded）：不再信标志位。`gERPagerActiveGesture` 弱引用 + `numberOfTouches > 0` 判手指是否真在屏幕上（结束事件丢了触摸数也归零，长按不动不误伤）；`gERPagerLastActivityTime` 由全部翻页事件（begin/update/finish/setCurrentPage/两个 pan）刷新，1.5s 无活动即闲置。闲置 +（标志位卡着 / 位移残留 / 当前页模块被裁隐藏）→ finishInteractive 落回视觉页 + 强制清标志位 + 清卡住的 dragging 票根。落 `[PAGERRECOVER]`
+  2. **卡死状态带恢复**：看门狗采样发现状态带 alpha 卡 0 且手指已离屏、翻页闲置、无展开/编辑 → 0.2s 淡回 1 并清残留动画（iOS 的「完成块恢复」永不来时的兜底）。落 `[BANDRESTORE]`
+  3. **PAGESETTLE 接诊断环**：落位 from/to/dur 同时进 ERPocketMirror（24 行低流量环），保证 bug 3 时序数据不再被通用环挤出
+- 装机验证：① 长按拖动翻页点 → 2 秒内自动恢复、不用 respring；② 末页超长上滑松手回弹；③ 竖屏点模块状态带不消失；④ 翻页几次后拉 ERPocketMirror 看 PAGESETTLE/PAGERRECOVER/BANDRESTORE次数
 
-## 1.2.1-174.22 · 第三批收尾：残影②淡出回归（安全写法）+ 自愈打架根修（当前验证版）
-- 174.21 实测：模块残留消失 ✔、但桌面磁贴仍在 → 淡出方向是对的，174.20 的翻车是实现方式。
-- 174.20 「模块残留」的真正机理：-49 淡出把 collection.opacity 写 0，而 174.18 的自愈
-  （ERDumpInvisibilityScene）在收起期间（state 3）还在跑——看门狗 tick 终止条件是
-  state==0，state3 时 tick 继续——自愈看到 colVanished 就把容器拉回 1，与淡出互相拉锯：
-  自愈赢 = 磁贴留在桌面（残留），淡出赢 = 正常消失。-38 原版没这问题，因为 -38 时代
-  还没有 -49 的淡出，两者从未共存过。
-- 修法三处：①自愈加呈现态门槛 state!=2 直接 return（收起中/已收起的容器隐藏是合法的，
-  自愈不该碰）；②淡出改安全写法：removedOnCompletion=YES 播完自动移除（不再常驻
-  forwards）+ 写 model 0 包进禁隐式事务；③state==2 恢复 colRestore、state==0 兜底恢复。
-- 缓落（-60 actionForLayer 否决）下一版单独做。
-- 版本 1.2.1-174.22（commit 3947ac6a）
+## 1.2.1-23（1002123）· 不变量自愈（不动中间过程，只校终态）+ 高容量追踪 + bug 3 去过冲
+- **1.2.1-22 装机复测实锤（用户 06:36 会话 plist，06:43 拉回）**：用户报「所有问题依旧」。三条一手数据同时到手：
+  1. 恢复机制**一次都没跑** —— `[PAGERRECOVER]` / `[BANDRESTORE]` / `[BANDFIX]` **零条**（环里只有 PAGESETTLE 与 `[BAND]`）
+  2. **窗口太窄（算得出来）**：闲置门 1.5s + tick 0.5s = 最坏 2s 才动手，而实测三次 PAGESETTLE 只隔 0.7s（06:36:53.953 / 54.636 / 55.337），自愈根本轮不到；随后 06:36:56.235 / .575 状态带被打零且再无恢复行
+  3. **诊断环被自己的日志吃光**：ERPocketMirror 19 行里 7 条 `[BAND]` 就是 5.6KB（每条 ~800B 调用栈），刚顶到 6KB 上限；ERLogMirror 60 行被 `DI-PILL` 单次窗口扫描占满。两条环都拿不到想看的证据 —— 这才是连着两轮「复现了但猜不出原因」的真正原因
+- **思路调整：不再追「哪条结束事件丢了」，改成校一组必须恒真的不变量**。丢事件是系统手势抢占造成的，追不完；只要**最终状态**不对就整盒重建，与中间断了哪条链路无关：
+  - A 标志：无手势、无自有动画时 scrub/transition 必须为 NO
+  - B 位移：`sublayerTransform.m42` 必须 = `base - page*span`，且 `interactiveTranslation == 0`（**bug 2 悬停**）
+  - C 可见性：当前页模块 `layer.opacity` 必须为 1（**bug 4 能点看不见**）
+  - D 亮度：`collection.alpha` 必须回到基准值（heldAlphaFactor 卡住时整页灰着）
+  - E 状态带：无展开/编辑/拖动时 pocket 子带 alpha 必须为 1（**bug 1 消失**）
+- **本版改动**：
+  1. **不变量自愈** `-erReconcilePagerForOverlay:forced:`（单一出口，走 `finishInteractivePageTransitionForOverlay:` 这条本来就写好的收敛路径；`forced` 时连标志位与 dragging 票根一起作废，因为它们本身可能就是卡死源头，不能拿来当判据）。看门狗 tick 0.5s→0.25s，闲置门 1.5s→0.45s —— 自愈延迟从最坏 2.0s 降到 **0.7s**。落 `RECON f=/fl=/disp=/vis=/dim=/pg=/tr=/m42=` 短行
+  2. **呈现即自检**：`ERStartHeaderPocketWatchdog` 在呈现落定后 0.45s 强制自检一次。上一轮会话丢干净的手势链留下的 opacity=0 / 悬停位移 / 状态带 alpha 0 **跨会话存活**，这条保证下次打开控制中心必定自愈 —— 用户不再需要用注销来恢复
+  3. **日志通道重建**：新增 `ERPagerTrace`（160 行 / 16KB，只装翻页生命周期短行）与 `ERBandTrace`（8 行 / 5KB，`[BAND]` 专用）；`[BAND]` 调用栈从 8 帧压到 3 帧并剥掉 UUID/偏移（单条 800B→~260B）；`ERLogMirror` 补过滤 `DI-PILL`
+  4. **翻页生命周期全追**：`TD / TAP / IPAN / IPAN-CH / SPAN / SPAN-CH / BEGIN / FIN / SETP / PAGESETTLE / RECON` 全部入 ERPagerTrace 同一时间轴（Changed 是 60Hz，照单全收会重演 DI-PILL 事故，故 Changed 节流 0.30s）
+  5. **bug 3（弹跳动画）定点去过冲**：`updateInteractivePageTransitionForOverlay:` 里每次跨页给每个模块播的 pop 动画原为 keyframe `0.90 → 1.025 → 1.0`，那个 **1.025 是故意写进去的过冲**，正是用户说的「弹一下」；改为单调 `0.92 → 1.0` 纯淡入（grid 侧同改）。另 `finishInteractive` 的 settle 曲线 EaseInEaseOut → **EaseOut**（in 段的「先慢半拍再冲」配上 0.30s 就是最初 bug 3 描述的「停滞一下再落下」）
+- 装机验证：① 长按拖动翻页点后松手 → 0.7s 内模块自己回来（**不用注销**）；② 末页超长上滑松手即回弹不悬停；③ 翻页跨页时不再有「弹一下」；④ 任意问题复现后立刻 SSH 拉 plist，看 `ERPagerTrace` 的 RECON 行与 `ERBandTrace` 的 `[BAND]` 行
 
-## 1.2.1-174.23 · 残影调优 + 治「打开 CC 内容延迟」（当前验证版）
-- 174.22 实测：残影消失 ✔、2/3/4 全正常；两个新输入：①淡出 0.3s 太慢（用户裁决改 0.15）；
-  ②新 bug：打开 CC 要 1-3 秒内容才出现（录屏实锤）。
-- 打开延迟根因：收起时 collection.opacity 被 ERDismissFade 写 0，state==0 兜底还「确保 0」；
-  下次打开要等 state==2 的 colRestore 才恢复可见 —— 呈现动画期间内容是透明的，
-  state 回调有多迟就空多久。
-- 修法：state==0（面板已不可见，无视觉跳变）时就移除 ERDismissFade 并恢复 opacity=1，
-  下次打开第一帧就有内容；state==2 colRestore 保留作双保险；淡出 0.2 → 0.15。
-- 版本 1.2.1-174.23（commit 9b7f399b）
+## 1.2.1-24（1002124）· bug 3 真凶实锤删除 + bug 2 橡皮筋收紧 + 收起期不打架
+- **1.2.1-23 用户四测结果（2026-10-25 14:34）**：① 状态带消失 **已解决**；② 长滑依旧悬停；③ 依旧弹跳；④ 长按翻页点后控制中心整体消失
+- **bug 3 真凶（代码级实锤，非推测）**：`pagePanned:` 两个收尾分支里，`delta == 0`（没跨页——末页回弹、小幅滑动全算）时 settle 曲线被换成 **cubic-bezier(0.34, 1.42, 0.64, 1.0)**。第二控制点 y=1.42 = 动画值**冲过终点再回来**，这就是用户连续四轮看到的「弹跳动画」。1.2.1-23 删掉的 pop keyframe 1.025 过冲不是真凶。修复：两处一律改 **EaseOut**（起步即走、末段自然减速、绝不过冲），曲线选择逻辑整体删除
+- **bug 2「悬停」定性 + 收紧**：`ERPagerTrace` 实测一次长拖把页面悬出 202pt+（渐近上限 0.5*span=484pt，长拖可悬出 300pt+ 小半屏），手指按住期间一直停在那里 = 用户说的「悬停」。修复：越界行程（over）超过 **0.35*span** 后不再继续拉伸，视觉位移上限收敛到 **≈125pt**（0.5*span*(1-1/1.35)）；短拖行程与原来完全一致。保留弹性回拉手感，页面永远不再悬出小半屏
+- **④ 的实锤新问题：恢复逻辑在收起动画期间和系统打架**：14:34:15.341 iOS 开始收起 CC（状态带淡出），15.595 我们的 `[BANDRESTORE]` 把状态带强行点亮，0.09s 后 iOS 又打回去 —— BANDRESTORE 门缺「呈现态必须是 2」判据。修复：`gERControlCenterPresentationState == 2` 才允许恢复，收起中（3）/已收起（0）一律放行系统
+- **④ 防线（收起即清场）**：`didChangePresentationState` 在 state 3/0 时立刻清空翻页交互残留（scrub/transition 标志、跟手位移、dragging 票根、手势弱引用），落 `DISM-CLEAN` 追踪行。防止长按拖拽中途 CC 被收起时，脏状态跨收起存活到下一轮呈现（呈现后强制自检仍是第二道）
+- 追踪数据侧写：本轮 `[BANDRESTORE]` 两次命中（14:33:50.167 / 14:34:15.595），bug 1 的自愈链路确认在干活；`RECON` 零命中 = 本轮没有发生真正的卡死（悬停是设计内的跟随位移，不是状态卡死）
+- 装机验证：① 翻页跨页/末页回弹不再有「弹一下」；② 末页/首页长滑，页面最多悬出 ~125pt，松手 0.24-0.42s 平滑归位；③ 长按翻页点拖拽后 CC 收起再打开，内容完整可见
 
-## 1.2.1-174.24 · 第四批①：模块表面归一体系整批移植（当前验证版）
-- 观感清单（用户定）：1×2 滑块、2×1 高亮白底、液态玻璃高亮圆角。Soko 留最后，长按里面暂不管。
-- 考古发现：-131~-165 在 VERSIONING 是空号，但源码注释留有碎片——其中 -159 揭示当年
-  也做过「1.2.1-3 干净、1.2.1-4 起坏」的二分实验，凶手就是横屏钳制（我们抄的 D4 缺了
-  -159 的后半段展开期让路）。
-- 修法（整批移植，不拆 hunk——三项观感长在同一个「表面归一」体系里）：
-  ① applyTransitionRadiusToModule: 圆角 walker 整函数替换为 172 版（365 行）：
-     -140 高亮白底归一 / -144 白底半径跟随玻璃背板 37.5 / -146 填充面标记重认 /
-     -147 兄弟滑块标记 / -154 只写半径不开裁剪等于没写（「首次打开不生效、长按返回
-     后才恢复」的确切机制：首次走 walker 只写 radius，返回路径走 ERNormalize 开了
-     masksToBounds——两条路径必须一致）。
-  ② ERNormalizeSliderSurfaces（-150，1×2 滑块表面归一，可独立重复调用）。
-  ③ ERAlignSliderFillClips（滑块填充裁剪对齐）/ ERDumpSliderTreeToFile×2。
-  ④ ERRestoreSiblingSliderModules（-147）+ ERRestoreMarkedHiddenViews（三 R 拼写，
-     不看控制器的恢复路径）。
-  ⑤ 诊断环 ERSliderDbgMirrorIn + ERMirrorRingUpdate（ERSliderDbgMirror 键 24 行）。
-  ⑥ D4 两处钳制加展开期让路 erExpandedNow（-159）。
-- 首轮 CI 缺符号（ERRestoreMarkedHiddenViews / ERAppendDebugFile / gERHiddenSiblingCount），
-  补齐后二轮通过。
-- 版本 1.2.1-174.24（commit 569e47ce）
+## 1.2.1-25（1002125）· 分页引擎对齐 CC18（C18PageScrollView 架构迁移）
+- **架构裁决（用户）**：不再打补丁，对齐 CC18 底层实现。参考材料 = 用户提供的 `cc18_blob.bin`（/Library/ControlCenter18 payload，二进制解析出主 dylib ControlCenter18.dylib 2.26MB 并提取）。ObjC 元数据实锤 CC18 三件套：**C18PageScrollView（UIScrollView 子类）+ C18PageView + C18PageControl**，落位走 `scrollViewWillEndDragging:withVelocity:targetContentOffset:` + `animateWithSpringDuration:bounce:`，收起仲裁走 `_dismissalPanGestureRecognizerShouldBegin:` / `_scrollViewCanAcceptDownwardsPan` 状态门控。dayanch96/CC18 仓库只有圆角 hook，与分页无关（已排除）。
+- **本版迁移内容**：
+  1. **新增 `ERPagerScrollView`**（UIScrollView 子类，tag kERPagerEngineTag，插在 collection 之上）：引擎铺满 overlay。触摸路由 hitTest —— 命中控件/原生滚动/带手势视图一律放行（模块交互优先，对齐 iOS18「翻页手势只属于背景与圆点」），纯背景归引擎；安全方向的失败（放行出错最坏只是这里翻不了页，不伤模块交互）。
+  2. **物理全部原生**：rubber band（bounces + alwaysBounceVertical）、减速、`targetContentOffset` 落位（round(预测位) + 速度偏置，对齐 CC18 _targetPage）。**bug 2 悬停 / bug 3 弹跳在架构上消失** —— 不存在自造橡皮筋曲线与自造 settle 动画了。
+  3. **渲染镜像**：`scrollViewDidScroll` 把 offset 镜像进现有渲染链：`gERCurrentPage = round(offset/span)`、`translation = page*span - offset` ⇒ 视觉位置恒等于 `-offset.y`（页号翻转时 translation 跳变但视觉连续）；镜像写入包 CATransaction disableActions（避免 0.25s 隐式补间导致跟手发糊）。
+  4. **收起仲裁（bug 4 根治）**：引擎拖拽 / 圆点 scrub 期间**窗口级压制**全部非我方 pan（此前只压 overlay 子树，CCUI 收起 pan 在子树外漏压 —— 长按圆点被系统收走就是这个洞）；松手/收尾立即恢复。另保留「末页快速上拂让位」：引擎 pan 在末页且 vy<-400 时 decline，同一触摸走祖先上的收起 pan（1.2.1-17 既有行为 + CC18 仲裁语义）。
+  5. **圆点 scrub 重写**（CC18 `_preciseTouchedPage` 语义）：触点 → ERPageProgressForScrubY → 引擎 offset 直接驱动；**heldScale 0.70 收缩 / jello / 粘滞滞后全部退役**（用户报的「放大」「弹跳」来源）；跨页 haptic + indicators 保留。
+  6. **点圆点跳页**：`ERPagerEngineJumpToPage` —— 视觉连续地把 offset 动画到目标页（`setContentOffset:animated:` 原生曲线，自造 0.22s CABasicAnimation 退役）。
+  7. **pop 动画整块删除**（updateInteractivePageTransition 的 changedPage 分支）——「弹跳」最后残留源。
+  8. **状态一致性**：`updatePageIndicatorsForOverlay` 开头 = 引擎对账汇聚点（所有翻页收尾都经过）；看门狗每 tick 对账；DISM-CLEAN 增加引擎 offset 同步；scrub/拖拽/动画期间对账不回写（守卫防视觉打架）。
+  9. 旧 `pagePanned` 休眠：引擎在位时 Began 即转投（SPAN-ENGBAIL），保留作模块表面 require-to-fail 链的兜底；其完成路径经 updatePageIndicators 汇聚点自动对账。
+  10. 追踪行新增：`ENG-INSTALL / ENG-BEG / ENG-END / ENG-JUMP / ENG-YIELD-DISMISS / SPAN-ENGBAIL / SCRUB-BEG / SCRUB-END`。
+- **明确不做（如实说明）**：模块内容不迁入滚动视图（CCUI 原生层级不能动，重写宿主层是另一个量级）；引擎是「物理引擎」而非「容器」——CC18 的内容随 offset 走，这里由镜像链等价实现。
+- 装机验证：① 背景滑动翻页 → 原生手感（rubber band 回弹、无弹跳、无悬停）；② 末页快速上拂 → CC 收起；③ 长按圆点拖拽 → 不再被收起，松手原生动画落位；④ 点圆点 → 原生动画跳页；⑤ 模块点按/滑条/长按编辑不受影响。
 
-## 1.2.1-174.25 · 第四批②：设置页三项交互增强（当前验证版）
-- 174.24 实测：1×2 / 2×1 / 液态玻璃高亮圆角全部正常 ✔。
-- 设置页在 -131~-172 期间的变化全部为 UX 增强（四个 plist 键集合与 -3 无差异，
-  无新增开关），整文件替换三个 .m：
-  ① ERUIHelpers：需注销才生效的开关切换时弹「需要注销才生效，是否确认要注销?」
-     → 启动 / 稍后。
-  ② ERModuleIconSwitchCell：cell 直接写偏好 + PostNotification 实时生效。
-  ③ ERGestureController：手势分组信息实时同步（文件夹改名/解散自动跟随、
-     分组信息可点、KVO + tick + 兄弟页同步、弱目标代理）。
-  ERShortcutController / ERSystemEnhanceController / ERLinkController / 四个 plist
-  与 -3 一致，不替换。
-- 版本 1.2.1-174.25（commit 506940dc）
+## 1.2.1-26（1002126）· 撞号崩溃热修 + 崩溃自报告
+- **用户崩溃日志实锤（SpringBoard-2026-10-25-162801.ips）**：下拉 CC 即 SIGABRT，`NSInvalidArgumentException` —— `-[UIButton <sel>]: unrecognized selector`，调用链 = CADisplayLink → 我方 6 帧 → forwarding。consecutiveCrashCount=4，CC 完全不可用。
+- **根因（代码级实锤，1 分钟定位后复盘）**：1.2.1-25 新增的 `kERPagerEngineTag = 181033` **与既有常量 `kERConnectivityExpandButtonTag = 181033`（连接模块展开按钮，UIButton）撞号**。`viewWithTag:` 递归全树查找，引擎对账（updatePageIndicators 汇聚点 / duplicate host 布局链）先命中展开按钮 → 强转 ERPagerScrollView → 调 `erSyncContent` → 崩。receiver=UIButton、下拉 CC 必崩（连接模块必然布局）、display link 链全吻合。
+- **修复**：① 引擎 tag 挪到未占用段 **181090**；② `ERPagerScrollViewForOverlay` 加 `isKindOfClass:[ERPagerScrollView class]` 类型防御 —— 撞号的最坏后果降级为「引擎缺失」，绝不崩 SpringBoard。
+- **崩溃自报告（永久升级）**：`NSSetUncaughtExceptionHandler` → 未捕获异常的名字/原因/EchoReborn 栈帧写入 cfprefsd 镜像新键 `ERCrashMirror`（20 行/8KB，handler 在 abort 前跑、通道已被 1.2.1-18 验证）。以后崩溃不再依赖 .ips 猜选择子，SSH 拉 plist 即得。
+- 验证：下拉 CC 不再崩溃；SSH 拉 plist 应见 `ENG-INSTALL`（引擎正常安装）与 `ERCrashMirror` 为空。
 
-## 1.2.1-174.27 · 第四批③：-130 桌面胶囊手势 + -131 三处 UI 微调（当前验证版）
-- 174.26（ERUIHelpers 单独）实测：无残影 ✔、但弹窗没出现——触发弹窗的 plist set→
-  setRespringToggle 映射是 -133 加的，只换 ERUIHelpers 无人调用。二分走完前半，
-  用户裁决跳过二分、按版本分批抄，基底回到 174.24。
-- **-130（Tweak.xm SPG 段 4 处）**：①shouldBegin 起手闸门实时帧校正 + 外扩矩形判定
-  （旧值来自 App 切换前，回桌面头 5~15s 每次都被判死）②ConfigurePill 拆分
-  ConfigurePillEx(pill,immediate) + 类级 didMoveToWindow 钩（新胶囊实例进窗口就地
-  挂载，跳过帧防抖）+ SBIconController viewDidAppear 钩（ERSPGAttachIconControllerHook，
-  ScanTick 类懒加载挂上为止）③ctor 首次 tick 8s→1s，轮询退化为兜底。
-- **-131（prefs）**：快捷指令空态文案去「的」字；手势下拉框布局段整段替换为 172 终态
-  （-131 自适应 + -132 基准宽 + -133 箭头对齐 + -134 居中——四轮迭代融合不可拆）。
-  下拉框间距 6→5（-131 间距全 5）。
-- 不带：-132 四项默认值变更（界面优化/液态玻璃/iOS27 Siri 默认关——行为变更单列）、
-  -133 弹窗（需 plist set 映射 + 控制器接入，待批）、-135~139 组头ⓘ/文件夹实时（待批）。
-- CI 两轮修正：-130 区块尾部误带 ERSPGDumpSelectors/gERSPGDumped 重定义；下拉框段
-  pad 变量与函数既有声明冲突（复用并 6→5）。
-- 版本 1.2.1-174.27（commit 2bccbef3）
+## 1.2.1-27（1002127）· 双引擎互踩根除（shouldBegin 闸口）+ scrub 动态恢复
+- **1.2.1-26 用户四项反馈（2026-10-25 17:30 会话追踪环）**：① 悬停依旧；② 弹跳依旧；③ CC 消失有变化——但**长按翻页点的动态效果被误删**（用户明确：只该修 CC 消失，不该动 scrub 手感）；④ 新问题：第二页滑不过第三页。
+- **追踪环实锤（根因）**：`SPAN-ENGBAIL` 后 `SPAN-CH`/`PAGESETTLE` 仍然成串出现 —— 1.2.1-25 的「引擎接管」只在 pagePanned 的 Began 分支 return，但**手势已经识别，Changed/Ended 事件继续涌进旧物理**，新旧两套引擎交替拖动同一页面：旧橡皮筋/旧 settle 的悬停弹跳全部回归（①②），混合写入的位移残留导致第二页到第三页的落位错乱（④），强制自愈还要收拾残局（17:30:58 RECON f=1 disp=1 拉回 57pt）。
+- **修复 1（双引擎根除）**：引擎接管从「Began 后逃逸」改为 **`gestureRecognizerShouldBegin:` 直接拒绝**（协调器手势代理，pager 分支加 `ERPagerEngineAvailable` 门）——手势整体不启动，触摸完全归引擎 pan；pagePanned 仅作引擎不可用时的兜底路径。1.2.1-25 的 Began-bail 块删除。
+- **修复 2（scrub 动态恢复，用户裁决）**：长按圆点 scrub 恢复 1.2.1-24 的原链路（beginInteractive → updateInteractive → finishInteractive，heldScale 收缩/粘滞/jello 全部回归）；**bug 4 的修复只保留「窗口级压制」**（拖拽期间收起 pan 被压住、松手恢复）这一件事。引擎 offset 由 finish 的 completion → updatePageIndicators → 引擎对账归位，不参与 scrub 驱动。TAP during scrub 同步回到 update+finish 链。
+- 保留：引擎背景翻页（原生物理）、ENG-JUMP 点按跳页、ENG-YIELD-DISMISS 末页上拂让位、崩溃自报告（ERCrashMirror）。
+- 验证：① 背景滑动 = 原生引擎物理（无悬停无弹跳、四页全部可达）；② 长按圆点 = 原动态手感 + 不再被收起；③ 点圆点 = 原生动画跳页。
 
-## 1.2.1-174.28 · 第四批④：-122~-129 收口批——「锁屏隐藏」卡（当前验证版）
-- **重要实测（用户）**：174.26/27 的残影是「注销后长按亮度音量，当时没有、**等 1-3 分钟
-  才出现**」——延迟出现型，与收起瞬间残留不同；174.24 测 5 分钟无问题。26/27 已砍，
-  基底回 174.24（表面归一三项保留）。延迟出现形态提示与某个周期任务相关，抄常驻钩子
-  时重点盯 -124/-125 的教训。
-- -122：撤回（-3 无 -118~121 的东西），无操作。
-- **-123（三块全抄）**：①SystemEnhance.plist 六处改名（灵动岛→上岛配置、天气模块
-  城市选择→天气模块、锁屏音乐→锁屏隐藏、注销设置项→注销设置、长按桌面快速添加→
-  长按桌面、iOS 26 开合动画→开合动效）②「锁屏隐藏」卡新增两开关（隐藏锁屏通知中心
-  文字 / 隐藏锁屏滑动解锁文字，PostNotification 实时生效，默认关；**不带 -133 的
-  set=setRespringToggle**）③Tweak.xm 功能实现整段移植。
-- **跳过 -123 原始实现，直接抄最终形态**：-124 ERSafeApply（只动本类自己的实现，
-  绝不碰父类 UIView 全局实现——原版换掉 SBUICallToActionLabel 继承的 layoutSubviews
-  等于换掉全 SpringBoard 的 UIView → cfprefsd 重入崩溃）；-125 钩子内禁止属性赋值
-  （属性赋值会走被 hook 的 setter → 无限递归），可见性一律原 IMP 直调；-129 滑动解锁
-  最终形态（无条件隐藏已知 ivar label + 遍历任何带文本的视图；jikan 的 ivar 路线在
-  17.2.1 上不存在）。偏好 1s 缓存定时器；%ctor 主队列异步安装。
-- ERSystemEnhanceController 分组名兜底一行。
-- 版本 1.2.1-174.28（commit 778b0c50）
+## 1.2.1-28（1002128）· bug 3 根修（停住后弹 8pt）：源头防漂移 + 回写条件化（基底 = 1.2.1-24）
+- **流程变更（用户裁决）**：回退 1.2.1-24 基线，逐 bug 修。1.2.1-25/26/27 的引擎迁移整线作废（双引擎互踩引入跳动与新问题）；工作区源码从 GitHub -24 commit（020a35bd6838）精确恢复。
+- **用户录屏逐帧取证（509 帧）**：落位动画结束后**静止约 0.2s，单帧离散跳变 ≈8pt**（视频位移 118→114，缩放折算 7.8pt）——不是动画过冲（过冲是多帧曲线），是某次延迟写入把内容挪了 8pt。8pt 与 `kERRestingModuleOffset = -8.0` 精确吻合。
+- **根因链（代码级）**：拖拽期间 `ERRestoreNativeScrollBaseline` 因 transitionActive 被跳过 → 原生 `CCUIModuleCollectionView` 的 contentOffset 可被手指带偏（clamp 只在 Began/Ended/snap 窗口跑）→ 落位后 snap 窗口（0/0.08/0.24/0.42s）里 4882 行的**无条件归零写**一次性修正漂移 → 视觉上「停住后弹一下」。
+- **修复（两层）**：
+  1. **源头防漂移**：新增 `ERPinNativePagerScroll` —— 滑动 Began 时把原生集合 `scrollEnabled = NO`（拖拽期间 offset 不可能漂移）；四处收尾（pagePanned 编辑/非编辑 completion、finishInteractive completion、DISM-CLEAN）恢复 `scrollEnabled = YES`。落 `NATIVE-PIN on/off` 追踪行（带当时 offset，直接验证漂移量）。
+  2. **回写条件化**：ERClamp 里对 CCUIModuleCollectionView / FCUIActivityListView 的归零写改为**差值 >0.5 才写**，并落 `SNAPZ cls= d=` 追踪行（若仍有漂移，直接给出类名与漂移量）。
+- 滑动/点按正常路径零改动（用户红线）；scrub 动态完整保留（-24 原样）。
+- 验证：翻页落位后应无任何「弹一下」；SSH 拉 plist 看 `NATIVE-PIN on/off` 的 offset 值（on 与 off 应一致 ≈0，证明无漂移）与 `SNAPZ` 是否出现（出现即仍有漂移源，数据直接指名）。
 
-## 1.2.1-174.25 ~ 174.28（全部作废回退）
-- 174.25（设置页三文件）残影 100% 回归；174.26/27/28 连锁排查发现残影为「延迟 3-5 分钟
-  出现」型且 26/27/28 皆有（树未真实回退，26/27/28 是 174.24+增量累积关系）。
-  -130/-131 的胶囊手势/下拉框成果随 27/28 被砍（待重新单批引入）。全部回退，
-  基底 = 174.24（可工作版 = 174.24b/569e47ce，含表面归一 + 4 个补丁符号）。
-- 关键教训：①树回退必须逐文件核对「可工作 commit」（174.24 有首轮 a3c50afe 和
-  修复版 569e47ce 两个）；②contents API 对 >1MB 文件返回空 content（Tweak.xm 一度
-  被写成 0 字节），大文件一律走 raw 通道。
+## 1.2.1-29（1002129）· bug 3 根修第二轮：漂移层定位修正（外层主滚动）
+- **1.2.1-28 复测（用户）**：跳动仍在。追踪环关键证据：**`SNAPZ` 零条** —— 内层 `CCUIModuleCollectionView` 在整场复测中漂移从未超过 0.5pt（1.2.1-28 的内层 pin + 条件写生效），**但跳动存在** ⇒ 8pt 修正不来自内层集合，1.2.1-28 钉错了层。
+- **修正定位**：这段代码有两层原生滚动 —— 内层 CCUIModuleCollectionView（-28 已钉）与**外层主滚动容器**（`ERNativeScrollViewForOverlay` 返回的那个）。漂移发生在外层：拖拽期间 applyPageTransform 因 transitionActive 跳过基线恢复（15176 行），外层 offset 被手指带偏；落位后 snap 窗口 `@[@0.0,@0.08,@0.24,@0.42]` 里**无条件**的 `[nativeScrollView setContentOffset:nativeOffset]`（16720-16723 行）一次性修正 ≈8pt —— 时序与录屏（落位静止 ~0.2s 后单帧跳）吻合。
+- **修复（1.2.1-29）**：新增 `ERPinMainNativeScrollLight` —— 在 pagePanned Changed（拖拽每帧）把外层 offset 贴回基线（差值 >0.25 才写、CATransaction 禁隐式动画、落 `MAIN-PIN d=x/y` 追踪行）。漂移被摊进跟手过程（每帧 <1pt 不可见），snap 写自动变成 no-op，「停住后弹一下」消失。
+- 内层 pin（-28）保留：两层都钉死，拖拽期间两个原生滚动都不可能漂移。
+- 验证：落位后无弹跳；`MAIN-PIN` 行的 d 值 = 每次实际修正量（若持续出现大值，说明漂移源在别处，数据继续指路）。
 
-## 1.2.1-174.29 · 第四批④·批 A：-123 设置面（当前验证版）
-- 基底 = 174.24 可工作版（树已从 569e47ce 语义恢复，4 补丁符号已补）。
-- SystemEnhance.plist 六处改名（灵动岛→上岛配置、天气模块城市选择→天气模块、
-  锁屏音乐→锁屏隐藏、注销设置项→注销设置、长按桌面快速添加→长按桌面、
-  iOS 26 开合动画→开合动效）+「锁屏隐藏」卡新增两开关（隐藏锁屏通知中心文字 /
-  隐藏锁屏滑动解锁文字，PostNotification 实时生效，默认关；不带 -133 的
-  set=setRespringToggle）+ ERSystemEnhanceController 分组名兜底一行。
-- 功能实现（Tweak.xm 钩子 = -124 ERSafeApply / -125 IMP 直调 / -129 最终形态）在批 B，
-  本版开关切了没反应是预期。
-- 版本 1.2.1-174.29（commit 810f5998）
+## 1.2.1-32（1002132）· bug 2 根修（末页悬停）：撤销底部 92pt 让位区
+- 用户关键观察：**上半部分滑动正常弹回，下半部分滑动就悬停** —— 与代码精确对应。
+- 根因：gestureRecognizerShouldBegin:/shouldReceiveTouch: 的翻页分支有底部 92pt 让位区（当年为「底部上滑收起 CC」保留）——底部滑动被翻页手势拒绝后落给原生滚动容器，它未被完全钳死（bounces=NO 但 scrollEnabled/inset 行程仍在），拖动后没有任何机制拉回 = 悬停；上半部分走我们的橡皮筋所以正常。追踪环佐证：悬停期间模型/呈现层零动作（位移在原生层）。
+- 修复（方案 A，对齐 CC18 全屏接管）：删除两处翻页分支的底部让位（shouldBegin + shouldReceiveTouch）；收起 CC 仍两条路：末页快速上拂让位（velocity<-400）+ 主屏指示条系统手势。编辑模式的两处底部护栏（dismiss pan / 模块拖拽）有意保留。
+- 代价（如实）：底部区域慢速上滑不再直接收起 CC，而是页面回弹——与 iOS 18 CC 行为一致。
+- 验证：下半部分滑动 = 与上半一致弹回；末页快速上拂 = 收起 CC；主屏指示条上滑 = 收起 CC。
 
-## 1.2.1-174.30 · 第四批④·批 B：-123 功能实现（当前验证版）
-- 基底 = 174.29（批 A 设置面）。Tweak.xm 整段移植 -122~-129 最终形态 436 行：
-  -124 ERSafeApply（只动本类自己的实现，绝不碰父类 UIView 全局实现）；
-  -125 钩子内禁止属性赋值、可见性一律保存的原 IMP 直调（防无限递归）；
-  -129 滑动解锁最终形态（无条件隐藏已知 ivar label + 遍历任何带文本的视图，
-  jikan ivar 路线 17.2.1 不存在已弃用）；偏好 1s 缓存定时器（钩子内不读 cfprefsd）；
-  %ctor 主队列异步安装 ERNCTextInstall(0) + ERSwipeTextInstall()。
-  覆盖四类：NCNotificationListSectionHeaderView / NCNotificationListCoalescingHeaderCell /
-  SBUICallToActionLabel / CSTeachableMomentsContainerView，全运行时
-  method_setImplementation（懒加载类安全）。
-- 版本 1.2.1-174.30（commit 5115c526）
+## 1.2.1-33（1002133）· bug 2 根修第二轮：悬停真凶 = 斜率拒绝让位 + 原生滚动可滚
+- 1.2.1-32 复测悬停仍在。probe 决定性数据：落位动画正常结束后，外层滚动 offset 从 -139 被拖到 +83（+222pt inset 行程）并停住 = 悬停本体；且内层集合查找 cc=-9999 = ERNativePagerCollectionViewForOverlay 永远 nil（要求 UICollectionView，运行时类不是）→ 内层钳制全空转。
+- 真凶链条：shouldBegin 的斜率判定（垂直>水平×1.12 才接）把斜向滑动让给原生滚动 → 拖动+减速停住 → 悬停。-32 撤销的只是「底部位置让位」，斜率让位仍在。
+- 修复（釜底抽薪，对齐 CC18「滚动由我们全权接管」）：① shouldBegin 删除斜率拒绝（滑动无条件归我们，斜滑=原地回弹）；② 主滚动 scrollEnabled=NO 常驻；③ 内层查找放宽为 UIScrollView + CCUIModuleCollectionView 常驻禁滚。末页快速上拂让位（收起 CC）保留。
+- 教训：probe 的 modY/cc 占位值 -9999 是「查找失败」信号，第一版就该追查而不是留默认。
 
-<!-- rerun trigger 2026-10-31 02:10 -->
-- **已装机（经 lvxl456 fork 构建通道）**。用户实测：174.24 零残影 40 分钟、174.29 零残影一整晚 —— 批 A 设置面无毒。批 B（锁屏隐藏钩子）待用户验两开关 + 残影复查。
+## 1.2.1-34（1002134）· bug 4 纯取证（长按圆点 → 内容全消失但可点击）
+- 用户录屏 + 追踪环关键排除：复现时刻追踪环里**没有任何我方事件**（无 IPAN/SCRUB/FIN/RECON）——scrub 链路无辜；自愈不变量 C（模块 opacity）未触发=模块 layer.opacity 未变；视频显示磁贴网格+圆点全消失、仅媒体模块红心可见（媒体不在分页集合）——消失的是「分页内容层」而 CC 本体在（能点击）。
+- 头号嫌疑：长按圆点触发 CCUI 自己的长按手势=进入编辑模式（iOS 17 系统行为），CCUI 藏正常内容视图而编辑视图未出现。CC18 圆点是自绘 C18PageControl 长按不触发 CCUI 手势=无此问题。
+- 本版：看门狗新增 ERDumpInvisibilityScene——异常态（可见模块=0 且非编辑态）每 tick 落 CCVIS 行（editMode/col 状态/grid/dots/scrub 全量），复现一次直接指名消失的层。探针暂停（防洪水）。
 
-## 1.2.1-174.31 · 第四批⑥：组头ⓘ（-134~-139 最终形态，当前验证版）
-- 174.30 实测：两开关功能正常、无残影 → 批 B（锁屏隐藏钩子）无毒。-122~-129 线收口。
-- **CI 额度确认恢复**（11-1 UTC 重置后 lvxl147 通道一次通过）。
-- 内容（prefs/ERGestureController.m 单文件，从 172 版逐 hunk 精准应用，跳过下拉框块）：
-  ①ERGestureFolderName「已解散」区分（-134 配套）；
-  ②viewWillAppear notify_post DumpFolders（文件夹下拉近实时）+ 多节奏同步调度 +
-  erGlyphDisplayStart/Stop 30fps 自检（页面不可见停表零开销）+ viewWillDisappear/dealloc；
-  ③-helper 块整段（字形构建 5 函数 + ERGHeaderInfoHelper 类 KVO/兄弟同步/明暗跟随 +
-  ERGlyphWeakProxy 防保留环）；④viewDidLoad 回前台观察者（弱引用槽位 + dispatch_once）；
-  ⑤FindHeaderLabel 匹配改「精确匹配或带附件占位符」（-136：hasPrefix 会误贴开关行）；
-  ⑥InstallGroupInfo → ERGestureSyncGroupInfo 三步同步（清陈旧→补缺失→重定位，
-  治ⓘ漂移到「震动反馈」——组头跨分组复用的实锤）。旧独立按钮由清陈旧逻辑移除。
-- 构建通道：lvxl147 原通道（额度已恢复）。
-- 版本 1.2.1-174.31（commit 7b3e336b）
+## 1.2.1-35（1002135）· bug 4 取证 v2（修复取证盲区）
+- 1.2.1-34 复测 CCVIS 零条 —— 取证器自身有盲区：ERDumpInvisibilityScene 开头 gEditModeActive 跳过，若消失态=编辑模式误入则采样器自己跳过了它。
+- v2：① 编辑态不再跳过；② 加测面板本体 ovlHid/ovlA；③ 看门狗链终止留痕 WATCHDOG-STOP（pres/state/ovlA）——面板还在但系统认为已收起=状态失步的直接证据。
 
-## 1.2.1-174.32 · 第四批⑦：-133 注销提醒弹窗（当前验证版）
-- 174.31 实测：组头ⓘ正常、无残影 → ERGestureController 无毒。-122~-129 全线收口，
-  组头ⓘ/文件夹实时成为 174 系的一部分。
-- 内容（-133）：①ERUIHelpers setMasterEnabled 内值变动即弹（保留导航栏重启按钮作
-  「稍后」）+ 追加全局唯一 erPresentRespringAlertForSwitchName:（标题=开关名 attributed
-  抬 6pt 间距、稍后=关弹窗、确定=红-立即 sbreload）+ 通用接入点
-  setRespringToggle:specifier:（写值照旧，PostNotification 照发，随后按 label 弹窗）。
-  ②plist 四处 set 接入：Glass「启用液态玻璃」+「灵动岛卡片」、Siri「启用」、
-  SystemEnhance「隐藏灵动岛」——开/关都弹。
-- **精准追加而非整文件替换**：ERUIHelpers 是 174.26 残影唯一未排除嫌疑（当时它单独
-  在场即 100% 残影，但其代码当时无运行路径——弹窗缺 plist 映射没触发过——矛盾未解）。
-  本版只加代码不改既有行为；若残影出现即证伪「ERUIHelpers 文件有毒」假说，指向别的
-  未知因素。跳过下拉框箭头对齐（随 -130/-131 批最后重进）。
-- 版本 1.2.1-174.32（commit 08432b0f）
+## 1.2.1-36（1002136）· bug 4 取证 v3（祖先链点名）
+- 关键观察：-35 装好后用户两次开关 CC（00:30:56/00:31:27 两条 WATCHDOG-STOP，正常关闭）全程无翻页/圆点手势事件 = 本次复现是「纯长按不拖动」，长按本身即触发消失，进一步坐实 CCUI 长按手势方向。CCVIS 零条 = 消失时模块 opacity/hidden/alpha 全正常 → 消失在祖先层。
+- v3：触发面放宽（模块全不可见 OR collection 消失 OR 面板透明 任一命中）+ **祖先链排查**（从首个模块向上爬，点名第一个 hidden/alpha<0.05/opacity<0.05 的祖先类名 hider= 字段）。
 
-## 1.2.1-174.33 · 快捷指令删除同步修复（基底=172 完全体，当前验证版）
-- **残影根因实锤（用户 5 遍二分）**：动快捷指令（插件页删）→ 闪模块/残影；不删 → 干净。
-  97/-3/29/172 全版本一致 → 先天数据流问题，与 174 系修复无关。
-- **根因**：快捷指令双数据源——真源 visibleUUIDs（设置页显示列表）vs 渲染源
-  ShortcutSlotAssignments（槽位绑定表）。添加两套都写；左滑删除只改真源不动绑定
-  （prefs 699-705）→ CC 磁贴残留可点击、注销按旧绑定表重建 = 数量回退旧基线（全删变 15）。
-  SpringBoard 侧除 ERPrefsChanged 外无删除响应。
-- 修复：①prefs 左滑删除补解绑槽位（照抄信息页删除的既有模式）；②Tweak 新增
-  ERShortcutSyncToVisible（绑定向真源全量对齐，幂等：uuid∉真源解绑、真源有而无绑定
-  认领空槽）；③ERPrefsChanged 挂载（ReloadPrefs observer 已存在，删除后 SpringBoard
-  侧最终对齐，无 CC 在场要求）。
-- CI 两轮修正：kERShortcutVisibleKey 重定义（172 已有，删重复声明）+ 编译顺序
-  （定义移到使用前）。
-- 版本 1.2.1-174.33（commit 6ed69218）
+## 1.2.1-37（1002137）· bug 4 根修：scrub 期间压制收起手势
+- 用户在 -35 上复现（长按+上下拖动）。probe 决定性链（00:35:36-42）：IPAN Began→CH×9→Ended→FIN tgt=3（scrub 全程正常）→ 3.7s 后 WATCHDOG-STOP pres=0 state=0 ovlA=1.00（系统宣布收起而面板 alpha=1）= scrub 尾态被 CCUI 收起手势解读 → 收起动画卡住 → 内容移出（看不见）而面板在（能点击）。
+- 根因：圆点 scrub 路径从未压制收起 pan（pagePanned Began 有压制、圆点没有——-24 血统的遗漏）。
+- 修复：抽公共函数 ERSuppressOverlayPans/ERRestoreSuppressedPans；pagePanned Began 改用公共函数（行为不变）；圆点 scrub Began 压制、Ended/结束态优先块恢复。
+
+## 1.2.1-38（1002138）· bug 4 自愈层：容器消失态当场恢复
+- -37 复测仍消失。60 条 CCVIS 实锤消失态：collection 与其父层 alpha/opacity 双 0（colA=0.00 colOp=0.00 hider=UIView a=0.00），而模块自身全部正常（mods=11/33 可见）——消失的是「分页内容容器」，被某次写入打成透明后无恢复路径。
+- 修复：看门狗 ERDumpInvisibilityScene 升级为自愈——检测到容器消失态（colVanished/ovlVanished/模块全不可见）时当场把 collection 与「首个模块→overlay 祖先链」的 alpha/opacity/hidden 拉回 1.0（禁隐式动画），随后 applyPageTransform + 可见性重申，落 CCVIS-HEAL 行（n=恢复层数、hider=被恢复的层名——为后续修根写入者留证）。
+- 效果：即使触发，内容 0.25s（一个看门狗 tick）内自动回来，不再卡死到注销。
+- 坑：版本号连锁替换会改掉历史注释里的版本标，锚点匹配要用当前文本。
+
+## 1.2.1-39（1002139）· bug A 修复（末页下滑收起）+ bug B 取证（残影几何）
+- bug A（末页下滑收起）：追踪环实锤下滑被我们的翻页正常接住（PAGESETTLE 到页 2）但 1.4s 后 CC 仍被收起 = 双识别：我们的 pan 与 CCUI 收起 pan（挂在 presentation 容器=overlay 子树之外，子树压制够不到）同时识别同一次触摸。修复：ERSuppressOverlayPans 压制范围升级为整个 CC 窗口；末页快速上拂让位不受影响（那条路 shouldBegin 返 NO，无压制需求）。
+- bug B（收起残影=CC 背板+圆点在而磁贴无）：残影窗口 CCVIS 零条=模块 opacity 全正常，疑为位置偏移（收起/再呈现布局把模块挪出屏）。CCVIS 触发面放宽：首模块呈现位置 vs 模型位置偏差>80pt 也算消失态，新增 posD/nat 几何字段。
+
+## 1.2.1-40（1002140）· 末页滑动收起根修：让位规则全删（双副本教训）
+- 用户裁决「滑动不该收起，收起只靠小白条」。-39 追踪环实锤：连续 4 次末页上滑（vy=-425~-2008）全部被我们正常橡皮筋接住，1 秒后 CC 仍被收起 = shouldBegin 的末页上拂让位（vy<-400 让位收起）在用户正常滑动速度区间内必触发。
+- **关键事故**：文件里存在两份重复的 gestureRecognizerShouldBegin: 实现（-40 第一轮只删了第一份的让位，运行时用的是第二份=让位仍生效）。第二轮删除第二份让位，velocity.y<-400 全文件 0 残留。
+- 现在：内容区内任何滑动都归翻页手势（末页上滑=橡皮筋回弹），CC 收起唯一入口=小白条系统手势。
+- 教训：**改手势委托方法前必须 grep 全文件确认唯一性**（同方法多副本时运行时行为与源码直觉不符）。
+
+## 1.2.1-41（1002141）· 残影取证 v4：遮挡检测（hitTest 点名覆盖者）
+- 残影窗口 CCVIS 零条（模块 opacity/位置全正常）+ 残影态「手电筒可见其他磁贴无」= 排除透明度/位置后，头号嫌疑转为 z 序遮挡（背板盖住磁贴）。
+- v4：采样器加遮挡检测——对首个可见模块中心 hitTest，命中不在该模块子树=被遮挡（occluder 字段点名覆盖者类名）；命中时（限 state==2 且非 scrub/edit/transition）自愈=collection bringToFront + 可见性重申（CCVIS-OCCLUDE 行）。
+- 理论：z 序遮挡时模块一切属性正常但被盖住=与全部观察吻合；自愈后 0.25s 内容回来。
+
+## 1.2.1-42（1002142）· 遮挡检测 v2
+- 12:44:32.754 首次命中 occ=UIView（tr=1 滑动中）= 模型/呈现坐标错位误报 + 0.25s 采样错过收起瞬态。
+- v2：hitTest 改用呈现层位置；tr=1 不判遮挡；命中者落完整父链（点名 UIView 挂在谁下面）。
+
+## 1.2.1-43（1002143）· 残影根修：zPosition 跨层级压制
+- -42 取证抓到覆盖者：CCUIS-OCCLUDE by=UIButton<ERQuickAccessHostView<CCUIHeaderPocketView（CC 顶部状态/快捷区容器）。收起/再呈现后 pocket 布局错乱压住磁贴；磁贴容器与 pocket 非兄弟视图，bringSubviewToFront 无效（OCCLUDE 反复触发实证）。另有 hider UIView 每 0.25s 被反复写 0（写入者在持续作恶）与模块累积 33→45（overlay 泄漏）待后续。
+- 修复：heal 改用 layer.zPosition（跨父级生效）——磁贴容器 z=pocket.zPosition+10、圆点 host +11，一击把内容提到 pocket 之上；OCCLUDE 行加 pocketFrame 取证。
+
+## 1.2.1-44（1002144）· 残影根修二：僵尸 overlay 清理
+- -43 复测 OCCLUDE 仍反复触发但 pocketFrame 正常（{{0,0},{430,139}} 未盖磁贴区）+ mods 33→45 累积 = 推翻 pocket 布局错乱假设，真因 = **僵尸 overlay 累积**：旧 overlay 收起后 CCUI 把其容器 alpha 写 0（收起态正常行为），看门狗对着僵尸无限自愈与 CCUI 打架；用户看到的「看不见但能点击」= 僵尸 overlay 本体（还挂着圆点/手势）。
+- 修复：① 存活门——overlay 不在窗口 = 僵尸，跳过一切治疗（CCVIS-SKIP）；② 呈现完成时清尸——把不在窗口的旧 overlay 从 gOverlayControllers 移除（OVERLAY-PURGE n/left）；③ CCVIS 加 ovl=总数/在窗 字段。
+- 教训：版本号连锁替换会改历史注释锚点；锚点必须用当前文本 grep 后再写。
+
+## 1.2.1-45（1002145）· bug 4 终版根修：幽灵模块过滤（页数膨胀）
+- -44 数据证伪僵尸 overlay（ovl=1/1、PURGE=0）但抓到决定性线索：TAP p=4（第 5 个圆点）+ RECON pg=4->4 m42=-3872=4*968 = **第 5 页真实存在** + mods=45。真因 = CCUI 每次呈现往 overlay 挂新模块 childViewController，旧控制器视图被移出（window=nil）但控制器仍挂载 → 模块 33→45 跨会话累积 → 页数按幽灵模块推导膨胀到 5+ → 圆点多出空页 → 长按圆点导航到空页 = 看不见但能点击。
+- 修复：ERCollectModuleControllers 过滤——只保留 isViewLoaded && view.window != nil 的模块；幽灵计数落 COLLECT-GHOST n/kept（变化时才落）。页数/圆点/可见性回归真实。
+
+## 1.2.1-46（1002146）· bug 4 终版根修：模块 identifier 去重
+- -45 窗口过滤失效（COLLECT-GHOST 零条）+ mods=47 + PAGESETTLE to=-4840=第 6 页 + cur=5 + pocketFrame 139→155。真相：幽灵模块视图没离开视图树（CCUI 把旧模块视图藏在原地），窗口过滤抓不到。真因=持久化 overlay + CCUI 每次呈现追加新模块控制器 → 模块 33→45→47 累积 → 页数推导 6+ → 圆点 6 个 → 导航到空页 = 看不见但能点击。
+- 修复：state==2 呈现完成时按 identifier 去重——同名模块只留最后出现的（最新在屏），旧的 removeFromParentViewController+view.removeFromSuperview 物理移除（MODULE-DEDUPE removed/kept 追踪）。
+- 教训：版本标链式替换导致锚点三次失配——大文件锚点必须先 grep 当前文本。
+
+## 1.2.1-47（1002147）· 去重键回退 + 模块清单转储
+- -46 MODULE-DEDUPE 零条 = ERModuleIdentifier 对幽灵模块返回空，去重键失效。
+- v2：去重键回退为「identifier 优先，空则类名」；state==2 转储 MODLIST（前 16 模块的 class/identifier 长度/hidden/alpha）——看清幽灵的形态。
+
+## 1.2.1-48（1002148）· 残影根修：收起瞬间隐藏我方副本层
+- 用户关键观察：控制中心面板退出后，磁贴在桌面停留 0.5-1 秒。嫌疑=我方常驻副本层（快捷指令磁贴渲染副本 duplicate host 等）——其隐藏动作挂在「同步窗口」里，收起时窗口已结束无人隐藏 = 副本比面板多活 0.5-1s。
+- 修复：DISM-CLEAN（state 3/0）第一时间隐藏 duplicate host（181052）/快捷区 host（181000）/圆点 host；collection 属面板层级随面板自然退场不动。
+- 坑：kERQuickAccessHostTag 不存在（快捷区现役 tag=181000）；indicatorHost 是 UIView 不是 UIViewController（锚点笔误）。
+
+## 1.2.1-49（1002149）· 残影根修终版：内容层统一淡出生命周期
+- 用户关键观察定方向：第一页亮度模块无感（系统自渲染跟随面板退场）、页码越大停留越久（内容层 opacity 恒 1 无人淡出，按模块排队的延迟清理逐页跑完）。用户裁决：0.3s 内消失即可。
+- 修复：① state 3（收起启动）collection.layer.opacity 0.2s 统一淡出（CABasicAnimation ERDismissFade，fillMode forwards）；② state 0 兜底切 0；③ state 2（呈现完成）显式恢复 opacity=1（在任何自愈前，避免打架）。
+
+## 1.2.1-50（1002150）· 缓落根修：落位 completion 禁隐式布局动画
+- 用户视频逐帧定量：滑到第 3 页落位后 0.3-0.4s 顶部三排以减速曲线下坠约 100pt = CCUI 布局重算的隐式动画（模块 frame 从旧布局位置缓缓落到新位置）。页 4/5 经圆点再滑正常 = 布局已稳定无 frame 差异。
+- 修复：三处落位 completion（滑动编辑态/滑动非编辑态/scrub+TAP+自愈）整体包 performWithoutAnimation——布局 frame 变化立即生效，缓落物理性消失。
+- 教训：文件里存在两份滑动 completion（编辑态/非编辑态），尾部结构不同（一个 prepareGrid 结尾一个 updateTopFade 结尾），包裹必须逐个核对块尾。
+
+## 1.2.1-53（1002153）· 缓落数据采集版（基底=-50 精确恢复）
+- 决策：-50 为新基线（-51 误删事故 + 47/51 累积为 BFS 重复计数误读，GEN-MAP 实证 12 模块稳定无累积）。源码从 -50 commit（d72f6384）整树恢复。
+- 本版只加缓落探针：滑到第 2+ 页落位后 1.2s 内采样顶部 3 模块呈现位置 + 外层滚动/collection offset/contentInset.top（DROOP 行×6），下坠的动画层直接指名。零逻辑改动。
+
+## 1.2.1-54（1002154）· 缓落根修：落位动画全清
+- DROOP 窗口坐标实锤：滑到第 3 页落位瞬间磁贴窗口位置差一页（m0=1061 vs 终点 160），0.5s 动画归位=缓落。colWinY 恒 139=collection 不动，磁贴相对 collection 的 frame 差一页。
+- 根因：第 3 页顶部三排模块的布局归属曾变动（挤到下一页又拉回），CCUI 布局重算以 UICollectionView cell move 动画（0.5s）归位。-50 的 performWithoutAnimation+指定键移除管不住 UICollectionView 自己的 move 动画。
+- 修复：滑动路径（非编辑态）与 scrub/TAP 路径的落位 completion 对当前页模块 removeAllAnimations 全清。编辑态分支不加（防误伤编辑动画）。
+
+## 1.2.1-55（1002155）· 缓落触发源切除：snap 补写判等跳过
+- -54 removeAllAnimations 无效 = 移动不是 CA 动画而是逐段 frame 写入。DROOP 下坠窗口（0-0.5s）与 snap 补写窗口（0/0.08/0.24/0.42s）完全重合 = 每次补写触发 CCUI scrollViewDidScroll → 内部修正内容（带动画）→ 磁贴逐段归位。
+- 修复：snap 补写前判等（contentOffset 已在目标 0.5pt 内则跳过写入）——拖拽期间 MAIN-PIN 已逐帧钉位，补写本就多余。不写=不触发=缓落源切除。
+
+## 1.2.1-56（1002156）· 动画源点名探针（纯采集）
+- DROOP 实锤缓落=顶部磁贴窗口 Y 1036→157 动画 0.5s（垂直 880pt 归位），colWinY/nat 恒定=collection 不动，动画在磁贴内部层级。-54 清模块层无效=动画载体是别的层。
+- v6：t=0.15-0.45 采样顶部磁贴 superview 链逐层「呈现 vs 模型」Y 差 + animationKeys + 类名——动画载体与键名直接现形。
+
+## 1.2.1-57（1002157）· 缓落真凶根修：collection 层动画清除
+- ANIMCHAIN 实锤动画载体 = CCUIModuleCollectionView 自己的 layer（d=0 但 animationKeys 非空，子树整体被平移 305-880pt）。-54 清模块层没够到它。-55 snap 判等无关（动画非 snap 触发）。
+- 修复：滑动路径 + scrub/TAP 路径的落位 completion 对 collection.layer 及其 superview 链 removeAllAnimations——contentOffset/bounds 瞬间跳终值，磁贴瞬间到位。
+
+## 1.2.1-58（1002158）· 缓落终版：滚动抑制窗口
+- 机制闭环：现有 %hook layoutSubviews 的零位锚（offset≠0 即拉回 0）与 CCUI 的动画滚动（contentOffset.y -880→0）互相拉扯 = 缓落合成轨迹。
+- 修复：%hook 内新增 setContentOffset:animated: 覆写——落位后 1.5s 抑制窗口内强制 animated:NO（CCUI 滚动瞬间到位，无拉扯）；两个落位 completion 设 gERDroopSuppressUntil。
+
+## 1.2.1-59（1002159）· 缓落根修：非动画 setContentOffset 入口封堵
+- -58 只拦了 animated: 变体；CCUI 在自己的动画块里调 setContentOffset:（无标志）→ bounds.origin 逐帧动画写入（ANIMCHAIN 容器 d=261 keys=- 实锤写入驱动）。
+- 修复：%hook 新增 setContentOffset:（无动画变体）覆写——窗口内 >100pt 大偏移写入忽略（零位锚持有正确位置），小偏移动作禁用事务瞬时应用。
+
+## 1.2.1-60（1002160）· 缓落终版：actionForLayer 关卡否决
+- 前四轮失败复盘：-54 清错层/-55 拦错触发/-58 拦错变体/-59 探针挂错分支（编辑态 completion，正常滑动不经过，缓落轨迹从未采到）。
+- 终版：① %hook CCUIModuleCollectionView 加 actionForLayer:forKey:——抑制窗口内对 bounds/position 返回 NSNull（CA 隐式动画唯一必经关卡，事前否决而非事后清除，覆盖一切写入路径）；② 抑制窗口设在落位启动点（now+1.8s，不依赖 completion）；③ 探针同步搬到启动点（+0.45/0.9/1.4s）。
+
+## 1.2.1-68（1002168）· 锁屏组件/通知卡片整体换成上游 Soko 1.1.0（ObjC + Logos 重写）
+- 基线：1.2.1-60（d45a6211）。1.2.1-61~66 的 addAnimation/缓落实验不进本版；-60 自带的 actionForLayer 抑制窗口原样保留。
+- Soko：Swift（rc.3 移植）整目录删除，改由上游 1.1.0 的 ObjC/Logos 源编入同一支 EchoReborn.dylib。组件「顶部/底部」改成长按锁屏 → 自定义 → 上下滑切换，按壁纸各自记忆（写进 PRPosterComplicationLayout 归档，编码键 SokoComplicationsUseBottomLayout）。
+- 旧设置桥：6 个 soko_* 键（域 com.strive.echoreborn.preferences、通知 com.strive.echoreborn/ReloadPrefs）名字/默认值/语义不变，1.1.0 的 SokoPreferences.m 按同键读取，设置页继续实时生效。
+- 修复：① 根 filter 补 com.apple.PosterKit / com.apple.MercuryPoster（壁纸配置在这两个进程编解码，缺了就是「编辑完退出回顶部」），Tweak.xm 的 %ctor 对它们第一行 return；② Soko 的 %ctor 改显式进程白名单（原来 Siri 三个进程会误走 poster 分支）；③ SokoPosterModel 的 <roothide.h> 改 __has_include 守卫（rootless 可编译），jbroot 兜底收进 SokoPrivate.h；④ 删除 Soko.x 里对 quickActionsView 的 transform 缩进 —— 与 Tweak.xm 的 center 路径叠加成 2× 位移，横向缩进唯一由 Tweak.xm 负责；⑤ marker 改名 com.strive.echoreborn.default-layout（不与真 Soko 抢文件）；本包不带 postinst，首次下滑一次即可，之后按壁纸记忆。
+- 诊断：新增 ERSokoLog 跨 TU 日志桥（Tweak.xm 实现 / Soko 各 .m 调用），打 SOKO-CAP / SOKO-DOCK / SOKO-SWIPE / SOKO-ENC / SOKO-DEC；日志开关未就绪前的行做早鸟缓冲，避免丢掉启动期探针。
+
+## 1.2.1-69（1002169）· 编辑态拖动诊断版（只加日志，不改行为）
+- 现象：长按进入编辑态后无法上下拖动切换组件位置。
+- 新增 Soko/SokoFileLog（独立文件 /var/mobile/Library/Logs/EchoReborn/soko.log，256KB 截断，按进程名打前缀）—— 不用 ERLogMirror 是因为它是 60 行环，SpringBoard 的 CC 心跳会把 PosterBoard 的判定行冲掉。
+- 探针：CTOR（进程归属/bundleId）、CAP（model/dock/poster/liquidAss）、INITPOSTER（支持判定 + 选中了哪组 widget 配置与加号手势钩子）、CONTAINER/EDITOR（登记与角色）、SWIPE-INSTALL/SKIP（手势装在哪一层）、SWIPE-TOUCH、SWIPE-BEGIN（逐条记录 canSwipe/presented/inset/dodging/dismissing/portrait/起手时长/方向/起手点是否落在 editingRowFrame±24 带内）、SWIPE-END（位移/速度/阈值）、ROW（editingRowFrame 与 inset/usesBottomEditingRow 的真值）。
+
+## 1.2.1-70（1002170）· 诊断通道改 cfprefsd 键（文件写不进）
+- 1.2.1-69 实锤：iOS 17.2.1 + rootless 下 SpringBoard 写 /var/mobile/Library/Logs/EchoReborn 被沙箱挡（目录能建、echoreborn.log 0 字节），Soko 文件日志同样写不进去。
+- 改为写 CFPreferences 独立键 com.strive.echoreborn.preferences / ERSokoMirror（120 行 / 20KB 环），不与 ERLogMirror 的 60 行环抢行；SSH 拉 plist 的 ERSokoMirror 即可读全部判定行。
+
+## 1.2.1-71（1002171）· 定位 PosterBoard 侧：双域日志 + isSupported 预演
+- 现象补充（用户）：原版 Soko 在底部态进编辑态，组件也在底部；我们这版进编辑态却回到顶部 —— 指向 PosterBoard 侧 Soko 完全没干活。
+- 双域日志：SokoFileLog 除写 com.strive.echoreborn.preferences 外，再写进程自己的 bundleId 域（PosterBoard 写不进宿主域，但一定写得进自己的域），SSH 读 com.apple.PosterBoard.plist 的 ERSokoMirror 即可。
+- SpringBoard 里预演 PosterBoard 的 isSupported 五项：nativeBottom（PRComplicationContainerViewController setWidgetsUseBottomLayout:）/ rowFrame / reticle / frameRect / frameVariant（后四项在 CSProminentLayoutController）。哪一项为 0 就是 PosterBoard 侧整段跳过的原因。
+
+## 1.2.1-72（1002172）· 数值标定版（只采集，不改行为）
+- 目标：把"顶部/底部"两档换算成滑块同一套单位（pt），确认实际行程。
+- CALIB 行：screen 尺寸 / safeAreaBottom / stockY（系统原位行 = 顶部态行，SpringBoard 未装 _frameForElement: hook，取到的是系统原值）/ bottomY（底部态行，含当前 offset）/ delta = stockY - bottomY。
+- 判读：delta 就是"从底部走到顶部"需要写进 soko_widgetOffset 的量（当前滑块只有 -120~120，明显不够）。
+
+## 1.2.1-73（1002173）· 滑块行程 -400~+120、默认/重置归 0、重置即时生效、海报进程报到探针
+- 滑块：soko_widgetOffset 范围 -120~+120 → **-400~+120**，默认 -18 → **0**；soko_notificationOffset 默认 60 → **0**（范围不变）。
+- 重置无效根因修复：SokoPreferences 原为"键存在才覆盖"，设置页重置只删 key → 缓存保留旧值，画面不变、必须拖一下滑块才生效。改为**键不存在即回落默认 0**，并新增 SokoPreferencesSetChangeHandler —— 变更/重置后 SpringBoard 立即 refresh + setNeedsLayout 重算组件行。
+- 海报进程报到：PosterBoard/PosterKit/MercuryPoster 侧写不进宿主偏好域（实测其自身域也没有文件），改为 %ctor 里 notify_post 一条报到通知，SpringBoard 侧监听并落盘 `POSTER-HELLO <name>`，用于确认编辑器进程是否真的加载了本 dylib。
+- CALIB 几何标定行（只读）：stockY（系统原位=顶部）/ bottomY（底部）/ delta，用于把两档换算成滑块同一单位。
+
+## 1.2.1-74（1002174）· 海报进程判定码通道（Darwin notify）
+- 1.2.1-73 实锤：PosterBoard 已注入并执行（收到 POSTER-HELLO.posterboard），但它既写不进宿主域，也写不进自己的域（com.apple.PosterBoard.plist 根本不生成）。所以判定只能走 Darwin 通知。
+- SokoTrace(code, payload)：海报进程把判定压进 notify state，SpringBoard 解码后落盘为 `TRACE code=… payload=…`。编码：低 8 位 code，高 32 位 payload+100000。
+- 码表：1 posterSupported / 2 liquidAss / 3 容器登记 / 4 编辑器登记 / 5 手势装(编辑器) / 6 手势装(容器) / 7 触摸(payload=起点y) / 8 接受(payload=行y) / 9 拒绝canSwipe(payload=位掩码:1弹层2insetNaN4dodging8dismissing16横屏) / 10 拒绝hold(ms) / 11 拒绝非纵向(vy) / 12 拒绝方向(vy) / 13 行框空 / 14 拒绝起手点出界(payload=起点y) / 15 应用(payload=切换前是否底部) / 16 editingRowFrame(payload=行y)。
+
+## 1.2.1-75（1002175）· 根修：装了 LiquidAss 就整段跳过编辑器钩子
+- 实锤（TRACE code=2 payload=1）：只要 lgHostEnabled("Clock") 为真，SokoInitPoster 就走「LiquidAss 分支」——该分支只装几何钩子，不装编辑态 reticle / 滑动 / 壁纸状态写入。所以长按进自定义既不在底部、也拖不动。
+- 修复：① 删除 SokoInitPoster 的 LiquidAss 早退分支，永远装标准编辑器钩子；② CSComplicationManager 读状态、SokoPosterLayout 选几何，都改成「这张壁纸的 userInfo 里真有 dylv.liquidass.clock.style 才算 LiquidAss」，否则走本插件自己的状态；③ 删除 frameByAdjustingFrame 里 `if (editing && liquidAss) return frame` 的编辑态早退。
+- 判定码通道修正：原来所有 code 共用一条通知名 + notify state，连续两笔被系统合并（实测 code=1 丢失只剩 code=2）。改为每条 code 一条独立通知名 com.strive.echoreborn.soko.tr.<code>。
+- 滑块下限 -400 → **-520**（实测顶部 = 底部 -518）。
+
+## 1.2.1-76（1002176）· 连续位置：编辑器与滑块共用同一个数值 + 边框跟随
+- 新通道 SokoDockPublishRowOffsets(rowOffset, topOffset, isSet)：SpringBoard 每次布局把「底部基准 + 生效偏移」「顶部端点(-518)」「是否显式设置过」发布给海报进程。
+- 行定位统一为 y = 底部基准行 + 生效偏移（编辑态/非编辑态同一套，去掉原来的 -28 编辑补偿），因此滑块 -200 进自定义就在 -200。
+- 编辑态虚线框改为直接钉到同一公式，不再用「系统行框差值」平移（17.2.1 上两套行框相同、差值恒 0，导致边框不跟随）。
+- 上滑 = 请求 topOffset(-518)，下滑 = 请求 0；PosterBoard 无法写偏好，改由 SokoEditorRequestRowOffset 发通知，SpringBoard 落盘 soko_widgetOffset 并广播 ReloadPrefs，设置页数值随编辑同步。
+- 只要用户显式设置过偏移，即使该壁纸布尔为"顶部"，dock 也接管渲染。
+
+## 1.2.1-77（1002177）· 编辑态虚线框跟随 + 滑动跟手
+- 边框不跟随根因：frameByAdjustingFrame 里对 `variant == kSokoReticleVariant(3)` 直接 return，而 17.2.1 的编辑虚线框正是走 variant 3 算帧 → 组件滑走、框留在原位。现改为 variant 3 与组件行走同一套定位公式。
+- 滑动后 0.2~0.3s 才动的根因：重排走 0.45s 弹簧动画（且要等跨进程 offset 发布回来）。改为编辑态/几何更新一律 relayoutAnimated:NO 立即重排，动画分支时长压到 0.18s。
+- 变体纠正：15 Pro Max 是 RootHide（/var/jb -> /、有 libroothide.dylib、dpkg 架构 iphoneos-arm64e），之前误装 rootless 包（iphoneos-arm64）才需要 --force-architecture；已改用 CI 的 roothide 产物，dpkg -i 无需强制参数。
+
+## 1.2.1-78（1002178）· 按原版语义重做编辑期：本地会话 + 完成才生效 + 震动 + 边框 transform 兜底
+- 编辑期不再跨进程：进入编辑时把当前生效偏移取进会话（SokoPosterLayout editingRowOffset），滑动只改会话值；取消退出会自动回落到发布值。
+- 保存语义对齐原版：只有 setComplicationLayout:（"完成"路径）才把会话值落盘（发通知由 SpringBoard 写 soko_widgetOffset）；"取消"不写、不生效。
+- 震动：滑动生效时 Light 轻震（与原版一致）。
+- 跟手：编辑期全程本地、无跨进程等待，重排改回 0.3s 弹簧（原版手感）。
+- 虚线框：先让系统 updateReticleViewFrames 重算（它会覆盖 frame 修正），再按「目标 y − 系统原位 y」叠加 transform.ty 兜底。
+
+## 1.2.1-79（1002179）· 每壁纸归档偏移 + 顶部基线校正 + 开关生效
+- 顶部端点校正：原用 layoutController 类方法算「系统原位行」(210)，与系统真正摆出的组件行差 ~11pt，导致 -518 实际偏低；改用 complications 视图的真实 frame，顶部端点应落到 ~-507。滑块下限 -520 → **-510**。
+- 每张壁纸独立记忆：新增归档编码键 ERSokoRowOffset(double)，随系统保存落盘；「完成」写进新 layout、「取消」不写 —— 天然实现原版语义（之前写偏好所以取消也生效）。
+- 编辑会话初始值取自该壁纸归档偏移，因此"设置里 -200 → 进自定义就在 -200"。
+- 开关修复：「调整组件位置」关闭 → 完全不接管（之前被 isSet 判定盖过）；「调整通知位置」关闭 → listMinY / footer inset / footer 中心三处全部不介入。
+- 设置页镜像：SpringBoard 读到归档偏移时写回 soko_widgetOffset，切壁纸滑块跟随。
+- 虚线框：仍不跟随，本轮加 TRACE 17/18/19（位移×10 / 边框高 / 系统原位）定位是没算对还是被系统复位。
+
+## 1.2.1-80（1002180）· 修复"上滑下滑无效"：几何发布与停靠解耦
+- 根因：顶部/底部基准只在 layoutDock 里计算并发布，而 layoutDock 只在"组件已被 dock 接管"时执行。默认顶部态下 dock 不启用 → 顶部 offset 从未发布（NaN）→ 编辑器滑动判定的 `isnan(topOffset)` 直接 return，表现为怎么滑都没反应。
+- 修复：抽出 publishRowOffsetsIfPossible，在 publishDockGeometry（每次锁屏布局都会走）里发布；layoutDock 改为复用发布值，两套算法不再漂移。
+- 顶部基线仍取"系统真实摆放的组件行"（≈ -507），滑块下限 -510。
+
+## 1.2.1-81（1002181）· 编辑态虚线框强制跟随（兜底）
+- 1.2.1-80 的 TRACE 已证明滑动恢复：code 7（触摸）/16（editingRowFrame=728）/8（接受）连续出现。
+- 边框仍不跟随：系统 updateReticleViewFrames 与我们的 frame/transform 都被随后复位。改为在每次重排后遍历编辑场景视图树，按类名匹配 reticle 视图并直接按其父视图坐标强制定位；同时 TRACE 17=命中数 / 18=目标y×10 / 19=当前偏移。
+
+## 1.2.1-82（1002182）· 修复滑块/滑动同时失效
+- 滑块无效根因：shouldHostDock 只认 self.enabled，而它仅在壁纸切换回调里更新；设置页改值后从未重算 → 一直不接管。改为：开关打开且（设置页设过值 或 该壁纸归档有值）即接管；设置页变更回调里同时 setEnabled 重算。
+- 滑动"无反应"根因：handleSwipe 用跨进程发布值当"当前值"，滞后一帧时会与目标相同而直接 return（日志里只有 7/16/8、没有 15）。改为当前值优先取编辑会话值。
+- 完成后立即生效：除写归档外再发一次 setrowoffset，SpringBoard 收到即设为当前生效偏移并接管刷新。
+- PUB 日志：throttle 1s 打 top/eff/set/prefs/archive 五元组，便于核对顶部基线与生效值。
+
+## 1.2.1-83（1002183）· 渲染唯一来源改回滑块 + 顶部端点 -507 修正
+- 实锤（PUB 行）：`eff=-108.1 prefs=-108.1` 之后变成 `eff=0.0 archive=0` —— 完成时写进归档的 0 覆盖了设置页的 -108，导致"滑块拖了没反应"。改为：渲染只认 soko_widgetOffset；归档值仅写入（为将来每壁纸记忆保留），不参与渲染与接管判定。
+- 顶部端点经验修正 +11pt：量到 -518，系统实际渲染行对应 -507，与用户实测一致。
+- 接管判定简化为「开关开 && 滑块设过值」。
+
+## 1.2.1-84（1002184）· 顶部基线缓存 + 虚线框匹配放宽
+- 实锤：停靠后组件视图被搬进 dock，再拿它当"系统原位"量出来是 11pt（PUB top=11.0），整条偏移尺度全错。改为只在"未停靠/不在 dock 容器内"时采样一次并缓存。
+- 虚线框：TRACE 17 一直是 0 → 类名匹配不到。放宽到 Reticle / Outline / Dashed 三类关键字，继续用 17 回报命中数。
+
+## 1.2.1-85（1002185）· 重置归 0、编辑不再被归档污染、类名回传
+- 重置无效/跳顶部：重置原是"删键"，删键=未设置=顶部(-507)。改为显式写 0（组件偏移与通知偏移都改）。
+- 进自定义落在 0：编辑会话此前用归档值播种，而之前一次完成把 0 写进了归档，之后每次进入都被污染。改为只用 SpringBoard 发布的当前生效值（= 设置页滑块）播种。
+- 边框定位：TRACE 17 恒为 0，说明按 Reticle/Outline/Dashed 都匹配不到。新增 code 20 类名回传（每 3 字节一条，-1 分隔，上限 25 个视图），下一轮据此定位真实类。
+
+## 1.2.1-86（1002186）· 顶部端点固定 -507、上滑不再变成 11、文案与类名回传修正
+- 上滑变成 11 的根因：顶部端点用"组件视图实时量"，停靠后该视图已被搬进 dock，量到 11pt。改为始终用 layoutController 的系统原位行 + 11pt 修正 → 恒定 -507，上滑一定到顶。
+- 文案：重置控件偏移 → 重置组件偏移（仅文字）。
+- 类名回传：上一版所有分片共用 code 20，被系统合并只剩 -1。改为分片用 code 20..26、分隔符 27。
+
+## 1.2.1-87（1002187）· 虚线框改几何匹配 + 完成/取消判定位
+- 虚线框：类名扫描显示前 6 层都是通用容器（...PresentationView / _UISceneLayerHostContainer...），改按几何匹配 —— 尺寸≈组件行(364x76)、纵向中心≈系统行中心(±10pt) 的视图整体平移 delta；TRACE 17 回报命中数。
+- 完成/取消判定：code 28 = setComplicationLayout 触发（并带上会话值），code 29 = 编辑场景 viewWillDisappear（带会话值）。用这两条确认"取消"到底会不会走 28。
+
+## 1.2.1-88（1002188）· 开关同步禁用编辑滑动 + 取消不再写偏好 + 归档镜像防覆盖
+- 开关：新增 SokoWidgetsEnabled 通道，SpringBoard 每次发布带上"调整组件位置"状态；编辑器在 gestureRecognizerShouldBegin/handleSwipe 里直接拒绝，关闭后上下滑完全不响应。
+- 取消逻辑：setComplicationLayout 实测触发 44 次（含取消路径），不能当"保存"信号。改为：该钩子只把偏移写进 layout 归档，**不写偏好**；取消时系统不保存 layout → 偏好不变。
+- 归档→滑块镜像改为"仅镜像变化值"（新键 soko_mirroredOffset 记基线），避免重启后被旧归档值覆盖滑块。
+
+## 1.2.1-89（1002189）· 关闭开关回到系统默认 + 完成写回滑块 + 边框探针带码
+- 关闭"调整组件位置"：发布'set=0'且 effective=顶部端点，组件回系统默认位置（此前仍按 0 渲染在底部）。
+- 完成写回滑块：恢复 SokoEditorRequestRowOffset（上一版去掉后滑块数值不再跟随）。
+- 边框探针：forceReticles 每个提前返回都带码（17=-1 inset无效 / -2 offset无效 / -3 行框为空 / -4 delta过小），命中数仍为正数，保证每轮都能拿到数据。
+
+## 1.2.1-90（1002190）· 边框问题：整段回到上游实现
+- 实锤：TRACE 17 全是 -4（delta<0.5）。根因是 1.2.1-77 删掉了 frameByAdjustingFrame 里对 reticle 变体的早退，导致编辑器算边框时拿到的"行"已被我们改写，chrome 里「目标 − 系统位置」恒为 0。
+- 恢复三处上游实现：① frameByAdjustingFrame 的 reticle 变体早退；② reticleFrameByAdjustingFrame 的"行差分"平移；③ SokoEditorChrome updateReticle 先调系统 updateReticleViewFrames 并 return（transform 仅作系统无该方法时的兜底）。
+- 删除绕路上游的 forceReticles 几何匹配、类名回传、强制平移。
+- 唯一保留的自定义：行位置仍按"底部基准 + 生效偏移"计算（连续值），其余全部上游原样。
+
+## 1.2.1-91（1002191）· 探针轮：边框裁剪/隐藏 + 编辑器完成取消按钮 + 设置页读写统一
+- 边框探针 code 31~38：alpha×100 / hidden / reticle.y / reticle.h / 父视图 clipsToBounds / 父视图 y / 父视图 h / 裁剪祖先数量。
+- 按钮探针 code 40~51：运行时枚举 PREditingSceneViewController 方法表，对名字含 done/cancel/save/apply/discard/commit/finish 的零参/单参方法装钩子，命中即发独立码后原样转调（只读，不改行为）。据此确定"完成/取消"的确切方法。
+- 设置页读写统一为 NSUserDefaults(suiteName:)，与 tweak 同一套 API，排除跨 API 缓存导致的"滑块无效"。
+
+## 1.2.1-92（1002192）· 取消不再写偏好 + 边框探针下沉到 reticle 计算内部
+- 取消/完成分离：setComplicationLayout 只写壁纸归档，不再写偏好。完成→系统落盘→SpringBoard 读归档后镜像回滑块；取消→系统丢弃归档→偏好不变。
+- 边框探针：code 60=进入时 reticle frame.y、61=编辑态行(已调整) minY、62=编辑态行(系统原值) minY、63=返回值。用于判断系统到底有没有采用我们算的边框位置。
+
+## 1.2.1-93（1002193）· 全深度几何筛选探针（定位编辑态虚线框到底是不是 UIView）
+- 实锤：code 60~63 恒为 0 —— iOS 17.2.1 根本不调用 complicationRowElementEditingReticleFrameWithBoundingRect:，我们在此方法里返回什么都不会被采用。这也解释了原版 Swift 为何在编辑器里直接放弃移动组件。
+- 新增探针：在编辑器内全深度遍历视图树（上限 800 个视图），按「宽度≈组件行±45%、高度≈±70%、纵向中心≈系统行±16pt」筛选，最多回传 6 个类名。39=候选数量（-3 行框为空 / -4 尺寸异常）、40=类名分片（每 3 字节）、41=分隔符；每条间隔 50ms 发送，避免通知被系统合并。
+
+## 1.2.1-94（1002194）· 完成/取消按钮监听 + 每壁纸独立保存
+- 完成/取消：不再依赖 setComplicationLayout / 私有 selector。编辑器出现时遍历视图树，按标题文字（完成/Done/Save/保存、取消/Cancel）给按钮挂 addTarget；点"完成"才把会话值发出去（trace 50=1 完成 / 2 取消）。
+- 每壁纸独立保存：SpringBoard 在壁纸配置回调里记录当前壁纸键（PRSPosterConfiguration._path 末段，退回 provider），写入 prefs 字典 soko_offsets_by_poster；切壁纸时读该壁纸的值并同步到滑块。完成时同时写"当前壁纸"这一条。
+- 归档编码路线确认不可用（SOKO-ENC-OFFSET 恒为 0），已弃用。
+
+## 1.2.1-95（1002195）· 完成判定改拦 UIApplication sendAction；编辑器打开后延迟扫描
+- 实测 code 50 恒为 0 → 编辑器"完成"是 UIBarButtonItem 而非 UIButton，按标题找 UIButton 全漏。改为 %hook UIApplication 的 sendAction:to:from:forEvent:，无论按钮还是 bar item 都能拿到标题：完成/Done/Save/保存 → 发 50=1 并写入当前值；取消/Cancel → 50=2，不写。
+- 编辑器登记后 0.8s 再补跑一次按钮安装与类名扫描（此前只在重排时跑，没滑动就等于没跑）。
+
+## 1.2.1-96（1002196）· 完成/取消改用动作名判定；边框扫描挂到容器登记
+- 前两版按标题/方法名都没命中（code 50 恒 0）。改为拦 UIApplication sendAction 时直接看 SEL：55=任意点击、56=动作名含 done/save/commit/finish/apply、57=含 cancel/dismiss/discard、58 保留标题匹配；命中 done 才写值。
+- 边框扫描从"编辑器登记"改挂到"组件容器登记"（code 3 已证明必然发生），并保留 0.8s 延迟补扫。
+
+## 1.2.1-97（1002197）· 定位点击钩子装在哪一侧
+- 实测 code 55（任意点击）恒为 0，说明 sendAction 钩子没装进真正处理按钮的进程；code 3~16 正常，说明编辑器钩子在跑。
+- 改动：SokoEditorActions 组在 SpringBoard 分支也初始化；两分支各发一条 59（1=SpringBoard、2=海报进程），先确认钩子落点，再定下一步。
+
+## 1.2.1-98（1002198）· 修好归档编码的早退门槛（完成/取消与每壁纸一次解决）
+- 根因：encodeComplicationLayout 第一行 `if (!complicationLayoutUsesBottomLayout) return;`，导致我们的偏移编码永远执行不到（SOKO-ENC-OFFSET 恒为 0）。
+- 修复：布尔与偏移各自独立编码。系统保存壁纸时这一趟必然执行 → 完成落盘、取消不落盘；归档本身按壁纸一份 → 每壁纸独立保存天然成立。
+- 去掉 code 28 的刷屏日志（一秒几十条，把其它探针冲掉，导致多轮数据为空）。
+
+## 1.2.1-99（1002199）· 摘掉"归档回流"，真源改为每壁纸偏好字典（解决"时好时坏"）
+根因（本轮日志实证，06:18~06:19）：
+1. **SokoTrace 的 `code >= 32 return` 上限** —— 39/40/41（视图扫描）、55/56/57（点击）、
+   60~63（reticle 探针）全部被静默丢弃。所以「60~63 恒为 0」「55=0」是**假阴性**，
+   不是系统没调用。这是十几个版本拿不到判据的直接原因。现上限与监听循环对齐到 64。
+2. **gSokoPendingRowOffset 污染归档**（1.2.1-98 引入）—— 滑动把它设成 -507/0 后，
+   **任何一次** encodeWithCoder:（取消也会触发）都写进归档；SpringBoard 的
+   ARCHIVE-MIRROR 再把归档值回写进 soko_widgetOffset。日志里
+   `ARCHIVE-MIRROR v=0.0` 与 `v=-507.0` 交替、`eff` 在 -431.7 → 0 → -507 → 0 跳，
+   就是"一会有效一会无效"。现删除 pending，归档只在"完成"这条路径上写。
+3. **删除 ARCHIVE-MIRROR 整段** —— 归档不再回流到滑块。真源唯一：
+   soko_offsets_by_poster（按壁纸键）+ soko_widgetOffset（当前壁纸的镜像）。
+4. **soko_offsets_by_poster 恒为 None** —— 唯一写它的 EDITOR-SETOFFSET 依赖
+   SokoEditorRequestRowOffset，调用点被 1 挡住从未执行；滑块改动也从不写它。
+   现补三处写入：切壁纸读回（POSTER-RESTORE）、新壁纸播种（POSTER-SEED）、
+   滑块改动回写（POSTER-SLIDER）。
+5. 完成/取消：新增 dirty 标志——只有本次会话真的滑动过才提交（17=提交值，
+   18=命中但没滑动，用于下轮判断"取消是否也走这个方法"）；编辑器消失 3s 后
+   清会话，杜绝残留值被误提交。
+6. 日志环 120 行 → 300 行 / 48KB；视图扫描探针加 3 秒节流（否则放开上限后会冲爆环）。
+
+## 1.2.1-100（1002200）· 壁纸身份探针 + 提交节流
+- 1.2.1-99 装机实测：归档污染已消除（`ARCHIVE-READ v=-507.0 (只读，不回流)`，
+  `PUB ... prefs=0.0` 稳定，不再在 0 / -507 之间跳）；`setComplicationLayout:`
+  确实可达（code 18 连续命中十几次）。
+- 但 **SokoPosterKeyForConfiguration 恒返回 nil**：整轮日志一条 POSTER-KEY /
+  POSTER-SEED / POSTER-RESTORE 都没有，而同一函数后面的 ARCHIVE-READ 有输出
+  → configuration 非 nil，是 `_path` 与 `provider` 都取不到（iOS 17.2.1 上
+  PRSPosterConfiguration 的键名变了，或 _path 是 NSURL）。
+- 新增一次性探针 POSTER-PROBE：把 _path / path / uuid / identifier / role /
+  provider / name / displayName / configurationUUID / posterUUID / descriptor
+  逐个试一遍并落盘（截断 60 字符），据此选一个稳定的壁纸键。
+- code 18 加 2 秒节流（原实现一次编辑会话写十几条，会冲爆 300 行环）。
+
+## 1.2.1-101（1002201）· 修"每壁纸保存从不生效"的真凶：_path 不是字符串
+- 1.2.1-100 的 POSTER-PROBE 实锤：
+  `_path=<PRSServerPosterPath:0x2829e8380 com.apple.PhotosUIPrivate.P…`
+  PRSPosterConfiguration 的 `_path` 是 **PRSServerPosterPath 对象**，不是 NSString，
+  原实现 `isKindOfClass:[NSString class]` 恒 NO → 退回 provider（N/A）→ 返回 nil。
+  gActivePosterKey 整轮为 nil，soko_offsets_by_poster 一次都没写进去 ——
+  这就是"每壁纸单独保存"从 1.2.1-94 到 1.2.1-100 一直无效的真正原因。
+- 修复：_path 是对象时取其 description 并剔除 0x 内存地址后作键（同一张壁纸稳定）。
+- 新增 POSTER-SHAPE / POSTER-PATH-SHAPE：把 configuration 与 _path 对象自身（含父类）
+  的属性逐个读一遍落盘，用于找一个真正唯一的键（PRSServerPosterPath 上多半有 UUID）。
+- 提交来源区分：17=setComplicationLayout:、19=UIApplication sendAction、20=UIButton 标题。
+
+## 1.2.1-102（1002202）· 边框跟随修好 + 壁纸键换正解 + 方法表落盘
+**边框（虚线 reticle）——真凶是二次位移，已修**：
+- 放开 SokoTrace 32 码上限后，60~63 第一次真正有数据（此前"iOS 17.2.1 不调用
+  complicationRowElementEditingReticleFrameWithBoundingRect:"是**假阴性**）：
+  `60=212 61=221 62=221`、`60=719 61=728 62=221` —— reticle.y **恒等于 row.minY - 9**，
+  即系统自己就是按**我们改过的行**算虚线框的。
+- 于是 `frame.y += row - stockRow` 是二次位移：偏移=顶部时 delta=0 侥幸正确
+  （"滑到上面边框正常"）；偏移=底部时 delta=+507 → 719+507=1226 → 飞出屏幕
+  （"滑动到下面边框直接不显示"）。
+- 修复：reticleFrameByAdjustingFrame 不再叠加位移，原样返回系统算好的 frame。
+**壁纸键换正解**：POSTER-PATH-SHAPE 显示 PRSServerPosterPath 上有
+`stablePersistenceIdentifier` / `identityPathComponent` / `serverIdentity`，
+改用它们（不含 /95-0 这类版本号后缀，跨编辑稳定），description 只作兜底。
+**完成/取消**：code 17 实锤 setComplicationLayout: 就是提交通道（10 次：5×-507、5×0），
+但同一次会话里它还被调用了 13 次（code 18）→ 它不是"完成"判据，取消同样会走到。
+关键字探针 40~51 一次都没命中 → 方法名里没有 done/cancel 这类词。
+新增 METHODS 落盘：把 PREditingSceneViewController / PREditor /
+PREditorRootViewController 的完整方法表打印出来，下一版直接挑真正的收尾方法。
+
+## 1.2.1-103（1002203）· 壁纸键去版本号 + 完成判据换到真正的落盘入口 + 方法表改在 SpringBoard 落盘
+**① 每壁纸保存"改完就丢"的最后一环**：偏好字典实测
+`…_CreateAFacePhotos(EEAE4B4F-…)_PRPosterRoleLockScreen_98-0` → **每次保存壁纸版本号
++1**（日志 95-0→96-0→…→99-0，POSTER-SEED 而非 POSTER-RESTORE）→ 同一张壁纸每编辑
+一次就换一个新键，值自然"丢了"。现在：键统一去掉尾部 `_NN-M` / `/NN-M`，
+读取时把历史脏键归一化合并；优先用不带版本号的 `identityPathComponent`。
+（跨壁纸切换本身已实测正常：3 张壁纸各自恢复 -507 / 0 / -163.2。）
+**② 完成/取消**：`setComplicationLayout:` 一次会话被调用**上千次**（code 18 计数到
+1133），取消一样会走到 —— 它根本不是完成判据（这就是"点取消也会保存"）。
+改为：它只把值挂到 layout 上（17/EDITOR-ATTACH），**写偏好改由
+PRMutablePosterConfiguration 的 storeComplicationLayout:error:** 负责（21），
+那是把 layout 写回磁盘的那一步，只有"完成"会走（上游 applyPendingDefaultLayout
+用的正是这个 API）。
+**③ 方法表落盘位置修好**：上一版 METHODS 一条都没出来 —— 海报进程写不进任何偏好域，
+SokoFileLog 在那里静默失败。改到 SpringBoard %ctor 里 dump
+（PREditingSceneViewController / PREditor / PREditorRootViewController /
+PRMutablePosterConfiguration）。
+**④ 噪声治理**：code 18 节流 30s、PUB/ROW 3s、虚线框探针 1s；日志环 500 行 / 80KB。
+（上一版 60~63 的边框数据就是被 code 18 上千条冲掉的。）
+新增 22=虚线框窗口 y、23=组件行窗口 y，用于判断边框到底有没有跟着走。
+
+## 1.2.1-104（1002204）· 恢复"完成保存" + 边框改为移动系统虚线框视图 + 取消回滚
+**① 完成保存（1.2.1-103 回归，已修）**：把提交挪到
+PRMutablePosterConfiguration storeComplicationLayout:error: 后 trace 21 **一次都没出现**
+（该类在 iOS 17.2.1 上只有 14 个方法，METHODS 列表里看不到 storeComplicationLayout:），
+"点击完成又失效了"。提交仍放回 setComplicationLayout:（1.2.1-102 用户已确认有效）。
+**② 取消不保存 —— 改用"回滚"**：滑动是立即提交的（否则编辑器里看不到移动），
+所以取消只能靠回滚。新增两条海报进程→SpringBoard 通道：
+`SokoEditorBaseline`（进编辑器时把编辑前的值存为基线，EDITOR-BASELINE）与
+`SokoEditorRevert`（点取消 → EDITOR-REVERT 回滚到基线）。取消按钮按 KVC 取
+PREditorRootViewController 的 cancelButton（方法表里有 setCancelButton: 实锤）。
+**③ 边框 —— 改为直接平移系统虚线框视图**：
+60~63 显示 complicationRowElementEditingReticleFrameWithBoundingRect: **确实被调用**、
+我们返回的 frame 也正确（63=719），但视图树扫描（39/40 解出类名 = **UIView**）在系统
+原位附近仍有尺寸≈组件行的 UIView —— 真正的虚线框**根本不受那个返回值驱动**。
+现在：找出尺寸≈组件行且仍停在"系统原位"的视图，用 transform 平移
+(adjusted - stock)；已经跟着走的视图不动（避免二次位移）。26=delta 27=命中数 28=新命中。
+**④ 壁纸键**：identityPathComponent 也带版本号（…/configurations/<UUID>**/versions/99**，
+每次保存 99→100→101），正则补上 `/versions/N`。
+
+## 1.2.1-105（1002205）· 取消逻辑回到原版机制：只写归档，不写偏好
+**原版 Soko 是怎么做到"取消不生效"的**（读了 soko_new/Tweak 上游源码）：
+它**根本没有"完成/取消"这两个概念**。`PRPosterConfiguredProperties setComplicationLayout:`
+里只把值挂到 layout 对象上（`setBottomLayoutValue:`），`encodeComplicationLayout:` 再
+encode 进归档；**"完成=系统落盘、取消=系统丢弃"完全由系统自己保证**，插件从不写偏好。
+我们为了"编辑器里能看见移动"而在滑动时立刻写偏好（1.2.1-104），等于绕过了这套机制
+→ 取消也保存。
+**本版改动**：
+1. `setComplicationLayout:` 只 `setRowOffset:forComplicationLayout:`，不再
+   `SokoEditorRequestRowOffset`（不写偏好）。编辑器内可见移动仍由会话值提供。
+2. SpringBoard 只在**读到的归档值发生变化**时才写偏好 + 每壁纸记录
+   （ARCHIVE-COMMIT，trace 25）。取消 → 归档不变 → 偏好不动；只拖滑块 → 归档不变 →
+   也不会被归档顶回去（1.2.1-83 那个 bug 的正是这一条）。基线用 gLastArchiveValue，
+   首次只读不写。
+3. 虚线框：PREditorRootViewController 的 loadView 钩子在 17.2.1 上零触发（trace 24 全零），
+   补 viewDidLoad 入口，并把查找/平移**同时挂到编辑场景 VC**（code 4 已证明必然注册）。
+4. 编辑器关闭发 trace 30 作为时间标记（不再用于回滚判定）。
+
+## 1.2.1-106（1002206）· 虚线框平移调用点接错位置（修）
+1.2.1-105 的 `[self updateReticleViewsForHostViewController:]` 被 Python 替换误插到了
+**编辑器根循环**（gEditorRootViewControllers，iOS 17.2.1 上永远为空 → 一次都不执行），
+而真正会跑的"编辑场景循环"里没有这行 → trace 26/27/28 全为零，虚线框纹丝不动。
+本版把这行加进编辑场景循环（code 4 已证明必然注册），并补取证：
+42=hunt 扫过的视图数、43=基准行高。
+
+## 1.2.1-107（1002207）· 虚线框扫描范围：从"编辑场景子树"扩到整个 window
+1.2.1-106 数据：26=0/507（位移算对了）、27=1（确实抓到一个视图并平移了），
+但 **42=8 —— 编辑场景 VC 的整棵子树只有 8 个视图**，虚线框根本不在这棵子树里。
+改为从 **window** 往下扫（上限 4000 个视图），并优先只保留"干净的 UIView"
+（虚线画在 layer 上，39/40 解出的类名就是 UIView），新增取证：
+44=尺寸/位置匹配的候选数、45=其中纯 UIView 的数量、46=最终保留数。
+
+## 1.2.1-108（1002208）· 虚线框按「画了虚线的图层」定位
+用户发来截图确认：虚线框把「日期 + 大时钟 + 空槽」整个框住，**高度远大于组件行 94pt**
+——1.2.1-107 按"高度≈94"筛（44=9/13、45=1/3）抓到的全是别的东西，永远轮不到它。
+换成唯一确定的判据：虚线框是 **CAShapeLayer 的 lineDashPattern**，全窗口只有它有。
+SokoCollectDashedViews 递归扫整个 window（含 sublayer），命中即以其为唯一目标集
+（47=命中的虚线视图数），不再走尺寸/位置猜测。
+
+## 1.2.1-109（1002209）· 直接拿系统自己的 reticle 视图
+1.2.1-108 的 trace 47 = 0：**全窗口没有任何 CAShapeLayer 虚线** —— 系统的虚线框不是
+shape layer 画的（多半是拉伸的虚线贴图）。
+改走最正规的路：从 window 的 **VC 树**里翻出 `PREditorRootViewController` 实例
+（它一直没被我们注册到，但类确实存在、且 SokoPrivate.h 里声明了
+`graphicComplicationsReticleView`），直接取那个视图来平移。
+48=找到的系统 reticle 视图数。次选仍是 1.2.1-108 的虚线图层判据。
+
+## 1.2.1-110（1002210）· 用系统算出的 reticle 矩形做精确匹配 + 布局后重平移
+1.2.1-109 的 48=0：PREditorRootViewController 不在 window 的 VC 树里。
+改用我们自己就有的数据 —— `complicationRowElementEditingReticleFrameWithBoundingRect:`
+返回的那个矩形（60/63：顶部 212 / 底部 719），存成 gSystemReticleRect 暴露出来。
+hunt 改用它做筛选（±15% 尺寸 / ±25pt 位置，比之前"组件行 94pt 宽打"精确得多），
+候选里优先取"叶子视图"（贴图/自绘框都是叶子）。
+另加 `reapplyReticleTransform`：挂到 PRComplicationContainerViewController 与
+PREditingSceneViewController 的 viewDidLayoutSubviews —— 系统每次布局都会把框摆回
+原位，必须布局完立刻再平移。
+
+## 1.2.1-111（1002211）· 虚线框：停止猜测，回传候选视图的类名+坐标
+-106~-110 连续五版平移了 1~3 个视图，虚线框都纹丝不动 —— 说明真正的框**根本不在
+被抓的集合里**。再按尺寸/位置猜下去没有意义。
+本版把 dumpCandidateViews 改为：用系统 reticle 矩形（±20% 尺寸 / ±30pt 位置）在整个
+window 里收候选，把**类名+坐标**打包经 trace 40/41 回传（最多 8 个，39=数量）。
+拿到真实类名后下一版直接对症。
+
+## 1.2.1-112（1002212）· 取证：window 里的完整 VC 树 + reticle 位置候选视图
+1.2.1-111 装机后 39 连续 5 次 = -3：gSystemReticleRect 在 dump 时还没算出来（兜底）。
+另外 -110 时代唯一抓到的候选类名是 **UIView**，但坐标段没出来（当时跑的是旧 dump）。
+本版 dump 回传两类字符串（39=条数、40=3 字节分片、41=分隔符）：
+  · `VC:类名` —— window.rootViewController 递归 childViewControllers/presentedViewController
+    最多 14 个，用来确认 PREditorRootViewController 到底在不在、叫什么
+  · `V:类名|x,y,w*h` —— reticle 矩形（兜底用 frameForElements:reticleVariant）±25% / ±40pt
+    位置上的候选视图，最多 8 个
+49 = reticle 矩形高度。停用 SokoProbeEditorButtons（15 版零产出，腾出 40~51）。
+
+## 1.2.1-113（1002213）· 边框锚点反了（真正的修复）
+1.2.1-112 取证实锤：VC 树里只有 PBFPosterRackCollection… / PREditingSceneViewController
+（没有 PREditorRootViewController，48=0 的原因），而 reticle 位置上的候选是
+`V:UIView|30,728,370x76` —— y=728 是**底部**，说明那是跟着组件走的内容视图，
+不是框。
+**根因**：1.2.1-110 把 hunt 的位置锚点换成了"当前 reticle 矩形"。滑到底时当前
+reticle 也在 728 → 只在 728 附近找 → 框（停在 212）永远不在搜索范围。
+1.2.1-107 用对了锚点（frameForElements:reticleVariant = 系统原位）但只扫了 8 个
+视图的子树。两个 bug 互补，把这条路堵死了十几个版本。
+修复：**整窗口扫描 + 系统原位锚点 + delta 平移**（叶子视图优先）。
+
+## 1.2.1-114（1002214）· 边框真凶：PREditorRootViewController 的钩子从未装上
+对照上游源码（soko_new/Tweak，1.1.0）后确认：上游的整条边框链路都压在
+PREditorRootViewController 上：
+  registerEditorRootViewController → updateReticleForEditorRootViewController
+  → [controller updateReticleViewFrames]（系统自己重摆框）
+  → 内部调 complicationRowElementEditingReticleFrameWithBoundingRect:（我们 hook 的）
+而我们的 trace 24 从头到尾都是 0 —— loadView / viewDidLoad 钩子**一次都没触发**。
+原因：PREditorRootViewController 属于 PosterBoard 的 UI 层，**懒加载**；%ctor 里
+%init(SokoPoster) 那一刻它还不存在，Logos 的 hook 静默落空。于是
+registerEditorRootViewController 一次都没被调过，updateReticleViewFrames 也没人调，
+边框自然不动。（这也解释了 48=0、31~38 全零。）
+修复：拆出独立 %group SokoEditorRoot，用 dispatch_once 包住 %init；
+SokoInitPoster 末尾主动调一次（类多半已加载），dyld 回调 SokoImageAdded 里再调一次
+（覆盖晚加载）。EDITOR-ROOT-INIT 落盘即成功。viewDidLayoutSubviews 里补 update。
+
+## 1.2.1-115（1002215）· 钩子安装改成可重试
+1.2.1-114 的 trace 24 仍是 0 —— 因为我用 dispatch_once 包了 %init：第一次调用时
+类还没加载，once 走完就永远不会再装了。
+改成 BOOL 门（gSokoEditorRootInstalled）：类存在且未装 → 装，否则下次再试。
+并新增一个必然时机：PRComplicationContainerViewController viewDidLoad（code 3，
+编辑器打开必发生）里也调 SokoInitEditorRoot —— 此刻 PREditorRootViewController
+一定已加载。24=3 表示这次真的装上了。
+
+## 1.2.1-116（1002216）· reticle 逐字照抄上游
+用户指出"原版至少会动，源代码摆在这里你复制粘贴都不会"。照做：
+reticleFrameByAdjustingFrame 恢复为上游 Soko 1.1.0 的原样实现（91-104 行），
+包括 `frame.origin.y += row.minY - stockRow.minY` 这一行 —— 1.2.1-102 我把它删了。
+60~63 探针保留。
+
+## 1.2.1-117（1002217）· 边框真凶（最终）：Logos 对懒加载类的钩子无效
+与上游逐文件 diff 后定位：Logos 的 `%hook X` 生成
+`static Class _logos_static_class$X = objc_getClass("X")` —— **镜像加载时就求值**。
+PREditorRootViewController 属于 PosterBoard 主程序、懒加载，我们的 dylib 加载时它
+还不存在 → 静态引用恒为 nil → %init「成功」（24=3）也只是对 nil 挂钩。
+PREditingSceneViewController 一直正常，因为它在我们加载前就已加载。
+这也统一解释了：24 从未出现 1/2、48=0、31~38 全零、取消按钮找不到。
+修复：该类改用运行时手动 hook（class_getInstanceMethod + method_setImplementation），
+SokoInitEditorRoot 在类真正加载后才换 IMP，可无限重试（BOOL 门）。
+调用点：SokoInitPoster 末尾 / dyld 回调 / 容器 viewDidLoad（code 3，必然时机）。
+
+## 1.2.1-118（1002218）· 自绘虚线框 + 隐藏系统框（用户已确认方案 B）
+iOS 17.2.1 的可见虚线框不受任何已知钩子控制（上游机制整体失效），用户拍板走自绘。
+- 补回 1.2.1-116 重写时弄丢的 `gSystemReticleRect = frame`（delta 之前的原始框，
+  即系统认为虚线框该在的位置，窗口坐标 212/719）——自绘框直接用它当 frame。
+- 自绘：UIView + CAShapeLayer，圆角 18、白色 85% 虚线（6/5）、线宽 2，
+  userInteractionEnabled=NO，挂在 window 上并置顶；frame 变化时重建 path。
+  50 = 自绘框当前 minY。
+- 隐藏系统框：扫描整窗口，凡「尺寸 ±30%/±40%、停在系统原位 ±45pt」且
+  **不在组件容器子树里**的视图一律 alpha=0（组件内容绝不碰）。51 = 本轮隐藏数。
+- 编辑会话结束后自绘框随 removeFromSuperview 移除。
+
+## 1.2.1-119（1002219）· 自绘框样式对齐 + 修正隐藏范围
+用户截图反馈：自绘框已出现且跟随，但 ①样式不对 ②系统的框没藏掉（51=0）。
+① 样式改为细实线（非虚线）1.5pt、圆角 14、白 75% —— 与截图一致。
+② 51=0 的原因：上一版把「组件容器子树」整个排除，而系统的框恰恰画在容器里。
+   改为只排除"容器本身"和"有子视图的视图"（内容），只藏叶子视图。
+
+## 1.2.1-120（1002220）· 自绘框不再时隐时现 + 系统框精确定位取证
+① "有时消失"：自绘框挂在 window 上，只在 relayout 时置顶；编辑器后来加进来的
+   内容会把它盖住。新增轻量 refreshDashedBorder（只更新位置+置顶，不做全窗口
+   扫描），挂到编辑场景 viewDidLayoutSubviews（每次布局都跑）。
+② 系统框定位：dump 锚点从"当前 reticle 矩形"改回"系统原位"——系统的框一直停
+   在系统原位，滑走之后用当前矩形锚定永远扫不到它。候选含容器子树，回传
+   类名+坐标（39=数量、40=分片、41=分隔符）。
+
+## 1.2.1-121（1002221）· 关掉系统框的绘制开关 + 样式精确对齐
+系统原位取证：只有 UIView(组件内容) 和 _UIPortalView(跨进程合成宿主) 两个视图，
+**没有边框视图** —— 虚线框画在 _UIPortalView 合成进来的图像里，本进程无可隐藏对象
+（47/48/51 全 0 的最终解释）。
+改从源头关掉：PREditingSceneViewController _hasGraphicComplications 直接返回 NO
+（这是系统画 graphic complications 框的开关，上游本来就 hook 着它）。
+样式对齐截图：虚线 4/4、线宽 1.5、白 68%、圆角 16。
+
+## 1.2.1-122（1002222）· 撤回自绘虚线框方案（-118 ~ -121 全部回退）
+用户接受现状：iOS 17.2.1 上系统的虚线框不跟随组件行，也不再尝试自绘/隐藏。
+- 恢复 _hasGraphicComplications 为上游原样（isIgnoringGraphicComplications ? NO : %orig）
+- 删除自绘虚线框（updateDashedBorderForWindow / refreshDashedBorder）
+- 删除隐藏系统框（hideSystemBorderForWindow）
+- 移除编辑场景 viewDidLayoutSubviews 里的刷新调用
+保留：完成/取消、每壁纸独立保存、SokoInitEditorRoot 运行时钩子（无害）。
+
+## 1.2.1-123（1002223）· 系统增强「锁屏隐藏」卡：改名 + 两行新开关
+1. 纯文字改名（SystemEnhance.plist 6 处 label + ERSystemEnhanceController.m 分组名兜底）：
+   灵动岛→上岛配置、锁屏音乐→锁屏隐藏、天气模块城市选择→天气模块、
+   注销设置项→注销设置、长按桌面快速添加→长按桌面、iOS 26 开合动画→开合动效。
+   开关名「开合动画」按用户要求保持不动；footerText 不动。
+2. 新增「隐藏锁屏通知中心文字」（SystemEnhance.HideLockScreenNCText，默认关）。
+   HideNCHeaders 1.0.4 移植，按源代码 = 整个分组头隐藏（含「通知中心」标题与
+   「清除」按钮）：NCNotificationListSectionHeaderView + NCNotificationListCoalescingHeaderCell，
+   setHidden:/setAlpha:/layoutSubviews/didMoveToWindow/didMoveToSuperview + 高度→0。
+   适配：加偏好门禁（关时把已隐藏的视图恢复可见）；裁掉 footer/spacing/controls
+   三个无关模块；签名校验 fail-closed 保留。运行时 method_setImplementation（懒加载安全）。
+3. 新增「隐藏锁屏滑动解锁文字」（SystemEnhance.HideSwipeToUnlockText，默认关）。
+   参考 jikan 1.0.2（闭源，从 dylib 符号还原结构）：
+   SBUICallToActionLabel（旧路径 layoutSubviews/didMoveToWindow）+
+   CSTeachableMomentsContainerView（新路径 layoutSubviews），
+   找文本含「解锁/轻扫/swipe up/slide to unlock」的 UILabel 隐藏；关时恢复。
+4. 两行开关挂在「锁屏隐藏」卡（与「隐藏系统锁屏音乐」同卡），图标 bell.slash(橙) /
+   arrow.up.to.line(青)。安装点：主 %ctor 主队列异步（PosterKit/MercuryPoster 已前门 return）。
+
+## 1.2.1-124（1002224）· 修复 -123 无限注销（.ips 定位的三层失误）
+崩溃栈：CFPreferences alreadylocked_generationCountFromListOfSources → SIGSEGV 主线程。
+1. **安全替换 ERSafeApply**（照抄 HideNCHeaders 的 HNCApplyMethod）：只在本类自己
+   实现该方法时才 method_setImplementation，否则 class_addMethod 加在本类 ——
+   绝不碰父类（UIView）的全局实现。上一版直接换掉 SBUICallToActionLabel 继承来的
+   layoutSubviews/didMoveToWindow，等于替换了全 SpringBoard 的 UIView。
+2. **偏好缓存**：1 秒定时器统一刷新 gERSwipeTextOn / gERNCTextOn，钩子内不再读
+   CFPreferences（didMoveToWindow 期间重入 cfprefsd 即崩）。
+3. **状态变化才写**：ERSwipeHideLabel 先比对 hidden 再写，杜绝「我藏 / 系统摆回」
+   的拉锯递归；遍历加 400 次访问上限。
+4. ERNCApply 改为转发 ERSafeApply 并补全各调用点签名。
+-123 已回滚（设备当前 -122）；本版修复后再装机。
+
+## 1.2.1-125（1002225）· 修复 -124 通知中心开关的无限递归（用户 .ips 16:20:45 实锤）
+崩溃栈：setHidden: → ERNCConceal(内部 view.hidden = YES) → 又走被 hook 的
+setHidden: → 无限递归。**属性赋值会经过被 hook 的 setter**，而我把 conceal 调用
+加进了 setHidden:/setAlpha: 钩子里 —— 原作者只在 layoutSubviews/didMoveToWindow 里调。
+修复：钩子内**禁止属性赋值**，可见性一律用保存下来的原 IMP 直调（绕过消息发送）：
+- ERNCHdrApplyVisibility / ERNCCoApplyVisibility（两类各自的 IMP，分开传）
+- setHidden:/setAlpha: 钩子只透传参数（gERNCTextOn ? 强制值 : 原参数），不再调 conceal
+- 删除 ERNCConceal / ERNCTextMakeVisible / 无引用的 ERHideNCTextEnabled
+滑动解锁那条不涉及（只 hook layoutSubviews/didMoveToWindow，没 hook setHidden:）。
+
+## 1.2.1-126（1002226）· 逆向 jikan 后对齐「隐藏滑动解锁文字」的实现
+逆向（fat dylib 拆 arm64e 切片 → 符号表 → capstone 反汇编 + objc stub selector 解析）：
+- jikan 有专门类 JikanUnlockTextVisibility：+trackedLabels / +originalVisibility /
+  +refreshTrackedLabels / +updateLabel: / +updateLegacyLabel: / +updateModernContainer: /
+  +hiddenValueForControl:requestedHidden:
+- 它的 modern 路径同样 hook CSTeachableMomentsContainerView layoutSubviews，
+  但**不做文本匹配** —— 用 KVC 直接读容器自己的 ivar：_staticLabel / _label /
+  _ringPrimaryLabel / _ringSecondaryLabel（系统自己管理的提示 label）。
+- 我们按文本找 UILabel 在 17.2.1 上找不到（那行字未必是 UILabel、文本也未必猜中）。
+修复：ERSwipeTeachableLayout 先 KVC 读这 4 个 ivar 藏掉，文本遍历保留作兜底；
+加 SWIPE-CT 布局命中日志（50 次打 1 条）确认容器是否被布局。
+
+## 1.2.1-127（1002227）· 修正 KVC ivar 名（jikan CFString 0x55f80 实锤）
+反汇编 updateModernContainer: 的 msgSend<valueForKey:> 参数是 CFString
+"_callToActionLabel"（不是 -126 猜的 _staticLabel 等四个）。
+- 只 KVC 读 _callToActionLabel；命中/非命中打一条 SWIPE-IVAR 日志
+- 只 setHidden:（与 jikan updateLabel: 一致），文本遍历保留兜底
+
+## 1.2.1-128（1002228）· 取证版：现场定位「向上轻扫以解锁」
+实锤日志：SWIPE-CT layout hit #51 enabled=1 —— 容器在布局、开关是开，
+但没有 SWIPE-IVAR 命中 → 17.2.1 的 CSTeachableMomentsContainerView 里
+**没有 jikan 用的 _callToActionLabel**（jikan 面向 iOS 26 时代）。
+本版一次性 dump（SWIPE-IVARS / SWIPE-KIDS / SWIPE-SCAN / SWIPE-CLS / SWIPE-TXT）：
+容器 ivar 全表 + 直系子视图类名 + 同窗口搜带「解锁/轻扫/swipe」的视图及父链。
+用途只是取证，拿到名字后把隐藏逻辑改到正确的类/ivar 上。
+
+## 1.2.1-130（1002230）· 桌面胶囊手势「回桌面立刻生效」
+根因（代码实锤）：gestureRecognizerShouldBegin: 用**缓存帧** sERSPGPillWinFrame 判定，
+App 返回桌面后缓存帧是切换前的旧值 → shouldBegin 直接 NO → pan 起不来；
+而 1.2.0-74 那句"起手实时取帧"的补丁在 pan 处理器里，跑不到。缓存帧只在 5s tick
+刷新且带 2 tick 防抖 → 正好 5~15 秒死区。
+三处齐改：
+① shouldBegin 起手时用 sERSPGPillRef 实时帧校正缓存，并按外扩矩形判定（与开火同几何）
+② 胶囊类 didMoveToWindow 事件驱动：新实例一进窗口就地 ConfigurePillEx(immediate=YES)，
+   跳过帧防抖；顺带把 pan 挂到该 window
+③ SBIconController viewDidAppear: → 立即 ERSPGScanTick()（类懒加载，每 tick 重试挂上）
+④ 首次 tick 从 respring 后 8s 提前到 1s
+轮询（5s）退化为兜底，不再是唯一入口。
+
+## 1.2.1-166（2026-10-30）· 单一变量：撤销展开/收起期的「模块必须在窗口里」判据
+- 依据：版本二分铁证 -3 干净 / -4 出问题，且 1.2.1 之前确认无此问题。-4 四类改动里
+  唯一能影响可见性的是「按视图挂载状态过滤模块列表」（当时为缓存活性校验 view.superview，
+  1.2.1-60 升级为 ERCollectModuleControllers 内的 view.window 硬过滤）。
+- 164 实测：收起期亮度模块不在该列表内 → 压制函数物理够不到 → 自行留在 a=1.00（问题②）。
+- 本版只改一个变量：展开/收起窗口内 alive = isViewLoaded（不判 window）；
+  非展开期（算页数/翻页点）判据完全不变，避免 -4 那次的翻页点回归。
+- 留痕：COLLECT t= kept= ghost= exp= close=（仅展开/收起期、仅数量变化时写一行）。
+- 版本 1.2.1-166
+
+## 1.2.1-168（2026-10-30）· 接回 159 写好的守卫：模块展开期不做 collection 整体淡出
+- 定位依据：159 自己的注释已写明 1.2.1-49「残影根修」把 moduleCollection 内容层用
+  fillMode=forwards 永久压成 opacity 0，只靠 state 2 一条分支还原；模块长按走另一条
+  呈现路径、等不到 state 2 → 内容层停在压暗状态 + 快照叠加 = 「亮度漏着 / 左上角闪」。
+- 159 为单变量纪律把守卫恒置 NO，并注明「若装机后仍有残留，160 再打开」；160 因白圆
+  副作用整版回退，此后 161~167 都没打开 → 守卫一直失效。
+- 本版唯一行为改动：moduleExpansionActive = 展开中 || 收起中 || 仍持有被藏活视图。
+- 同时下线 167 的跟随式重压（实测 24 拍 n=49 kept=0 全压仍无变化，证明可见物不是
+  活着的模块容器），容器压制退回 165 尺寸判断。
+- 版本 1.2.1-168
+
+## 1.2.1-169（2026-10-30）· 恢复 -3 语义：展开期把被摘走的模块补回列表
+- 事实链（166/167 日志实测）：长按展开期，亮度/音量/正在播放三个模块根本不在
+  overlay 的 childViewControllers 树里 —— 日志里 46 个模块齐全，唯独 DisplayModule 缺席；
+  166 已豁免 view.window 判据它仍缺席 → 与挂载过滤无关，是树结构够不到。
+  因此 147/153/164/165/167 所有「按列表压制」都无效（压不到不存在的东西）。
+- 版本边界：-3 的 ERCollectModuleControllers 带代际缓存，展开期不失效 → 返回陈旧但
+  完整的列表，normalizePagedLayoutForOverlay 按全量集合重算布局 = 正确；-4 在 normalize
+  入口强制失效 → 拿到残缺集合 → 布局按残缺集合重算 → 三个模块被重新摆出/留残影。
+  现在缓存被删 → 永远拿残缺集合，比 -4 更彻底。
+- 修法：弱引用登记表（非展开期持续登记），展开期把「登记过且视图仍在同一窗口」的模块
+  补回结果；窗口一致性过滤保证补回的是屏幕真实存在的模块。
+- 留痕：COLLECT kept=/reg=/ghost=
+- 版本 1.2.1-169

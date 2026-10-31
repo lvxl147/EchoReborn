@@ -1,0 +1,237 @@
+#import "SokoDockGeometry.h"
+
+NSString *const SokoDockGeometryDidChangeNotification = @"moe.waru.soko.dock.geometry";
+NSString *const SokoEditorDodgingDidChangeNotification = @"moe.waru.soko.dock.editor.dodging";
+NSString *const SokoActiveBottomLayoutDidChangeNotification = @"moe.waru.soko.dock.active.bottom";
+NSString *const SokoEditorBottomLayoutDidChangeNotification = @"moe.waru.soko.dock.editor.bottom";
+NSString *const SokoRowOffsetDidChangeNotification = @"moe.waru.soko.dock.rowoffset";
+NSString *const SokoTopOffsetDidChangeNotification = @"moe.waru.soko.dock.topoffset";
+NSString *const SokoRowOffsetIsSetDidChangeNotification = @"moe.waru.soko.dock.rowset";
+NSString *const SokoSetRowOffsetRequestNotification = @"com.strive.echoreborn.soko.setrowoffset";
+NSString *const SokoEditorBaselineNotification = @"com.strive.echoreborn.soko.baseline";
+NSString *const SokoEditorRevertNotification = @"com.strive.echoreborn.soko.revert";
+NSString *const SokoEditorClosedNotification = @"com.strive.echoreborn.soko.closed";
+NSString *const SokoWidgetsEnabledDidChangeNotification = @"com.strive.echoreborn.soko.widgetsenabled";
+
+static const double kSokoInsetScale = 64.0;
+
+static CGFloat gBottomInset = NAN;
+static CGFloat gRowOffset = NAN;
+static CGFloat gTopOffset = NAN;
+static BOOL gRowOffsetIsSet;
+static BOOL gWidgetsEnabled = YES;
+static BOOL gActiveBottom;
+static BOOL gEditorBottom;
+static BOOL gDodging;
+static BOOL gLoaded;
+
+static void (^gObserver)(void);
+
+static int SokoToken(NSString *name) {
+	static NSMutableDictionary<NSString *, NSNumber *> *tokens;
+	static dispatch_once_t once;
+	dispatch_once(&once, ^{
+		tokens = [NSMutableDictionary dictionary];
+	});
+
+	@synchronized(tokens) {
+		NSNumber *token = tokens[name];
+		if (!token) {
+			int value = NOTIFY_TOKEN_INVALID;
+			if (notify_register_check(name.UTF8String, &value) != NOTIFY_STATUS_OK) return NOTIFY_TOKEN_INVALID;
+
+			token = @(value);
+			tokens[name] = token;
+		}
+		return token.intValue;
+	}
+}
+
+static uint64_t SokoReadState(NSString *name) {
+	int token = SokoToken(name);
+	uint64_t state = 0;
+	if (token == NOTIFY_TOKEN_INVALID || notify_get_state(token, &state) != NOTIFY_STATUS_OK) return 0;
+
+	return state;
+}
+
+static void SokoWriteState(NSString *name, uint64_t state) {
+	int token = SokoToken(name);
+	if (token == NOTIFY_TOKEN_INVALID || notify_set_state(token, state) != NOTIFY_STATUS_OK) return;
+
+	notify_post(name.UTF8String);
+}
+
+// 1.2.1-76 · 有符号数值编码：value*64 + 1<<32（0 表示无效）
+static uint64_t SokoEncodeSigned(CGFloat value) {
+	if (!isfinite(value)) return 0;
+	return (uint64_t)((long long)llround(value * kSokoInsetScale) + 0x100000000LL);
+}
+
+static CGFloat SokoDecodeSigned(uint64_t state) {
+	if (!state) return NAN;
+	return (CGFloat)((double)((long long)state - 0x100000000LL) / kSokoInsetScale);
+}
+
+static uint64_t SokoEncodeInset(CGFloat inset) {
+	if (!isfinite(inset) || inset < 0.0) return 0;
+
+	return (uint64_t)llround(inset * kSokoInsetScale) + 1;
+}
+
+static void SokoLoadIfNeeded(void) {
+	if (!gLoaded) SokoDockGeometryReload();
+}
+
+static void SokoPublishFlag(BOOL *storage, BOOL value, NSString *name) {
+	SokoLoadIfNeeded();
+	if (*storage == value) return;
+
+	*storage = value;
+	SokoWriteState(name, value ? 1 : 0);
+}
+
+void SokoDockGeometryReload(void) {
+	uint64_t inset = SokoReadState(SokoDockGeometryDidChangeNotification);
+	gBottomInset = inset ? (CGFloat)((double)(inset - 1) / kSokoInsetScale) : NAN;
+
+	gActiveBottom = SokoReadState(SokoActiveBottomLayoutDidChangeNotification) != 0;
+	gEditorBottom = SokoReadState(SokoEditorBottomLayoutDidChangeNotification) != 0;
+	gDodging = SokoReadState(SokoEditorDodgingDidChangeNotification) != 0;
+	gRowOffset = SokoDecodeSigned(SokoReadState(SokoRowOffsetDidChangeNotification));
+	gTopOffset = SokoDecodeSigned(SokoReadState(SokoTopOffsetDidChangeNotification));
+	gRowOffsetIsSet = SokoReadState(SokoRowOffsetIsSetDidChangeNotification) != 0;
+	gWidgetsEnabled = SokoReadState(SokoWidgetsEnabledDidChangeNotification) != 0;
+	gLoaded = YES;
+}
+
+static void SokoDockGeometryDidChange(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+	dispatch_async(dispatch_get_main_queue(), ^{
+		SokoDockGeometryReload();
+		if (gObserver) gObserver();
+	});
+}
+
+void SokoDockGeometryObserve(void (^handler)(void)) {
+	gObserver = [handler copy];
+
+	NSArray<NSString *> *names = @[
+		SokoDockGeometryDidChangeNotification,
+		SokoEditorDodgingDidChangeNotification,
+		SokoActiveBottomLayoutDidChangeNotification,
+		SokoEditorBottomLayoutDidChangeNotification,
+		SokoRowOffsetDidChangeNotification,
+		SokoTopOffsetDidChangeNotification,
+		SokoRowOffsetIsSetDidChangeNotification,
+		SokoWidgetsEnabledDidChangeNotification,
+	];
+
+	CFNotificationCenterRef darwin = CFNotificationCenterGetDarwinNotifyCenter();
+	for (NSString *name in names) {
+		CFNotificationCenterAddObserver(darwin, NULL, SokoDockGeometryDidChange, (__bridge CFStringRef)name, NULL, CFNotificationSuspensionBehaviorDeliverImmediately);
+	}
+}
+
+void SokoDockGeometryPublishBottomInset(CGFloat inset) {
+	SokoLoadIfNeeded();
+
+	uint64_t state = SokoEncodeInset(inset);
+	if (state == SokoEncodeInset(gBottomInset)) return;
+
+	gBottomInset = state ? inset : NAN;
+	SokoWriteState(SokoDockGeometryDidChangeNotification, state);
+}
+
+CGFloat SokoDockGeometryBottomInset(void) {
+	SokoLoadIfNeeded();
+	return gBottomInset;
+}
+
+void SokoDockPublishActiveUsesBottomLayout(BOOL usesBottomLayout) {
+	SokoPublishFlag(&gActiveBottom, usesBottomLayout, SokoActiveBottomLayoutDidChangeNotification);
+}
+
+BOOL SokoDockActiveUsesBottomLayout(void) {
+	SokoLoadIfNeeded();
+	return gActiveBottom;
+}
+
+void SokoEditorPublishUsesBottomLayout(BOOL usesBottomLayout) {
+	SokoPublishFlag(&gEditorBottom, usesBottomLayout, SokoEditorBottomLayoutDidChangeNotification);
+}
+
+BOOL SokoEditorUsesBottomLayout(void) {
+	SokoLoadIfNeeded();
+	return gEditorBottom;
+}
+
+void SokoEditorPublishDodging(BOOL dodging) {
+	SokoPublishFlag(&gDodging, dodging, SokoEditorDodgingDidChangeNotification);
+}
+
+BOOL SokoEditorDodging(void) {
+	SokoLoadIfNeeded();
+	return gDodging;
+}
+
+void SokoDockPublishRowOffsets(CGFloat rowOffset, CGFloat topOffset, BOOL isSet) {
+	SokoLoadIfNeeded();
+	if (SokoEncodeSigned(rowOffset) != SokoEncodeSigned(gRowOffset)) {
+		gRowOffset = rowOffset;
+		SokoWriteState(SokoRowOffsetDidChangeNotification, SokoEncodeSigned(rowOffset));
+	}
+	if (SokoEncodeSigned(topOffset) != SokoEncodeSigned(gTopOffset)) {
+		gTopOffset = topOffset;
+		SokoWriteState(SokoTopOffsetDidChangeNotification, SokoEncodeSigned(topOffset));
+	}
+	SokoPublishFlag(&gRowOffsetIsSet, isSet, SokoRowOffsetIsSetDidChangeNotification);
+}
+
+CGFloat SokoRowOffsetValue(void) {
+	SokoLoadIfNeeded();
+	return gRowOffset;
+}
+
+CGFloat SokoTopOffsetValue(void) {
+	SokoLoadIfNeeded();
+	return gTopOffset;
+}
+
+BOOL SokoRowOffsetIsSet(void) {
+	SokoLoadIfNeeded();
+	return gRowOffsetIsSet;
+}
+
+void SokoEditorRequestRowOffset(CGFloat offset) {
+	SokoWriteState(SokoSetRowOffsetRequestNotification, SokoEncodeSigned(offset));
+}
+
+CGFloat SokoRowOffsetRequestValue(void) {
+	return SokoDecodeSigned(SokoReadState(SokoSetRowOffsetRequestNotification));
+}
+
+void SokoEditorRequestBaseline(CGFloat offset) {
+	SokoWriteState(SokoEditorBaselineNotification, SokoEncodeSigned(offset));
+}
+
+CGFloat SokoRowOffsetBaselineValue(void) {
+	return SokoDecodeSigned(SokoReadState(SokoEditorBaselineNotification));
+}
+
+void SokoEditorRequestRevert(void) {
+	SokoWriteState(SokoEditorRevertNotification, 1);
+}
+
+void SokoEditorRequestClosed(void) {
+	SokoWriteState(SokoEditorClosedNotification, 1);
+}
+
+void SokoDockPublishWidgetsEnabled(BOOL enabled) {
+	SokoLoadIfNeeded();
+	SokoPublishFlag(&gWidgetsEnabled, enabled, SokoWidgetsEnabledDidChangeNotification);
+}
+
+BOOL SokoWidgetsEnabledValue(void) {
+	SokoLoadIfNeeded();
+	return gWidgetsEnabled;
+}

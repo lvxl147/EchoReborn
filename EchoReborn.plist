@@ -3,6 +3,12 @@
         Bundles = (
             "com.apple.springboard",
             "com.apple.PosterBoard",
+            // 1.2.1-68 · Soko 1.1.0 的壁纸配置归档（PRPosterComplicationLayout）
+            // 在这两个进程里编解码。只在 SpringBoard/PosterBoard 注入时，“编辑完
+            // 退回锁屏还是顶部”就是典型的没落盘。Tweak.xm 的 %ctor 对这两个进程
+            // 第一行 return，所以它们只会跑 Soko 那部分代码。
+            "com.apple.PosterKit",
+            "com.apple.MercuryPoster",
             "com.apple.SiriViewService",
             "com.apple.siri.SystemUI",
             "com.apple.SiriUI"
