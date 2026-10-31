@@ -82,7 +82,14 @@ def sync_info_plist(path, version):
     parts = [int(p) for p in core.split('.')]
     while len(parts) < 3:
         parts.append(0)
-    build = parts[0] * 1000000 + parts[1] * 10000 + parts[2] * 100 + (int(revision) if revision else 0)
+    # revision 可能本身含点（本项目用 1.2.1-174.38，revision="174.38"），
+    # 把所有数字段折叠进低位：174.38 → 17438，保证 CFBundleVersion 单调递增且可比。
+    rev_build = 0
+    if revision:
+        for p in revision.split('.'):
+            if p.isdigit():
+                rev_build = rev_build * 100 + int(p)
+    build = parts[0] * 1000000 + parts[1] * 10000 + parts[2] * 100 + rev_build
     out, build_count = re.subn(
         r'(<key>CFBundleVersion</key>\s*<string>)[^<]*(</string>)',
         r'\g<1>%d\g<2>' % build, short)
@@ -162,7 +169,7 @@ def main():
     args = parser.parse_args()
 
     version = args.version.strip()
-    if not re.fullmatch(r'\d+\.\d+(\.\d+)?(-\d+)?', version):
+    if not re.fullmatch(r'\d+\.\d+(\.\d+)?(-\d+(\.\d+)?)?', version):
         raise SystemExit('version must look like 1.0.5 or 1.0.6-1 (got %r)' % version)
 
     project = find_project_root(args.project)
