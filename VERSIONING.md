@@ -875,3 +875,18 @@
   治ⓘ漂移到「震动反馈」——组头跨分组复用的实锤）。旧独立按钮由清陈旧逻辑移除。
 - 构建通道：lvxl147 原通道（额度已恢复）。
 - 版本 1.2.1-174.31（commit 7b3e336b）
+
+## 1.2.1-174.32 · 第四批⑦：-133 注销提醒弹窗（当前验证版）
+- 174.31 实测：组头ⓘ正常、无残影 → ERGestureController 无毒。-122~-129 全线收口，
+  组头ⓘ/文件夹实时成为 174 系的一部分。
+- 内容（-133）：①ERUIHelpers setMasterEnabled 内值变动即弹（保留导航栏重启按钮作
+  「稍后」）+ 追加全局唯一 erPresentRespringAlertForSwitchName:（标题=开关名 attributed
+  抬 6pt 间距、稍后=关弹窗、确定=红-立即 sbreload）+ 通用接入点
+  setRespringToggle:specifier:（写值照旧，PostNotification 照发，随后按 label 弹窗）。
+  ②plist 四处 set 接入：Glass「启用液态玻璃」+「灵动岛卡片」、Siri「启用」、
+  SystemEnhance「隐藏灵动岛」——开/关都弹。
+- **精准追加而非整文件替换**：ERUIHelpers 是 174.26 残影唯一未排除嫌疑（当时它单独
+  在场即 100% 残影，但其代码当时无运行路径——弹窗缺 plist 映射没触发过——矛盾未解）。
+  本版只加代码不改既有行为；若残影出现即证伪「ERUIHelpers 文件有毒」假说，指向别的
+  未知因素。跳过下拉框箭头对齐（随 -130/-131 批最后重进）。
+- 版本 1.2.1-174.32（commit 08432b0f）

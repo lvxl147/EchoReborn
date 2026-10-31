@@ -697,6 +697,30 @@ static NSString *ERShortcutTimestampLine(NSDictionary *diagnostics) {
     NSString *uuid = rows[(NSUInteger)indexPath.row][@"uuid"];
     if (![uuid isKindOfClass:[NSString class]] || !uuid.length) return;
     [self.visibleUUIDs removeObject:uuid];
+    // 1.2.1-174.33 · 左滑删除补解绑槽位：原版只移出显示列表，槽位绑定
+    // ShortcutSlotAssignments 不清 → CC 磁贴残留且可点击、注销后数量回退
+    // （全删回退到旧基线）。解绑模式与信息页「删除快捷指令」一致。
+    {
+        NSMutableDictionary<NSString *, NSString *> *updated = [NSMutableDictionary dictionary];
+        id stored = (__bridge_transfer id)CFPreferencesCopyAppValue(
+            (__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
+            (__bridge CFStringRef)kERShortcutPrefsDomain);
+        if ([stored isKindOfClass:[NSDictionary class]]) [updated addEntriesFromDictionary:stored];
+        BOOL changed = NO;
+        for (NSString *key in [updated.allKeys copy]) {
+            if ([updated[key] isKindOfClass:[NSString class]] &&
+                [(NSString *)updated[key] isEqualToString:uuid]) {
+                [updated removeObjectForKey:key];
+                changed = YES;
+            }
+        }
+        if (changed) {
+            CFPreferencesSetAppValue((__bridge CFStringRef)kERShortcutSlotAssignmentsKey,
+                                     (__bridge CFPropertyListRef)[updated copy],
+                                     (__bridge CFStringRef)kERShortcutPrefsDomain);
+            CFPreferencesAppSynchronize((__bridge CFStringRef)kERShortcutPrefsDomain);
+        }
+    }
     [self persist];
     [tableView reloadData];
     ERShortcutLog(@"shortcutPane: 左滑移出显示列表 %@", uuid);
