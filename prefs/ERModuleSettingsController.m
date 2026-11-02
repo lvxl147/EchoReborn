@@ -103,6 +103,11 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 - (PSSpecifier *)erSwitchForModule:(NSDictionary *)module;
 @end
 
+@interface ERModuleSettingsController (ERSearch)
+@property (nonatomic, strong) UISearchBar *erSearchBar;
+@property (nonatomic, copy) NSString *erFilterText;
+@end
+
 @implementation ERModuleSettingsController
 
 // A controller pushed by hand never receives a bundle from the Preferences
@@ -138,6 +143,24 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
         for (NSDictionary *feature in ERUtilityFeatureList()) {
             [specifiers addObject:[self erSwitchForModule:feature]];
         }
+        // 1.2.2-109 · 第三方插件：与画廊同一批模块（扫 bundle 目录），
+        // 行样式与上面两组一致：图标左 + 名称 + 开关右。开关只控制「画廊显示」。
+        NSArray<NSDictionary *> *thirdParty = [self erThirdPartyModules];
+        if (thirdParty.count) {
+            PSSpecifier *tpGroup = [PSSpecifier groupSpecifierWithName:@"第三方插件"];
+            [tpGroup setProperty:@"关掉某一行后，该模块不再出现在「添加控制项」里；已放置在控制中心的实例不受影响。"
+                            forKey:@"footerText"];
+            [specifiers addObject:tpGroup];
+            NSString *filter = self.erFilterText.lowercaseString;
+            for (NSDictionary *module in thirdParty) {
+                NSString *name = module[@"name"] ?: @"";
+                if (filter.length) {
+                    NSString *haystack = [NSString stringWithFormat:@"%@ %@", name, module[@"id"]].lowercaseString;
+                    if (![haystack containsString:filter]) continue;
+                }
+                [specifiers addObject:[self erSwitchForModule:module]];
+            }
+        }
         _specifiers = specifiers;
         ERModuleLog(@"modulePane: built %lu connectivity + %lu utility row(s)",
                     (unsigned long)ERModuleList().count, (unsigned long)ERUtilityFeatureList().count);
@@ -147,6 +170,7 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [self erSetupSearchBar];   // 1.2.2-109 · 搜索框
     // 1.2.2-50 · 右上角「编辑」：分类管理入口从根页面移动到这里（功能不变）。
     UIBarButtonItem *erEditItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑"
                                                                    style:UIBarButtonItemStylePlain
@@ -173,6 +197,8 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self erApplyIcons];
+    [self erSetupSearchBar];
+    self.table.tableHeaderView = self.erSearchBar;
 }
 
 - (PSSpecifier *)erSwitchForModule:(NSDictionary *)module {
@@ -242,6 +268,61 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     Class iconCellClass = NSClassFromString(ERModuleIconSwitchCellClassName);
     if (iconCellClass) [spec setProperty:iconCellClass forKey:@"cellClass"];
     return spec;
+}
+
+
+// ---------------------------------------------------------------------------
+// 1.2.2-109 · 第三方模块清单（与画廊同一规则：扫 bundle 目录，读 Info.plist）
+// 不实例化模块，只读名字；自研模块已有专门分组，此处排除。
+// ---------------------------------------------------------------------------
+- (NSArray<NSDictionary *> *)erThirdPartyModules {
+    NSMutableArray<NSDictionary *> *result = [NSMutableArray array];
+    NSMutableSet<NSString *> *seen = [NSMutableSet set];
+    NSArray<NSString *> *directories = @[@"/Library/ControlCenter/Bundles",
+                                         @"/var/jb/Library/ControlCenter/Bundles"];
+    for (NSString *directory in directories) {
+        for (NSString *item in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:directory error:nil]) {
+            if (![item.pathExtension isEqualToString:@"bundle"]) continue;
+            NSString *path = [directory stringByAppendingPathComponent:item];
+            NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]];
+            NSString *identifier = info[@"CFBundleIdentifier"];
+            if (![identifier isKindOfClass:[NSString class]] || !identifier.length) continue;
+            if ([seen containsObject:identifier]) continue;
+            if ([identifier.lowercaseString containsString:@"echoreborn"]) continue;
+            [seen addObject:identifier];
+            NSString *name = info[@"CFBundleDisplayName"] ?: info[@"CFBundleName"] ?: identifier;
+            if (![name isKindOfClass:[NSString class]] || !name.length) name = identifier;
+            [result addObject:@{@"id": identifier,
+                                @"name": name,
+                                @"symbol": @"puzzlepiece.extension.fill",
+                                @"color": @"gray"}];
+        }
+    }
+    [result sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];
+    }];
+    return result;
+}
+
+- (void)erSetupSearchBar {
+    if (self.erSearchBar) return;
+    UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.table.bounds.size.width, 44)];
+    bar.searchBarStyle = UISearchBarStyleMinimal;
+    bar.placeholder = @"搜索模块";
+    bar.delegate = self;
+    bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+    self.erSearchBar = bar;
+    self.table.tableHeaderView = bar;
+}
+
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
+    self.erFilterText = searchText ?: @"";
+    [self reloadSpecifiers];
+    self.table.tableHeaderView = self.erSearchBar;
+}
+
+- (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
+    [searchBar resignFirstResponder];
 }
 
 @end
