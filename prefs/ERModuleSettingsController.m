@@ -1,4 +1,5 @@
 #import "ERModuleSettingsController.h"
+#import "ERCategoryOrderController.h"
 #import "ERUIHelpers.h"
 #import "ERUtilitySwitchCell.h"
 #import "ERModuleIconSwitchCell.h"
@@ -146,12 +147,25 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    // 1.2.2-50 · 右上角「编辑」：分类管理入口从根页面移动到这里（功能不变）。
+    UIBarButtonItem *erEditItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑"
+                                                                   style:UIBarButtonItemStylePlain
+                                                                  target:self
+                                                                  action:@selector(erOpenCategoryOrder:)];
+    self.navigationItem.rightBarButtonItem = erEditItem;
     // 1.0.4：子页标题由「连接」改回「独立模块」——与入口行「模块管理」的层级关系
     // 保持「入口 = 模块管理、子页 = 独立模块」的读法；页内顶部那行文案则改为
     // 「连接」，因为下面这七项正是控制中心「连接」分类下的模块。仅改文案。
     self.title = @"独立模块";
     // 1.0.3：给七个模块行挂上左侧图标（erIcon/erIconColor → iconImage）。
     [self erActivateIconRefresh];
+}
+
+// 与根页面 openCategoryOrder: 完全相同的推送逻辑（功能不变，仅入口移动）。
+- (void)erOpenCategoryOrder:(__unused id)sender {
+    ERCategoryOrderController *controller = [[ERCategoryOrderController alloc] init];
+    if (!controller) return;
+    [self.navigationController pushViewController:controller animated:YES];
 }
 
 // 与其余几个子页同样的兜底：从桌面回到设置时 Preferences 会重新解析出一批新的
