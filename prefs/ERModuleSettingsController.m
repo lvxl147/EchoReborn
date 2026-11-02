@@ -121,6 +121,39 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 - (NSArray *)specifiers {
     if (!_specifiers) {
         NSMutableArray *specifiers = [NSMutableArray array];
+        // 1.2.2-111 · 从 tweak 发布的清单渲染**全部模块**（含系统模块），
+        // 按分类分组，每行独立开关。清单不存在时退回下面的固定两组。
+        NSArray *erModuleCache = (__bridge_transfer NSArray *)CFPreferencesCopyAppValue(CFSTR("ERModuleCatalogCache"),
+                                                                                         CFSTR("com.strive.echoreborn.preferences"));
+        if ([erModuleCache isKindOfClass:[NSArray class]] && erModuleCache.count) {
+            NSMutableArray<NSString *> *categoryOrder = [NSMutableArray array];
+            NSMutableDictionary<NSString *, NSMutableArray *> *byCategory = [NSMutableDictionary dictionary];
+            for (NSDictionary *entry in erModuleCache) {
+                if (![entry isKindOfClass:[NSDictionary class]]) continue;
+                NSString *cat = entry[@"cat"] ?: @"其他";
+                if (!byCategory[cat]) {
+                    byCategory[cat] = [NSMutableArray array];
+                    [categoryOrder addObject:cat];
+                }
+                [byCategory[cat] addObject:@{@"id": entry[@"id"] ?: @"",
+                                             @"name": entry[@"name"] ?: entry[@"id"] ?: @"",
+                                             @"symbol": @"puzzlepiece.extension.fill",
+                                             @"color": @"gray"}];
+            }
+            for (NSString *cat in categoryOrder) {
+                PSSpecifier *groupSpec = [PSSpecifier groupSpecifierWithName:cat];
+                [groupSpec setProperty:@"关掉某一行后，该模块不再出现在「添加控制项」里；已放置在控制中心的实例不受影响。"
+                                forKey:@"footerText"];
+                [specifiers addObject:groupSpec];
+                for (NSDictionary *module in byCategory[cat]) {
+                    [specifiers addObject:[self erSwitchForModule:module]];
+                }
+            }
+            _specifiers = specifiers;
+            ERModuleLog(@"modulePane(cache): %lu categories, %lu modules",
+                        (unsigned long)categoryOrder.count, (unsigned long)erModuleCache.count);
+            return _specifiers;
+        }
         // 1.0.4：这一页顶部那行独立文案由「模块管理」改为「连接」；
         // 导航栏标题改为「独立模块」（见 -viewDidLoad）。只动文案，行与功能不变。
         PSSpecifier *group = [PSSpecifier groupSpecifierWithName:@"连接"];
@@ -162,6 +195,13 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
             }
         }
         _specifiers = specifiers;
+        // 1.2.2-110 · 扫描结果落盘（prefs 进程无法写日志文件，改写偏好域）
+        CFPreferencesSetAppValue(CFSTR("ERPrefsModuleScan"),
+                                 (__bridge CFStringRef)[NSString stringWithFormat:@"rows=%lu first=%@",
+                                                        (unsigned long)thirdParty.count,
+                                                        [[thirdParty.firstObject objectForKey:@"name"] description] ?: @"-"],
+                                 CFSTR("com.strive.echoreborn.preferences"));
+        CFPreferencesAppSynchronize(CFSTR("com.strive.echoreborn.preferences"));
         ERModuleLog(@"modulePane: built %lu connectivity + %lu utility row(s)",
                     (unsigned long)ERModuleList().count, (unsigned long)ERUtilityFeatureList().count);
     }
@@ -170,7 +210,6 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [self erSetupSearchBar];   // 1.2.2-109 · 搜索框
     // 1.2.2-50 · 右上角「编辑」：分类管理入口从根页面移动到这里（功能不变）。
     UIBarButtonItem *erEditItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑"
                                                                    style:UIBarButtonItemStylePlain
@@ -197,8 +236,6 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self erApplyIcons];
-    [self erSetupSearchBar];
-    self.table.tableHeaderView = self.erSearchBar;
 }
 
 - (PSSpecifier *)erSwitchForModule:(NSDictionary *)module {
