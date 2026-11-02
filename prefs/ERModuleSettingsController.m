@@ -140,12 +140,36 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
                                              @"symbol": @"puzzlepiece.extension.fill",
                                              @"color": @"gray"}];
             }
+            // 1.2.2-112 · 分组顺序跟随「编辑」页的 CategoryOrder，改那边这里也变。
+            NSArray *storedOrder = (__bridge_transfer NSArray *)CFPreferencesCopyAppValue(CFSTR("CategoryOrder"),
+                                                                                          CFSTR("com.strive.echoreborn.preferences"));
+            if ([storedOrder isKindOfClass:[NSArray class]] && storedOrder.count) {
+                NSMutableArray<NSString *> *sorted = [NSMutableArray array];
+                for (NSString *cat in storedOrder) {
+                    if ([categoryOrder containsObject:cat] && ![sorted containsObject:cat]) [sorted addObject:cat];
+                }
+                for (NSString *cat in categoryOrder) {
+                    if (![sorted containsObject:cat]) [sorted addObject:cat];
+                }
+                categoryOrder = sorted;
+            }
+            NSString *erFilter = self.erFilterText.length ? self.erFilterText.lowercaseString : nil;
             for (NSString *cat in categoryOrder) {
+                NSArray *rawModules = byCategory[cat];
+                NSMutableArray *visibleModules = [NSMutableArray array];
+                for (NSDictionary *candidate in rawModules) {
+                    if (erFilter.length) {
+                        NSString *haystack = [NSString stringWithFormat:@"%@ %@", candidate[@"name"] ?: @"", candidate[@"id"] ?: @""].lowercaseString;
+                        if (![haystack containsString:erFilter]) continue;
+                    }
+                    [visibleModules addObject:candidate];
+                }
+                if (!visibleModules.count) continue;
                 PSSpecifier *groupSpec = [PSSpecifier groupSpecifierWithName:cat];
                 [groupSpec setProperty:@"关掉某一行后，该模块不再出现在「添加控制项」里；已放置在控制中心的实例不受影响。"
                                 forKey:@"footerText"];
                 [specifiers addObject:groupSpec];
-                for (NSDictionary *module in byCategory[cat]) {
+                for (NSDictionary *module in visibleModules) {
                     [specifiers addObject:[self erSwitchForModule:module]];
                 }
             }
@@ -210,6 +234,7 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    [self erSetupSearchController];   // 1.2.2-113 · 搜索
     // 1.2.2-50 · 右上角「编辑」：分类管理入口从根页面移动到这里（功能不变）。
     UIBarButtonItem *erEditItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑"
                                                                    style:UIBarButtonItemStylePlain
@@ -235,6 +260,8 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 // PSSpecifier，运行时挂上去的 iconImage 会丢，所以在每次出现时重挂一遍。
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
+    // 1.2.2-112 · 每次进入重建：在「编辑」改分类顺序后，这一页的分组顺序跟着变。
+    _specifiers = nil;
     [self erApplyIcons];
 }
 
@@ -339,6 +366,24 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
         return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];
     }];
     return result;
+}
+
+- (void)erSetupSearchController {
+    if (self.erSearchController) return;
+    UISearchController *controller = [[UISearchController alloc] initWithSearchResultsController:nil];
+    controller.searchResultsUpdater = self;
+    controller.obscuresBackgroundDuringPresentation = NO;
+    controller.searchBar.placeholder = @"搜索模块";
+    controller.searchBar.searchBarStyle = UISearchBarStyleMinimal;
+    self.erSearchController = controller;
+    self.navigationItem.searchController = controller;
+    self.navigationItem.hidesSearchBarWhenScrolling = NO;
+}
+
+- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
+    self.erFilterText = searchController.searchBar.text ?: @"";
+    _specifiers = nil;
+    [self reloadSpecifiers];
 }
 
 - (void)erSetupSearchBar {
