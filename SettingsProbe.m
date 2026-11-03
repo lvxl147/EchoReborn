@@ -23,6 +23,46 @@ static void erSPViewDidAppear(id self, SEL cmd, BOOL animated) {
         if ([cls containsString:@"ControlCenter"] || [cls containsString:@"CCUI"]) {
             ERSPLog([NSString stringWithFormat:@"VC-appear %@", cls]);
         }
+        // 1.2.2-149 · 深挖：CCUISettingsListController 的结构与数据机制
+        if ([cls isEqualToString:@"CCUISettingsListController"]) {
+            @try {
+                NSMutableString *chain = [NSMutableString string];
+                Class walker = [self class];
+                for (int depth = 0; depth < 5 && walker; depth++) {
+                    [chain appendFormat:@"%@ <- ", NSStringFromClass(walker)];
+                    walker = class_getSuperclass(walker);
+                }
+                ERSPLog([NSString stringWithFormat:@"chain %@", chain]);
+                ERSPLog([NSString stringWithFormat:@"responds specifiers=%d tableViewDS=%d",
+                        (int)[self respondsToSelector:@selector(specifiers)],
+                        (int)[self conformsToProtocol:@protocol(UITableViewDataSource)]]);
+                if ([self respondsToSelector:@selector(specifiers)]) {
+                    NSArray *specs = [self performSelector:@selector(specifiers)];
+                    ERSPLog([NSString stringWithFormat:@"specifier count %lu",
+                             (unsigned long)(specs ? specs.count : 0)]);
+                    if (specs.count) {
+                        for (NSUInteger i = 0; i < 3 && i < specs.count; i++) {
+                            id spec = specs[i];
+                            NSString *name = [spec respondsToSelector:@selector(name)]
+                                ? [NSString stringWithFormat:@"%@", [spec performSelector:@selector(name)]] : @"-";
+                            ERSPLog([NSString stringWithFormat:@"spec %lu name=%@ cls=%@",
+                                     (unsigned long)i, name, NSStringFromClass(object_getClass(spec))]);
+                        }
+                    }
+                }
+                id tableView = nil;
+                if ([self isKindOfClass:[UIViewController class]]) {
+                    for (UIView *sub in ((UIViewController *)self).view.subviews) {
+                        if ([sub isKindOfClass:[UITableView class]]) { tableView = sub; break; }
+                    }
+                }
+                ERSPLog([NSString stringWithFormat:@"table=%@ sections=%ld",
+                        tableView ? NSStringFromClass(object_getClass(tableView)) : @"nil",
+                        tableView ? (long)[(UITableView *)tableView numberOfSections] : -1]);
+            } @catch (__unused NSException *e) {
+                ERSPLog(@"deep probe exception");
+            }
+        }
     } @catch (__unused NSException *e) {}
 }
 
