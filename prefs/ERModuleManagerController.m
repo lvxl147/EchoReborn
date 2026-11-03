@@ -156,12 +156,19 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
 - (UIImage *)erNormalizeIcon:(UIImage *)image {
     if (!image) return nil;
     CGFloat box = 29.0;
+    // 1.2.2-129 · 关键修复：Assets.car 里的图常被标记为 template，直接画会变成
+    // 黑色剪影（官方设置页是彩色的）—— 强制原色模式再画，并裁成圆角方框。
+    UIImage *original = [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
     UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(box, box)];
     return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
-        CGSize size = image.size;
+        CGSize size = original.size;
         CGFloat scale = MIN(box / MAX(size.width, 1.0), box / MAX(size.height, 1.0));
         CGFloat width = size.width * scale, height = size.height * scale;
-        [image drawInRect:CGRectMake((box - width) * 0.5, (box - height) * 0.5, width, height)];
+        CGFloat x = (box - width) * 0.5, y = (box - height) * 0.5;
+        UIBezierPath *rounded = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(x, y, width, height)
+                                                           cornerRadius:width * 0.2237];
+        [rounded addClip];
+        [original drawInRect:CGRectMake(x, y, width, height)];
     }];
 }
 
