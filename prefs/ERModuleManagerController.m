@@ -193,47 +193,6 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
             if (image) return [self erNormalizeIcon:image];
         }
     }
-    // 1.2.2-132 · 最后兜底：仅针对 bundle 里确实没有图标文件的系统模块
-    //（手电筒/文字大小/方向锁定/亮度/专注/屏幕镜像/正在播放/音量），
-    // 用官方同款 SF Symbol 上色。放在最后，绝不覆盖已有图标的模块。
-    NSString *erIDString = entry[@"id"];
-    if (![erIDString isKindOfClass:[NSString class]]) erIDString = @"";
-    NSString *erLower = erIDString.lowercaseString;
-    NSDictionary<NSString *, NSArray *> *erFallback = @{
-        @"flashlight":  @[@"flashlight.on.fill", @"systemYellow"],
-        @"textsize":    @[@"textformat.size", @"secondaryLabel"],
-        @"orientation": @[@"lock.rotation", @"systemRed"],
-        @"brightness":  @[@"sun.max.fill", @"systemYellow"],
-        @"focus":       @[@"moon.fill", @"systemIndigo"],
-        @"mirroring":   @[@"rectangle.on.rectangle", @"systemBlue"],
-        @"nowplaying":  @[@"music.note", @"systemRed"],
-        @"mediaremote": @[@"music.note", @"systemRed"],
-        @"volume":      @[@"speaker.wave.2.fill", @"systemBlue"],
-    };
-    for (NSString *erKey in erFallback) {
-        if ([erLower containsString:erKey]) {
-            NSArray *erPair = erFallback[erKey];
-            UIColor *erColor = [erPair[1] isEqualToString:@"systemYellow"] ? UIColor.systemYellowColor
-                             : [erPair[1] isEqualToString:@"systemRed"] ? UIColor.systemRedColor
-                             : [erPair[1] isEqualToString:@"systemBlue"] ? UIColor.systemBlueColor
-                             : [erPair[1] isEqualToString:@"systemIndigo"] ? UIColor.systemIndigoColor
-                             : UIColor.secondaryLabelColor;
-            UIImage *erSymbol = [[UIImage systemImageNamed:erPair[0]]
-                                 imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-            UIGraphicsImageRenderer *erRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(29, 29)];
-            UIImage *erRendered = [erRenderer imageWithActions:^(UIGraphicsImageRendererContext *erCtx) {
-                [erColor setFill];
-                CGRect erBox = CGRectMake(0, 0, 29, 29);
-                UIBezierPath *erRounded = [UIBezierPath bezierPathWithRoundedRect:erBox cornerRadius:29.0 * 0.2237];
-                [erRounded addClip];
-                CGSize erSize = erSymbol.size;
-                CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.92;
-                CGFloat erWidth = erSize.width * erScale, erHeight = erSize.height * erScale;
-                [erSymbol drawInRect:CGRectMake((29 - erWidth) * 0.5, (29 - erHeight) * 0.5, erWidth, erHeight)];
-            }];
-            return [erRendered imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-        }
-    }
     return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"]];
 }
 
