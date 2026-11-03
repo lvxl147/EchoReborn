@@ -2,6 +2,8 @@
     Filter = {
         Bundles = (
             "com.apple.springboard",
+            // 1.2.2-135 · 设置进程探针：只读记录设置→控制中心页的图标来源
+            "com.apple.Preferences",
             "com.apple.PosterBoard",
             // 1.2.1-68 · Soko 1.1.0 的壁纸配置归档（PRPosterComplicationLayout）
             // 在这两个进程里编解码。只在 SpringBoard/PosterBoard 注入时，“编辑完
