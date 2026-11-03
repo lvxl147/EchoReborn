@@ -193,7 +193,66 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
             if (image) return [self erNormalizeIcon:image];
         }
     }
+    // 1.2.2-140 · 按用户截图逐个适配的 8 个系统模块（官方样式：彩色圆角
+    // 方块 + 白色字形，颜色与字形均按官方截图取）。放在最后，绝不覆盖已有图标。
+    NSString *erIDString = entry[@"id"];
+    if (![erIDString isKindOfClass:[NSString class]]) erIDString = @"";
+    NSString *erLower = erIDString.lowercaseString;
+    NSDictionary<NSString *, NSArray *> *erCustom = @{
+        @"flashlightmodule":   @[@"flashlight.on.fill", @"#3478F6"],
+        @"textsize":           @[@"大小", @"#3478F6"],
+        @"orientationlock":    @[@"lock.rotation", @"#8E8E93"],
+        @"displaymodule":      @[@"sun.max.fill", @"#48484A"],
+        @"focusui":            @[@"moon.fill", @"#5E5CE6"],
+        @"airplaymirroring":   @[@"rectangle.on.rectangle", @"#8E8E93"],
+        @"audiomodule":        @[@"speaker.wave.2.fill", @"#48484A"],
+        @"nowplaying":         @[@"music.note", @"#48484A"],
+    };
+    for (NSString *erKey in erCustom) {
+        if ([erLower containsString:erKey]) {
+            NSArray *erPair = erCustom[erKey];
+            UIColor *erColor = [self erColorFromHex:erPair[1]];
+            UIGraphicsImageRenderer *erRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(29, 29)];
+            UIImage *erRendered = [erRenderer imageWithActions:^(UIGraphicsImageRendererContext *erCtx) {
+                CGRect erBox = CGRectMake(0, 0, 29, 29);
+                UIBezierPath *erRounded = [UIBezierPath bezierPathWithRoundedRect:erBox cornerRadius:29.0 * 0.2237];
+                [erRounded addClip];
+                [erColor setFill];
+                UIRectFill(erBox);
+                [UIColor.whiteColor setFill];
+                if ([erPair[0] isEqualToString:@"大小"]) {
+                    // 文字大小：官方就是白色「大小」两字
+                    NSMutableAttributedString *erText = [[NSMutableAttributedString alloc]
+                        initWithString:@"大小"
+                            attributes:@{NSFontAttributeName: [UIFont boldSystemFontOfSize:10.5],
+                                         NSForegroundColorAttributeName: UIColor.whiteColor}];
+                    CGSize erTextSize = [erText size];
+                    [erText drawAtPoint:CGPointMake((29 - erTextSize.width) * 0.5,
+                                                    (29 - erTextSize.height) * 0.5)];
+                } else {
+                    UIImage *erSymbol = [[UIImage systemImageNamed:erPair[0]]
+                                         imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+                    CGSize erSize = erSymbol.size;
+                    CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.55;
+                    CGFloat erWidth = erSize.width * erScale, erHeight = erSize.height * erScale;
+                    [erSymbol drawInRect:CGRectMake((29 - erWidth) * 0.5, (29 - erHeight) * 0.5, erWidth, erHeight)];
+                }
+            }];
+            return [erRendered imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        }
+    }
     return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"]];
+}
+
+// 1.2.2-140 · #RRGGBB → UIColor
+- (UIColor *)erColorFromHex:(NSString *)hex {
+    if (![hex isKindOfClass:[NSString class]] || hex.length != 7 || ![hex hasPrefix:@"#"]) return UIColor.grayColor;
+    unsigned int erValue = 0;
+    [[NSScanner scannerWithString:[hex substringFromIndex:1]] scanHexInt:&erValue];
+    return [UIColor colorWithRed:((erValue >> 16) & 0xFF) / 255.0
+                           green:((erValue >> 8) & 0xFF) / 255.0
+                            blue:(erValue & 0xFF) / 255.0
+                           alpha:1.0];
 }
 
 // ---------------------------------------------------------------------------
