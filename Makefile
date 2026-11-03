@@ -34,7 +34,7 @@ THEOS_PACKAGE_SCHEME ?= rootless
 
 include $(THEOS)/makefiles/common.mk
 
-TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam
+TWEAK_NAME = EchoReborn EchoRebornBackboardd EchoRebornDualCam ERSetsProbe
 
 # 0.5.26: Soko and LiquidSiri are no longer separate subprojects / dylibs.
 # Shipping them as their own Soko.dylib + LiquidSiri.dylib put a SECOND copy of
@@ -73,6 +73,11 @@ EchoReborn_FILES = Tweak.xm \
                 LiquidSiri/Shared/LGBackButtonSupport.m \
                 LiquidSiri/Runtime/LGLiquidGlassRuntime.m \
                 LiquidSiri/Runtime/LGSnapshotCaptureSupport.m
+
+# 1.2.2-147 · 独立设置进程探针（只读，仅注入 com.apple.Preferences）
+ERSetsProbe_FILES = SettingsProbe.m
+ERSetsProbe_FRAMEWORKS = UIKit Foundation
+ERSetsProbe_CFLAGS = -fobjc-arc
 # Union of what EchoReborn, Soko and LiquidSiri each linked separately.
 EchoReborn_FRAMEWORKS = UIKit CoreFoundation CFNetwork QuartzCore CoreImage CoreMotion \
                      Foundation SwiftUI AVFoundation Accelerate AudioToolbox MetalKit \
