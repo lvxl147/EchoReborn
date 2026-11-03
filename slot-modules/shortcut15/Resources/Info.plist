@@ -11,9 +11,9 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>模块占位 15</string>
+	<string>快捷指令 15</string>
 	<key>CFBundleDisplayName</key>
-	<string>模块占位 15</string>
+	<string>快捷指令 15</string>
 	<key>CFBundlePackageType</key>
 	<string>BNDL</string>
 	<key>CFBundleShortVersionString</key>
@@ -33,7 +33,7 @@
 		<integer>1</integer>
 		<integer>2</integer>
 	</array>
-	<!-- Slot 15 of 50. Identity only: which shortcut this slot runs is a
+	<!-- Slot 15 of 32. Identity only: which shortcut this slot runs is a
 	     data binding in the com.strive.echoreborn.preferences domain, written
 	     by the Settings pane, so the pool of 32 bundles is fixed at build time.
 	     Unassigned slots are filtered out of EchoReborn's 添加控制项 catalog. -->

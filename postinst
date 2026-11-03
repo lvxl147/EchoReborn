@@ -1,7 +1,0 @@
-#!/bin/bash
-# 1.2.2-160 · 槽位 bundle 内置 .jbroot -> / 符号链接（roothide 依赖解析）
-BB=/var/jb/Library/ControlCenter/Bundles
-for n in $(seq 1 50); do
-  [ -d "$BB/ERShortcut${n}Module.bundle" ] && ln -sf / "$BB/ERShortcut${n}Module.bundle/.jbroot"
-done
-exit 0
