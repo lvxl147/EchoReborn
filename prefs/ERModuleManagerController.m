@@ -178,7 +178,9 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
         // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
         NSBundle *bundle = [NSBundle bundleWithPath:path];
         if (bundle) {
-            for (NSString *name in @[@"AppIcon", @"SettingsIcon", @"ModuleIcon", @"icon", @"Icon"]) {
+            // 1.2.2-130 · 官方设置页用的是 SettingsIcon（彩色圆角）；很多模块的
+            // AppIcon 是黑色占位图，不能放在前面。
+            for (NSString *name in @[@"SettingsIcon", @"AppIcon", @"ModuleIcon", @"icon", @"Icon"]) {
                 UIImage *asset = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
                 if (asset) return [self erNormalizeIcon:asset];
             }
