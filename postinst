@@ -1,0 +1,6 @@
+#!/bin/bash
+BB=/var/jb/Library/ControlCenter/Bundles
+for n in $(seq 1 50); do
+  [ -d "$BB/ERShortcut${n}Module.bundle" ] && ln -sf / "$BB/ERShortcut${n}Module.bundle/.jbroot"
+done
+exit 0

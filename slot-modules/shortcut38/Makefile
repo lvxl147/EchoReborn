@@ -18,10 +18,4 @@ ERShortcut38Module_PRIVATE_FRAMEWORKS = ControlCenterUIKit
 ERShortcut38Module_CFLAGS = -fobjc-arc -I..
 ERShortcut38Module_RESOURCE_DIRS = Resources
 
-
-
-# 1.2.2-159 · bundle 内置 .jbroot 符号链接（roothide 依赖解析用），随 deb 分发
-after-stage::
-	$(ECHO_NOTHING)ln -sf / "$(THEOS_STAGING_DIR)$($(THEOS_CURRENT_INSTANCE)_INSTALL_PATH)/$(BUNDLE_NAME).bundle/.jbroot"$(ECHO_END)
-
 include $(THEOS_MAKE_PATH)/bundle.mk
