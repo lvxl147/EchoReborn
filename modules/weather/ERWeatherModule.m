@@ -31,7 +31,7 @@
 // 记一行加载日志。控制中心侧的 [WEATHER] 日志都写进
 // /var/mobile/Library/Logs/EchoReborn/echoreborn.log，与设置侧同一个文件。
 + (void)load {
-    ERWeatherLog(@"ERWeatherModule bundle loaded ver=1.2.2-160.50.49.48.47.46.45.44.43.42.41.40.39.38.37.36.36 (pid %d)", (int)getpid());
+    ERWeatherLog(@"ERWeatherModule bundle loaded ver=1.2.2-161.50.49.48.47.46.45.44.43.42.41.40.39.38.37.36.36 (pid %d)", (int)getpid());
 }
 
 // 惰性构造：磁贴可能被反复销毁重建（翻页、编辑模式），只在这里建一次
