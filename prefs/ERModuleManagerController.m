@@ -181,11 +181,15 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     if ([erPath isKindOfClass:[NSString class]] && [erPath containsString:@"Application Support/CCSupport"]) {
         NSRange erRange = [erPath rangeOfString:@"CCSupport"];
         NSString *erCCDir = [erPath substringToIndex:erRange.location + erRange.length];
-        NSBundle *erCCBundle = [NSBundle bundleWithPath:erCCDir];
+        // 1.2.2-137 · CCSupport 目录不是标准 bundle（无 Info.plist），bundleWithPath 拿不到，
+        // 直接读目录里的 <id>@3x.png / @2x.png / .png（彩色原图）。
         NSString *erModuleID = entry[@"id"] ?: @"";
-        if (erCCBundle && erModuleID.length) {
-            UIImage *erAsset = [UIImage imageNamed:erModuleID inBundle:erCCBundle compatibleWithTraitCollection:nil];
-            if (erAsset) return [self erNormalizeIcon:erAsset rounded:NO];
+        if (erModuleID.length) {
+            for (NSString *erSuffix in @[@"@3x.png", @"@2x.png", @".png"]) {
+                NSString *erFile = [erCCDir stringByAppendingPathComponent:[erModuleID stringByAppendingString:erSuffix]];
+                UIImage *erAsset = [UIImage imageWithContentsOfFile:erFile];
+                if (erAsset) return [self erNormalizeIcon:erAsset rounded:NO];
+            }
         }
     }
     NSString *path = entry[@"path"];
