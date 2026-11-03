@@ -265,13 +265,11 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     // 1.2.2-115 · reloadSpecifiers 会把导航栏上的搜索控制器摘掉（表现为「闪一下就没了」），
     // 所以每次重建后都要重新挂回。
     [self erSetupSearchController];
-    self.navigationItem.searchController = self.erSearchController;
     if (self.erNeedsRebuild) {
         self.erNeedsRebuild = NO;
         _specifiers = nil;
         [self reloadSpecifiers];
         [self erSetupSearchController];
-        self.navigationItem.searchController = self.erSearchController;
     }
 }
 
@@ -386,43 +384,27 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     return result;
 }
 
+// 1.2.2-116 · 改用表格 header 内的搜索框：navigationItem 上的搜索栏会被 Preferences
+// 在入场后重置（实测：闪 1 秒后消失）；放进表格 header 则只需重建后重新挂回。
 - (void)erSetupSearchController {
-    if (self.erSearchController) return;
-    UISearchController *controller = [[UISearchController alloc] initWithSearchResultsController:nil];
-    // 1.2.2-115 · 勿在此提前 return；重新挂回在调用方那侧做。
-    controller.searchResultsUpdater = self;
-    controller.obscuresBackgroundDuringPresentation = NO;
-    controller.searchBar.placeholder = @"搜索模块";
-    controller.searchBar.searchBarStyle = UISearchBarStyleMinimal;
-    controller.definesPresentationContext = YES;
-    self.erSearchController = controller;
-    self.navigationItem.searchController = controller;
-    self.navigationItem.hidesSearchBarWhenScrolling = NO;
-    self.definesPresentationContext = YES;
-}
-
-- (void)updateSearchResultsForSearchController:(UISearchController *)searchController {
-    self.erFilterText = searchController.searchBar.text ?: @"";
-    _specifiers = nil;
-    [self reloadSpecifiers];
-    self.navigationItem.searchController = self.erSearchController;   // 1.2.2-115 · 重新挂回
-}
-
-- (void)erSetupSearchBar {
-    if (self.erSearchBar) return;
-    UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.table.bounds.size.width, 44)];
-    bar.searchBarStyle = UISearchBarStyleMinimal;
-    bar.placeholder = @"搜索模块";
-    bar.delegate = self;
-    bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-    self.erSearchBar = bar;
-    self.table.tableHeaderView = bar;
+    [self.navigationItem setSearchController:nil];
+    if (!self.erSearchBar) {
+        UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.table.bounds.size.width, 44)];
+        bar.searchBarStyle = UISearchBarStyleMinimal;
+        bar.placeholder = @"搜索模块";
+        bar.delegate = self;
+        bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
+        self.erSearchBar = bar;
+    }
+    self.erSearchBar.text = self.erFilterText;
+    self.table.tableHeaderView = self.erSearchBar;
 }
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
     self.erFilterText = searchText ?: @"";
+    _specifiers = nil;
     [self reloadSpecifiers];
-    self.table.tableHeaderView = self.erSearchBar;
+    [self erSetupSearchController];   // 1.2.2-116 · 重建后重挂 header
 }
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {

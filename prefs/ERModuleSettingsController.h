@@ -17,7 +17,7 @@
 // 每一个开关行都写入共享偏好域 com.strive.echoreborn.preferences 下的
 // ModuleEnabled_<identifier>，并发布 com.strive.echoreborn/ReloadPrefs；Tweak.xm
 // 在重建「添加控制项」目录时据此过滤（见 availableControlCatalog 里的门控）。
-@interface ERModuleSettingsController : PSListController <UISearchBarDelegate, UISearchResultsUpdating>
+@interface ERModuleSettingsController : PSListController <UISearchBarDelegate>
 @property (nonatomic, strong) UISearchBar *erSearchBar;
 @property (nonatomic, copy) NSString *erFilterText;
 @property (nonatomic, strong) UISearchController *erSearchController;
