@@ -287,6 +287,14 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     if (![currentOrder isKindOfClass:[NSArray class]]) currentOrder = nil;
     self.erNeedsRebuild = !(self.erLastCategoryOrder == currentOrder ||
                             (currentOrder && self.erLastCategoryOrder && [currentOrder isEqualToArray:self.erLastCategoryOrder]));
+    // 1.2.2-121 · 顺序变了就在转场开始前重建（此时表格还没上屏，重建不可见）；
+    // 并补一次 reloadData 防止分组错位（早期在 viewWillAppear 重建会出现合并卡片）。
+    if (self.erNeedsRebuild) {
+        self.erNeedsRebuild = NO;
+        _specifiers = nil;
+        [self reloadSpecifiers];
+        [self.table reloadData];
+    }
     [self erApplyIcons];
 }
 
