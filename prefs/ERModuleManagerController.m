@@ -152,17 +152,39 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     [self erSetModule:toggle.accessibilityIdentifier enabled:toggle.on];
 }
 
+// 1.2.2-128 · 统一图标：任何来源都裁到 29pt 方框（与自研模块行一致），按比例适配居中，原色渲染。
+- (UIImage *)erNormalizeIcon:(UIImage *)image {
+    if (!image) return nil;
+    CGFloat box = 29.0;
+    UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(box, box)];
+    return [renderer imageWithActions:^(UIGraphicsImageRendererContext *context) {
+        CGSize size = image.size;
+        CGFloat scale = MIN(box / MAX(size.width, 1.0), box / MAX(size.height, 1.0));
+        CGFloat width = size.width * scale, height = size.height * scale;
+        [image drawInRect:CGRectMake((box - width) * 0.5, (box - height) * 0.5, width, height)];
+    }];
+}
+
 - (UIImage *)erIconForEntry:(NSDictionary *)entry {
     NSString *path = entry[@"path"];
-    if (![path isKindOfClass:[NSString class]] || !path.length) return [UIImage systemImageNamed:@"puzzlepiece.extension.fill"];
-    for (NSString *name in @[@"SettingsIcon@3x.png", @"SettingsIcon@2x.png", @"SettingsIcon.png",
-                             @"icon@3x.png", @"icon@2x.png", @"icon.png",
-                             @"Icon@2x.png", @"Icon.png"]) {
-        NSString *file = [path stringByAppendingPathComponent:name];
-        UIImage *image = [UIImage imageWithContentsOfFile:file];
-        if (image) return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];   // 1.2.2-123 · 不渲染成主题蓝
+    if ([path isKindOfClass:[NSString class]] && path.length) {
+        // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
+        NSBundle *bundle = [NSBundle bundleWithPath:path];
+        if (bundle) {
+            for (NSString *name in @[@"AppIcon", @"SettingsIcon", @"ModuleIcon", @"icon", @"Icon"]) {
+                UIImage *asset = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
+                if (asset) return [self erNormalizeIcon:asset];
+            }
+        }
+        for (NSString *name in @[@"SettingsIcon@3x.png", @"SettingsIcon@2x.png", @"SettingsIcon.png",
+                                 @"icon@3x.png", @"icon@2x.png", @"icon.png",
+                                 @"Icon@2x.png", @"Icon.png"]) {
+            NSString *file = [path stringByAppendingPathComponent:name];
+            UIImage *image = [UIImage imageWithContentsOfFile:file];
+            if (image) return [self erNormalizeIcon:image];
+        }
     }
-    return [UIImage systemImageNamed:@"puzzlepiece.extension.fill"];
+    return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"]];
 }
 
 // ---------------------------------------------------------------------------
