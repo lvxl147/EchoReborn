@@ -172,7 +172,64 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     }];
 }
 
+// 1.2.2-131 · 系统模块的图标不在 bundle 里（系统是用代码画的），
+// 按 identifier 配官方同款 SF Symbol 与颜色。
+- (UIImage *)erSymbolForIdentifier:(NSString *)identifier color:(UIColor **)outColor {
+    NSString *lower = identifier.lowercaseString;
+    NSDictionary *map = @{
+        @"flashlight":   @[@"flashlight.on.fill", @"systemYellow"],
+        @"orientation":  @[@"lock.rotation", @"systemRed"],
+        @"textsize":     @[@"textformat.size", @"secondaryLabel"],
+        @"brightness":   @[@"sun.max.fill", @"systemYellow"],
+        @"focus":        @[@"moon.fill", @"systemIndigo"],
+        @"mirroring":    @[@"rectangle.on.rectangle", @"systemBlue"],
+        @"nowplaying":   @[@"music.note", @"systemRed"],
+        @"mediaremote":  @[@"music.note", @"systemRed"],
+        @"volume":       @[@"speaker.wave.2.fill", @"systemBlue"],
+        @"lowpower":     @[@"battery.25", @"systemYellow"],
+        @"calculator":   @[@"plus.forwardslash.minus", @"systemOrange"],
+        @"alarm":        @[@"alarm.fill", @"systemOrange"],
+        @"timer":        @[@"timer", @"systemOrange"],
+        @"camera":       @[@"camera.fill", @"systemGray"],
+        @"qr":           @[@"qrcode.viewfinder", @"systemTeal"],
+    };
+    for (NSString *key in map) {
+        if ([lower containsString:key.lowercaseString]) {
+            NSArray *pair = map[key];
+            if (outColor) {
+                *outColor = [pair[1] isEqualToString:@"systemYellow"] ? UIColor.systemYellowColor
+                          : [pair[1] isEqualToString:@"systemRed"] ? UIColor.systemRedColor
+                          : [pair[1] isEqualToString:@"systemBlue"] ? UIColor.systemBlueColor
+                          : [pair[1] isEqualToString:@"systemIndigo"] ? UIColor.systemIndigoColor
+                          : [pair[1] isEqualToString:@"systemOrange"] ? UIColor.systemOrangeColor
+                          : [pair[1] isEqualToString:@"systemTeal"] ? UIColor.systemTealColor
+                          : UIColor.secondaryLabelColor;
+            }
+            return [UIImage systemImageNamed:pair[0]];
+        }
+    }
+    return nil;
+}
+
 - (UIImage *)erIconForEntry:(NSDictionary *)entry {
+    NSString *identifier = entry[@"id"] ?: @"";
+    UIColor *symbolColor = nil;
+    UIImage *symbol = [self erSymbolForIdentifier:identifier color:&symbolColor];
+    if (symbol && symbolColor) {
+        symbol = [symbol imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        UIGraphicsImageRenderer *sr = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(29, 29)];
+        UIImage *rendered = [sr imageWithActions:^(UIGraphicsImageRendererContext *context) {
+            [symbolColor setFill];
+            CGRect box = CGRectMake(0, 0, 29, 29);
+            UIBezierPath *rounded = [UIBezierPath bezierPathWithRoundedRect:box cornerRadius:box.size.width * 0.2237];
+            [rounded addClip];
+            CGSize size = symbol.size;
+            CGFloat scale = MIN(29.0 / MAX(size.width, 1.0), 29.0 / MAX(size.height, 1.0)) * 0.92;
+            CGFloat w = size.width * scale, h = size.height * scale;
+            [symbol drawInRect:CGRectMake((29 - w) * 0.5, (29 - h) * 0.5, w, h)];
+        }];
+        return [rendered imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+    }
     NSString *path = entry[@"path"];
     if ([path isKindOfClass:[NSString class]] && path.length) {
         // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
