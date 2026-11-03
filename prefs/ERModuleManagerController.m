@@ -118,6 +118,9 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     NSString *moduleID = entry[@"id"] ?: @"";
     cell.textLabel.text = entry[@"name"] ?: moduleID;
     cell.imageView.image = [self erIconForEntry:entry];
+    // 1.2.2-124 · 图标不再被染成主题蓝：回退用的 SF Symbol 是模板图，
+    // 默认跟 tintColor（蓝）走；这里把行内图标 tint 改为二级文字色。
+    cell.imageView.tintColor = [UIColor secondaryLabelColor];
 
     UISwitch *toggle = (UISwitch *)[cell.accessoryView viewWithTag:0xE001];
     if (!toggle) toggle = (UISwitch *)cell.accessoryView;
@@ -171,8 +174,25 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     self.tableView.tableHeaderView = self.searchBar;   // \u81ea\u5e26\u8868\u683c\u4e0d\u4f1a\u88ab\u91cd\u7f6e\uff0c\u8fd9\u91cc\u4fdd\u9669\u518d\u6302\u4e00\u6b21
 }
 
+- (void)searchBarTextDidBeginEditing:(UISearchBar *)searchBar {
+    [searchBar setShowsCancelButton:YES animated:YES];
+}
+
+- (void)searchBarTextDidEndEditing:(UISearchBar *)searchBar {
+    [searchBar setShowsCancelButton:NO animated:YES];
+}
+
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
     [searchBar resignFirstResponder];
+}
+
+- (void)searchBarCancelButtonClicked:(UISearchBar *)searchBar {
+    // 1.2.2-124 · 取消：清空关键字、收键盘、恢复全部模块
+    [searchBar setShowsCancelButton:NO animated:YES];
+    searchBar.text = @"";
+    [searchBar resignFirstResponder];
+    self.filterText = @"";
+    [self erReloadSections];
 }
 
 
