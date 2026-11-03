@@ -128,17 +128,18 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
                                                                                          CFSTR("com.strive.echoreborn.preferences"));
         if ([erModuleCache isKindOfClass:[NSArray class]] && erModuleCache.count) {
             // 1.2.2-117 · 搜索行（列表首行，不会被 Preferences 重置）
-            PSSpecifier *erSearchSpec = [PSSpecifier preferenceSpecifierNamed:@""
+            // 1.2.2-118 · 搜索入口：点击弹出系统输入框（不受布局重置影响）
+            NSString *searchTitle = self.erFilterText.length
+                ? [NSString stringWithFormat:@"搜索：%@（点击修改）", self.erFilterText]
+                : @"搜索模块";
+            PSSpecifier *erSearchSpec = [PSSpecifier preferenceSpecifierNamed:searchTitle
                                                                        target:self
                                                                           set:nil
                                                                           get:nil
                                                                        detail:nil
-                                                                         cell:PSStaticTextCell
+                                                                         cell:PSButtonCell
                                                                          edit:nil];
-            [erSearchSpec setProperty:NSClassFromString(@"ERModuleSearchCell") forKey:@"cellClass"];
-            [erSearchSpec setProperty:self forKey:@"erSearchTarget"];
-            [erSearchSpec setProperty:NSStringFromSelector(@selector(erSearchChanged:)) forKey:@"erSearchAction"];
-            [erSearchSpec setProperty:(self.erFilterText ?: @"") forKey:@"erSearchText"];
+            [erSearchSpec setProperty:NSStringFromSelector(@selector(erPromptSearch:)) forKey:@"action"];
             [specifiers addObject:erSearchSpec];
 
             NSMutableArray<NSString *> *categoryOrder = [NSMutableArray array];
@@ -250,7 +251,6 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
-    [self erSetupSearchController];   // 1.2.2-113 · 搜索
     // 1.2.2-50 · 右上角「编辑」：分类管理入口从根页面移动到这里（功能不变）。
     UIBarButtonItem *erEditItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑"
                                                                    style:UIBarButtonItemStylePlain
@@ -400,24 +400,15 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 // 1.2.2-116 · 改用表格 header 内的搜索框：navigationItem 上的搜索栏会被 Preferences
 // 在入场后重置（实测：闪 1 秒后消失）；放进表格 header 则只需重建后重新挂回。
 - (void)erSetupSearchController {
+    // 1.2.2-118 · 已废弃：导航栏/表格 header 上的搜索栏会被 Preferences 在入场后重置，
+    // 改为「点击行 → 弹出输入框」。
     [self.navigationItem setSearchController:nil];
-    if (!self.erSearchBar) {
-        UISearchBar *bar = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, self.table.bounds.size.width, 44)];
-        bar.searchBarStyle = UISearchBarStyleMinimal;
-        bar.placeholder = @"搜索模块";
-        bar.delegate = self;
-        bar.autoresizingMask = UIViewAutoresizingFlexibleWidth;
-        self.erSearchBar = bar;
-    }
-    self.erSearchBar.text = self.erFilterText;
-    self.table.tableHeaderView = self.erSearchBar;
 }
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
     self.erFilterText = searchText ?: @"";
     _specifiers = nil;
     [self reloadSpecifiers];
-    [self erSetupSearchController];   // 1.2.2-116 · 重建后重挂 header
 }
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
@@ -430,6 +421,30 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     self.erFilterText = text ?: @"";
     _specifiers = nil;
     [self reloadSpecifiers];
+}
+
+
+// 1.2.2-118 · 点击搜索行 → 系统输入框；确定后过滤，清空则恢复全部。
+- (void)erPromptSearch:(PSSpecifier *)specifier {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"搜索模块"
+                                                                   message:@"支持名称、分类名、identifier"
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+        field.text = self.erFilterText ?: @"";
+        field.placeholder = @"如：拍摄 / 时钟 / 低电量";
+    }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"清空" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *action) {
+        self.erFilterText = @"";
+        _specifiers = nil;
+        [self reloadSpecifiers];
+    }]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"搜索" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+        self.erFilterText = alert.textFields.firstObject.text ?: @"";
+        _specifiers = nil;
+        [self reloadSpecifiers];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 @end
