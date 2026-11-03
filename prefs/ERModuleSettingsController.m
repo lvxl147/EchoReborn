@@ -262,10 +262,16 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 - (void)viewDidAppear:(BOOL)animated {
     [super viewDidAppear:animated];
     // 1.2.2-114 · 在转场结束后才重建：提前到 viewWillAppear 会让分组卡片合并/    // 搜索栏失踪（Preferences 在转场中重建 specifier 会错位）。
+    // 1.2.2-115 · reloadSpecifiers 会把导航栏上的搜索控制器摘掉（表现为「闪一下就没了」），
+    // 所以每次重建后都要重新挂回。
+    [self erSetupSearchController];
+    self.navigationItem.searchController = self.erSearchController;
     if (self.erNeedsRebuild) {
         self.erNeedsRebuild = NO;
         _specifiers = nil;
         [self reloadSpecifiers];
+        [self erSetupSearchController];
+        self.navigationItem.searchController = self.erSearchController;
     }
 }
 
@@ -383,6 +389,7 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 - (void)erSetupSearchController {
     if (self.erSearchController) return;
     UISearchController *controller = [[UISearchController alloc] initWithSearchResultsController:nil];
+    // 1.2.2-115 · 勿在此提前 return；重新挂回在调用方那侧做。
     controller.searchResultsUpdater = self;
     controller.obscuresBackgroundDuringPresentation = NO;
     controller.searchBar.placeholder = @"搜索模块";
@@ -398,6 +405,7 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     self.erFilterText = searchController.searchBar.text ?: @"";
     _specifiers = nil;
     [self reloadSpecifiers];
+    self.navigationItem.searchController = self.erSearchController;   // 1.2.2-115 · 重新挂回
 }
 
 - (void)erSetupSearchBar {
