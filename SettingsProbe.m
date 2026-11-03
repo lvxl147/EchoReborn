@@ -1,3 +1,4 @@
+static void ERSPInstallShortcutFilter(void);
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
@@ -23,8 +24,10 @@ static void erSPViewDidAppear(id self, SEL cmd, BOOL animated) {
         if ([cls containsString:@"ControlCenter"] || [cls containsString:@"CCUI"]) {
             ERSPLog([NSString stringWithFormat:@"VC-appear %@", cls]);
         }
-        // 1.2.2-149 · 深挖：CCUISettingsListController 的结构与数据机制
+        // 1.2.2-150 · 惰性安装过滤器：构造器运行时 ControlCenter 框架尚未加载
+        //（实测打点「CCUISettingsListController missing」），进入该页时类已存在，此时安装。
         if ([cls isEqualToString:@"CCUISettingsListController"]) {
+            ERSPInstallShortcutFilter();
             @try {
                 NSMutableString *chain = [NSMutableString string];
                 Class walker = [self class];
@@ -152,10 +155,13 @@ static NSArray *erSPNewSpecifiers(id self, SEL cmd) {
     return filtered;
 }
 
+static BOOL erSPFilterInstalled = NO;
 static void ERSPInstallShortcutFilter(void) {
     @try {
+        if (erSPFilterInstalled) return;
         Class listClass = objc_getClass("CCUISettingsListController");
         if (!listClass) { ERSPLog(@"shortcut filter: CCUISettingsListController missing"); return; }
+        erSPFilterInstalled = YES;
         SEL sel = @selector(specifiers);
         Method superMethod = class_getInstanceMethod(listClass, sel);
         if (!superMethod) { ERSPLog(@"shortcut filter: specifiers method missing"); return; }
