@@ -153,7 +153,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
 }
 
 // 1.2.2-128 · 统一图标：任何来源都裁到 29pt 方框（与自研模块行一致），按比例适配居中，原色渲染。
-- (UIImage *)erNormalizeIcon:(UIImage *)image rounded:(BOOL)rounded {
+- (UIImage *)erNormalizeIcon:(UIImage *)image {
     if (!image) return nil;
     CGFloat box = 29.0;
     // 1.2.2-129 · 关键修复：Assets.car 里的图常被标记为 template，直接画会变成
@@ -165,33 +165,14 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
         CGFloat scale = MIN(box / MAX(size.width, 1.0), box / MAX(size.height, 1.0));
         CGFloat width = size.width * scale, height = size.height * scale;
         CGFloat x = (box - width) * 0.5, y = (box - height) * 0.5;
-        if (rounded) {
-            UIBezierPath *roundedPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(x, y, width, height)
-                                                                   cornerRadius:width * 0.2237];
-            [roundedPath addClip];
-        }
+        UIBezierPath *rounded = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(x, y, width, height)
+                                                           cornerRadius:width * 0.2237];
+        [rounded addClip];
         [original drawInRect:CGRectMake(x, y, width, height)];
     }];
 }
 
 - (UIImage *)erIconForEntry:(NSDictionary *)entry {
-    // 1.2.2-136 · 探针实锤：官方设置页对 CCSupport 家族模块的识别 =
-    // 在 …/Application Support/CCSupport 目录里按 **identifier 同名** 找图（<id>@2x/@3x.png，彩色圆角）。
-    // 1.2.2-138 · 直接用 tweak 推算并写入缓存的 CCSupport 目录（不再依赖 path 噥探：
-    // 系统模块的 path 指向它们自己的 bundle，永远不会含 CCSupport，所以上一版永远不会命中）。
-    NSString *erCCDir = entry[@"ccdir"];
-    if ([erCCDir isKindOfClass:[NSString class]] && erCCDir.length) {
-        // 1.2.2-137 · CCSupport 目录不是标准 bundle（无 Info.plist），bundleWithPath 拿不到，
-        // 直接读目录里的 <id>@3x.png / @2x.png / .png（彩色原图）。
-        NSString *erModuleID = entry[@"id"] ?: @"";
-        if (erModuleID.length) {
-            for (NSString *erSuffix in @[@"@3x.png", @"@2x.png", @".png"]) {
-                NSString *erFile = [erCCDir stringByAppendingPathComponent:[erModuleID stringByAppendingString:erSuffix]];
-                UIImage *erAsset = [UIImage imageWithContentsOfFile:erFile];
-                if (erAsset) return [self erNormalizeIcon:erAsset rounded:NO];
-            }
-        }
-    }
     NSString *path = entry[@"path"];
     if ([path isKindOfClass:[NSString class]] && path.length) {
         // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
@@ -201,7 +182,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
             // AppIcon 是黑色占位图，不能放在前面。
             for (NSString *name in @[@"SettingsIcon", @"AppIcon", @"ModuleIcon", @"icon", @"Icon"]) {
                 UIImage *asset = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
-                if (asset) return [self erNormalizeIcon:asset rounded:YES];
+                if (asset) return [self erNormalizeIcon:asset];
             }
         }
         for (NSString *name in @[@"SettingsIcon@3x.png", @"SettingsIcon@2x.png", @"SettingsIcon.png",
@@ -209,52 +190,10 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
                                  @"Icon@2x.png", @"Icon.png"]) {
             NSString *file = [path stringByAppendingPathComponent:name];
             UIImage *image = [UIImage imageWithContentsOfFile:file];
-            if (image) return [self erNormalizeIcon:image rounded:YES];
+            if (image) return [self erNormalizeIcon:image];
         }
     }
-    // 1.2.2-134 · 官方设置页样式：彩色圆角底板 + 白色字形。
-    // 仅用于 bundle 里确实没有图标的系统模块（手电筒/文字大小/方向锁定/
-    // 亮度/专注/屏幕镜像/正在播放/音量）；放在最后，绝不覆盖已有图标。
-    NSString *erIDString = entry[@"id"];
-    if (![erIDString isKindOfClass:[NSString class]]) erIDString = @"";
-    NSString *erLower = erIDString.lowercaseString;
-    NSDictionary<NSString *, NSArray *> *erFallback = @{
-        @"flashlight":  @[@"flashlight.on.fill", @"blue"],
-        @"textsize":    @[@"textformat.size", @"blue"],
-        @"orientation": @[@"lock.rotation", @"red"],
-        @"brightness":  @[@"sun.max.fill", @"yellow"],
-        @"focus":       @[@"moon.fill", @"indigo"],
-        @"mirroring":   @[@"rectangle.on.rectangle", @"blue"],
-        @"nowplaying":  @[@"music.note", @"red"],
-        @"mediaremote": @[@"music.note", @"red"],
-        @"volume":      @[@"speaker.wave.2.fill", @"blue"],
-    };
-    for (NSString *erKey in erFallback) {
-        if ([erLower containsString:erKey]) {
-            NSArray *erPair = erFallback[erKey];
-            UIColor *erColor = [erPair[1] isEqualToString:@"yellow"] ? [UIColor colorWithRed:0.98 green:0.75 blue:0.18 alpha:1.0]
-                             : [erPair[1] isEqualToString:@"red"] ? [UIColor colorWithRed:0.94 green:0.25 blue:0.29 alpha:1.0]
-                             : [erPair[1] isEqualToString:@"indigo"] ? [UIColor colorWithRed:0.42 green:0.40 blue:0.90 alpha:1.0]
-                             : [UIColor colorWithRed:0.20 green:0.47 blue:0.96 alpha:1.0];
-            UIImage *erSymbol = [[UIImage systemImageNamed:erPair[0]]
-                                 imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
-            UIGraphicsImageRenderer *erRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(29, 29)];
-            UIImage *erRendered = [erRenderer imageWithActions:^(UIGraphicsImageRendererContext *erCtx) {
-                CGRect erBox = CGRectMake(0, 0, 29, 29);
-                UIBezierPath *erRounded = [UIBezierPath bezierPathWithRoundedRect:erBox cornerRadius:29.0 * 0.2237];
-                [erRounded addClip];
-                [erColor setFill];
-                UIRectFill(erBox);
-                [UIColor.whiteColor setFill];
-                CGSize erSize = erSymbol.size;
-                CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.55;
-                CGFloat erWidth = erSize.width * erScale, erHeight = erSize.height * erScale;
-                [erSymbol drawInRect:CGRectMake((29 - erWidth) * 0.5, (29 - erHeight) * 0.5, erWidth, erHeight)];
-            }];
-            return [erRendered imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
-        }
-    }
-    return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"] rounded:YES];
+    return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"]];
 }
 
 // ---------------------------------------------------------------------------
