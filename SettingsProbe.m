@@ -28,6 +28,12 @@ static void erSPViewDidAppear(id self, SEL cmd, BOOL animated) {
         //（实测打点「CCUISettingsListController missing」），进入该页时类已存在，此时安装。
         if ([cls isEqualToString:@"CCUISettingsListController"]) {
             ERSPInstallShortcutFilter();
+            // 1.2.2-151 · 安装后立即重载：PSListController 在 viewDidLoad 阶段已缓存旧列表，
+            // 不重载的话过滤不会上屏。
+            if ([self respondsToSelector:@selector(reloadSpecifiers)]) {
+                [self performSelector:@selector(reloadSpecifiers)];
+                ERSPLog(@"reloadSpecifiers triggered");
+            }
             @try {
                 NSMutableString *chain = [NSMutableString string];
                 Class walker = [self class];
