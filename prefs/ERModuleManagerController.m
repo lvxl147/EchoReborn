@@ -31,6 +31,12 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     self.tableView.tableHeaderView = self.searchBar;
     [self.view addSubview:self.tableView];
 
+    // 1.2.2-123 · 补回右上角「编辑」（分类管理入口），与旧版一致。
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑"
+                                                                              style:UIBarButtonItemStylePlain
+                                                                             target:self
+                                                                             action:@selector(erOpenCategoryOrder:)];
+
     [self erReloadSections];
 }
 
@@ -151,7 +157,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
                              @"Icon@2x.png", @"Icon.png"]) {
         NSString *file = [path stringByAppendingPathComponent:name];
         UIImage *image = [UIImage imageWithContentsOfFile:file];
-        if (image) return [image imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+        if (image) return [image imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];   // 1.2.2-123 · 不渲染成主题蓝
     }
     return [UIImage systemImageNamed:@"puzzlepiece.extension.fill"];
 }
@@ -167,6 +173,17 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
     [searchBar resignFirstResponder];
+}
+
+
+// 1.2.2-123 · 右上角「编辑」→ 分类管理（分类顺序）
+- (void)erOpenCategoryOrder:(id)sender {
+    Class orderClass = NSClassFromString(@"ERCategoryOrderController");
+    if (!orderClass) return;
+    UIViewController *controller = [[orderClass alloc] init];
+    if ([controller isKindOfClass:[UIViewController class]]) {
+        [self.navigationController pushViewController:controller animated:YES];
+    }
 }
 
 @end
