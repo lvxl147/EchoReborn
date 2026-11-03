@@ -159,7 +159,8 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
                 NSMutableArray *visibleModules = [NSMutableArray array];
                 for (NSDictionary *candidate in rawModules) {
                     if (erFilter.length) {
-                        NSString *haystack = [NSString stringWithFormat:@"%@ %@", candidate[@"name"] ?: @"", candidate[@"id"] ?: @""].lowercaseString;
+                        // 1.2.2-114 · 分类名也参与匹配（用户会直接搜「拍摄」「时钟」）
+                        NSString *haystack = [NSString stringWithFormat:@"%@ %@ %@", candidate[@"name"] ?: @"", candidate[@"id"] ?: @"", cat ?: @""].lowercaseString;
                         if (![haystack containsString:erFilter]) continue;
                     }
                     [visibleModules addObject:candidate];
@@ -258,10 +259,21 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 // 与其余几个子页同样的兜底：从桌面回到设置时 Preferences 会重新解析出一批新的
 // PSSpecifier，运行时挂上去的 iconImage 会丢，所以在每次出现时重挂一遍。
+- (void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    // 1.2.2-114 · 在转场结束后才重建：提前到 viewWillAppear 会让分组卡片合并/    // 搜索栏失踪（Preferences 在转场中重建 specifier 会错位）。
+    if (self.erNeedsRebuild) {
+        self.erNeedsRebuild = NO;
+        _specifiers = nil;
+        [self reloadSpecifiers];
+    }
+}
+
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
-    // 1.2.2-112 · 每次进入重建：在「编辑」改分类顺序后，这一页的分组顺序跟着变。
-    _specifiers = nil;
+    // 1.2.2-114 · 每次进入都需重建（分类顺序可能被「编辑」改过），但延到
+    // viewDidAppear 再建，避开转场期间的错位。
+    self.erNeedsRebuild = YES;
     [self erApplyIcons];
 }
 
@@ -375,9 +387,11 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     controller.obscuresBackgroundDuringPresentation = NO;
     controller.searchBar.placeholder = @"搜索模块";
     controller.searchBar.searchBarStyle = UISearchBarStyleMinimal;
+    controller.definesPresentationContext = YES;
     self.erSearchController = controller;
     self.navigationItem.searchController = controller;
     self.navigationItem.hidesSearchBarWhenScrolling = NO;
+    self.definesPresentationContext = YES;
 }
 
 - (void)updateSearchResultsForSearchController:(UISearchController *)searchController {

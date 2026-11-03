@@ -21,4 +21,5 @@
 @property (nonatomic, strong) UISearchBar *erSearchBar;
 @property (nonatomic, copy) NSString *erFilterText;
 @property (nonatomic, strong) UISearchController *erSearchController;
+@property (nonatomic, assign) BOOL erNeedsRebuild;
 @end
