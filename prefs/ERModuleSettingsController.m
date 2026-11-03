@@ -3,6 +3,7 @@
 #import "ERUIHelpers.h"
 #import "ERUtilitySwitchCell.h"
 #import "ERModuleIconSwitchCell.h"
+#import "ERModuleSearchCell.h"
 #import <Preferences/PSSpecifier.h>
 #import <objc/message.h>
 
@@ -126,6 +127,20 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
         NSArray *erModuleCache = (__bridge_transfer NSArray *)CFPreferencesCopyAppValue(CFSTR("ERModuleCatalogCache"),
                                                                                          CFSTR("com.strive.echoreborn.preferences"));
         if ([erModuleCache isKindOfClass:[NSArray class]] && erModuleCache.count) {
+            // 1.2.2-117 · 搜索行（列表首行，不会被 Preferences 重置）
+            PSSpecifier *erSearchSpec = [PSSpecifier preferenceSpecifierNamed:@""
+                                                                       target:self
+                                                                          set:nil
+                                                                          get:nil
+                                                                       detail:nil
+                                                                         cell:PSStaticTextCell
+                                                                         edit:nil];
+            [erSearchSpec setProperty:NSClassFromString(@"ERModuleSearchCell") forKey:@"cellClass"];
+            [erSearchSpec setProperty:self forKey:@"erSearchTarget"];
+            [erSearchSpec setProperty:NSStringFromSelector(@selector(erSearchChanged:)) forKey:@"erSearchAction"];
+            [erSearchSpec setProperty:(self.erFilterText ?: @"") forKey:@"erSearchText"];
+            [specifiers addObject:erSearchSpec];
+
             NSMutableArray<NSString *> *categoryOrder = [NSMutableArray array];
             NSMutableDictionary<NSString *, NSMutableArray *> *byCategory = [NSMutableDictionary dictionary];
             for (NSDictionary *entry in erModuleCache) {
@@ -264,13 +279,11 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     // 1.2.2-114 · 在转场结束后才重建：提前到 viewWillAppear 会让分组卡片合并/    // 搜索栏失踪（Preferences 在转场中重建 specifier 会错位）。
     // 1.2.2-115 · reloadSpecifiers 会把导航栏上的搜索控制器摘掉（表现为「闪一下就没了」），
     // 所以每次重建后都要重新挂回。
-    [self erSetupSearchController];
     if (self.erNeedsRebuild) {
         self.erNeedsRebuild = NO;
         _specifiers = nil;
         [self reloadSpecifiers];
-        [self erSetupSearchController];
-    }
+        }
 }
 
 - (void)viewWillAppear:(BOOL)animated {
@@ -409,6 +422,14 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 
 - (void)searchBarSearchButtonClicked:(UISearchBar *)searchBar {
     [searchBar resignFirstResponder];
+}
+
+
+// 1.2.2-117 · 搜索输入回调：过滤后重建列表（搜索行自身作为首行保留）。
+- (void)erSearchChanged:(NSString *)text {
+    self.erFilterText = text ?: @"";
+    _specifiers = nil;
+    [self reloadSpecifiers];
 }
 
 @end
