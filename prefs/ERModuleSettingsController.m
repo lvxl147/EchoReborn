@@ -179,6 +179,8 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
                 }
             }
             _specifiers = specifiers;
+            self.erLastCategoryOrder = (__bridge_transfer NSArray *)CFPreferencesCopyAppValue(CFSTR("CategoryOrder"),
+                                                                                             CFSTR("com.strive.echoreborn.preferences")) ?: @[];
             ERModuleLog(@"modulePane(cache): %lu categories, %lu modules",
                         (unsigned long)categoryOrder.count, (unsigned long)erModuleCache.count);
             return _specifiers;
@@ -278,7 +280,13 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
     [super viewWillAppear:animated];
     // 1.2.2-114 · 每次进入都需重建（分类顺序可能被「编辑」改过），但延到
     // viewDidAppear 再建，避开转场期间的错位。
-    self.erNeedsRebuild = YES;
+    // 1.2.2-120 · 只有分类顺序真的变了才重建。之前每次进入都整表重建，
+    // 表现就是「进入页面闪一下」。
+    NSArray *currentOrder = (__bridge_transfer NSArray *)CFPreferencesCopyAppValue(CFSTR("CategoryOrder"),
+                                                                                   CFSTR("com.strive.echoreborn.preferences"));
+    if (![currentOrder isKindOfClass:[NSArray class]]) currentOrder = nil;
+    self.erNeedsRebuild = !(self.erLastCategoryOrder == currentOrder ||
+                            (currentOrder && self.erLastCategoryOrder && [currentOrder isEqualToArray:self.erLastCategoryOrder]));
     [self erApplyIcons];
 }
 

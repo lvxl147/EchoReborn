@@ -22,4 +22,5 @@
 @property (nonatomic, copy) NSString *erFilterText;
 @property (nonatomic, strong) UISearchController *erSearchController;
 @property (nonatomic, assign) BOOL erNeedsRebuild;
+@property (nonatomic, copy) NSArray *erLastCategoryOrder;
 @end
