@@ -177,10 +177,10 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
 - (UIImage *)erIconForEntry:(NSDictionary *)entry {
     // 1.2.2-136 · 探针实锤：官方设置页对 CCSupport 家族模块的识别 =
     // 在 …/Application Support/CCSupport 目录里按 **identifier 同名** 找图（<id>@2x/@3x.png，彩色圆角）。
-    NSString *erPath = entry[@"path"];
-    if ([erPath isKindOfClass:[NSString class]] && [erPath containsString:@"Application Support/CCSupport"]) {
-        NSRange erRange = [erPath rangeOfString:@"CCSupport"];
-        NSString *erCCDir = [erPath substringToIndex:erRange.location + erRange.length];
+    // 1.2.2-138 · 直接用 tweak 推算并写入缓存的 CCSupport 目录（不再依赖 path 噥探：
+    // 系统模块的 path 指向它们自己的 bundle，永远不会含 CCSupport，所以上一版永远不会命中）。
+    NSString *erCCDir = entry[@"ccdir"];
+    if ([erCCDir isKindOfClass:[NSString class]] && erCCDir.length) {
         // 1.2.2-137 · CCSupport 目录不是标准 bundle（无 Info.plist），bundleWithPath 拿不到，
         // 直接读目录里的 <id>@3x.png / @2x.png / .png（彩色原图）。
         NSString *erModuleID = entry[@"id"] ?: @"";

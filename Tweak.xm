@@ -26162,6 +26162,15 @@ static void ERStartEditStateProbe(void) {
     // 1.2.2-111 · 把完整清单写入共享偏好域，供设置页「模块管理」渲染（设置进程
     // 拿不到 CCUI 的模块元数据，只能由 tweak 这侧生成）。
     {
+        // 1.2.2-138 · 计算本机 CCSupport 目录（从 tweak 自身路径推 jbroot），
+        // 写进每条缓存 —— 设置页按 identifier 在里面找官方彩色 PNG 图标。
+        NSString *erSelfPath = [NSBundle bundleForClass:[self class]].bundlePath ?: @"";
+        NSString *erCCSupportDir = @"";
+        NSRange erMSRange = [erSelfPath rangeOfString:@"/Library/MobileSubstrate"];
+        if (erMSRange.location != NSNotFound) {
+            erCCSupportDir = [[erSelfPath substringToIndex:erMSRange.location]
+                              stringByAppendingPathComponent:@"Library/Application Support/CCSupport"];
+        }
         NSMutableArray *erCache = [NSMutableArray array];
         for (NSString *erCategory in byCategory) {
             for (NSDictionary *erEntry in byCategory[erCategory]) {
@@ -26170,6 +26179,7 @@ static void ERStartEditStateProbe(void) {
                 [erCache addObject:@{@"id": erID,
                                      @"name": erEntry[@"name"] ?: erID,
                                      @"cat": erCategory,
+                                     @"ccdir": erCCSupportDir,
                                      @"path": (([erEntry[@"bundleURL"] isKindOfClass:[NSURL class]]
                                                 ? ((NSURL *)erEntry[@"bundleURL"]).path : @"") ?: @"")}];
             }
