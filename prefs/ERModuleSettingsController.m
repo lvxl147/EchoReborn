@@ -128,19 +128,7 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
                                                                                          CFSTR("com.strive.echoreborn.preferences"));
         if ([erModuleCache isKindOfClass:[NSArray class]] && erModuleCache.count) {
             // 1.2.2-117 · 搜索行（列表首行，不会被 Preferences 重置）
-            // 1.2.2-118 · 搜索入口：点击弹出系统输入框（不受布局重置影响）
-            NSString *searchTitle = self.erFilterText.length
-                ? [NSString stringWithFormat:@"搜索：%@（点击修改）", self.erFilterText]
-                : @"搜索模块";
-            PSSpecifier *erSearchSpec = [PSSpecifier preferenceSpecifierNamed:searchTitle
-                                                                       target:self
-                                                                          set:nil
-                                                                          get:nil
-                                                                       detail:nil
-                                                                         cell:PSButtonCell
-                                                                         edit:nil];
-            [erSearchSpec setProperty:NSStringFromSelector(@selector(erPromptSearch:)) forKey:@"action"];
-            [specifiers addObject:erSearchSpec];
+            
 
             NSMutableArray<NSString *> *categoryOrder = [NSMutableArray array];
             NSMutableDictionary<NSString *, NSMutableArray *> *byCategory = [NSMutableDictionary dictionary];
@@ -400,9 +388,11 @@ static NSArray<NSDictionary *> *ERUtilityFeatureList(void) {
 // 1.2.2-116 · 改用表格 header 内的搜索框：navigationItem 上的搜索栏会被 Preferences
 // 在入场后重置（实测：闪 1 秒后消失）；放进表格 header 则只需重建后重新挂回。
 - (void)erSetupSearchController {
-    // 1.2.2-118 · 已废弃：导航栏/表格 header 上的搜索栏会被 Preferences 在入场后重置，
-    // 改为「点击行 → 弹出输入框」。
+    // 1.2.2-119 · 设置页的搜索栏已移除：Preferences 在入场后会重置
+    // tableHeaderView / navigationItem.searchController，任何挂法都会「闪一下消失」。
+    // 搜索改到画廊面板（自己的 VC）里实现。
     [self.navigationItem setSearchController:nil];
+    self.navigationItem.searchController = nil;
 }
 
 - (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)searchText {
