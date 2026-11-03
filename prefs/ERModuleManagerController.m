@@ -213,7 +213,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
                     UIImage *erSymbol = [[UIImage systemImageNamed:erPair[0]]
                                          imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
                     CGSize erSize = erSymbol.size;
-                    CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.60;
+                    CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.62;
                     CGFloat erWidth = erSize.width * erScale, erHeight = erSize.height * erScale;
                     [erSymbol drawInRect:CGRectMake((29 - erWidth) * 0.5, (29 - erHeight) * 0.5, erWidth, erHeight)];
                 }
