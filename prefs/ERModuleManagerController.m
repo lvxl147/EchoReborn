@@ -62,7 +62,14 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
         NSString *name = entry[@"name"] ?: entry[@"id"] ?: @"";
         NSLog(@"[ERMM] module %@", name);
         if (!byCategory[cat]) { byCategory[cat] = [NSMutableArray array]; [categoryOrder addObject:cat]; }
-        [byCategory[cat] addObject:entry];
+        // 1.2.2-145 · 指定改名：正在播放 → 播放控制
+        NSDictionary *rowEntry = entry;
+        if ([[entry[@"id"] lowercaseString] containsString:@"nowplaying"]) {
+            NSMutableDictionary *renamed = [entry mutableCopy];
+            renamed[@"name"] = @"播放控制";
+            rowEntry = renamed;
+        }
+        [byCategory[cat] addObject:rowEntry];
     }
     NSMutableArray<NSString *> *sortedOrder = [NSMutableArray array];
     for (NSString *cat in order) {
@@ -178,18 +185,27 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
     NSString *erIDString = entry[@"id"];
     if (![erIDString isKindOfClass:[NSString class]]) erIDString = @"";
     NSString *erLower = erIDString.lowercaseString;
+    // 1.2.2-145 · 匹配通道加「名称」：有的模块 identifier 对不上但名称对得上
+    NSString *erNameString = entry[@"name"];
+    if (![erNameString isKindOfClass:[NSString class]]) erNameString = @"";
+    NSString *erNameLower = erNameString.lowercaseString;
     NSDictionary<NSString *, NSArray *> *erCustom = @{
         @"flashlightmodule":   @[@"flashlight.on.fill", @"#3478F6"],
         @"textsize":           @[@"大小", @"#3478F6"],
+        @"文字大小":            @[@"大小", @"#3478F6"],
         @"orientationlock":    @[@"lock.rotation", @"#8E8E93"],
         @"displaymodule":      @[@"sun.max.fill", @"#48484A"],
         @"focusui":            @[@"moon.fill", @"#5E5CE6"],
         @"airplaymirroring":   @[@"rectangle.on.rectangle", @"#8E8E93"],
         @"audiomodule":        @[@"speaker.wave.2.fill", @"#48484A"],
-        @"nowplaying":         @[@"music.note", @"#48484A"],
+        @"音量":                @[@"speaker.wave.2.fill", @"#48484A"],
+        @"connectivitymodule": @[@"antenna.radiowaves.left.and.right", @"#30D158"],
+        @"连接":                @[@"antenna.radiowaves.left.and.right", @"#30D158"],
+        @"nowplaying":         @[@"playpause.fill", @"#48484A"],
+        @"播放控制":            @[@"playpause.fill", @"#48484A"],
     };
     for (NSString *erKey in erCustom) {
-        if ([erLower containsString:erKey]) {
+        if ([erLower containsString:erKey.lowercaseString] || [erNameLower containsString:erKey.lowercaseString]) {
             NSArray *erPair = erCustom[erKey];
             UIColor *erColor = [self erColorFromHex:erPair[1]];
             UIGraphicsImageRenderer *erRenderer = [[UIGraphicsImageRenderer alloc] initWithSize:CGSizeMake(29, 29)];
