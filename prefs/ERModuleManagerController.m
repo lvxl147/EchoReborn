@@ -173,28 +173,8 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
 }
 
 - (UIImage *)erIconForEntry:(NSDictionary *)entry {
-    NSString *path = entry[@"path"];
-    if ([path isKindOfClass:[NSString class]] && path.length) {
-        // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
-        NSBundle *bundle = [NSBundle bundleWithPath:path];
-        if (bundle) {
-            // 1.2.2-130 · 官方设置页用的是 SettingsIcon（彩色圆角）；很多模块的
-            // AppIcon 是黑色占位图，不能放在前面。
-            for (NSString *name in @[@"SettingsIcon", @"AppIcon", @"ModuleIcon", @"icon", @"Icon"]) {
-                UIImage *asset = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
-                if (asset) return [self erNormalizeIcon:asset];
-            }
-        }
-        for (NSString *name in @[@"SettingsIcon@3x.png", @"SettingsIcon@2x.png", @"SettingsIcon.png",
-                                 @"icon@3x.png", @"icon@2x.png", @"icon.png",
-                                 @"Icon@2x.png", @"Icon.png"]) {
-            NSString *file = [path stringByAppendingPathComponent:name];
-            UIImage *image = [UIImage imageWithContentsOfFile:file];
-            if (image) return [self erNormalizeIcon:image];
-        }
-    }
-    // 1.2.2-140 · 按用户截图逐个适配的 8 个系统模块（官方样式：彩色圆角
-    // 方块 + 白色字形，颜色与字形均按官方截图取）。放在最后，绝不覆盖已有图标。
+    // 1.2.2-141 · 8 个系统模块的官方样式适配（彩色圆角方块 + 白字形）。
+    // 放在最前：这几个模块 bundle 里的图标是占位图（蓝色拼图/黑色方块），必须抢先。
     NSString *erIDString = entry[@"id"];
     if (![erIDString isKindOfClass:[NSString class]]) erIDString = @"";
     NSString *erLower = erIDString.lowercaseString;
@@ -233,12 +213,32 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
                     UIImage *erSymbol = [[UIImage systemImageNamed:erPair[0]]
                                          imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
                     CGSize erSize = erSymbol.size;
-                    CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.55;
+                    CGFloat erScale = MIN(29.0 / MAX(erSize.width, 1.0), 29.0 / MAX(erSize.height, 1.0)) * 0.60;
                     CGFloat erWidth = erSize.width * erScale, erHeight = erSize.height * erScale;
                     [erSymbol drawInRect:CGRectMake((29 - erWidth) * 0.5, (29 - erHeight) * 0.5, erWidth, erHeight)];
                 }
             }];
             return [erRendered imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
+        }
+    }
+    NSString *path = entry[@"path"];
+    if ([path isKindOfClass:[NSString class]] && path.length) {
+        // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
+        NSBundle *bundle = [NSBundle bundleWithPath:path];
+        if (bundle) {
+            // 1.2.2-130 · 官方设置页用的是 SettingsIcon（彩色圆角）；很多模块的
+            // AppIcon 是黑色占位图，不能放在前面。
+            for (NSString *name in @[@"SettingsIcon", @"AppIcon", @"ModuleIcon", @"icon", @"Icon"]) {
+                UIImage *asset = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
+                if (asset) return [self erNormalizeIcon:asset];
+            }
+        }
+        for (NSString *name in @[@"SettingsIcon@3x.png", @"SettingsIcon@2x.png", @"SettingsIcon.png",
+                                 @"icon@3x.png", @"icon@2x.png", @"icon.png",
+                                 @"Icon@2x.png", @"Icon.png"]) {
+            NSString *file = [path stringByAppendingPathComponent:name];
+            UIImage *image = [UIImage imageWithContentsOfFile:file];
+            if (image) return [self erNormalizeIcon:image];
         }
     }
     return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"]];
