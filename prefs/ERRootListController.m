@@ -4,6 +4,7 @@
 #import "ERLinkController.h"
 #import "ERGlassListController.h"
 #import "ERModuleSettingsController.h"
+#import "ERModuleManagerController.h"
 #import "EREnhancedSettingsController.h"
 #import "ERSokoController.h"
 #import "ERBottomComponentsController.h"
@@ -294,7 +295,8 @@ extern void ERGPrefsLog(NSString *format, ...);
 // 1.0.4：入口行文案是「模块管理」，子页标题回到「独立模块」；子页内顶部那行
 // 分组文案改为「连接」（与这七项所属的控制中心分类同名）。
 - (void)openModuleSettings:(__unused PSSpecifier *)specifier {
-    ERModuleSettingsController *controller = [[ERModuleSettingsController alloc] init];
+    // 1.2.2-122 · 改用 PSViewController 版本（自带表格），搜索栏才不会被 Preferences 重置
+    ERModuleManagerController *controller = [[ERModuleManagerController alloc] init];
     if (!controller) return;
     controller.title = @"独立模块";
     [self.navigationController pushViewController:controller animated:YES];
