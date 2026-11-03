@@ -153,7 +153,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
 }
 
 // 1.2.2-128 · 统一图标：任何来源都裁到 29pt 方框（与自研模块行一致），按比例适配居中，原色渲染。
-- (UIImage *)erNormalizeIcon:(UIImage *)image {
+- (UIImage *)erNormalizeIcon:(UIImage *)image rounded:(BOOL)rounded {
     if (!image) return nil;
     CGFloat box = 29.0;
     // 1.2.2-129 · 关键修复：Assets.car 里的图常被标记为 template，直接画会变成
@@ -165,14 +165,29 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
         CGFloat scale = MIN(box / MAX(size.width, 1.0), box / MAX(size.height, 1.0));
         CGFloat width = size.width * scale, height = size.height * scale;
         CGFloat x = (box - width) * 0.5, y = (box - height) * 0.5;
-        UIBezierPath *rounded = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(x, y, width, height)
-                                                           cornerRadius:width * 0.2237];
-        [rounded addClip];
+        if (rounded) {
+            UIBezierPath *roundedPath = [UIBezierPath bezierPathWithRoundedRect:CGRectMake(x, y, width, height)
+                                                                   cornerRadius:width * 0.2237];
+            [roundedPath addClip];
+        }
         [original drawInRect:CGRectMake(x, y, width, height)];
     }];
 }
 
 - (UIImage *)erIconForEntry:(NSDictionary *)entry {
+    // 1.2.2-136 · 探针实锤：官方设置页对 CCSupport 家族模块的识别 =
+    // 在 …/Application Support/CCSupport 目录里按 **identifier 同名** 找图（<id>@2x/@3x.png，彩色圆角）。
+    NSString *erPath = entry[@"path"];
+    if ([erPath isKindOfClass:[NSString class]] && [erPath containsString:@"Application Support/CCSupport"]) {
+        NSRange erRange = [erPath rangeOfString:@"CCSupport"];
+        NSString *erCCDir = [erPath substringToIndex:erRange.location + erRange.length];
+        NSBundle *erCCBundle = [NSBundle bundleWithPath:erCCDir];
+        NSString *erModuleID = entry[@"id"] ?: @"";
+        if (erCCBundle && erModuleID.length) {
+            UIImage *erAsset = [UIImage imageNamed:erModuleID inBundle:erCCBundle compatibleWithTraitCollection:nil];
+            if (erAsset) return [self erNormalizeIcon:erAsset rounded:NO];
+        }
+    }
     NSString *path = entry[@"path"];
     if ([path isKindOfClass:[NSString class]] && path.length) {
         // 1.2.2-128 · 部分模块的图标在 Assets.car 里（无 PNG 文件），文件读取拿不到 → 改用 NSBundle imageNamed 加载资产目录。
@@ -182,7 +197,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
             // AppIcon 是黑色占位图，不能放在前面。
             for (NSString *name in @[@"SettingsIcon", @"AppIcon", @"ModuleIcon", @"icon", @"Icon"]) {
                 UIImage *asset = [UIImage imageNamed:name inBundle:bundle compatibleWithTraitCollection:nil];
-                if (asset) return [self erNormalizeIcon:asset];
+                if (asset) return [self erNormalizeIcon:asset rounded:YES];
             }
         }
         for (NSString *name in @[@"SettingsIcon@3x.png", @"SettingsIcon@2x.png", @"SettingsIcon.png",
@@ -190,7 +205,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
                                  @"Icon@2x.png", @"Icon.png"]) {
             NSString *file = [path stringByAppendingPathComponent:name];
             UIImage *image = [UIImage imageWithContentsOfFile:file];
-            if (image) return [self erNormalizeIcon:image];
+            if (image) return [self erNormalizeIcon:image rounded:YES];
         }
     }
     // 1.2.2-134 · 官方设置页样式：彩色圆角底板 + 白色字形。
@@ -235,7 +250,7 @@ static NSString *const kERMMReloadNotification = @"com.strive.echoreborn/ReloadP
             return [erRendered imageWithRenderingMode:UIImageRenderingModeAlwaysOriginal];
         }
     }
-    return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"]];
+    return [self erNormalizeIcon:[UIImage systemImageNamed:@"puzzlepiece.extension.fill"] rounded:YES];
 }
 
 // ---------------------------------------------------------------------------
