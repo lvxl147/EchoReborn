@@ -8212,34 +8212,6 @@ static NSString *const kERShortcutVisibleKey = @"ShortcutVisibleIdentifiers";
 //   ③ 系统启用列表 = (原列表 − 全部 com.strive.echoreborn.shortcut.*) ∪ 期望集；
 //   ④ 全程打诊断日志（SHORTCUT-SYNC），便于上机抓真因。幂等，仅在确有变化时落盘。
 
-// 1.2.2-166 · dlopen 探针：在 SpringBoard 进程内逐个加载 50 个槽位二进制，
-// 记录系统返回的真实错误 —— 定案 33-50 是「加载失败」还是「注册表缺席」。
-static void ERDumpSlotDlopen(void) {
-    @try {
-        for (NSInteger n = 1; n <= 50; n++) {
-            NSString *erPath = [NSString stringWithFormat:
-                @"/var/containers/Bundle/Application/.jbroot-757F885A19186FB6/Library/ControlCenter/Bundles/ERShortcut%ldModule.bundle/ERShortcut%ldModule",
-                (long)n, (long)n];
-            if (![[NSFileManager defaultManager] fileExistsAtPath:erPath]) {
-                ERLogInfo(@"DLOPEN %ld SKIP(no file)", (long)n);
-                continue;
-            }
-            void *erHandle = dlopen(erPath.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
-            if (erHandle) {
-                ERLogInfo(@"DLOPEN %ld OK", (long)n);
-                ERKeyLog(@"ERDlopenDump", [NSString stringWithFormat:@"%ld OK", (long)n]);
-                dlclose(erHandle);
-            } else {
-                const char *erErr = dlerror();
-                ERLogInfo(@"DLOPEN %ld FAIL %@", (long)n,
-                          erErr ? [NSString stringWithUTF8String:erErr] : @"(no error string)");
-                ERKeyLog(@"ERDlopenDump", [NSString stringWithFormat:@"%ld FAIL: %@", (long)n,
-                          erErr ? [NSString stringWithUTF8String:erErr] : @"(no error string)"]);
-            }
-        }
-        ERLogInfo(@"DLOPEN-DONE");
-    } @catch (__unused NSException *e) {}
-}
 
 // 1.2.2-166b · 专用键探针日志（独立键，无环冲刷）
 static void ERKeyLog(NSString *key, NSString *line) {
@@ -8300,35 +8272,7 @@ static void ERDumpRegistrationAPIs(void) {
     } @catch (__unused NSException *e) {}
 }
 
-%group ERInstScanProbe
-%hook CCUIModuleCollectionViewController
-- (void)moduleInstancesChangedForModuleInstanceManager:(id)manager {
-    %orig;
-    @try {
-        NSMutableArray *erOut = [NSMutableArray array];
-        for (NSString *erKey in @[@"_instances", @"_moduleInstances", @"instances", @"_liveInstances"]) {
-            @try {
-                id erValue = [manager valueForKey:erKey];
-                if (![erValue isKindOfClass:[NSArray class]] && ![erValue isKindOfClass:[NSSet class]] && ![erValue isKindOfClass:[NSDictionary class]]) continue;
-                NSUInteger erTotal = 0;
-                NSMutableArray *erIDs = [NSMutableArray array];
-                for (id erEntry in erValue) {
-                    erTotal++;
-                    for (NSString *erK in @[@"identifier", @"moduleIdentifier", @"_identifier"]) {
-                        @try {
-                            id erV = [erEntry valueForKey:erK];
-                            if ([erV isKindOfClass:[NSString class]]) { [erIDs addObject:erV]; break; }
-                        } @catch (__unused NSException *e) {}
-                    }
-                }
-                if (erTotal) [erOut addObject:[NSString stringWithFormat:@"%@ n=%lu ids=%@", erKey, (unsigned long)erTotal, erIDs]];
-            } @catch (__unused NSException *e) {}
-        }
-        if (erOut.count) ERKeyLog(@"ERDlopenDump", [erOut componentsJoinedByString:@"\n"]);
-    } @catch (__unused NSException *e) {}
-}
-%end
-%end
+
 
 static void ERShortcutSyncToVisible(void) {
     static NSString *const kERShortcutForceRemoveSlotKey = @"ERShortcutForceRemoveSlot";
@@ -8396,11 +8340,6 @@ static void ERShortcutSyncToVisible(void) {
 
     ERKeyLog(@"EREnabledDump", [NSString stringWithFormat:@"SYNC enabled=%@ next=%@",
                       enabled, next]);
-    static dispatch_once_t erInstOnce;
-    dispatch_once(&erInstOnce, ^{
-        @try { %init(ERInstScanProbe); } @catch (__unused NSException *e) {}
-    });
-    ERDumpSlotDlopen();   // 1.2.2-166f · 在已验证的执行路径上触发 dlopen 探针
     BOOL changed = (next.count != enabled.count) ||
                    ![[NSSet setWithArray:next] isEqualToSet:[NSSet setWithArray:enabled]];
     ERLogInfo(@"SHORTCUT-SYNC assign=%lu visible=%lu enabled=%lu desired=%lu forceSlot=%ld changed=%d",
@@ -29253,13 +29192,7 @@ static void ERInstallModuleTapFeedback(UIView *host) {
         dispatch_async(dispatch_get_main_queue(), ^{
             @try { ERShortcutSyncToVisible(); } @catch (__unused NSException *e) {}
         });
-        // 1.2.2-172 · dlopen 探针移到后台线程：主线程 dlopen 会与 CCUI 的 dyld 锁死锁
-        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
-            @try {
-                ERDumpSlotDlopen();
-                ERDumpRegistrationAPIs();   // 1.2.2-176 · CCUI 注册/扫描 API 普查
-            } @catch (__unused NSException *e) {}
-        });
+
 
     }
 
