@@ -7498,6 +7498,7 @@ static BOOL ERShortcutIdentifierIsShortcut(NSString *identifier) {
 // 槽位是纯数字（"3"），旧的 uuid 磁贴是 36 个字符带连字符。
 // ---------------------------------------------------------------------------
 static NSUInteger const kERShortcutSlotCount = 32;
+static void ERKeyLog(NSString *key, NSString *line);
 static NSString *const kERShortcutSlotAssignmentsKey = @"ShortcutSlotAssignments";
 // 与槽位 bundle 共享：bundle 广播 RunShortcut，并把工作流 uuid 暂存在
 // ShortcutRunRequest（Darwin 通知跨观察者不带可靠的 userInfo），本进程读回来。
@@ -8224,17 +8225,29 @@ static void ERDumpSlotDlopen(void) {
             void *erHandle = dlopen(erPath.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
             if (erHandle) {
                 ERLogInfo(@"DLOPEN %ld OK", (long)n);
-                ERAppendDebugFile(@"er_dlopen.txt", [NSString stringWithFormat:@"%ld OK", (long)n]);
+                ERKeyLog(@"ERDlopenDump", [NSString stringWithFormat:@"%ld OK", (long)n]);
                 dlclose(erHandle);
             } else {
                 const char *erErr = dlerror();
                 ERLogInfo(@"DLOPEN %ld FAIL %@", (long)n,
                           erErr ? [NSString stringWithUTF8String:erErr] : @"(no error string)");
-                ERAppendDebugFile(@"er_dlopen.txt", [NSString stringWithFormat:@"%ld FAIL: %@", (long)n,
+                ERKeyLog(@"ERDlopenDump", [NSString stringWithFormat:@"%ld FAIL: %@", (long)n,
                           erErr ? [NSString stringWithUTF8String:erErr] : @"(no error string)"]);
             }
         }
         ERLogInfo(@"DLOPEN-DONE");
+    } @catch (__unused NSException *e) {}
+}
+
+// 1.2.2-166b · 专用键探针日志（独立键，无环冲刷）
+static void ERKeyLog(NSString *key, NSString *line) {
+    @try {
+        CFPreferencesAppSynchronize(kERPrefsDomain);
+        NSMutableArray *erLines = [(__bridge_transfer NSMutableArray *)CFPreferencesCopyAppValue((__bridge CFStringRef)key, kERPrefsDomain) mutableCopy] ?: [NSMutableArray array];
+        [erLines addObject:[NSString stringWithFormat:@"%@ | %@", [NSDate date].description, line]];
+        while (erLines.count > 80) [erLines removeObjectAtIndex:0];
+        CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)erLines, kERPrefsDomain);
+        CFPreferencesAppSynchronize(kERPrefsDomain);
     } @catch (__unused NSException *e) {}
 }
 static void ERShortcutSyncToVisible(void) {
@@ -8301,7 +8314,7 @@ static void ERShortcutSyncToVisible(void) {
         if ([next containsObject:fid] && ![desired containsObject:fid]) [next removeObject:fid];
     }
 
-    ERAppendDebugFile(@"er_enabled.txt", [NSString stringWithFormat:@"SYNC enabled=%@ next=%@",
+    ERKeyLog(@"EREnabledDump", [NSString stringWithFormat:@"SYNC enabled=%@ next=%@",
                       enabled, next]);
     BOOL changed = (next.count != enabled.count) ||
                    ![[NSSet setWithArray:next] isEqualToSet:[NSSet setWithArray:enabled]];
