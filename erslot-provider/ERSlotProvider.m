@@ -10,6 +10,13 @@
 #define K_ER_PREFS CFSTR("com.strive.echoreborn.preferences")
 #endif
 
+
+// CCUI 开关模块基类（ControlCenterUIKit 私有类，槽位模块的宿主基类）
+@interface CCUIToggleModule : NSObject
+@property (nonatomic, strong) UIViewController *contentViewController;
+- (UIViewController *)contentViewController;
+@end
+
 static NSDictionary *ERSPAssignments(void) {
     NSDictionary *d = (__bridge_transfer NSDictionary *)CFPreferencesCopyAppValue(CFSTR("ShortcutSlotAssignments"), K_ER_PREFS);
     return [d isKindOfClass:[NSDictionary class]] ? d : @{};
@@ -36,49 +43,56 @@ typedef struct { NSUInteger width, height; } ERSPSize;
 typedef struct { NSUInteger x, y; } ERSPPoint;
 typedef struct { ERSPPoint origin; ERSPSize size; } ERSPRect;
 
-@protocol ERSPCCUIContentModule <NSObject>
-@optional
-- (UIViewController *)contentViewControllerForContext:(id)context;
-@end
 
-// 磁贴视图控制器
-@interface ERSPTileController : UIViewController
+
+// 模块类：继承 CCUIToggleModule（CCUI 管线全由基类提供）
+@interface ERSPModule : CCUIToggleModule
+@property (nonatomic, copy) NSString *identifier;
 @property (nonatomic, copy) NSString *slotKey;
 @property (nonatomic, copy) NSString *uuid;
+@property (nonatomic, strong) UILabel *tileLabel;
 @end
-@implementation ERSPTileController
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.view.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
-    UILabel *l = [[UILabel alloc] initWithFrame:self.view.bounds];
-    l.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
-    l.textColor = UIColor.whiteColor;
-    l.textAlignment = NSTextAlignmentCenter;
-    l.font = [UIFont systemFontOfSize:13];
-    l.numberOfLines = 2;
-    l.text = ERSPNameForUUID(self.uuid) ?: @"快捷指令";
-    [self.view addSubview:l];
-    UITapGestureRecognizer *t = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(runIt)];
-    [self.view addGestureRecognizer:t];
+@implementation ERSPModule
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        UIViewController *vc = [[UIViewController alloc] init];
+        UIView *v = [[UIView alloc] init];
+        v.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
+        UILabel *l = [[UILabel alloc] init];
+        l.textColor = UIColor.whiteColor;
+        l.textAlignment = NSTextAlignmentCenter;
+        l.font = [UIFont systemFontOfSize:13];
+        l.numberOfLines = 2;
+        [v addSubview:l];
+        vc.view = v;
+        self.contentViewController = vc;
+        self.tileLabel = l;
+    }
+    return self;
 }
-- (void)runIt {
+- (void)refreshBinding {
+    NSDictionary *assign = ERSPAssignments();
+    self.uuid = assign[self.slotKey];
+    NSString *name = ERSPNameForUUID(self.uuid) ?: [NSString stringWithFormat:@"模块占位 %@", self.slotKey];
+    self.tileLabel.text = name;
+    self.tileLabel.frame = self.contentViewController.view.bounds;
+}
+- (UIImage *)iconGlyph { return nil; }
+- (UIImage *)selectedIconGlyph { return nil; }
+- (UIColor *)selectedColor { return [UIColor systemBlueColor]; }
+- (NSString *)glyphState { return @"switch"; }
+- (BOOL)isSelected { return NO; }
+- (void)setSelected {}
+- (void)reloadBinding { [self refreshBinding]; }
+- (void)touchDown {}
+- (void)touchUp { [self runShortcut]; }
+- (void)runShortcut {
     if (!self.uuid.length) return;
     CFPreferencesSetAppValue(CFSTR("ShortcutRunRequest"), (__bridge CFPropertyListRef)self.uuid, K_ER_PREFS);
     CFPreferencesAppSynchronize(K_ER_PREFS);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
         (__bridge CFStringRef)@"com.strive.echoreborn/RunShortcut", nil, nil, YES);
-}
-@end
-
-// 模块包装（实现 CCUIContentModule）
-@interface ERSPModule : NSObject
-@property (nonatomic, copy) NSString *identifier;
-@property (nonatomic, strong) ERSPTileController *controller;
-@end
-@implementation ERSPModule
-- (UIViewController *)contentViewControllerForContext:(id)context {
-    if (!self.controller) self.controller = [[ERSPTileController alloc] init];
-    return self.controller;
 }
 @end
 
@@ -126,13 +140,11 @@ typedef struct { ERSPPoint origin; ERSPSize size; } ERSPRect;
     if (!m) {
         m = [[ERSPModule alloc] init];
         m.identifier = identifier;
-        // 从 identifier 解析槽位号 → uuid
         NSString *prefix = @"com.strive.echoreborn.shortcut.";
         if ([identifier hasPrefix:prefix]) {
-            NSString *k = [identifier substringFromIndex:prefix.length];
-            m.controller = [[ERSPTileController alloc] init];
-            m.controller.slotKey = k;
-            m.controller.uuid = ERSPAssignments()[k];
+            m.slotKey = [identifier substringFromIndex:prefix.length];
+            m.uuid = ERSPAssignments()[m.slotKey];
+            [m refreshBinding];
         }
         self.moduleCache[identifier] = m;
     }
