@@ -8210,9 +8210,6 @@ static NSString *const kERShortcutVisibleKey = @"ShortcutVisibleIdentifiers";
 // 1.2.2-166 · dlopen 探针：在 SpringBoard 进程内逐个加载 50 个槽位二进制，
 // 记录系统返回的真实错误 —— 定案 33-50 是「加载失败」还是「注册表缺席」。
 static void ERDumpSlotDlopen(void) {
-    static BOOL erDlDone = NO;
-    if (erDlDone) return;
-    erDlDone = YES;
     @try {
         for (NSInteger n = 1; n <= 50; n++) {
             NSString *erPath = [NSString stringWithFormat:
@@ -8316,6 +8313,7 @@ static void ERShortcutSyncToVisible(void) {
 
     ERKeyLog(@"EREnabledDump", [NSString stringWithFormat:@"SYNC enabled=%@ next=%@",
                       enabled, next]);
+    ERDumpSlotDlopen();   // 1.2.2-166f · 在已验证的执行路径上触发 dlopen 探针
     BOOL changed = (next.count != enabled.count) ||
                    ![[NSSet setWithArray:next] isEqualToSet:[NSSet setWithArray:enabled]];
     ERLogInfo(@"SHORTCUT-SYNC assign=%lu visible=%lu enabled=%lu desired=%lu forceSlot=%ld changed=%d",
