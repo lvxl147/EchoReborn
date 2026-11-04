@@ -1,22 +1,12 @@
-// 1.2.2-173 · ERSlotProvider —— CCSupport Provider：运行时动态提供快捷指令槽位模块
-// 协议逆向自上游 EVOConferenceProvider（numberOfProvidedModules /
-// identifierForModuleAtIndex: / displayNameForModuleIdentifier: /
-// moduleInstanceForModuleIdentifier: / moduleLayoutSizeForOrientation:）
-// 绑定表 = ShortcutSlotAssignments（com.strive.echoreborn.preferences）
+// 1.2.2-175 · ERSlotProvider —— CCSupport Provider（完整 17 方法，精确复刻上游 EVOConference*）
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
-#ifndef K_ER_PREFS
 #define K_ER_PREFS CFSTR("com.strive.echoreborn.preferences")
-#endif
 
+typedef struct { NSUInteger width, height; } ERSPSize2;
 
-// CCUI 开关模块基类（ControlCenterUIKit 私有类，槽位模块的宿主基类）
-@interface CCUIToggleModule : NSObject
-@property (nonatomic, strong) UIViewController *contentViewController;
-- (UIViewController *)contentViewController;
-@end
-
+// ---------- 偏好读取 ----------
 static NSDictionary *ERSPAssignments(void) {
     NSDictionary *d = (__bridge_transfer NSDictionary *)CFPreferencesCopyAppValue(CFSTR("ShortcutSlotAssignments"), K_ER_PREFS);
     return [d isKindOfClass:[NSDictionary class]] ? d : @{};
@@ -37,69 +27,97 @@ static NSString *ERSPNameForUUID(NSString *uuid) {
     }
     return nil;
 }
+static NSString *ERSPKeyLog(NSString *key, NSString *line) {
+    NSMutableArray *l = [(__bridge_transfer NSMutableArray *)CFPreferencesCopyAppValue((__bridge CFStringRef)key, K_ER_PREFS) mutableCopy] ?: [NSMutableArray array];
+    [l addObject:line];
+    while (l.count > 60) [l removeObjectAtIndex:0];
+    CFPreferencesSetAppValue((__bridge CFStringRef)key, (__bridge CFPropertyListRef)l, K_ER_PREFS);
+    CFPreferencesAppSynchronize(K_ER_PREFS);
+    return line;
+}
 
-// CCSUILayoutSize 本地定义（与 CCUI 一致）
-typedef struct { NSUInteger width, height; } ERSPSize;
-typedef struct { NSUInteger x, y; } ERSPPoint;
-typedef struct { ERSPPoint origin; ERSPSize size; } ERSPRect;
-
-
-
-// 模块类：继承 CCUIToggleModule（CCUI 管线全由基类提供）
-@interface ERSPModule : CCUIToggleModule
+// ---------- 模块类（NSObject 基类 + 17 方法全实现，复刻 EVOConferenceModule）----------
+@interface ERSPModule : NSObject
 @property (nonatomic, copy) NSString *identifier;
-@property (nonatomic, copy) NSString *slotKey;
-@property (nonatomic, copy) NSString *uuid;
-@property (nonatomic, strong) UILabel *tileLabel;
+@property (nonatomic, strong) id nativeModule;
+@property (nonatomic, strong) id contentModuleContext;
+@property (nonatomic, strong) id presentationContext;
+@property (nonatomic, strong) UIViewController *controller;
+- (instancetype)initWithIdentifier:(NSString *)identifier;
 @end
-@implementation ERSPModule
-- (instancetype)init {
+
+@implementation ERSPModule {
+    UIViewController *_tileVC;
+    UILabel *_tileLabel;
+    NSString *_identifier;
+    id _nativeModule;
+    id _contentModuleContext;
+    id _presentationContext;
+    UIViewController *_controller;
+}
+- (instancetype)initWithIdentifier:(NSString *)identifier {
     self = [super init];
-    if (self) {
-        UIViewController *vc = [[UIViewController alloc] init];
-        UIView *v = [[UIView alloc] init];
-        v.backgroundColor = [UIColor colorWithWhite:1.0 alpha:0.18];
-        UILabel *l = [[UILabel alloc] init];
-        l.textColor = UIColor.whiteColor;
-        l.textAlignment = NSTextAlignmentCenter;
-        l.font = [UIFont systemFontOfSize:13];
-        l.numberOfLines = 2;
-        [v addSubview:l];
-        vc.view = v;
-        self.contentViewController = vc;
-        self.tileLabel = l;
-    }
+    if (self) _identifier = [identifier copy];
     return self;
 }
-- (void)refreshBinding {
-    NSDictionary *assign = ERSPAssignments();
-    self.uuid = assign[self.slotKey];
-    NSString *name = ERSPNameForUUID(self.uuid) ?: [NSString stringWithFormat:@"模块占位 %@", self.slotKey];
-    self.tileLabel.text = name;
-    self.tileLabel.frame = self.contentViewController.view.bounds;
+- (NSString *)slotKey {
+    NSString *prefix = @"com.strive.echoreborn.shortcut.";
+    return [self.identifier hasPrefix:prefix] ? [self.identifier substringFromIndex:prefix.length] : nil;
 }
-- (UIImage *)iconGlyph { return nil; }
-- (UIImage *)selectedIconGlyph { return nil; }
-- (UIColor *)selectedColor { return [UIColor systemBlueColor]; }
-- (NSString *)glyphState { return @"switch"; }
-- (BOOL)isSelected { return NO; }
-- (void)setSelected {}
-- (void)reloadBinding { [self refreshBinding]; }
-- (void)touchDown {}
-- (void)touchUp { [self runShortcut]; }
+- (NSString *)bindingName {
+    NSString *uuid = ERSPAssignments()[self.slotKey];
+    return ERSPNameForUUID(uuid) ?: [NSString stringWithFormat:@"模块占位 %@", self.slotKey ?: @""];
+}
+- (UIViewController *)makeTileVC {
+    UIViewController *vc = [[UIViewController alloc] init];
+    UILabel *l = [[UILabel alloc] init];
+    l.textColor = UIColor.whiteColor;
+    l.textAlignment = NSTextAlignmentCenter;
+    l.font = [UIFont systemFontOfSize:13];
+    l.numberOfLines = 2;
+    [vc.view addSubview:l];
+    _tileLabel = l;
+    UITapGestureRecognizer *t = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(runShortcut)];
+    [vc.view addGestureRecognizer:t];
+    return vc;
+}
+- (UIViewController *)contentViewController {
+    if (!_tileVC) _tileVC = [self makeTileVC];
+    _tileLabel.frame = _tileVC.view.bounds;
+    _tileLabel.text = [self bindingName];
+    return _tileVC;
+}
+- (UIViewController *)contentViewControllerForContext:(id)context { return [self contentViewController]; }
+- (UIViewController *)backgroundViewController { return nil; }
+- (UIViewController *)backgroundViewControllerForContext:(id)context { return nil; }
+- (ERSPSize2)moduleSizeForOrientation:(NSInteger)orientation {
+    ERSPSize2 s; s.width = 1; s.height = 1; return s;
+}
+- (NSString *)identifier { return _identifier; }
+- (void)setIdentifier:(NSString *)v { _identifier = [v copy]; }
+- (id)nativeModule { return _nativeModule; }
+- (void)setNativeModule:(id)v { _nativeModule = v; }
+- (id)contentModuleContext { return _contentModuleContext; }
+- (void)setContentModuleContext:(id)v { _contentModuleContext = v; }
+- (id)presentationContext { return _presentationContext; }
+- (void)setPresentationContext:(id)v { _presentationContext = v; }
+- (UIViewController *)controller { return _controller; }
+- (void)setController:(UIViewController *)v { _controller = v; }
 - (void)runShortcut {
-    if (!self.uuid.length) return;
-    CFPreferencesSetAppValue(CFSTR("ShortcutRunRequest"), (__bridge CFPropertyListRef)self.uuid, K_ER_PREFS);
+    NSString *uuid = ERSPAssignments()[self.slotKey];
+    if (!uuid.length) return;
+    CFPreferencesSetAppValue(CFSTR("ShortcutRunRequest"), (__bridge CFPropertyListRef)uuid, K_ER_PREFS);
     CFPreferencesAppSynchronize(K_ER_PREFS);
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),
         (__bridge CFStringRef)@"com.strive.echoreborn/RunShortcut", nil, nil, YES);
 }
 @end
 
-// Provider 主类
+// ---------- Provider 主类 ----------
 @interface ERSlotProvider : NSObject
 @property (nonatomic, strong) NSMutableDictionary<NSString *, ERSPModule *> *moduleCache;
 @end
+
 @implementation ERSlotProvider
 + (instancetype)shared {
     static ERSlotProvider *p; static dispatch_once_t t;
@@ -107,21 +125,19 @@ typedef struct { ERSPPoint origin; ERSPSize size; } ERSPRect;
     return p;
 }
 - (NSArray<NSString *> *)orderedSlotKeys {
-    // 按显示清单顺序返回已绑定槽位键（数字升序）
     NSDictionary *assign = ERSPAssignments();
     NSArray *visible = ERSPVisibleOrder();
     NSMutableDictionary *uuidToKey = [NSMutableDictionary dictionary];
     for (NSString *k in assign) uuidToKey[assign[k]] = k;
     NSMutableArray *out = [NSMutableArray array];
-    for (NSString *uuid in visible) {
-        NSString *k = uuidToKey[uuid];
-        if (k) [out addObject:k];
-    }
+    for (NSString *uuid in visible) { NSString *k = uuidToKey[uuid]; if (k) [out addObject:k]; }
     for (NSString *k in assign) if (![out containsObject:k]) [out addObject:k];
     return out;
 }
 - (NSUInteger)numberOfProvidedModules {
-    return self.orderedSlotKeys.count;
+    NSUInteger n = self.orderedSlotKeys.count;
+    ERSPKeyLog(@"ERDlopenDump", [NSString stringWithFormat:@"numberOfProvidedModules=%lu", (unsigned long)n]);
+    return n;
 }
 - (NSString *)identifierForModuleAtIndex:(NSUInteger)index {
     NSArray *keys = self.orderedSlotKeys;
@@ -132,33 +148,22 @@ typedef struct { ERSPPoint origin; ERSPSize size; } ERSPRect;
     NSDictionary *assign = ERSPAssignments();
     for (NSString *k in assign)
         if ([identifier isEqualToString:[NSString stringWithFormat:@"com.strive.echoreborn.shortcut.%@", k]])
-            return [ERSPNameForUUID(assign[k]) ?: [NSString stringWithFormat:@"模块占位 %@", k] copy];
+            return ERSPNameForUUID(assign[k]) ?: [NSString stringWithFormat:@"模块占位 %@", k];
     return @"快捷指令";
 }
 - (id)moduleInstanceForModuleIdentifier:(NSString *)identifier {
     ERSPModule *m = self.moduleCache[identifier];
     if (!m) {
-        m = [[ERSPModule alloc] init];
-        m.identifier = identifier;
-        NSString *prefix = @"com.strive.echoreborn.shortcut.";
-        if ([identifier hasPrefix:prefix]) {
-            m.slotKey = [identifier substringFromIndex:prefix.length];
-            m.uuid = ERSPAssignments()[m.slotKey];
-            [m refreshBinding];
-        }
+        m = [[ERSPModule alloc] initWithIdentifier:identifier];
         self.moduleCache[identifier] = m;
     }
     return m;
 }
-- (ERSPRect)moduleLayoutSizeForOrientation:(NSInteger)orientation {
-    ERSPRect r; r.origin.x = 0; r.origin.y = 0; r.size.width = 1; r.size.height = 1;
-    return r;
+- (ERSPSize2)moduleLayoutSizeForOrientation:(NSInteger)orientation {
+    ERSPSize2 s; s.width = 1; s.height = 1; return s;
 }
-- (ERSPRect)moduleSizeForOrientation:(NSInteger)orientation {
-    return [self moduleLayoutSizeForOrientation:orientation];
+- (ERSPSize2)moduleSizeForOrientation:(NSInteger)orientation {
+    ERSPSize2 s; s.width = 1; s.height = 1; return s;
 }
 - (UIViewController *)listControllerForModuleIdentifier:(NSString *)identifier { return nil; }
 @end
-
-__attribute__((constructor))
-static void ERSPCtor(void) { /* Provider 由 CCSupport 在需要时实例化 */ }
