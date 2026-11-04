@@ -8224,11 +8224,14 @@ static void ERDumpSlotDlopen(void) {
             void *erHandle = dlopen(erPath.fileSystemRepresentation, RTLD_NOW | RTLD_LOCAL);
             if (erHandle) {
                 ERLogInfo(@"DLOPEN %ld OK", (long)n);
+                ERAppendDebugFile(@"er_dlopen.txt", [NSString stringWithFormat:@"%ld OK", (long)n]);
                 dlclose(erHandle);
             } else {
                 const char *erErr = dlerror();
                 ERLogInfo(@"DLOPEN %ld FAIL %@", (long)n,
                           erErr ? [NSString stringWithUTF8String:erErr] : @"(no error string)");
+                ERAppendDebugFile(@"er_dlopen.txt", [NSString stringWithFormat:@"%ld FAIL: %@", (long)n,
+                          erErr ? [NSString stringWithUTF8String:erErr] : @"(no error string)"]);
             }
         }
         ERLogInfo(@"DLOPEN-DONE");
@@ -8298,6 +8301,8 @@ static void ERShortcutSyncToVisible(void) {
         if ([next containsObject:fid] && ![desired containsObject:fid]) [next removeObject:fid];
     }
 
+    ERAppendDebugFile(@"er_enabled.txt", [NSString stringWithFormat:@"SYNC enabled=%@ next=%@",
+                      enabled, next]);
     BOOL changed = (next.count != enabled.count) ||
                    ![[NSSet setWithArray:next] isEqualToSet:[NSSet setWithArray:enabled]];
     ERLogInfo(@"SHORTCUT-SYNC assign=%lu visible=%lu enabled=%lu desired=%lu forceSlot=%ld changed=%d",
