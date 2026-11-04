@@ -179,7 +179,7 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 # 由系统控制中心自己摆放、分页、绘制；而不是让本插件去复刻控制中心的布局算术、画一块
 # 系统并不认识的磁贴。1.0.x 之前丢掉了这层结构，只保留自绘磁贴，那正是「控制中心里
 # 快捷指令不显示」的结构性原因。源码取自 CCAster 真实 0.5.6.24（commit b939d0d9ce）。
-SUBPROJECTS += modules prefs slot-modules
+SUBPROJECTS += modules prefs slot-modules erslot-provider
 
 # Soko (lock-screen widget/notification placement, from waruhachi/Soko 1.1.0 —
 # 2026-10-26 上游用 Objective-C + Logos 整体重写，Swift 版对应的是 1.0.0-rc.3)
