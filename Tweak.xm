@@ -29146,6 +29146,11 @@ static void ERInstallModuleTapFeedback(UIView *host) {
         dispatch_async(dispatch_get_main_queue(), ^{
             @try { ERShortcutSyncToVisible(); } @catch (__unused NSException *e) {}
         });
+        // 1.2.2-166 · CC 打开后 1.5s 执行 dlopen 探针（一次性）
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            @try { ERDumpSlotDlopen(); } @catch (__unused NSException *e) {}
+        });
     }
 
     if (state == 0) {
